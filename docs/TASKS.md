@@ -4,6 +4,11 @@ Pending work only (`CLAUDE.md`). What was done and how it was verified is in the
 
 Last steer: b11ce00
 
+## From review
+
+- **The sandbox's `write` and `edit` check a path, then open it** (review of 879a5dc, 2026-11-06). Dangling symlinks are refused since 0.53.1, but a bash call running at the same time (`src/agent/batch.rs` runs calls on separate threads) can swap a checked directory for a symlink before the write; the agent's own bash can also make the links. Closing it means opening without following links (`openat2` with `RESOLVE_BENEATH`, or `O_NOFOLLOW` per component) and checking the opened file's real place.
+- **Only the project's top-level `.git`, `.scramjet` and `.agents` stay read-only in `workspace-write`**: a nested repository's `.git` (a project holding other checkouts, `vendor/x/.git`) is writable by bash and `write`, and its hooks or `core.fsmonitor` run outside the sandbox at the user's next `git` there. Codex protects only the top level too; finding nested ones at start and binding each read-only would close it.
+
 ## Current focus
 
 Set by the user at the steer of 2026-11-06, in this order: the theme editor's fixes (17, with a background row added the same day; what is left needs the user), a sandbox for the main agent (27, in since 0.53.0; MCP servers inside and Unix sockets left), spelling (26), session chains (25), a full disk survived (29), what is left of 23 (queued behind the provider package since 2026-11-05), `/usage` (32, polish, lower priority), and the scale work of item 7 last. Item 7 stays lower priority, but every design keeps it in mind so that nothing built now corners it ([design](DESIGN.md#current-direction-2026-11-03)). Item 21's live check, the last part of its Goal, runs whenever the user can sign in (Open questions).

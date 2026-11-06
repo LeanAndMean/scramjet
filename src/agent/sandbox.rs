@@ -111,7 +111,9 @@ impl Sandbox {
         if self.mode == SandboxMode::ReadOnly {
             return refused("the sandbox is read-only");
         }
-        let real = real_path(path);
+        let Some(real) = real_path(path) else {
+            return refused("a symlink there points nowhere the sandbox can check");
+        };
         let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
         if !real.starts_with(&root) {
             return refused("outside the project, which the sandbox leaves read-only");
@@ -123,20 +125,24 @@ impl Sandbox {
     }
 }
 
-/// `path` with its longest existing part resolved, the rest as given.
-fn real_path(path: &Path) -> PathBuf {
+/// `path` with its longest existing part resolved, the rest as given; `None` when a part exists
+/// but does not resolve, as a dangling symlink, which a write would follow out of the check.
+fn real_path(path: &Path) -> Option<PathBuf> {
     let mut rest = Vec::new();
     let mut existing = path;
     loop {
         if let Ok(real) = std::fs::canonicalize(existing) {
-            return rest.iter().rev().fold(real, |path, name| path.join(name));
+            return Some(rest.iter().rev().fold(real, |path, name| path.join(name)));
+        }
+        if std::fs::symlink_metadata(existing).is_ok() {
+            return None;
         }
         match (existing.parent(), existing.file_name()) {
             (Some(parent), Some(name)) => {
                 rest.push(name.to_owned());
                 existing = parent;
             }
-            _ => return path.to_owned(),
+            _ => return Some(path.to_owned()),
         }
     }
 }
@@ -598,6 +604,9 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
         std::fs::create_dir_all(root.join(".git")).unwrap();
         std::fs::create_dir_all(home.join("elsewhere")).unwrap();
         std::os::unix::fs::symlink(home.join("elsewhere"), root.join("out")).unwrap();
+        std::os::unix::fs::symlink(root.join(".git/hooks/pre-commit"), root.join("hook")).unwrap();
+        std::os::unix::fs::symlink(home.join("elsewhere/new"), root.join("away")).unwrap();
+        std::os::unix::fs::symlink(root.join("loop"), root.join("loop")).unwrap();
         let write = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
             network: true,
@@ -620,6 +629,9 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
             );
         }
         assert!(refused(write, ".git/config").contains("kept read-only"));
+        for path in ["hook", "away", "away/a.rs", "loop"] {
+            assert!(refused(write, path).contains("points nowhere"), "{path}");
+        }
     }
 
     #[test]

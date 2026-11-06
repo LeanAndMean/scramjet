@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.53.1 — No write through a dangling symlink in the sandbox
+
+### Fixed
+
+- In `--sandbox workspace-write`, `write` and `edit` refuse a path through a symlink that points nowhere yet: the write would have created its target outside the project or in its `.git`.
+
 ## 0.53.0 — A sandbox for the main agent
 
 ### Added
