@@ -9,6 +9,8 @@ use crate::agent_cli::keymap::Binding;
 use crate::agent_cli::keys::{ByteSource, Code, ESCAPE_WAIT, Key, Press};
 use crate::agent_cli::select::Picked;
 use crate::agent_cli::slash::Builtin;
+use crate::agent_cli::style;
+use crate::agent_cli::theme_editor::Ended;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -303,6 +305,33 @@ impl App {
             }
             return Flow::Go;
         }
+        if let Some(Open {
+            shown: Shown::Theme(editor),
+            ..
+        }) = &mut self.dialog
+        {
+            if key.is(Binding::ThinkingToggle) {
+                self.hide_thinking.fetch_xor(true, Ordering::Relaxed);
+                return Flow::Go;
+            }
+            match editor.key(&key) {
+                None => style::set(&editor.theme()),
+                Some(ended) => {
+                    let Some(Open { shown, reply, .. }) = self.dialog.take() else {
+                        return Flow::Go;
+                    };
+                    let saved = match (ended, shown) {
+                        (Ended::Save, Shown::Theme(editor)) => Some(editor),
+                        _ => None,
+                    };
+                    let _ = reply.send(Answer::Theme(saved));
+                    if let Some(activity) = &mut self.activity {
+                        *activity = Activity::new("Working");
+                    }
+                }
+            }
+            return Flow::Go;
+        }
         let Some(open) = &mut self.dialog else {
             return Flow::Go;
         };
@@ -353,7 +382,7 @@ impl App {
             },
             Shown::Press(..) => None,
             Shown::Wait(..) if key.is(Binding::SelectCancel) => Some(Answer::Pressed(None)),
-            Shown::Wait(..) => None,
+            Shown::Wait(..) | Shown::Theme(_) => None,
         };
         if answer.is_some() {
             self.answer(answer);

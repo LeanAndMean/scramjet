@@ -1,13 +1,15 @@
 //! `/settings`, as Scramjet's: the settings in a list, each changed with Enter and saved at
 //! once, with the next steps of commands, publication approval and what is installed.
 use super::interactive::{Interactive, completions};
+use super::screen::{Answer, Dialog, Optional};
 use super::settings::{ROWS, Row, scramjet_level};
 use super::text::clip;
-use super::theme::{Listed, Mode, TERMINAL_COLORS};
-use super::{editor, installed, select, style};
+use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
+use super::theme_editor::ThemeEditor;
+use super::{editor, installed, palette, select, style};
 use scramjet_rs::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
-    Publication, Scope, Setting, search_program, shortened,
+    Publication, Scope, Setting, agent_directory, search_program, shortened, write_replacing,
 };
 use std::{
     path::{Path, PathBuf},
@@ -38,6 +40,10 @@ const STEP_CHOICES: [(&str, Option<(Edge, Scope)>); 5] = [
 ];
 const AUTOPILOT_DECIDES: &str = "With autopilot on, the recommended step runs after a 3-second \
     countdown; off, the next steps wait for you to choose.";
+const NEW_THEME: &str = "New theme…";
+const NEW_THEME_NOTE: &str = "Make a theme of your own: choose how many main colors and how they \
+    go together, then roll until you like it, lock the colors you like and roll again. A sample \
+    session shows it as you go.";
 
 /// What a theme is, as `/settings` says under its row.
 /// The hint of a list under `/settings`' own.
@@ -231,25 +237,115 @@ impl Interactive {
             };
             let listed = &self.themes.listed;
             let current = (listed.iter()).position(|known| known.name == self.settings.theme);
-            let notes = listed.iter().map(theme_note).collect();
+            let notes = (listed.iter().map(theme_note))
+                .chain([NEW_THEME_NOTE.to_owned()])
+                .collect();
             let picker = select::Picker::select(
                 "Theme",
                 select::VISIBLE,
-                listed.len(),
+                listed.len() + 1,
                 at.or(current).unwrap_or(0),
                 current,
-                |index, width| clip(&listed[index].name, width),
+                |index, width| match listed.get(index) {
+                    Some(listed) => clip(&listed.name, width),
+                    None => clip(NEW_THEME, width),
+                },
             );
             let Some(index) = screen.pick(picker.noting(back_keys("use"), notes).held()) else {
                 return;
             };
             at = Some(index);
+            if index == listed.len() {
+                if let Some(name) = self.make_theme() {
+                    at = (self.themes.listed.iter()).position(|known| known.name == name);
+                }
+                continue;
+            }
             let name = listed[index].name.clone();
             let saved = self.settings.set_theme(&name);
             self.use_theme();
             if let Err(error) = saved {
                 self.say(&format!("Error: settings not saved: {error}"));
             }
+        }
+    }
+
+    /// The theme editor; a theme saved from it is named, written to the `themes` directory of
+    /// Scramjet's agent directory, where Scramjet finds it too, and used. Escape on the name goes
+    /// back to the editor as it was; Escape in the editor goes back to the theme in use.
+    fn make_theme(&mut self) -> Option<String> {
+        let Some(directory) = agent_directory().map(|directory| directory.join("themes")) else {
+            self.say("Error: a theme cannot be saved: HOME is not set");
+            return None;
+        };
+        let seed = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
+            .map_or(0, |since| since.as_nanos() as u64)
+            ^ u64::from(std::process::id());
+        let light = match self.themes.theme(&self.settings.theme).background() {
+            Color::Rgb(r, g, b) => !palette::is_dark((r, g, b)),
+            _ => self.settings.theme == "pi-light",
+        };
+        let mut editor = Box::new(ThemeEditor::new(seed, light));
+        loop {
+            let saved = self.screen.as_ref()?.edit_theme(editor);
+            let Some(saved) = saved else {
+                self.use_theme();
+                return None;
+            };
+            editor = saved;
+            let Some(name) = self.theme_name(&directory) else {
+                continue;
+            };
+            let file = directory.join(format!("{name}.json"));
+            let shown = shortened(&file.display().to_string());
+            if let Err(error) = write_replacing(&file, &editor.file_text(&name)) {
+                self.say(&format!("Error: theme not saved in {shown}: {error}"));
+                continue;
+            }
+            self.discover_themes();
+            let set = self.settings.set_theme(&name);
+            self.use_theme();
+            self.say_styled(style::MUTED, &format!("Saved theme {name} in {shown}"));
+            if let Err(error) = set {
+                self.say(&format!("Error: settings not saved: {error}"));
+            }
+            return Some(name);
+        }
+    }
+
+    /// A name for a new theme in `directory`, typed: one no other theme has, which is also its
+    /// file's name; `None` when cancelled.
+    fn theme_name(&self, directory: &Path) -> Option<String> {
+        let taken = |name: &str| {
+            self.themes.get(name).is_some() || directory.join(format!("{name}.json")).exists()
+        };
+        let suggested = (1..)
+            .map(|number| match number {
+                1 => "my-theme".to_owned(),
+                number => format!("my-theme-{number}"),
+            })
+            .find(|name| !taken(name))
+            .unwrap_or_default();
+        let mut title = "Name the theme".to_owned();
+        let mut typed = suggested;
+        loop {
+            let dialog = Dialog::Text(title.clone(), typed.clone(), Optional::No);
+            let Some(Answer::Text(Some(text))) = self.screen.as_ref()?.ask(dialog, None) else {
+                return None;
+            };
+            typed = text.trim().to_owned();
+            let problem = match typed.as_str() {
+                "" => "Name the theme",
+                name if name.starts_with('.') || name.contains(['/', '\\']) => {
+                    "A name cannot start with a dot or hold a slash"
+                }
+                name if name.chars().any(char::is_control) || name.len() > 64 => {
+                    "A name is up to 64 characters, without control characters"
+                }
+                name if taken(name) => "That name is taken: choose another",
+                _ => return Some(typed),
+            };
+            title = problem.to_owned();
         }
     }
 

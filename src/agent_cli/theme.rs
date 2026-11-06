@@ -16,8 +16,8 @@ macro_rules! tokens {
         #[derive(Clone, Copy, Debug, PartialEq)]
         pub(super) enum Token { $($token),* }
 
-        const KEYS: &[&str] = &[$($key),*];
-        const TOKENS: &[Token] = &[$(Token::$token),*];
+        pub(super) const KEYS: &[&str] = &[$($key),*];
+        pub(super) const TOKENS: &[Token] = &[$(Token::$token),*];
     };
 }
 
@@ -375,6 +375,15 @@ impl Theme {
         self.background
     }
 
+    /// A theme of exact colors: each token's, in `TOKENS`' order, on the main `background`.
+    pub(super) fn exact(colors: &[(u8, u8, u8)], background: (u8, u8, u8)) -> Self {
+        let exact = |(r, g, b)| Color::Rgb(r, g, b);
+        Self {
+            colors: colors.iter().copied().map(exact).collect(),
+            background: exact(background),
+        }
+    }
+
     /// The built-in theme `name`.
     pub(super) fn built_in(name: &str) -> Option<Self> {
         let text = match name {
@@ -428,6 +437,36 @@ impl Theme {
             .collect::<Result<_, _>>()?;
         Ok((name, Self { colors, background }))
     }
+}
+
+/// The text of a theme file in Scramjet's format, named `name`, of exact colors: `vars` names
+/// some, and each token (in `TOKENS`' order) and the main `background` take the first of those
+/// that is theirs by its name, or else their own.
+pub(super) fn file_text(
+    name: &str,
+    vars: &[(String, (u8, u8, u8))],
+    colors: &[(u8, u8, u8)],
+    background: (u8, u8, u8),
+) -> String {
+    let hex = |(r, g, b): (u8, u8, u8)| format!("#{r:02x}{g:02x}{b:02x}");
+    let quoted = |text: &str| Value::String(text.to_owned()).to_string();
+    let value = |color| match vars.iter().find(|(_, var)| *var == color) {
+        Some((name, _)) => quoted(name),
+        None => quoted(&hex(color)),
+    };
+    let vars: Vec<String> = (vars.iter())
+        .map(|(name, color)| format!("    {}: {}", quoted(name), quoted(&hex(*color))))
+        .collect();
+    let keys = KEYS.iter().copied().chain([BACKGROUND]);
+    let colors: Vec<String> = (keys.zip(colors.iter().copied().chain([background])))
+        .map(|(key, color)| format!("    {}: {}", quoted(key), value(color)))
+        .collect();
+    format!(
+        "{{\n  \"name\": {},\n  \"vars\": {{\n{}\n  }},\n  \"colors\": {{\n{}\n  }}\n}}\n",
+        quoted(name),
+        vars.join(",\n"),
+        colors.join(",\n")
+    )
 }
 
 /// How often the file of the theme in use is looked at, as the screen looks at the terminal's

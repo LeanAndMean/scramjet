@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.29.0 — A theme editor
+
+### Added
+
+- `/settings` → Theme → New theme… opens a theme editor. Choose how many main colors the theme has (1 to 5) and a harmony that fits them (complementary, triadic, split-complementary, square…, each said in a line), on a dark or light background, then roll (R) until it is close. Lock (L) the colors you like and a roll changes only the others, placed in the harmony around them; Left and Right turn a color's hue, H steps the colors toward the harmony, + and − step the contrast, U undoes and Shift+U redoes. A sample session shows the theme in the conversation's place as you go, with the harmony's score and the text's contrast in numbers and words. Every role of the theme is derived from the main colors, its text and backgrounds kept readable: errors, success and warnings keep their reds, greens and ambers. Enter names the theme and saves it in Scramjet's format in `~/.scramjet/agent/themes/`, where Scramjet finds it too, and uses it.
+- The editor's keys are in `/hotkeys` and `keybindings.json` (`app.theme.*`).
+
 ## 0.28.2 — Responses streams as providers send them
 
 ### Fixed

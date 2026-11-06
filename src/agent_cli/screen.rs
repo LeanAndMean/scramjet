@@ -20,6 +20,7 @@ use super::settings::MarkdownReads;
 use super::slash::Builtin;
 use super::terminal::next_spin;
 use super::theme::Watched;
+use super::theme_editor::{self, ThemeEditor};
 use super::{external, job, style};
 use scramjet_rs::agent::{self, EffortCycle, Shell, Tokens};
 use std::{
@@ -133,6 +134,8 @@ pub(super) enum Dialog {
     /// Shows the title and the note until Escape (answered `Pressed(None)`) or the session
     /// dismisses it: a login waiting for the user.
     Wait(String, String),
+    /// The theme editor, a sample session showing its theme in the conversation's place.
+    Theme(Box<ThemeEditor>),
 }
 
 /// Whether a dialog's text may be left empty.
@@ -163,6 +166,8 @@ pub(super) enum Answer {
     Approved(agent::Answer),
     /// The key pressed, `None` for Escape.
     Pressed(Option<Press>),
+    /// The theme editor as it was saved; `None`: cancelled.
+    Theme(Option<Box<ThemeEditor>>),
 }
 
 /// What the user enters while the session waits for it.
@@ -241,6 +246,7 @@ enum Shown {
     /// The title and the note.
     Press(String, String),
     Wait(String, String),
+    Theme(Box<ThemeEditor>),
 }
 
 struct TextDialog {
@@ -269,6 +275,9 @@ struct App {
     editor: Editor,
     draft: Draft,
     transcript: Transcript,
+    /// The conversation and where it was scrolled to, while the theme editor's sample session
+    /// is shown in its place.
+    conversation: Option<(Transcript, Option<Place>)>,
     hide_thinking: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     inputs: mpsc::Sender<Input>,
@@ -334,6 +343,7 @@ impl App {
             draft: editor.draft(String::new()),
             editor,
             transcript: Transcript::default(),
+            conversation: None,
             hide_thinking,
             cancel,
             inputs,
@@ -523,11 +533,12 @@ impl App {
                 if let Event::Subagents(children) = &event {
                     self.footer.subagents(0, children);
                 }
-                self.transcript.push(event);
+                self.conversation_mut().push(event);
             }
             ToScreen::Call(index, event) => {
                 // The status line says `running` until every call has ended.
-                let others = (self.transcript.calls().into_iter().flatten().enumerate())
+                let calls = self.conversation_mut().calls();
+                let others = (calls.into_iter().flatten().enumerate())
                     .any(|(other, events)| other != index && !record::ended(events));
                 if !(others && matches!(event, Event::ToolResult(..))) {
                     self.track(&event);
@@ -535,16 +546,19 @@ impl App {
                 if let Event::Subagents(children) = &event {
                     self.footer.subagents(index, children);
                 }
-                self.transcript.push_call(index, event);
+                self.conversation_mut().push_call(index, event);
             }
-            ToScreen::Clear => {
-                self.transcript = Transcript::default();
-                self.top = None;
-                (self.selection, self.edge) = (None, None);
-            }
+            ToScreen::Clear => match &mut self.conversation {
+                Some(conversation) => *conversation = (Transcript::default(), None),
+                None => {
+                    self.transcript = Transcript::default();
+                    self.top = None;
+                    (self.selection, self.edge) = (None, None);
+                }
+            },
             ToScreen::Turn(efforts) => {
                 let running = efforts.is_some();
-                self.transcript.split();
+                self.conversation_mut().split();
                 self.activity = running.then(|| Activity::new("Working"));
                 if let Some(efforts) = efforts {
                     self.efforts = efforts;
@@ -606,6 +620,10 @@ impl App {
                     Dialog::Approve(question) => Shown::Approve(question),
                     Dialog::Press(title, note) => Shown::Press(title, note),
                     Dialog::Wait(title, note) => Shown::Wait(title, note),
+                    Dialog::Theme(editor) => {
+                        style::set(&editor.theme());
+                        Shown::Theme(editor)
+                    }
                 };
                 self.dialog = Some(Open {
                     shown,
@@ -632,6 +650,9 @@ impl App {
         let Some(watched) = &mut self.theme else {
             return;
         };
+        if self.conversation.is_some() {
+            return;
+        }
         let failed = watched.failed;
         let note = match watched.check(Instant::now()) {
             None => return,
@@ -661,6 +682,47 @@ impl App {
         if activity.what != next.what || activity.countdown.is_some() || next.countdown.is_some() {
             *activity = next;
         }
+    }
+
+    /// The conversation, which events go to, also while the theme editor's sample is shown.
+    fn conversation_mut(&mut self) -> &mut Transcript {
+        match &mut self.conversation {
+            Some((conversation, _)) => conversation,
+            None => &mut self.transcript,
+        }
+    }
+
+    /// Shows the theme editor's sample session from its start in the conversation's place while
+    /// the editor is open, and the conversation again, where it was, once it closes.
+    fn preview(&mut self) {
+        let editing = matches!(
+            self.dialog,
+            Some(Open {
+                shown: Shown::Theme(_),
+                ..
+            })
+        );
+        match (editing, self.conversation.take()) {
+            (true, None) => {
+                let mut sample = Transcript::default();
+                for part in theme_editor::sample() {
+                    sample.split();
+                    part.into_iter().for_each(|event| sample.push(event));
+                }
+                let conversation = std::mem::replace(&mut self.transcript, sample);
+                self.conversation = Some((conversation, self.top.take()));
+                self.top = Some(Place::START);
+            }
+            (false, Some((conversation, top))) => {
+                self.transcript = conversation;
+                self.top = top;
+            }
+            (_, conversation) => {
+                self.conversation = conversation;
+                return;
+            }
+        }
+        (self.selection, self.edge) = (None, None);
     }
 
     fn exit(&mut self) {
@@ -714,6 +776,7 @@ impl App {
             Shown::Text(_) => Answer::Text(None),
             Shown::Approve(_) => Answer::Approved(agent::Answer::Deny),
             Shown::Press(..) | Shown::Wait(..) => Answer::Pressed(None),
+            Shown::Theme(_) => Answer::Theme(None),
         });
         let _ = open.reply.send(answer);
         if !self.exiting && matches!(&open.shown, Shown::Pick(picker) if picker.is_held()) {

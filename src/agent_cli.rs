@@ -23,6 +23,7 @@ mod keys;
 mod login;
 mod markdown;
 mod packages;
+mod palette;
 mod record;
 mod scope;
 mod screen;
@@ -36,6 +37,7 @@ mod style;
 mod terminal;
 mod text;
 mod theme;
+mod theme_editor;
 mod tree;
 
 use args::{Options, Start, USAGE};

@@ -88,6 +88,13 @@ pub(super) enum Binding {
     TreeFilterAll,
     TreeFilterCycleForward,
     TreeFilterCycleBackward,
+    ThemeRoll,
+    ThemeLock,
+    ThemeHarmonize,
+    ThemeContrastUp,
+    ThemeContrastDown,
+    ThemeUndo,
+    ThemeRedo,
 }
 
 /// Where `/hotkeys` lists an action.
@@ -100,9 +107,10 @@ enum Section {
     Resume,
     ScopedModels,
     Tree,
+    ThemeEditor,
 }
 
-const SECTIONS: [(Section, &str); 7] = [
+const SECTIONS: [(Section, &str); 8] = [
     (Section::Navigation, "Navigation"),
     (Section::Editing, "Editing"),
     (Section::Other, "Other"),
@@ -110,6 +118,7 @@ const SECTIONS: [(Section, &str); 7] = [
     (Section::Resume, "In /resume"),
     (Section::ScopedModels, "In /scoped-models"),
     (Section::Tree, "In /tree"),
+    (Section::ThemeEditor, "In the theme editor"),
 ];
 
 struct Definition {
@@ -143,7 +152,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 71] = [
+const DEFINITIONS: [Definition; 78] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -215,6 +224,13 @@ const DEFINITIONS: [Definition; 71] = [
     define(B::TreeFilterAll, "app.tree.filter.all", &["ctrl+a"], S::Tree, "Filter: all entries"),
     define(B::TreeFilterCycleForward, "app.tree.filter.cycleForward", &["ctrl+o"], S::Tree, "Next filter"),
     define(B::TreeFilterCycleBackward, "app.tree.filter.cycleBackward", &["shift+ctrl+o"], S::Tree, "Previous filter"),
+    define(B::ThemeRoll, "app.theme.roll", &["r"], S::ThemeEditor, "Roll the colors not locked"),
+    define(B::ThemeLock, "app.theme.lock", &["l", "space"], S::ThemeEditor, "Lock or unlock the main color"),
+    define(B::ThemeHarmonize, "app.theme.harmonize", &["h"], S::ThemeEditor, "Turn the colors a step toward the harmony"),
+    define(B::ThemeContrastUp, "app.theme.contrastUp", &["+", "="], S::ThemeEditor, "More contrast"),
+    define(B::ThemeContrastDown, "app.theme.contrastDown", &["-"], S::ThemeEditor, "Less contrast"),
+    define(B::ThemeUndo, "app.theme.undo", &["u"], S::ThemeEditor, "Undo a roll or step"),
+    define(B::ThemeRedo, "app.theme.redo", &["shift+u"], S::ThemeEditor, "Redo a roll or step"),
 ];
 
 /// The keys of every action, in `DEFINITIONS`' order.

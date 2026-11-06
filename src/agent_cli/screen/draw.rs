@@ -303,6 +303,13 @@ impl App {
                 None
             }
             Some(Open {
+                shown: Shown::Theme(editor),
+                ..
+            }) => {
+                rows.extend(selection::rows(&editor.lines((width, room))));
+                None
+            }
+            Some(Open {
                 shown: Shown::Approve(question),
                 ..
             }) => {
@@ -387,6 +394,7 @@ impl App {
     }
 
     pub(super) fn draw(&mut self) -> io::Result<()> {
+        self.preview();
         let (width, height) = terminal_size();
         let mut out = String::from("\x1b[?2026h\x1b[?25l");
         // Some terminals move what they show on a resize.

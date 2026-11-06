@@ -11,6 +11,7 @@ use crate::agent_cli::select::{Picked, Picker, Routed, Spot};
 use crate::agent_cli::settings::{Delivery, DoubleEscape, Settings};
 use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
+use crate::agent_cli::theme_editor::ThemeEditor;
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
@@ -208,6 +209,18 @@ impl Link {
     pub(in crate::agent_cli) fn press(&self, title: &str, note: &str) -> Option<Press> {
         match self.ask(Dialog::Press(title.to_owned(), note.to_owned()), None) {
             Some(Answer::Pressed(press)) => press,
+            _ => None,
+        }
+    }
+
+    /// The theme editor, opening as `editor` is; the editor as it was saved, `None` when
+    /// cancelled.
+    pub(in crate::agent_cli) fn edit_theme(
+        &self,
+        editor: Box<ThemeEditor>,
+    ) -> Option<Box<ThemeEditor>> {
+        match self.ask(Dialog::Theme(editor), None) {
+            Some(Answer::Theme(saved)) => saved,
             _ => None,
         }
     }

@@ -31,6 +31,11 @@ pub(super) struct Place {
     line: usize,
 }
 
+impl Place {
+    /// The conversation's first line.
+    pub(super) const START: Place = Place { part: 0, line: 0 };
+}
+
 /// The conversation shown, in parts that each render on their own: a turn, or what came
 /// between turns. Each part is rendered again only when it or the look changes.
 #[derive(Default)]
