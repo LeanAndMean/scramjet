@@ -269,7 +269,7 @@ pub(super) fn relist(logins: &login::Logins) -> Result<Option<String>, String> {
 }
 
 fn relist_at(logins: &login::Logins, urls: &Urls) -> Result<Option<String>, String> {
-    login::access(&logins.auth, PROVIDER)?;
+    login::access(&logins.auth, PROVIDER, None)?;
     let credential = login::saved(&logins.auth)?.remove(PROVIDER);
     let credential = credential.ok_or("not logged in to ChatGPT (/login)")?;
     save_models(&credential, urls, logins, &AtomicBool::new(false))

@@ -18,6 +18,9 @@ A scenario (scripts/screens/*.json) holds:
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
     "model":    the scripted server's model (default gpt-6-luna);
     "providers": more models.json providers, listed after the scripted server's ("screens");
+    "models":   more of models.json's fields, such as "logins", `{root}` in a text being the
+                repository; programs scramjet-rs runs find the scripted server's base URL in
+                SCREENS_BASE_URL;
     "servers":  programs to run first in the repository, each {"run": [ARGUMENTS...], "port": PORT},
                 waited for until PORT on 127.0.0.1 takes connections, and stopped at the end;
     "env":      more environment for scramjet-rs, `{root}` in a value being the repository;
@@ -27,7 +30,8 @@ A scenario (scripts/screens/*.json) holds:
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
                 {"sleep": SECONDS}, {"shot": NAME} writes NAME.ansi and NAME.png.
 
-Nothing reaches a provider or the user's settings, sessions, packages or clipboard."""
+Nothing reaches a provider or the user's settings, sessions, packages, clipboard or browser: the
+pages scramjet-rs opens are written to opened.txt in the scratch directory."""
 import argparse
 import fcntl
 import json
@@ -271,6 +275,17 @@ def value(text):
         return text
 
 
+def rooted(value):
+    """`value` with `{root}` in its texts being the repository."""
+    if isinstance(value, str):
+        return value.replace('{root}', ROOT)
+    if isinstance(value, list):
+        return [rooted(item) for item in value]
+    if isinstance(value, dict):
+        return {key: rooted(item) for key, item in value.items()}
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('scenario')
@@ -313,14 +328,26 @@ def main():
         for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'TMUX', 'VISUAL', 'EDITOR',
                      'SCRAMJET_CACHE']:
             env.pop(name, None)
+        # Pages to open in a browser are written down instead.
+        os.makedirs(os.path.join(work, 'bin'))
+        for opener in ['xdg-open', 'open']:
+            path = os.path.join(work, 'bin', opener)
+            with open(path, 'w') as file:
+                file.write('#!/bin/sh\necho "$@" >> %s\n' % os.path.join(work, 'opened.txt'))
+            os.chmod(path, 0o755)
+        env['PATH'] = os.path.join(work, 'bin') + os.pathsep + env.get('PATH', '')
         env.update({name: text.replace('{root}', ROOT) for name, text in scenario.get('env', {}).items()})
 
         # The scripted server is the first provider, offering the scenario's model.
         model = scenario.get('model', 'gpt-6-luna')
-        provider = {'baseUrl': 'http://%s/v1' % serve(scenario.get('replies', [])), 'api': 'openai-responses',
+        base = 'http://%s/v1' % serve(scenario.get('replies', []))
+        env['SCREENS_BASE_URL'] = base
+        provider = {'baseUrl': base, 'api': 'openai-responses',
                     'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}
+        document = dict(rooted(scenario.get('models', {})),
+                        providers=dict({'screens': provider}, **scenario.get('providers', {})))
         with open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w') as file:
-            json.dump({'providers': dict({'screens': provider}, **scenario.get('providers', {}))}, file)
+            json.dump(document, file)
 
         for server in scenario.get('servers', []):
             servers.append(subprocess.Popen(server['run'], cwd=ROOT, stdin=subprocess.DEVNULL,

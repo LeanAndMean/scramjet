@@ -3,14 +3,17 @@
 //! while the screen waits, as Scramjet's login dialog does. ChatGPT's is a browser login, which
 //! comes back by itself, or the user pastes the address the browser ended on. While the full
 //! screen is open, the models each login lists are read again in the background as they age.
-//! A provider of the `models.json` files takes an API key, which requests to it then carry. The
-//! lists the providers whose entries list no models give themselves are kept current alike.
+//! A package's login is its program's: the screen opens and shows the pages it names and waits
+//! with what it says. A provider of the `models.json` files takes an API key, which requests to
+//! it then carry. The lists the providers whose entries list no models give themselves are kept
+//! current alike.
 
 use super::interactive::Interactive;
 use super::screen::{Answer, Dialog, Optional, Relisting};
 use super::select::{self, Picker};
 use super::text::{clip, visible};
 use super::{clipboard, editor, style};
+use scramjet_rs::agent::login::{LoginProgram, Said};
 use scramjet_rs::agent::{KeyFrom, Listing, codex, copilot, login};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -31,15 +34,18 @@ const LOOK_EVERY: Duration = Duration::from_secs(60);
 /// A row of `/login`'s list.
 enum Row<'a> {
     Heading(&'static str),
-    /// A provider's own login: its name, and what the user knows it by.
-    Login(&'static str, &'static str),
+    /// A provider's own login, or a package's: its name, and what the user knows it by.
+    Login(&'a str, &'a str),
     /// A provider of the files, which takes an API key.
     Key(&'a str, &'a KeyFrom),
 }
 
-/// `/login`'s rows: the logins, then, under headings, the providers that take an API key.
-fn rows(keyed: &[(String, KeyFrom)]) -> Vec<Row<'_>> {
-    let logins = (login::LOGINS.iter()).map(|(name, shown)| Row::Login(name, shown));
+/// `/login`'s rows: its own logins and the `programs`', then, under headings, the providers that
+/// take an API key.
+fn rows<'a>(programs: &'a [LoginProgram], keyed: &'a [(String, KeyFrom)]) -> Vec<Row<'a>> {
+    let own = (login::LOGINS.iter()).map(|(name, shown)| Row::Login(name, shown));
+    let packaged = programs.iter().map(|p| Row::Login(&p.provider, &p.name));
+    let logins = own.chain(packaged);
     if keyed.is_empty() {
         return logins.collect();
     }
@@ -63,7 +69,8 @@ impl Interactive {
         let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
         let is_logged_in = |name: &str| logged_in.iter().any(|known| known == name);
         let keyed = self.agent.providers().keyed().to_vec();
-        let rows = rows(&keyed);
+        let programs = self.agent.providers().login_programs().to_vec();
+        let rows = rows(&programs, &keyed);
         let notes = (rows.iter())
             .map(|row| match row {
                 Row::Login(name, _) if is_logged_in(name) => {
@@ -116,8 +123,80 @@ impl Interactive {
         match rows[index] {
             Row::Login(copilot::PROVIDER, shown) => self.copilot_login(&logins, shown),
             Row::Login(codex::PROVIDER, shown) => self.codex_login(&logins, shown),
+            Row::Login(provider, _) => {
+                let program = programs.iter().find(|program| program.provider == provider);
+                if let Some(program) = program {
+                    self.program_login(&logins, program.clone());
+                }
+            }
             Row::Key(provider, _) => self.key_login(&logins, provider),
-            _ => {}
+            Row::Heading(_) => {}
+        }
+    }
+
+    /// A package's login, its program's: the pages it names are opened and shown, and the
+    /// dialog waits with what it last said until it ends; Escape stops it.
+    fn program_login(&mut self, logins: &login::Logins, program: LoginProgram) {
+        let Some(screen) = &self.screen else {
+            return;
+        };
+        let shown = program.name.clone();
+        let (telling, heard) = mpsc::channel();
+        let [changed, done, cancel] = [(); 3].map(|()| Arc::new(AtomicBool::new(false)));
+        let finishing = {
+            let (logins, changed, done, cancel) = (
+                logins.clone(),
+                changed.clone(),
+                done.clone(),
+                cancel.clone(),
+            );
+            std::thread::spawn(move || {
+                let finished = program.login(&logins, &cancel, |said| {
+                    let _ = telling.send(said);
+                    changed.store(true, Ordering::SeqCst);
+                });
+                done.store(true, Ordering::SeqCst);
+                changed.store(true, Ordering::SeqCst);
+                finished
+            })
+        };
+        let title = format!("Log in to {shown}");
+        let mut note = "Starting the login…".to_owned();
+        let tell = |said: Said, note: &mut String| match said {
+            Said::Open(url) => {
+                let copied = match clipboard::copy(&url, false) {
+                    Ok(_) => " (copied)",
+                    Err(_) => "",
+                };
+                open_in_browser(&url);
+                screen.say(&format!(
+                    "Log in to {shown} in the browser that opened, or open this page in the one \
+                     you choose{copied}:\n{url}"
+                ));
+            }
+            Said::Say(text) => *note = text,
+        };
+        // Shown again with each news, until the login ends.
+        while !done.load(Ordering::SeqCst) {
+            let answer = screen.ask(Dialog::Wait(title.clone(), note.clone()), Some(&changed));
+            let news = changed.swap(false, Ordering::SeqCst);
+            // Escape, or the screen gone.
+            if answer.is_some() || !news {
+                cancel.store(true, Ordering::SeqCst);
+                break;
+            }
+            for said in heard.try_iter() {
+                tell(said, &mut note);
+            }
+        }
+        let finished = (finishing.join()).unwrap_or_else(|_| Err("the login failed".to_owned()));
+        for said in heard.try_iter() {
+            tell(said, &mut note);
+        }
+        let warning = finished.as_ref().ok().cloned().flatten();
+        self.finished_login(&shown, logins, finished.map(drop));
+        if let Some(warning) = warning {
+            self.say(&format!("Warning: {warning}"));
         }
     }
 
@@ -315,9 +394,13 @@ impl Interactive {
         }
         let keys = login::saved_keys(&logins.auth).unwrap_or_default();
         let is_key = |provider: &str| keys.iter().any(|keyed| keyed == provider);
+        let programs = self.agent.providers().login_programs().to_vec();
         let shown = |provider: &str| match is_key(provider) {
             true => format!("{} API key", visible(provider)),
-            false => visible(login::shown_name(provider)),
+            false => match programs.iter().find(|program| program.provider == provider) {
+                Some(program) => visible(&program.name),
+                None => visible(login::shown_name(provider)),
+            },
         };
         let chosen = match &self.screen {
             Some(screen) => {
@@ -361,29 +444,42 @@ impl Interactive {
     }
 }
 
+/// What the background keeps current, as the session last read the providers: the logins
+/// packages' programs do, and the providers that list their models themselves.
+#[derive(Clone, Default)]
+pub(super) struct Kept {
+    pub(super) programs: Vec<LoginProgram>,
+    pub(super) listings: Vec<Listing>,
+}
+
+impl Kept {
+    pub(super) fn of(providers: &scramjet_rs::agent::Providers) -> Self {
+        Self {
+            programs: providers.login_programs().to_vec(),
+            listings: providers.listings().to_vec(),
+        }
+    }
+}
+
 /// Keeps the model lists current while the full screen is open, the logins' and those the
-/// providers in `listings` give themselves: each is read again in the background once
+/// providers in `kept` give themselves: each is read again in the background once
 /// `RELIST_AFTER` old, at start too, and `relisting` hears when what they offer changes, with
 /// what to tell the user. A list another process read is taken up as well.
-pub(super) fn keep_lists_current(relisting: Relisting, listings: Arc<Mutex<Vec<Listing>>>) {
+pub(super) fn keep_lists_current(relisting: Relisting, kept: Arc<Mutex<Kept>>) {
     let Some(logins) = login::Logins::user() else {
         return;
     };
     let looking = std::thread::Builder::new().name("relist".into());
     let _ = looking.spawn(move || {
-        let listings = || {
-            listings
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone()
-        };
-        let mut lists = Lists::new(&logins, &listings());
+        let kept = || kept.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let mut lists = Lists::new(&logins, &kept());
         let relist = |source: &Source| match source {
             Source::Login(name, _) => login::relist(&logins, name),
+            Source::Program(program) => program.relist(&logins),
             Source::Provider(listing) => listing.relist().map(|()| None),
         };
         loop {
-            if let Some(notes) = lists.look(&logins, &listings(), Instant::now(), relist) {
+            if let Some(notes) = lists.look(&logins, &kept(), Instant::now(), relist) {
                 relisting.changed(notes);
             }
             std::thread::sleep(LOOK_EVERY);
@@ -395,15 +491,19 @@ pub(super) fn keep_lists_current(relisting: Relisting, listings: Arc<Mutex<Vec<L
 enum Source<'a> {
     /// A login's: its provider, and what the user knows it by.
     Login(&'static str, &'static str),
+    /// A package's login's.
+    Program(&'a LoginProgram),
     /// One a provider of the files gives itself, as its entry lists no models.
     Provider(&'a Listing),
 }
 
 impl Source<'_> {
-    /// What `Lists` knows it by; a provider's has a line break, which no login's name has.
+    /// What `Lists` knows it by: a provider's has a line break, which no login's name has, and
+    /// a package's login's is never one of `/login`'s own.
     fn key(&self) -> String {
         match self {
             Source::Login(name, _) => name.to_string(),
+            Source::Program(program) => program.provider.clone(),
             Source::Provider(listing) => listing.key(),
         }
     }
@@ -411,6 +511,7 @@ impl Source<'_> {
     fn shown(&self) -> String {
         match self {
             Source::Login(_, shown) => shown.to_string(),
+            Source::Program(program) => visible(&program.name),
             Source::Provider(listing) => visible(listing.provider()),
         }
     }
@@ -419,6 +520,9 @@ impl Source<'_> {
     fn age(&self, logins: &login::Logins) -> Option<Duration> {
         match self {
             Source::Login(name, _) => login::List::read(logins, name).and_then(|l| l.age()),
+            Source::Program(program) => {
+                login::List::read(logins, &program.provider).and_then(|l| l.age())
+            }
             Source::Provider(listing) => listing.age(),
         }
     }
@@ -426,9 +530,25 @@ impl Source<'_> {
     fn models(&self, logins: &login::Logins) -> Vec<Value> {
         match self {
             Source::Login(name, _) => offered(logins, name),
+            Source::Program(program) => offered(logins, &program.provider),
             Source::Provider(listing) => listing.models(),
         }
     }
+}
+
+/// The lists to keep current: of the logins saved in `logins`, `/login`'s own then `kept`'s
+/// programs', then those `kept`'s providers give themselves.
+fn sources<'a>(logins: &login::Logins, kept: &'a Kept) -> Vec<Source<'a>> {
+    let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
+    let is_logged_in = |name: &str| logged_in.iter().any(|known| known == name);
+    let own = (login::LOGINS.iter())
+        .filter(|(name, _)| is_logged_in(name))
+        .map(|(name, shown)| Source::Login(name, shown));
+    let programs = (kept.programs.iter())
+        .filter(|program| is_logged_in(&program.provider))
+        .map(Source::Program);
+    let listings = kept.listings.iter().map(Source::Provider);
+    own.chain(programs).chain(listings).collect()
 }
 
 /// What the lists offered when last looked at.
@@ -444,20 +564,18 @@ struct Lists {
 
 impl Lists {
     /// As the session read them at start.
-    fn new(logins: &login::Logins, listings: &[Listing]) -> Self {
-        let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
-        let logged_in = (login::LOGINS.iter())
-            .filter(|(name, _)| logged_in.iter().any(|known| known == name))
-            .map(|(name, shown)| Source::Login(name, shown));
-        let sources = logged_in.chain(listings.iter().map(Source::Provider));
-        let models = sources.map(|source| (source.key(), source.models(logins)));
+    fn new(logins: &login::Logins, kept: &Kept) -> Self {
+        let sources = sources(logins, kept);
+        let models = sources
+            .iter()
+            .map(|source| (source.key(), source.models(logins)));
         let mut lists = Self {
             models: models.collect(),
             retry: HashMap::new(),
             said: HashSet::new(),
             seen: HashSet::new(),
         };
-        for listing in listings {
+        for listing in &kept.listings {
             lists.see(listing, Instant::now());
         }
         lists
@@ -481,36 +599,29 @@ impl Lists {
         self.models.remove(key).is_some()
     }
 
-    /// Reads again with `relist` each list due at `now`, of the logins and of `listings`;
-    /// returns what to tell the user when what the lists offer changed, or there is trouble not
-    /// yet said.
+    /// Reads again with `relist` each list due at `now`, of the logins and of `kept`'s
+    /// providers; returns what to tell the user when what the lists offer changed, or there is
+    /// trouble not yet said.
     fn look(
         &mut self,
         logins: &login::Logins,
-        listings: &[Listing],
+        kept: &Kept,
         now: Instant,
         relist: impl Fn(&Source) -> Result<Option<String>, String>,
     ) -> Option<Vec<String>> {
-        let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
         let (mut notes, mut changed) = (Vec::new(), false);
-        let mut sources = Vec::new();
-        for (name, shown) in login::LOGINS {
-            match logged_in.iter().any(|known| known == name) {
-                true => sources.push(Source::Login(name, shown)),
-                false => changed |= self.forget(name),
-            }
-        }
-        let keys: Vec<String> = listings.iter().map(Listing::key).collect();
+        let sources = sources(logins, kept);
+        // Those logged out of, and those gone from the files.
+        let keys: HashSet<String> = sources.iter().map(Source::key).collect();
         let gone: Vec<String> = (self.models.keys().chain(&self.seen))
-            .filter(|key| key.contains('\n') && !keys.contains(key))
+            .filter(|key| !keys.contains(*key))
             .cloned()
             .collect();
         for key in gone {
             changed |= self.forget(&key);
         }
-        for listing in listings {
+        for listing in &kept.listings {
             self.see(listing, now);
-            sources.push(Source::Provider(listing));
         }
         for source in &sources {
             let (key, shown) = (source.key(), source.shown());
@@ -633,6 +744,14 @@ mod tests {
         }
     }
 
+    fn kept(listings: &[Listing]) -> Kept {
+        let listings = listings.to_vec();
+        Kept {
+            listings,
+            ..Kept::default()
+        }
+    }
+
     fn now_ms() -> f64 {
         let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
         since.unwrap().as_millis() as f64
@@ -678,11 +797,11 @@ mod tests {
             listings.iter().map(Listing::offered).collect::<Vec<_>>(),
             [Ok(1)]
         );
-        let mut lists = Lists::new(&logins, &listings);
+        let mut lists = Lists::new(&logins, &kept(&listings));
         let start = Instant::now();
         let never =
             |_: &Source| -> Result<Option<String>, String> { panic!("read again while fresh") };
-        assert_eq!(lists.look(&logins, &listings, start, never), None);
+        assert_eq!(lists.look(&logins, &kept(&listings), start, never), None);
         // Old enough, it is read again, and what changed is said.
         saved(16.0, &["a"]);
         let relisted = |source: &Source| {
@@ -690,30 +809,87 @@ mod tests {
             saved(0.0, &["a", "b"]);
             Ok(None)
         };
-        let said = lists.look(&logins, &listings, start, relisted);
+        let said = lists.look(&logins, &kept(&listings), start, relisted);
         assert_eq!(said, Some(vec!["local now offers b (/model)".to_owned()]));
         // Gone from the files, its models go.
-        assert_eq!(lists.look(&logins, &[], start, never), Some(vec![]));
+        assert_eq!(
+            lists.look(&logins, &Kept::default(), start, never),
+            Some(vec![])
+        );
         // One the providers could not read just now, which they said, waits before it is tried
         // again, and its trouble is not said twice.
         std::fs::remove_file(scratch.0.join("models/local.json")).unwrap();
         let unread = Providers::read(vec![file], Some(logins.clone()));
         let listings = unread.listings().to_vec();
         assert!(listings[0].offered().is_err());
-        assert_eq!(lists.look(&logins, &listings, start, never), None);
+        assert_eq!(lists.look(&logins, &kept(&listings), start, never), None);
         let failing = |_: &Source| Err("offline".to_owned());
         let later = start + RELIST_AFTER;
-        assert_eq!(lists.look(&logins, &listings, later, failing), None);
+        assert_eq!(lists.look(&logins, &kept(&listings), later, failing), None);
         let read = |_: &Source| {
             saved(0.0, &["c"]);
             Ok(None)
         };
-        let said = lists.look(&logins, &listings, later + RELIST_AFTER, read);
+        let said = lists.look(&logins, &kept(&listings), later + RELIST_AFTER, read);
         assert_eq!(said, Some(vec!["local now offers c (/model)".to_owned()]));
         // A long list is cut short.
         let ids = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
         assert_eq!(few(&ids), "a, b, c, d, e, f, g, h, i, j and 2 more");
         assert_eq!(few(&ids[..11]), ids[..11].join(", "));
+    }
+
+    #[test]
+    fn the_lists_of_packages_logins_are_kept_current_while_logged_in() {
+        let scratch = Scratch(
+            std::env::temp_dir().join(format!("scramjet-rs-relist-program-{}", std::process::id())),
+        );
+        let logins = login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        std::fs::create_dir_all(&logins.lists).unwrap();
+        let file = scratch.0.join("models.json");
+        let declared = json!({"logins": {"acme": {"name": "Acme", "command": ["./login"]}}});
+        std::fs::write(&file, declared.to_string()).unwrap();
+        let saved = |minutes: f64, ids: &[&str]| {
+            let models: Vec<Value> = ids.iter().map(|id| json!({"id": id})).collect();
+            let entry = json!({"baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+                "models": models});
+            let list = json!({"fetched": now_ms() - minutes * 60_000.0, "provider": entry});
+            std::fs::write(logins.lists.join("acme.json"), list.to_string()).unwrap();
+        };
+        std::fs::write(&logins.auth, r#"{"acme": {"type": "oauth"}}"#).unwrap();
+        saved(1.0, &["a"]);
+        let providers = Providers::read(vec![file], Some(logins.clone()));
+        let kept = Kept::of(&providers);
+        assert_eq!(kept.programs.len(), 1);
+        let mut lists = Lists::new(&logins, &kept);
+        let start = Instant::now();
+        let never =
+            |_: &Source| -> Result<Option<String>, String> { panic!("read again while fresh") };
+        assert_eq!(lists.look(&logins, &kept, start, never), None);
+        saved(16.0, &["a"]);
+        let relisted = |source: &Source| {
+            assert!(matches!(source, Source::Program(program) if program.provider == "acme"));
+            saved(0.0, &["a", "b"]);
+            Ok(Some("one source is stale".to_owned()))
+        };
+        assert_eq!(
+            lists.look(&logins, &kept, start, relisted),
+            Some(vec![
+                "Warning: one source is stale".to_owned(),
+                "Acme now offers b (/model)".to_owned(),
+            ])
+        );
+        // Gone from the files, or logged out of, its models go.
+        assert_eq!(
+            lists.look(&logins, &Kept::default(), start, never),
+            Some(vec![])
+        );
+        assert_eq!(lists.look(&logins, &kept, start, never), Some(vec![]));
+        std::fs::write(&logins.auth, "{}").unwrap();
+        assert_eq!(lists.look(&logins, &kept, start, never), Some(vec![]));
+        assert!(lists.models.is_empty());
     }
 
     #[test]
@@ -729,11 +905,11 @@ mod tests {
         let credential = r#"{"github-copilot": {"type": "oauth", "access": "a", "expires": 0}}"#;
         std::fs::write(&logins.auth, credential).unwrap();
         list(&logins, 1.0, &["a", "b"]);
-        let mut lists = Lists::new(&logins, &[]);
+        let mut lists = Lists::new(&logins, &Kept::default());
         let start = Instant::now();
         let never =
             |_: &Source| -> Result<Option<String>, String> { panic!("read again while fresh") };
-        assert_eq!(lists.look(&logins, &[], start, never), None);
+        assert_eq!(lists.look(&logins, &Kept::default(), start, never), None);
         // Old enough, it is read again, and what it offers now and no longer is said.
         list(&logins, 16.0, &["a", "b"]);
         let relisted = |source: &Source| {
@@ -742,7 +918,7 @@ mod tests {
             Ok(None)
         };
         assert_eq!(
-            lists.look(&logins, &[], start, relisted),
+            lists.look(&logins, &Kept::default(), start, relisted),
             Some(vec![
                 "GitHub Copilot now offers c (/model)".to_owned(),
                 "GitHub Copilot no longer offers b".to_owned(),
@@ -750,7 +926,10 @@ mod tests {
         );
         // Another process read it: taken up, nothing said.
         list(&logins, 0.0, &["a", "c", "d"]);
-        assert_eq!(lists.look(&logins, &[], start, never), Some(vec![]));
+        assert_eq!(
+            lists.look(&logins, &Kept::default(), start, never),
+            Some(vec![])
+        );
         // Trouble is said once, the list kept, and tried again only after a while.
         list(&logins, 16.0, &["a", "c", "d"]);
         let tries = Cell::new(0);
@@ -759,16 +938,16 @@ mod tests {
             Err("offline".to_owned())
         };
         assert_eq!(
-            lists.look(&logins, &[], start, failing),
+            lists.look(&logins, &Kept::default(), start, failing),
             Some(vec![
                 "Warning: GitHub Copilot's models could not be read again, so those it listed \
                  before are offered: offline"
                     .to_owned()
             ])
         );
-        assert_eq!(lists.look(&logins, &[], start, failing), None);
+        assert_eq!(lists.look(&logins, &Kept::default(), start, failing), None);
         let later = start + RELIST_AFTER;
-        assert_eq!(lists.look(&logins, &[], later, failing), None);
+        assert_eq!(lists.look(&logins, &Kept::default(), later, failing), None);
         assert_eq!(tries.get(), 2);
         // Read well, a later trouble is said again.
         let unchanged = |_: &Source| {
@@ -776,16 +955,19 @@ mod tests {
             Ok(None)
         };
         assert_eq!(
-            lists.look(&logins, &[], later + RELIST_AFTER, unchanged),
+            lists.look(&logins, &Kept::default(), later + RELIST_AFTER, unchanged),
             None
         );
         list(&logins, 16.0, &["a", "c", "d"]);
         let warned = |_: &Source| Ok(Some("npm is out of reach".to_owned()));
-        let said = lists.look(&logins, &[], later + RELIST_AFTER, warned);
+        let said = lists.look(&logins, &Kept::default(), later + RELIST_AFTER, warned);
         assert_eq!(said, Some(vec!["Warning: npm is out of reach".to_owned()]));
         // Logged out, its models are gone.
         std::fs::write(&logins.auth, "{}").unwrap();
-        assert_eq!(lists.look(&logins, &[], later, never), Some(vec![]));
+        assert_eq!(
+            lists.look(&logins, &Kept::default(), later, never),
+            Some(vec![])
+        );
         assert!(lists.models.is_empty());
     }
 }

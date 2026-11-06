@@ -20,8 +20,9 @@ Scramjet's format: each provider has a baseUrl (http:// or https://), an api (op
 anthropic-messages or openai-completions, with its compat), an apiKey (the value of the environment variable of that name, else the
 text) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
 providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}, and
-its credentialFiles the files holding their keys, hidden as --list-credential-stores says.
-/login adds the models of GitHub Copilot, its login saved in auth.json beside the settings.
+its credentialFiles the files holding their keys, hidden as --list-credential-stores says,
+and its logins the programs that log in to more providers. /login adds the models of ChatGPT,
+GitHub Copilot and those logins, each saved in auth.json beside the settings.
   --project DIR          project directory (default: current directory)
   --model PATTERN        model, as Scramjet finds it: the one whose provider/id or id PATTERN
                          is (an id two providers offer: the first's), else the newest whose

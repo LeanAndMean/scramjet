@@ -295,7 +295,7 @@ fn start(
     let mut warnings: Vec<String> = providers.problems().to_vec();
     if providers.options().is_empty() {
         warnings.push(format!(
-            "No provider offers any model: add providers to {} (see --help)",
+            "No provider offers any model: /login, or add providers to {} (see --help)",
             providers
                 .files()
                 .first()

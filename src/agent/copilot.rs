@@ -212,7 +212,7 @@ pub(super) fn relist(logins: &login::Logins) -> Result<(), String> {
 }
 
 fn relist_at(logins: &login::Logins, api: Option<&str>) -> Result<(), String> {
-    login::access(&logins.auth, PROVIDER)?;
+    login::access(&logins.auth, PROVIDER, None)?;
     let credential = login::saved(&logins.auth)?.remove(PROVIDER);
     let credential = credential.ok_or("not logged in to GitHub Copilot (/login)")?;
     save_models(&credential, api, logins)

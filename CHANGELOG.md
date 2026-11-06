@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.28.0 — Packages' logins
+
+### Added
+
+- A package can bring a login of its own: its `models.json` names a program in `logins`, which `/login` lists after ChatGPT and GitHub Copilot. The program has your browser open its sign-in page, which is also shown and copied, and the dialog says what it waits for; Escape stops it. Its token is saved in `auth.json` and renewed by the program once it expires, and the provider's models it lists are read after the login and kept current while the full screen is open, as Copilot's are. The format is in the README.
+
+### Changed
+
+- When no provider offers a model at start, the warning names `/login` beside `models.json`.
+
 ## 0.27.1 — MCP servers that redirect
 
 ### Fixed

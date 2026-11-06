@@ -1,0 +1,48 @@
+{
+  "size": "100x34",
+  "settings": {"theme": "scramjet-dark"},
+  "models": {
+    "logins": {"acme": {"name": "Acme Cloud", "command": ["{root}/tests/support/login_program.sh"]}}
+  },
+  "replies": [
+    [{"text": "Hello from Acme Large."}]
+  ],
+  "steps": [
+    {"sleep": 1},
+    {"type": "/login\r"},
+    {"until": "Log in to"},
+    {"shot": "logins"},
+    {"type": "\u001b[B\u001b[B"},
+    {"sleep": 0.3},
+    {"shot": "chosen"},
+    {"type": "\r"},
+    {"until": "open this page"},
+    {"shot": "opened"},
+    {"until": "Waiting for the browser sign-in"},
+    {"shot": "waiting"},
+    {"until": "Reading the models"},
+    {"shot": "models"},
+    {"until": "Logged in to Acme Cloud"},
+    {"sleep": 0.3},
+    {"shot": "logged-in"},
+    {"type": "/model acme/acme-large\r"},
+    {"sleep": 0.5},
+    {"type": "Hello?\r"},
+    {"until": "Hello from Acme Large."},
+    {"sleep": 0.3},
+    {"shot": "reply"},
+    {"type": "/logout\r"},
+    {"until": "Log out of"},
+    {"shot": "logout"},
+    {"type": "\u001b"},
+    {"sleep": 0.5},
+    {"type": "/login\r"},
+    {"until": "Log in to"},
+    {"type": "\u001b[B\u001b[B\r"},
+    {"until": "Waiting for the browser sign-in"},
+    {"type": "\u001b"},
+    {"until": "Login cancelled"},
+    {"sleep": 0.3},
+    {"shot": "cancelled"}
+  ]
+}

@@ -8,6 +8,11 @@
 //! It is written in place, as Scramjet writes its own: a sandbox hides it by mounting an empty
 //! file over it, and a file renamed over that path would show in every sandbox already running.
 //! What a login lists that is not secret, its models, is kept apart, in the state directory.
+//! Besides its own, `/login` lists those packages' programs do (`program`).
+
+mod program;
+
+pub use program::{LoginProgram, Said};
 
 use super::client::{Failure, Fetched};
 use super::{codex, copilot};
@@ -60,9 +65,10 @@ impl Logins {
         })
     }
 
-    /// The models `provider`'s login listed.
+    /// The models `provider`'s login listed, under a name a package's cannot lead out of.
     pub(super) fn listed(&self, provider: &str) -> PathBuf {
-        self.lists.join(format!("{provider}.json"))
+        let name = super::listed::file_name(provider);
+        self.lists.join(format!("{name}.json"))
     }
 
     /// The models `provider`, a provider of the files whose entry lists none, lists itself: in
@@ -127,13 +133,11 @@ pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
 /// Removes `provider`'s credentials, and what its login listed; returns whether there were any.
 pub fn logout(logins: &Logins, provider: &str) -> Result<bool, String> {
     let removed = update::<_, String>(&logins.auth, |saved| Ok(saved.remove(provider).is_some()))?;
-    // A login's provider is named by a file name; a key's, by a models.json file. What a key's
-    // provider listed is asked for again with the key it is left with.
-    match LOGINS.iter().any(|(login, _)| *login == provider) {
-        true => std::fs::remove_file(logins.listed(provider)),
-        false => std::fs::remove_file(logins.provided(provider)),
+    // What a key's provider listed is asked for again with the key it is left with.
+    std::fs::remove_file(logins.listed(provider)).ok();
+    if !LOGINS.iter().any(|(login, _)| *login == provider) {
+        std::fs::remove_file(logins.provided(provider)).ok();
     }
-    .ok();
     Ok(removed)
 }
 
@@ -163,12 +167,15 @@ impl List {
 }
 
 /// The provider, as a `models.json` entry, that what `provider`'s login `listed` makes with its
-/// `credential`; `None` for a provider `/login` does not log in to.
+/// `credential`; a package's program lists the entry itself. `None` when there is none.
 pub(super) fn entry(provider: &str, credential: &Value, listed: &Value) -> Option<Value> {
     match provider {
         copilot::PROVIDER => Some(copilot::entry(credential, listed)),
         codex::PROVIDER => Some(codex::entry(listed)),
-        _ => None,
+        _ => listed
+            .get("provider")
+            .filter(|entry| entry.is_object())
+            .cloned(),
     }
 }
 
@@ -191,27 +198,33 @@ pub(super) fn save(path: &Path, provider: &str, credential: Value) -> Result<(),
 }
 
 /// What a request to `provider` authenticates with: the access token its login keeps in `path`,
-/// renewed first when it has expired. A renewal that failed transiently may succeed if retried.
-pub(super) fn access(path: &Path, provider: &str) -> Result<String, Failure> {
-    access_with(path, provider, |credential| match provider {
-        copilot::PROVIDER => copilot::refresh(credential),
-        codex::PROVIDER => codex::refresh(credential),
-        _ => Err(format!("not logged in to {} (/login)", shown_name(provider)).into()),
+/// renewed first when it has expired, by `program` when a package's does the login. A renewal
+/// that failed transiently may succeed if retried.
+pub(super) fn access(
+    path: &Path,
+    provider: &str,
+    program: Option<&LoginProgram>,
+) -> Result<String, Failure> {
+    let shown = program.map_or(shown_name(provider), |program| &program.name);
+    access_with(path, provider, shown, |credential| {
+        match (program, provider) {
+            (Some(program), _) => program.refresh(credential),
+            (None, copilot::PROVIDER) => copilot::refresh(credential),
+            (None, codex::PROVIDER) => codex::refresh(credential),
+            (None, _) => Err(format!("not logged in to {shown} (/login)").into()),
+        }
     })
 }
 
-/// As `access`, `refresh` buying a token for an expired credential.
+/// As `access`, `refresh` buying a token for an expired credential; problems name the login
+/// `shown`.
 fn access_with(
     path: &Path,
     provider: &str,
+    shown: &str,
     refresh: impl FnOnce(&Value) -> Result<Value, Failure>,
 ) -> Result<String, Failure> {
-    let unusable = || {
-        Failure::from(format!(
-            "not logged in to {} (/login)",
-            shown_name(provider)
-        ))
-    };
+    let unusable = || Failure::from(format!("not logged in to {shown} (/login)"));
     let current = |saved: &Map<String, Value>| {
         let credential = saved.get(provider).filter(|c| c["type"] == "oauth");
         credential.cloned().ok_or_else(unusable)
@@ -442,15 +455,15 @@ mod tests {
             assert_eq!(credential["refresh"], "gho");
             Ok(bought.clone())
         };
-        let token = access_with(&path, "github-copilot", &mut refresh).unwrap();
+        let token = access_with(&path, "github-copilot", "GitHub Copilot", &mut refresh).unwrap();
         assert_eq!(token, "new");
         let credential = &saved(&path).unwrap()["github-copilot"];
         assert_eq!(credential["access"], "new");
         assert_eq!(credential["enterpriseUrl"], "company.ghe.com");
         // Fresh now, it is used as it is.
-        let token = access_with(&path, "github-copilot", &mut refresh).unwrap();
+        let token = access_with(&path, "github-copilot", "GitHub Copilot", &mut refresh).unwrap();
         assert_eq!((token.as_str(), refreshes), ("new", 1));
-        let failed = access_with(&path, "other", |_| unreachable!()).unwrap_err();
+        let failed = access_with(&path, "other", "other", |_| unreachable!()).unwrap_err();
         assert_eq!(failed.message, "not logged in to other (/login)");
         assert!(!failed.transient);
         // A refresh that fails leaves the login as it was, and says whether to try again.
@@ -458,7 +471,8 @@ mod tests {
         save(&path, "github-copilot", expired.clone()).unwrap();
         for transient in [false, true] {
             let failure = Failure::new("HTTP 5xx or 401", transient);
-            let failed = access_with(&path, "github-copilot", |_| Err(failure)).unwrap_err();
+            let failed = access_with(&path, "github-copilot", "GitHub Copilot", |_| Err(failure))
+                .unwrap_err();
             assert_eq!(
                 (failed.message.as_str(), failed.transient),
                 ("HTTP 5xx or 401", transient)

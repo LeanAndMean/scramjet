@@ -4,8 +4,10 @@
 //! `providersCommand`, whose output, `{"version": 1, "providers": …}`, adds more providers, as a
 //! package lists models it learns at run time, and in `credentialFiles` the files and directories
 //! holding its providers' credentials, which the agent's tools do not see (`sandbox::Hidden`).
-//! A provider logged in to with `/login` (`login::LOGINS`) adds the models its login listed,
-//! unless a file names it; a provider of that name without an `apiKey` takes the login's key.
+//! A file's `logins` name the programs that log in to more providers (`login::LoginProgram`).
+//! A provider logged in to with `/login` (`login::LOGINS`, or a program) adds the models its
+//! login listed, unless a file names it; a provider of that name without an `apiKey` takes the
+//! login's key.
 //! An API key `/login` saved for a provider the files name is sent in place of its `apiKey`.
 //! A provider whose entry lists no models offers those its server lists (`listed`).
 //! Providers may offer the same id: a model is named by its reference, `provider/id`.
@@ -14,7 +16,7 @@ use super::ModelOption;
 use super::client::Protocol;
 use super::completions::Compat;
 use super::listed::{self, Listing};
-use super::login::Logins;
+use super::login::{LoginProgram, Logins};
 use super::pricing::Prices;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -65,11 +67,12 @@ pub(super) struct Route {
     pub login: Option<Login>,
 }
 
-/// A provider's login (`login::LOGINS`), saved in `file`.
+/// A provider's login (`login::LOGINS`, or a package's `program`), saved in `file`.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Login {
     pub provider: String,
     pub file: PathBuf,
+    pub program: Option<LoginProgram>,
 }
 
 /// Leaves the headers' values out: they hold keys.
@@ -208,6 +211,8 @@ pub struct Providers {
     /// The lists asked for since these providers were made, by `Listing::key`, for those not
     /// saved: one that could not be read is not asked again at each reading.
     tried: HashMap<String, Result<Vec<Value>, String>>,
+    /// The logins the files' programs do.
+    programs: Vec<LoginProgram>,
 }
 
 impl Providers {
@@ -259,19 +264,33 @@ impl Providers {
                 Err(problem) => reading.problems.push(problem),
             }
         }
+        let mut documents: Vec<(Vec<u8>, &Path, String)> = Vec::new();
         for file in &self.files {
-            reading.file(file);
+            let shown = file.display().to_string();
+            match std::fs::read(file) {
+                Ok(text) => documents.push((text, file.parent().unwrap_or(Path::new(".")), shown)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => reading.problems.push(format!("{shown}: {error}")),
+            }
         }
         #[cfg(test)]
         if let Some(document) = &self.given {
             let text = document.to_string().into_bytes();
-            reading.document(&text, Path::new("."), "models");
+            documents.push((text, Path::new("."), "models".to_owned()));
+        }
+        // Every file's providers know the logins, whichever file names them.
+        for (text, directory, what) in &documents {
+            reading.declare(text, directory, what);
+        }
+        for (text, directory, what) in &documents {
+            reading.document(text, directory, what);
         }
         reading.logins();
         self.models = reading.models;
         self.keyed = reading.keyed;
         self.listings = reading.listings;
         self.tried = reading.tried;
+        self.programs = reading.programs;
         let previous = std::mem::replace(&mut self.credential_files, reading.credential_files);
         self.problems = reading.problems;
         self.keep_credential_files(previous);
@@ -325,6 +344,11 @@ impl Providers {
     /// from: those `/login` may save a key for.
     pub fn keyed(&self) -> &[(String, KeyFrom)] {
         &self.keyed
+    }
+
+    /// The logins the files' programs do, in their order.
+    pub fn login_programs(&self) -> &[LoginProgram] {
+        &self.programs
     }
 
     /// The model `name` names: the one whose reference (`provider/id`) it is, else the first
@@ -381,6 +405,12 @@ struct Document {
     version: Option<Value>,
 }
 
+/// A `models.json`'s logins, read from files only, before their providers.
+#[derive(Deserialize)]
+struct Declared {
+    logins: Option<Ordered>,
+}
+
 /// An object's entries in the order written, which `Value`'s map does not keep, as Scramjet
 /// keeps the providers in their order.
 struct Ordered(Vec<(String, Value)>);
@@ -422,9 +452,57 @@ struct Reading {
     listings: Vec<Listing>,
     /// `Providers::tried`.
     tried: HashMap<String, Result<Vec<Value>, String>>,
+    programs: Vec<LoginProgram>,
 }
 
 impl Reading {
+    /// Whether `/login` logs in to provider `name`, itself or by a package's program.
+    fn logs_in(&self, name: &str) -> bool {
+        super::login::LOGINS.iter().any(|(login, _)| *login == name)
+            || self.programs.iter().any(|program| program.provider == name)
+    }
+
+    /// The logins a `models.json` in `directory` names; problems name it `what`.
+    fn declare(&mut self, text: &[u8], directory: &Path, what: &str) {
+        // One that is no models.json is said so as its providers are read.
+        let Ok(Declared {
+            logins: Some(logins),
+        }) = serde_json::from_slice(text)
+        else {
+            return;
+        };
+        for (provider, entry) in logins.0 {
+            let what = format!("{what}: login {provider}");
+            let command = entry.get("command").and_then(Value::as_array);
+            let command = command.filter(|words| {
+                !words.is_empty()
+                    && words
+                        .iter()
+                        .all(|word| word.as_str().is_some_and(|w| !w.is_empty()))
+            });
+            let name = match entry.get("name") {
+                None => Some(provider.as_str()),
+                Some(name) => name.as_str().filter(|name| !name.trim().is_empty()),
+            };
+            let problem = match (command, name) {
+                _ if provider.trim().is_empty() => "has no provider name",
+                _ if self.logs_in(&provider) => "is logged in to already; not offered here",
+                (None, _) => "command must be a program and its arguments, as a list of strings",
+                (_, None) => "name must be a text",
+                (Some(command), Some(name)) => {
+                    let command = command.iter().filter_map(Value::as_str);
+                    let command = command.map(str::to_owned).collect();
+                    let directory = directory.to_path_buf();
+                    let name = name.to_owned();
+                    let program = LoginProgram::new(provider, name, command, directory);
+                    self.programs.push(program);
+                    continue;
+                }
+            };
+            self.problems.push(format!("{what}: {problem}"));
+        }
+    }
+
     /// The models of the providers logged in to that no file named, as their logins listed
     /// them.
     fn logins(&mut self) {
@@ -432,7 +510,13 @@ impl Reading {
             return;
         };
         let saved = self.saved.clone();
-        for (name, _) in super::login::LOGINS {
+        let builtin = super::login::LOGINS
+            .iter()
+            .map(|(name, _)| name.to_string());
+        let programs = self.programs.iter().map(|program| program.provider.clone());
+        let names: Vec<String> = builtin.chain(programs).collect();
+        for name in &names {
+            let name = name.as_str();
             if self.named.iter().any(|named| named == name) {
                 continue;
             }
@@ -444,6 +528,10 @@ impl Reading {
             let listed = super::login::List::read(&logins, name);
             let listed = listed.map_or(Value::Null, |listed| listed.0);
             let Some(entry) = super::login::entry(name, credential, &listed) else {
+                self.problems.push(format!(
+                    "{what}: no models were read for the login yet; they are asked for again \
+                     in the full screen, or /login again"
+                ));
                 continue;
             };
             if entry["models"].as_array().is_some_and(Vec::is_empty) {
@@ -454,17 +542,6 @@ impl Reading {
             }
             self.provider(name, &entry, &what);
         }
-    }
-
-    fn file(&mut self, path: &Path) {
-        let shown = path.display().to_string();
-        let text = match std::fs::read(path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
-            Err(error) => return self.problems.push(format!("{shown}: {error}")),
-        };
-        let directory = path.parent().unwrap_or(Path::new("."));
-        self.document(&text, directory, &shown);
     }
 
     /// A `models.json`'s `providers`, then those its `providersCommand` lists.
@@ -510,8 +587,7 @@ impl Reading {
     fn providers(&mut self, providers: Option<Ordered>, what: &str) {
         for (name, entry) in providers.into_iter().flat_map(|ordered| ordered.0) {
             self.named.push(name.clone());
-            let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
-            if !logs_in && !self.keyed.iter().any(|(keyed, _)| *keyed == name) {
+            if !self.logs_in(&name) && !self.keyed.iter().any(|(keyed, _)| *keyed == name) {
                 let from = match (super::login::key(&self.saved, &name), &entry["apiKey"]) {
                     (Some(_), _) => KeyFrom::Saved,
                     (None, Value::String(key))
@@ -560,7 +636,7 @@ impl Reading {
     /// The models provider `name`'s `entry`, which lists none, lists itself, as its server listed
     /// them when last asked, else now; `None`, with the problem said, when it cannot.
     fn listed(&mut self, name: &str, entry: &Map<String, Value>, what: &str) -> Option<Vec<Value>> {
-        let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
+        let logs_in = self.logs_in(name);
         let api = entry.get("api").and_then(Value::as_str);
         let lists = matches!(
             api,
@@ -668,16 +744,18 @@ impl Reading {
             path,
         } = base_url(url).map_err(|problem| format!("{subject}: baseUrl {problem}"))?;
         let mut headers = Vec::new();
-        let logs_in = super::login::LOGINS.iter().any(|(login, _)| *login == name);
         // As Scramjet's, a key `/login` saved is sent in place of the entry's.
         let key = match super::login::key(&self.saved, name) {
             Some(saved) => Some((saved, "the API key /login saved")),
             None => text("apiKey")?.map(|key| (key, "apiKey")),
         };
         let login = match (&self.logins, key) {
-            (Some(logins), None) if logs_in => Some(Login {
+            (Some(logins), None) if self.logs_in(name) => Some(Login {
                 provider: name.to_owned(),
                 file: logins.auth.clone(),
+                program: (self.programs.iter())
+                    .find(|program| program.provider == name)
+                    .cloned(),
             }),
             _ => None,
         };
@@ -912,15 +990,21 @@ fn in_directory(path: &str, directory: &Path) -> PathBuf {
     }
 }
 
-/// The output of the program `words` names with its arguments, run in `directory`: `~/` starts a
-/// path in the home directory, and a path with a `/` is from `directory`.
-fn run(words: &[&str], directory: &Path) -> Result<Vec<u8>, String> {
-    let program = words[0];
-    let path = match program.strip_prefix("~/").zip(std::env::home_dir()) {
+/// The program a file in `directory` names: `~/` starts a path in the home directory, a path
+/// with a `/` is from `directory`, and a name is looked for in `PATH`.
+pub(super) fn program_path(program: &str, directory: &Path) -> PathBuf {
+    match program.strip_prefix("~/").zip(std::env::home_dir()) {
         Some((rest, home)) => home.join(rest),
         None if program.contains('/') => directory.join(program),
         None => PathBuf::from(program),
-    };
+    }
+}
+
+/// The output of the program `words` names with its arguments (`program_path`), run in
+/// `directory`.
+fn run(words: &[&str], directory: &Path) -> Result<Vec<u8>, String> {
+    let program = words[0];
+    let path = program_path(program, directory);
     // In a group of its own, so that the processes it starts end with it.
     let mut child = Command::new(&path)
         .args(&words[1..])
@@ -1596,5 +1680,83 @@ mod tests {
         ] {
             assert!(parsed(url).is_err(), "{url}");
         }
+    }
+
+    #[test]
+    fn files_declare_logins_that_every_files_providers_take() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-rs-declared-{}", std::process::id())),
+        );
+        let package = scratch.0.join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let write = |path: &Path, document: Value| std::fs::write(path, document.to_string());
+        let own = scratch.0.join("models.json");
+        // The user's file names the provider before the package declares its login.
+        let fixed = json!({"baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+            "models": [{"id": "fixed"}]});
+        write(&own, json!({"providers": {"acme": fixed}})).unwrap();
+        let declared = package.join("models.json");
+        write(
+            &declared,
+            json!({"logins": {
+                "acme": {"command": ["bin/login", "--direct"]},
+                "github-copilot": {"command": ["bin/login"]},
+                "nameless": {"name": 3, "command": ["bin/login"]},
+                "bare": {},
+                "wordy": {"command": ["bin/login", 2]},
+                "other": {"name": "Other Co", "command": ["other-login"]},
+            }}),
+        )
+        .unwrap();
+        let again = scratch.0.join("again.json");
+        write(
+            &again,
+            json!({"logins": {"acme": {"command": ["elsewhere"]}}}),
+        )
+        .unwrap();
+        super::super::login::save(&logins.auth, "other", json!({"type": "oauth"})).unwrap();
+        let files = vec![own, declared.clone(), again.clone()];
+        let providers = Providers::read(files, Some(logins.clone()));
+        let programs = providers.login_programs();
+        let shown: Vec<(&str, &str)> = (programs.iter())
+            .map(|program| (program.provider.as_str(), program.name.as_str()))
+            .collect();
+        assert_eq!(shown, [("acme", "acme"), ("other", "Other Co")]);
+        let (declared, again) = (declared.display(), again.display());
+        assert_eq!(
+            providers.problems(),
+            // In the order written, which json! sorts.
+            [
+                format!(
+                    "{declared}: login bare: command must be a program and its arguments, as a \
+                     list of strings"
+                ),
+                format!(
+                    "{declared}: login github-copilot: is logged in to already; not offered here"
+                ),
+                format!("{declared}: login nameless: name must be a text"),
+                format!(
+                    "{declared}: login wordy: command must be a program and its arguments, as a \
+                     list of strings"
+                ),
+                format!("{again}: login acme: is logged in to already; not offered here"),
+                "other (/login): no models were read for the login yet; they are asked for \
+                 again in the full screen, or /login again"
+                    .to_owned(),
+            ]
+        );
+        let fixed = route(&providers, "acme/fixed");
+        let login = fixed.login.unwrap();
+        assert_eq!(
+            (login.provider.as_str(), &login.file),
+            ("acme", &logins.auth)
+        );
+        assert_eq!(login.program.as_ref(), Some(&programs[0]));
+        // A login, it takes no key.
+        assert!(providers.keyed().is_empty());
     }
 }

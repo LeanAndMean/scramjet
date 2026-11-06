@@ -286,9 +286,12 @@ pub(super) fn send(
 /// renewal, which goes on by itself and saves what it gets: OpenAI's renewal answers with a new
 /// refresh token, and the old one may not be taken again.
 fn login_token(login: &Login, cancel: &AtomicBool) -> Result<String, ClientError> {
-    let (file, provider) = (login.file.clone(), login.provider.clone());
+    let login = login.clone();
     let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || sender.send(super::login::access(&file, &provider)));
+    std::thread::spawn(move || {
+        let program = login.program.as_ref();
+        sender.send(super::login::access(&login.file, &login.provider, program))
+    });
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(ClientError::Cancelled);
@@ -917,6 +920,57 @@ response is incomplete; retry the request."});
             matches!(&failed, Err(AgentError::Provider(message))
                 if message == "not logged in to GitHub Copilot (/login)"),
             "{failed:?}"
+        );
+    }
+
+    #[test]
+    fn a_packages_login_renews_its_token_before_the_request_that_carries_it() {
+        let (endpoint, server) = serve_requests(vec![stream(&fixture::text_events(
+            "Hi.",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, scratch) = agent(endpoint, "program-login");
+        let logins = super::super::login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let program = scratch.0.join("login");
+        let renewed = r#"{"credential":{"access":"renewed","expires":99999999999999}}"#;
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\nread -r r\necho '{renewed}'\n"),
+        )
+        .unwrap();
+        let mode = std::os::unix::fs::PermissionsExt::from_mode(0o755);
+        std::fs::set_permissions(&program, mode).unwrap();
+        let file = scratch.0.join("models.json");
+        let declared = r#"{"logins": {"acme": {"name": "Acme", "command": ["./login"]}}}"#;
+        std::fs::write(&file, declared).unwrap();
+        let expired = json!({"type": "oauth", "access": "old", "refresh": "r", "expires": 0});
+        super::super::login::save(&logins.auth, "acme", expired).unwrap();
+        // The login listed the test's server.
+        let entry = json!({"baseUrl": format!("http://{endpoint}/v1"), "api": "openai-responses",
+            "models": [{"id": "m1"}]});
+        let list = json!({"fetched": super::super::login::now_ms(), "provider": entry});
+        super::super::login::save_list(&logins.listed("acme"), &list).unwrap();
+        agent.config.providers = crate::agent::Providers::read(vec![file], Some(logins.clone()));
+        agent.set_model("acme/m1").unwrap();
+        let mut ui = Recorder::default();
+        agent
+            .turn("Hello?", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        assert_eq!(ui.replies, ["Hi."]);
+        let requests = server.join().unwrap();
+        let head = &requests[0].0;
+        assert!(
+            head.starts_with("post /v1/responses http/1.1\r\n"),
+            "{head}"
+        );
+        assert!(head.contains("authorization: bearer renewed\r\n"), "{head}");
+        let saved = super::super::login::saved(&logins.auth).unwrap();
+        assert_eq!(
+            (&saved["acme"]["access"], &saved["acme"]["refresh"]),
+            (&json!("renewed"), &json!("r"))
         );
     }
 
