@@ -391,6 +391,7 @@ mod tests {
                 cost,
                 ..ChildUsage::default()
             },
+            responses: Vec::new(),
             warnings: Vec::new(),
         };
         let children = |runs| Children {

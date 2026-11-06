@@ -755,6 +755,13 @@ here\n\nkept.txt says original";
         // Each response: 7 input tokens not from the cache, 3 from it and 5 output tokens.
         let each = 7e-3 + 3e-4 + 5e-2;
         close(run.usage.cost.unwrap(), 3.0 * each);
+        // And each response's usage and timing are kept.
+        assert_eq!(run.responses.len(), 3);
+        for response in &run.responses {
+            assert_eq!(response["usage"]["output"], 5);
+            assert!(response["timing"]["duration_ms"].is_u64(), "{response}");
+            assert!(response["timing"]["started"].as_u64() > Some(1_700_000_000_000));
+        }
         // The session's cost has the child's, its tokens only the parent's; the footer is told
         // after each response and after the child's result.
         let costs: Vec<_> = ui.usage.iter().map(|(tokens, _)| tokens.cost).collect();

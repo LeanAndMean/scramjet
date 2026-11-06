@@ -11,7 +11,7 @@ use std::{
         Arc, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -106,6 +106,30 @@ pub(super) struct Reply {
     pub cost: Option<f64>,
     /// From its request to its end, retries aside (`request::send`).
     pub elapsed: Duration,
+    /// When its response's headers came, and its first text, reasoning or call streamed.
+    pub headers_at: Option<Instant>,
+    pub first_output_at: Option<Instant>,
+    /// Set by `request::send`.
+    pub timing: Option<Timing>,
+}
+
+/// When a reply's request was sent and how long its parts took, with the attempts that failed
+/// before it.
+#[derive(Clone, Debug)]
+pub(super) struct Timing {
+    pub started_at: SystemTime,
+    pub headers: Option<Duration>,
+    pub first_output: Option<Duration>,
+    pub elapsed: Duration,
+    pub failed: Vec<FailedAttempt>,
+}
+
+/// An attempt that failed before a reply came, retried.
+#[derive(Clone, Debug)]
+pub(super) struct FailedAttempt {
+    pub started_at: SystemTime,
+    pub elapsed: Duration,
+    pub error: String,
 }
 
 pub(super) enum ClientError {
@@ -297,8 +321,13 @@ async fn exchange(
         compat,
     }: Sent<'_>,
     body: Vec<u8>,
-    progress: &mut dyn FnMut(StreamProgress),
+    shown: &mut dyn FnMut(StreamProgress),
 ) -> Result<Reply, Failure> {
+    let mut first_output_at = None;
+    let progress = &mut |update| {
+        first_output_at.get_or_insert_with(Instant::now);
+        shown(update)
+    };
     let authority = &route.authority;
     let (mut sender, driver) = connect(route).await?;
     let mut request = match protocol {
@@ -327,6 +356,7 @@ async fn exchange(
         .send_request(request)
         .await
         .map_err(|e| Failure::new(format!("request failed: {e}"), true))?;
+    let headers_at = Some(Instant::now());
     let status = response.status();
     let wait = match crate::http::retry_after::parse(
         response
@@ -394,7 +424,12 @@ async fn exchange(
         }
     };
     driver.abort();
-    result.map(|reply| Reply { priced_by, ..reply })
+    result.map(|reply| Reply {
+        priced_by,
+        headers_at,
+        first_output_at,
+        ..reply
+    })
 }
 
 /// What a request other than a model's (a login's) was answered: its status and body.

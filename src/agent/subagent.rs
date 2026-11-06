@@ -700,6 +700,7 @@ impl<'a> Job<'a> {
             state: ChildState::Running,
             items: Vec::new(),
             usage: ChildUsage::default(),
+            responses: Vec::new(),
             warnings: self.warnings.clone(),
         }
     }
@@ -715,6 +716,8 @@ struct Run {
     usage: Usage,
     /// Responses received.
     turns: u64,
+    /// Each response's usage and timing (`ChildRun::responses`).
+    responses: Vec<Value>,
     /// What was said about the agent's file and the tools it did not get.
     warnings: Vec<String>,
 }
@@ -727,6 +730,7 @@ impl Run {
             error: None,
             usage: Usage::default(),
             turns: 0,
+            responses: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -1082,6 +1086,7 @@ fn run_jobs(
                 Event::Done(run) => {
                     child.state = run.shown_state();
                     child.usage = run.shown_usage();
+                    child.responses = run.responses.clone();
                     runs[index] = Some(run);
                 }
             }
@@ -1260,6 +1265,10 @@ fn run_child(
         };
         run.turns += 1;
         run.usage.count(&reply);
+        run.responses.push(json!({
+            "usage": super::turn::saved_usage(&reply),
+            "timing": reply.timing.as_ref().map(super::turn::saved_timing),
+        }));
         if let Some(path) = parent.rates {
             // The rates are only shown; a child goes on without them.
             let _ = rates::record(path, &job.model, &reply);

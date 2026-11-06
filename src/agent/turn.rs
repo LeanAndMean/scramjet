@@ -4,7 +4,8 @@ use super::calls::Calls;
 use super::request::Replying;
 use super::{
     Agent, AgentError, AgentUi, AutoCompaction, CONTEXT, Completed, MAX_STEPS, PROBE, PRODUCER,
-    Routing, Source, Step, Suggested, TYPED, USAGE, autonomy, message_text, status, suggest,
+    Routing, Source, Step, Suggested, TIMING, TYPED, USAGE, autonomy, message_text, status,
+    suggest,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -282,6 +283,7 @@ to a larger-context model)"
             let mut calls = Vec::new();
             let last = reply.items.len().saturating_sub(1);
             let saved = saved_usage(&reply);
+            let timing = reply.timing.as_ref().map(saved_timing);
             for (index, mut item) in reply.items.into_iter().enumerate() {
                 if let Some(object) = item.as_object_mut() {
                     object.insert(PRODUCER.into(), json!(model));
@@ -290,6 +292,9 @@ to a larger-context model)"
                     }
                     if let Some(usage) = saved.as_ref().filter(|_| index == last) {
                         object.insert(USAGE.into(), usage.clone());
+                    }
+                    if let Some(timing) = timing.as_ref().filter(|_| index == last) {
+                        object.insert(TIMING.into(), timing.clone());
                     }
                 }
                 match item["type"].as_str() {
@@ -381,7 +386,7 @@ to a larger-context model)"
 /// A response's usage as saved with its last item (`USAGE`), as Scramjet's usage counts it:
 /// input tokens neither read from the cache nor written to it, output tokens, cache reads and
 /// writes, and the cost when it is known.
-fn saved_usage(reply: &super::client::Reply) -> Option<Value> {
+pub(super) fn saved_usage(reply: &super::client::Reply) -> Option<Value> {
     let usage = reply.usage.as_ref()?;
     let read = usage.cached_input_tokens.unwrap_or(0);
     let written = usage.cache_write_tokens.unwrap_or(0);
@@ -395,6 +400,36 @@ fn saved_usage(reply: &super::client::Reply) -> Option<Value> {
         saved["cost"] = json!(cost);
     }
     Some(saved)
+}
+
+/// A response's timing as saved with its last item (`TIMING`).
+pub(super) fn saved_timing(timing: &super::client::Timing) -> Value {
+    let since = |at: std::time::SystemTime| {
+        (at.duration_since(std::time::UNIX_EPOCH)).map_or(0, |since| since.as_millis() as u64)
+    };
+    let millis = |duration: std::time::Duration| duration.as_millis() as u64;
+    let mut saved = json!({
+        "started": since(timing.started_at),
+        "duration_ms": millis(timing.elapsed),
+    });
+    if let Some(headers) = timing.headers {
+        saved["headers_ms"] = json!(millis(headers));
+    }
+    if let Some(first) = timing.first_output {
+        saved["first_output_ms"] = json!(millis(first));
+    }
+    if !timing.failed.is_empty() {
+        saved["failed"] = (timing.failed.iter())
+            .map(|attempt| {
+                json!({
+                    "started": since(attempt.started_at),
+                    "duration_ms": millis(attempt.elapsed),
+                    "error": attempt.error,
+                })
+            })
+            .collect();
+    }
+    saved
 }
 
 #[cfg(test)]

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.47.0 — Each response's timing recorded
+
+### Added
+
+- Each response saved in a session now records when its request was sent and how many milliseconds passed until its headers, its first streamed text, reasoning or call, and its end (`_scramjet_timing`), with the attempts that failed and were retried before it. Subagents' saved results keep each of their responses' usage and timing too. This starts the history a later `/usage` view draws on.
+
 ## 0.46.0 — Fresh session shown and switched on next steps
 
 ### Added

@@ -101,6 +101,10 @@ const CONTEXT: &str = "_scramjet_context_tokens";
 /// and, when its model's prices say, its `cost` in dollars, which `/session` and the footer
 /// sum as Scramjet sums its assistant messages' usage. Never sent.
 const USAGE: &str = "_scramjet_usage";
+/// Stored with a response's last item: when its request was sent (`started`, milliseconds since
+/// 1970), the milliseconds until its response's headers, its first streamed text, reasoning or
+/// call, and its end, and the attempts that failed before it (`failed`). Never sent.
+const TIMING: &str = "_scramjet_timing";
 /// Stored with a user message whose text is not its prompt as typed (a command's or skill's
 /// expansion, a `!command`'s output, `@` files' contents): the prompt as typed, which is shown and
 /// recalled. Never sent to the provider.

@@ -14,7 +14,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 /// Scramjet's retry backoff: 2s, 4s, 8s, ...
@@ -141,7 +141,7 @@ impl Agent {
                 }
                 Err(error) => Err(error.into()),
             };
-            let _ = to.send(Streamed::Ended(ended));
+            let _ = to.send(Streamed::Ended(Box::new(ended)));
         });
         Ok(Replying {
             from,
@@ -183,7 +183,7 @@ impl Agent {
                     ui.retrying(&error, attempt, self.config.retries, delay)
                 }
                 Ok(Streamed::Ended(ended)) => {
-                    let reply = ended?;
+                    let reply = (*ended)?;
                     self.count(&replying.model, &reply, Purpose::Reply);
                     return Ok(reply);
                 }
@@ -278,7 +278,7 @@ enum Streamed {
     Sent,
     Progress(StreamProgress),
     Retrying(String, u32, Duration),
-    Ended(Result<client::Reply, AgentError>),
+    Ended(Box<Result<client::Reply, AgentError>>),
 }
 
 /// What happens while a request is sent.
@@ -351,7 +351,9 @@ pub(super) fn send(
     };
     let body = body.map_err(std::io::Error::from)?;
     let mut attempt = 0;
+    let mut failed = Vec::new();
     loop {
+        let mut sent_at = None;
         on(Sending::Attempt);
         // A login's token, renewed when it expired, which it may have during a retry's wait.
         let token = (route.login.as_ref())
@@ -379,6 +381,7 @@ pub(super) fn send(
                 }
                 on(Sending::Sent);
                 let started = Instant::now();
+                sent_at = Some((SystemTime::now(), started));
                 let sent = client::Sent {
                     route,
                     protocol: info.protocol,
@@ -391,6 +394,13 @@ pub(super) fn send(
                 {
                     Ok(mut reply) => {
                         reply.elapsed = started.elapsed();
+                        reply.timing = Some(client::Timing {
+                            started_at: sent_at.map_or_else(SystemTime::now, |(at, _)| at),
+                            headers: reply.headers_at.map(|at| at - started),
+                            first_output: reply.first_output_at.map(|at| at - started),
+                            elapsed: reply.elapsed,
+                            failed,
+                        });
                         reply.cost = (reply.usage.as_ref())
                             .and_then(|usage| info.prices.cost(usage, reply.priced_by.as_deref()));
                         return Ok(reply);
@@ -400,6 +410,16 @@ pub(super) fn send(
                 }
             }
         };
+        if let Some((started_at, started)) = sent_at {
+            failed.push(client::FailedAttempt {
+                started_at,
+                elapsed: started.elapsed(),
+                error: (failure.message.lines().next().unwrap_or_default())
+                    .chars()
+                    .take(300)
+                    .collect(),
+            });
+        }
         let backoff = RETRY_DELAY * 2u32.pow(attempt.min(5));
         let delay = backoff
             .min(MAX_RETRY_WAIT)
@@ -541,6 +561,24 @@ response is incomplete; retry the request."});
             .map(|item| item["type"].as_str().or(item["role"].as_str()).unwrap())
             .collect();
         assert_eq!(kinds, ["user", "message"]);
+        // The reply's timing is saved, with the attempt that failed before it.
+        let timing = &agent.conversation()[1]["_scramjet_timing"];
+        let failed = &timing["failed"][0];
+        assert!(
+            failed["error"]
+                .as_str()
+                .unwrap()
+                .contains("Connection reset by peer")
+        );
+        assert!(timing["failed"].get(1).is_none());
+        let ms = |value: &Value| value.as_u64().unwrap();
+        let waited = ms(&timing["started"]) - ms(&failed["started"]);
+        assert!(waited >= RETRY_DELAY.as_millis() as u64, "{timing}");
+        let (headers, first) = (ms(&timing["headers_ms"]), ms(&timing["first_output_ms"]));
+        assert!(
+            headers <= first && first <= ms(&timing["duration_ms"]),
+            "{timing}"
+        );
     }
 
     #[test]

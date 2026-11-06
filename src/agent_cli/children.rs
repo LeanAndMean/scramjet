@@ -430,6 +430,7 @@ mod tests {
                 output_tokens: 950,
                 cost: None,
             },
+            responses: Vec::new(),
             warnings: Vec::new(),
         }
     }

@@ -291,6 +291,9 @@ pub struct ChildRun {
     /// Its replies' texts and tool calls, in order; the last text is its result.
     pub items: Vec<ChildItem>,
     pub usage: ChildUsage,
+    /// Each response's usage and timing, as the main agent's are saved with its items.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub responses: Vec<Value>,
     /// What was said about the agent's file and the tools it did not get.
     pub warnings: Vec<String>,
 }
