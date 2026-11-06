@@ -179,6 +179,9 @@ pub struct AgentConfig {
     pub prompt: SystemPrompt,
     /// The MCP servers the settings list (`mcpServers`).
     pub mcp_servers: Vec<McpServer>,
+    /// How the coding tools and the MCP servers that run as programs are confined; `None`
+    /// leaves them as `Agent::set_hide_credentials` says.
+    pub sandbox: Option<Sandbox>,
 }
 
 /// What the command line changes in the agent's instructions, as Scramjet's options do. A text
@@ -515,8 +518,6 @@ pub struct Agent {
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
-    /// How the coding tools are confined; `None`: as `hide_credentials` says.
-    sandbox: Option<Sandbox>,
     /// Whether a completed command's recommended next step runs without the user choosing it.
     autopilot: bool,
     /// The MCP servers, while the model is offered their tools.
@@ -672,7 +673,6 @@ impl Agent {
             identities: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
-            sandbox: None,
             autopilot,
             mcp: None,
             calls: None,
@@ -727,7 +727,13 @@ impl Agent {
         // Calls still running keep the servers they had.
         match self.mcp.as_mut().and_then(Arc::get_mut) {
             Some(running) => running.update(wanted, root),
-            None => self.mcp = Some(Arc::new(mcp::Servers::start(wanted, root))),
+            None => {
+                let confined = self.config.sandbox.map(|sandbox| {
+                    let hidden = sandbox::Hidden::current(self.config.providers.credential_files());
+                    (sandbox, hidden)
+                });
+                self.mcp = Some(Arc::new(mcp::Servers::start(wanted, root, confined)));
+            }
         }
     }
 
@@ -1332,13 +1338,18 @@ impl Agent {
 
     /// Confines the coding tools as `sandbox` says, the credential stores hidden too, or, with
     /// `None`, no more than `set_hide_credentials` says. Where bubblewrap cannot run, their
-    /// commands fail (`Sandbox::check` says so first). A `!` command stays outside.
+    /// commands fail (`Sandbox::check` says so first). A `!` command stays outside. The MCP
+    /// servers start again in it.
     pub fn set_sandbox(&mut self, sandbox: Option<Sandbox>) {
-        self.sandbox = sandbox;
+        if self.config.sandbox != sandbox {
+            self.config.sandbox = sandbox;
+            self.mcp = None;
+            self.start_mcp();
+        }
     }
 
     pub fn sandbox(&self) -> Option<Sandbox> {
-        self.sandbox
+        self.config.sandbox
     }
 
     /// The window automatic compaction checks; `None` skips the check.

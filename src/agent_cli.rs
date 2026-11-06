@@ -306,6 +306,13 @@ fn start(
         ));
     }
     let model = named.map_or_else(|| default_model(&providers), |named| named.model);
+    let sandbox = (options.sandbox.unwrap_or(settings.sandbox)).map(|mode| Sandbox {
+        mode,
+        network: settings.sandbox_network,
+    });
+    if sandbox.is_some() {
+        Sandbox::check()?;
+    }
     let config = AgentConfig {
         providers,
         model,
@@ -321,16 +328,9 @@ fn start(
         skill_options,
         prompt: options.prompt,
         mcp_servers: settings.mcp_servers.clone(),
+        sandbox,
     };
-    let sandbox = (options.sandbox.unwrap_or(settings.sandbox)).map(|mode| Sandbox {
-        mode,
-        network: settings.sandbox_network,
-    });
-    if sandbox.is_some() {
-        Sandbox::check()?;
-    }
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
-    agent.set_sandbox(sandbox);
     let (scoped, scope_warnings) = match patterns.is_empty() {
         true => Default::default(),
         false => scope::resolve(patterns, &agent.model_options()),

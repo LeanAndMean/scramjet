@@ -90,7 +90,8 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
                          every file read-only, a private /tmp, its own processes and the
                          credential stores hidden, and refuses write and edit;
                          workspace-write lets both change the project but its .git,
-                         .scramjet and .agents. Commands reach the network unless the
+                         .scramjet and .agents. MCP servers that run as programs start
+                         inside too. Commands reach the network unless the
                          setting sandboxNetwork is false. It needs bubblewrap (bwrap) and
                          refuses to start without it. `!` commands you type stay outside
   -p, --print            run the messages and exit; a message `-` is read from stdin

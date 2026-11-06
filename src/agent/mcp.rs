@@ -3,6 +3,7 @@
 //! `mcp_call`. So the tools it is offered, and the cached start of its requests, stay the same
 //! however many servers and tools there are.
 use super::image;
+use super::sandbox::{self, Hidden, Sandbox};
 use super::tools::{Group, MAX_BYTES, MAX_LINES, Output};
 use rmcp::{
     ClientLifecycleMode, ClientServiceExt, RoleClient,
@@ -176,6 +177,8 @@ pub(super) struct Servers {
     within: Duration,
     /// The instructions' list of the servers, made once none is starting.
     section: Mutex<Option<String>>,
+    /// The sandbox the servers that run as programs start in, with the stores it hides.
+    confined: Option<Arc<(Sandbox, Hidden)>>,
 }
 
 struct Running {
@@ -215,13 +218,19 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Servers {
-    /// Starts each of `configs` in `root`, in the background.
-    pub fn start(configs: &[Server], root: &Path) -> Self {
-        Self::start_within(configs, root, START)
+    /// Starts each of `configs` in `root`, in the background, those that run as programs in
+    /// `confined`'s sandbox.
+    pub fn start(configs: &[Server], root: &Path, confined: Option<(Sandbox, Hidden)>) -> Self {
+        Self::start_within(configs, root, START, confined.map(Arc::new))
     }
 
     /// As `start`, each server given `within` to start.
-    fn start_within(configs: &[Server], root: &Path, within: Duration) -> Self {
+    fn start_within(
+        configs: &[Server],
+        root: &Path,
+        within: Duration,
+        confined: Option<Arc<(Sandbox, Hidden)>>,
+    ) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("mcp")
@@ -232,6 +241,7 @@ impl Servers {
             servers: Vec::new(),
             within,
             section: Mutex::new(None),
+            confined,
         };
         match runtime {
             Ok(runtime) => servers.runtime = Some(runtime),
@@ -254,7 +264,7 @@ impl Servers {
     /// that ended, and kills those it no longer lists.
     pub fn update(&mut self, configs: &[Server], root: &Path) {
         if self.runtime.is_none() {
-            *self = Self::start_within(configs, root, self.within);
+            *self = Self::start_within(configs, root, self.within, self.confined.clone());
             return;
         }
         let mut old = std::mem::take(&mut self.servers);
@@ -284,10 +294,19 @@ impl Servers {
         let server = Running::new(config);
         let runtime = self.runtime.as_ref().expect("launched on a runtime");
         let (started, root, within) = (server.clone(), root.to_owned(), self.within);
+        let confined = self.confined.clone();
         runtime.spawn(async move {
-            let status = match tokio::time::timeout(within, start(&started, root)).await {
+            let started_up = start(&started, root, confined.as_deref());
+            let status = match tokio::time::timeout(within, started_up).await {
                 Ok(Ok(ready)) => Status::Ready(Arc::new(ready)),
-                Ok(Err(error)) => Status::Failed(error),
+                Ok(Err(error)) => match (&confined, &started.config.transport) {
+                    (Some(confined), Transport::Program { .. }) => Status::Failed(format!(
+                        "in the sandbox (--sandbox {}), which hides credential stores and \
+                         variables: {error}",
+                        confined.0.mode.name()
+                    )),
+                    _ => Status::Failed(error),
+                },
                 Err(_) => {
                     started.kill();
                     Status::Failed(format!("it did not start within {} s", within.as_secs()))
@@ -614,7 +633,11 @@ impl Running {
 /// Starts the server, or reaches it over HTTP, and connects to it as MCP's 2026-07-28 revision
 /// does, or with the `initialize` handshake of those before, as the server answers; then lists
 /// its tools.
-async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
+async fn start(
+    server: &Arc<Running>,
+    root: PathBuf,
+    confined: Option<&(Sandbox, Hidden)>,
+) -> Result<Ready, String> {
     let client = ClientConfig::new(
         ClientCapabilities::default(),
         Implementation::new("scramjet-rs", env!("CARGO_PKG_VERSION")),
@@ -625,7 +648,8 @@ async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
     };
     let service = match &server.config.transport {
         Transport::Program { command, args, env } => {
-            run(server, (command, args, env), root, client, lifecycle).await?
+            let program = (command.as_str(), &args[..], &env[..]);
+            run(server, program, root, confined, client, lifecycle).await?
         }
         Transport::Http { url, headers } => {
             let headers = (headers.iter())
@@ -674,16 +698,20 @@ async fn start(server: &Arc<Running>, root: PathBuf) -> Result<Ready, String> {
     Ok(ready)
 }
 
-/// Runs the server's program, keeps the end of its standard error, and connects to it over its
-/// standard input and output.
+/// Runs the server's program, in `confined`'s sandbox if any, keeps the end of its standard
+/// error, and connects to it over its standard input and output.
 async fn run(
     server: &Arc<Running>,
     (program, args, env): (&str, &[String], &[(String, String)]),
     root: PathBuf,
+    confined: Option<&(Sandbox, Hidden)>,
     client: ClientConfig,
     lifecycle: ClientLifecycleMode,
 ) -> Result<RunningService<RoleClient, ClientConfig>, String> {
-    let mut command = tokio::process::Command::new(program);
+    let mut command = match confined {
+        Some((sandbox, hidden)) => sandbox::server(&root, program, hidden, *sandbox).into(),
+        None => tokio::process::Command::new(program),
+    };
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value)))

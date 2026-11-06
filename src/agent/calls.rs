@@ -90,7 +90,7 @@ impl Agent {
             approvals: self.approvals.clone(),
             rates: self.rates.clone(),
             hide_credentials: self.hide_credentials,
-            sandbox: self.sandbox,
+            sandbox: self.config.sandbox,
             mcp: self.mcp.clone(),
         }
     }

@@ -30,7 +30,13 @@ fn test_server(name: &str, env: &[(&str, String)]) -> Server {
 
 /// `configs` started in `root` and settled, each given ten seconds.
 fn started(configs: &[Server], root: &Path) -> Servers {
-    let servers = Servers::start_within(configs, root, Duration::from_secs(10));
+    confined(configs, root, None)
+}
+
+/// As `started`, those that run as programs in `sandbox`.
+fn confined(configs: &[Server], root: &Path, sandbox: Option<Sandbox>) -> Servers {
+    let confined = sandbox.map(|sandbox| Arc::new((sandbox, Hidden::current(&[]))));
+    let servers = Servers::start_within(configs, root, Duration::from_secs(10), confined);
     servers.settle(&AtomicBool::new(false));
     servers
 }
@@ -221,6 +227,73 @@ fn a_call_stopped_cancels_its_request_and_ending_the_servers_kills_them() {
 }
 
 #[test]
+fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
+    use crate::agent::SandboxMode;
+    if sandbox::available().is_err() {
+        return;
+    }
+    let scratch = scratch("sandboxed");
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let log = |path: &Path| [("MCP_TEST_LOG", path.display().to_string())];
+    let sandbox = |mode| Sandbox {
+        mode,
+        network: false,
+    };
+    let inside = project.join("log");
+    let servers = confined(
+        &[test_server("test", &log(&inside))],
+        &project,
+        Some(sandbox(SandboxMode::WorkspaceWrite)),
+    );
+    assert!(
+        matches!(servers.states()[..], [(_, State::Ready { .. })]),
+        "{:?}",
+        servers.states()
+    );
+    assert_eq!(
+        call(&servers, "echo", json!({"text": "hi"})).unwrap().text,
+        "echo: hi"
+    );
+    // The first process of its own namespace's, after bubblewrap's.
+    let logged = std::fs::read_to_string(&inside).unwrap();
+    assert!(
+        logged.starts_with("pid 2\n") || logged.starts_with("pid 3\n"),
+        "{logged}"
+    );
+    drop(servers);
+    // Outside `/tmp`, which is the sandbox's own.
+    let outside = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("sjrs-mcp-outside-{}", std::process::id()));
+    for (mode, path) in [
+        (SandboxMode::WorkspaceWrite, outside),
+        (SandboxMode::ReadOnly, inside),
+    ] {
+        let servers = confined(
+            &[test_server("test", &log(&path))],
+            &project,
+            Some(sandbox(mode)),
+        );
+        let [(_, State::Failed(why))] = &servers.states()[..] else {
+            panic!("{mode:?}: {:?}", servers.states());
+        };
+        assert!(
+            why.starts_with(&format!(
+                "in the sandbox (--sandbox {}), which hides credential stores and variables: it \
+                 ended before it answered; it wrote:\n",
+                mode.name()
+            )),
+            "{why}"
+        );
+        assert!(why.contains("Read-only file system"), "{mode:?}: {why}");
+        if mode == SandboxMode::WorkspaceWrite {
+            assert!(!path.exists());
+        }
+    }
+}
+
+#[test]
 fn servers_that_cannot_start_say_why_once_and_the_others_run() {
     let scratch = scratch("failing");
     let missing = program("missing", "/nonexistent/mcp-server", Vec::new(), &[]);
@@ -268,6 +341,7 @@ fn a_server_that_does_not_answer_is_given_up_and_killed() {
         &[test_server("test", &env)],
         &scratch.0,
         Duration::from_secs(1),
+        None,
     );
     assert_eq!(servers.starting(), ["test"]);
     servers.settle(&AtomicBool::new(false));
@@ -557,7 +631,7 @@ fn servers_ended_as_they_start_leave_no_process() {
         &[],
     );
     for round in 0..40 {
-        let servers = Servers::start(std::slice::from_ref(&server), &scratch.0);
+        let servers = Servers::start(std::slice::from_ref(&server), &scratch.0, None);
         std::thread::sleep(Duration::from_micros(round * 50));
         drop(servers);
     }

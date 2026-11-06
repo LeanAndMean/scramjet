@@ -437,15 +437,35 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
 
 /// `bash -c command` in `root`, confined.
 pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Command {
-    let mut process = confined(root, None, hidden, None);
+    let mut process = confined(root, None, hidden, None, None);
     process.args(["bash", "-c"]).arg(command);
     process
 }
 
 /// `bash -c command` in `root`, confined as `sandbox` says.
 pub(super) fn sandboxed(root: &Path, command: &str, hidden: &Hidden, sandbox: Sandbox) -> Command {
-    let mut process = confined(root, None, hidden, Some(sandbox));
+    let mut process = confined(root, None, hidden, Some(sandbox), None);
     process.args(["bash", "-c"]).arg(command);
+    process
+}
+
+/// `program` (its arguments to follow) in `root`, confined as `sandbox` says: an MCP server.
+/// Its package managers' caches (uv's, npm's, and others' under `XDG_CACHE_HOME`) are moved to
+/// a directory only sandboxed servers use, writable to them, as `uvx` and `npx` fail on a
+/// read-only cache; nothing outside the sandbox runs what is put there.
+pub(super) fn server(root: &Path, program: &str, hidden: &Hidden, sandbox: Sandbox) -> Command {
+    let cache = super::session::state_directory().map(|directory| directory.join("sandbox-cache"));
+    let cache = (cache.ok())
+        .filter(|cache| std::fs::create_dir_all(cache).is_ok())
+        .and_then(|cache| std::fs::canonicalize(cache).ok());
+    let mut process = confined(root, None, hidden, Some(sandbox), cache.as_deref());
+    if let Some(cache) = &cache {
+        process
+            .env("XDG_CACHE_HOME", cache)
+            .env("UV_CACHE_DIR", cache.join("uv"))
+            .env("npm_config_cache", cache.join("npm"));
+    }
+    process.arg(program);
     process
 }
 
@@ -471,7 +491,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
 /// `program` (its arguments to follow) confined as `command` is, with `path`, which it reads,
 /// mounted again too.
 pub(super) fn program(root: &Path, path: &Path, program: &Path, hidden: &Hidden) -> Command {
-    let mut process = confined(root, Some(path), hidden, None);
+    let mut process = confined(root, Some(path), hidden, None, None);
     process.arg(program);
     process
 }
@@ -484,12 +504,14 @@ pub(super) fn program(root: &Path, path: &Path, program: &Path, hidden: &Hidden)
 /// symlink) in case they are under `/tmp` or `/run`, before what is hidden, so that it stays
 /// hidden in them. A `sandbox` makes `root` writable in `workspace-write`, but what stays
 /// protected in it, and shares the network as it says, with the name servers that
-/// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's).
+/// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's). `writable_too`, a real
+/// path, is mounted writable last.
 fn confined(
     root: &Path,
     also: Option<&Path>,
     hidden: &Hidden,
     sandbox: Option<Sandbox>,
+    writable_too: Option<&Path>,
 ) -> Command {
     let writable = sandbox.is_some_and(|sandbox| sandbox.mode == SandboxMode::WorkspaceWrite);
     let network = sandbox.is_some_and(|sandbox| sandbox.network);
@@ -539,6 +561,9 @@ fn confined(
     // on the network.
     if let Some(own) = &hidden.tmux {
         process.arg("--tmpfs").arg(own).arg("--remount-ro").arg(own);
+    }
+    if let Some(path) = writable_too {
+        process.arg("--bind").arg(path).arg(path);
     }
     process.arg("--chdir").arg(root).arg("--");
     process

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.54.0 — MCP servers inside the sandbox
+
+### Changed
+
+- Under `--sandbox`, MCP servers that run as programs start inside the sandbox too, as the main agent's bash does: they see the credential stores and variables hidden, write only where the mode allows, and reach the network as `sandboxNetwork` says. `uvx` and `npx` get caches of their own there (in scramjet-rs's state directory), as theirs in the home directory are read-only. A server that fails to start in it says it ran in the sandbox.
+
 ## 0.53.4 — Credential stores stay hidden when the directories above them move
 
 ### Fixed
