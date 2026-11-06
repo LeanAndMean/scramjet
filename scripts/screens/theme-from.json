@@ -22,7 +22,7 @@
     {"until": "Theme editor"},
     {"sleep": 0.3},
     {"shot": "from"},
-    {"type": "\u001b[B\u001b[B\u001b[B\u001b[Bl"},
+    {"type": "\u001b[B\u001b[B\u001b[B\u001b[B\u001b[Bl"},
     {"sleep": 0.2},
     {"type": "r"},
     {"sleep": 0.3},

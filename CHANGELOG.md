@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.50.0 — The theme editor's background lighter or darker
+
+### Added
+
+- The theme editor has a Lightness row under Background: Left and Right make the main background up to three steps lighter or darker than the one rolled or chosen. Rolls keep the steps, undo and redo go through them, and the saved theme keeps them. Every color is lit anew to read well on it, and roles kept from a theme the editor started from keep their colors, only lighter or darker. A step from the terminal's own background makes the theme set its own.
+
 ## 0.49.0 — A theme started from another stays itself
 
 ### Changed

@@ -390,12 +390,22 @@ pub(super) struct Draft {
     pub(super) tint: f64,
     /// Steps of contrast above or below each band's middle.
     pub(super) contrast: i32,
+    /// Steps of the main background's lightness above or below the one it has without them.
+    pub(super) lightness: i32,
     /// Each token's pick, in `TOKENS`' order; `None` follows its own source.
     pub(super) picks: Vec<Option<Pick>>,
 }
 
 /// The highest step of contrast either way, at which every role is at its band's edge.
 pub(super) const CONTRAST_STEPS: i32 = 3;
+
+/// The highest step of the background's lightness either way, at which it reaches the lightest
+/// or darkest a dark or light background goes (`LIGHTNESS`).
+pub(super) const LIGHTNESS_STEPS: i32 = 3;
+
+/// The OKLCH lightness a dark and a light background stay within when stepped, where every
+/// role still reaches the bottom of its contrast band.
+const LIGHTNESS: [(f64, f64); 2] = [(0.06, 0.30), (0.88, 1.0)];
 
 /// What a role is drawn as: its contrast band and how much chroma it has.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -600,6 +610,7 @@ impl Draft {
             depth: 0.5,
             tint: 0.5,
             contrast: 0,
+            lightness: 0,
             picks: vec![None; TOKENS.len()],
         };
         draft.roll(&[], rng);
@@ -628,6 +639,7 @@ impl Draft {
             depth: 0.5,
             tint: 0.5,
             contrast: 0,
+            lightness: 0,
             picks: vec![None; TOKENS.len()],
         };
         let on = draft.build().background;
@@ -765,8 +777,10 @@ impl Draft {
         let ((low, high), tint) = match self.background {
             Background::Light => ((0.955, 0.995), 0.02),
             Background::Dark => ((0.14, 0.23), 0.035),
-            Background::Terminal(background) => return self.built(background, true),
-            Background::Own(background) => return self.built(background, false),
+            Background::Terminal(background) => {
+                return self.built(self.stepped(background), self.lightness == 0);
+            }
+            Background::Own(background) => return self.built(self.stepped(background), false),
         };
         let background = Oklch {
             l: low + (high - low) * self.depth,
@@ -774,7 +788,27 @@ impl Draft {
             h: first.hue,
         }
         .rgb();
-        self.built(background, false)
+        self.built(self.stepped(background), false)
+    }
+
+    /// `background` made lighter or darker by the steps of lightness, each a third of the way
+    /// to the end of its range, with its hue and chroma.
+    fn stepped(&self, background: Rgb) -> Rgb {
+        if self.lightness == 0 {
+            return background;
+        }
+        let color = Oklch::of(background);
+        let (low, high) = LIGHTNESS[usize::from(!is_dark(background))];
+        let end = match self.lightness > 0 {
+            true => high.max(color.l),
+            false => low.min(color.l),
+        };
+        let share = f64::from(self.lightness.abs()) / f64::from(LIGHTNESS_STEPS);
+        Oklch {
+            l: color.l + (end - color.l) * share,
+            ..color
+        }
+        .rgb()
     }
 
     fn built(&self, background: Rgb, terminal: bool) -> Built {
@@ -1108,18 +1142,31 @@ mod tests {
             for harmony in 0..HARMONIES.len() {
                 for _ in 0..rolls {
                     let mut draft = Draft::rolled(harmony, background, &mut rng);
-                    for steps in [-CONTRAST_STEPS, 0, CONTRAST_STEPS] {
+                    let ends = [-CONTRAST_STEPS, 0, CONTRAST_STEPS];
+                    let lightness = [-LIGHTNESS_STEPS, 0, LIGHTNESS_STEPS];
+                    for (steps, lightness) in ends.into_iter().flat_map(|steps| {
+                        lightness
+                            .into_iter()
+                            .map(move |lightness| (steps, lightness))
+                    }) {
                         draft.contrast = steps;
+                        draft.lightness = lightness;
                         let built = draft.build();
                         match background {
                             Background::Dark => assert!(is_dark(built.background)),
                             Background::Light => assert!(!is_dark(built.background)),
-                            Background::Terminal(rgb) => {
+                            Background::Terminal(rgb) | Background::Own(rgb) => {
+                                assert_eq!(is_dark(built.background), is_dark(rgb))
+                            }
+                        }
+                        match (background, lightness) {
+                            (Background::Terminal(rgb), 0) => {
                                 assert_eq!((built.background, built.own_background()), (rgb, None))
                             }
-                            Background::Own(rgb) => {
+                            (Background::Own(rgb), 0) => {
                                 assert_eq!(built.own_background(), Some(rgb))
                             }
+                            _ => assert_eq!(built.own_background(), Some(built.background)),
                         }
                         for (token, ratio, (low, high)) in contrasts(&built) {
                             assert!(
@@ -1159,6 +1206,56 @@ mod tests {
             let (from, to) = meaning.range();
             assert!(hue >= from - 3.0 && hue <= to + 3.0, "{token:?} {hue}");
         }
+    }
+
+    #[test]
+    fn lightness_steps_move_the_background_alone_and_reach_its_range_at_the_ends() {
+        let backgrounds = [
+            Background::Dark,
+            Background::Light,
+            Background::Terminal((0, 43, 54)),
+            Background::Own((240, 228, 200)),
+        ];
+        for background in backgrounds {
+            let mut draft = Draft::rolled(3, background, &mut Rng::new(7));
+            let mut last = None;
+            for steps in -LIGHTNESS_STEPS..=LIGHTNESS_STEPS {
+                draft.lightness = steps;
+                let built = draft.build();
+                let now = Oklch::of(built.background);
+                // Near white, steps toward it are small.
+                if let Some(last) = last {
+                    assert!(now.l > last - 1e-3, "{background:?} {steps}: {now:?}");
+                }
+                last = Some(now.l);
+                if steps == 0 {
+                    draft.lightness = -1;
+                    let darker = Oklch::of(draft.build().background).l;
+                    assert!(darker < now.l - 0.01, "{background:?}");
+                }
+                let (low, high) = LIGHTNESS[usize::from(!is_dark(built.background))];
+                match steps {
+                    LIGHTNESS_STEPS => assert!(close(now.l, high.max(now.l), 0.01)),
+                    steps if steps == -LIGHTNESS_STEPS => assert!(now.l <= low + 0.01),
+                    _ => {}
+                }
+                draft.lightness = 0;
+                let base = Oklch::of(draft.build().background);
+                // Dark grays' hues move more as they are rounded to 8 bits a channel.
+                if base.c > 0.02 && now.c > 0.02 {
+                    assert!(
+                        close(now.h, base.h, 8.0),
+                        "{background:?} {steps} {now:?} {base:?}"
+                    );
+                }
+            }
+        }
+        // Rolls keep the steps.
+        let mut rng = Rng::new(3);
+        let mut draft = Draft::rolled(3, Background::Dark, &mut rng);
+        draft.lightness = 2;
+        draft.roll(&[], &mut rng);
+        assert_eq!(draft.lightness, 2);
     }
 
     #[test]

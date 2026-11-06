@@ -1,15 +1,16 @@
 //! The theme editor in `/settings`: a theme made from a few main colors in a harmony, rolled
-//! until it is close, its liked colors locked, stepped toward the harmony or toward more or less
-//! contrast, and each of its roles, one view away, set to follow another main color or to an
-//! exact color, with undo and redo, while a sample session shows it in the conversation's place.
-//! It can start from another theme's colors. It is saved as a theme file in Scramjet's format,
-//! which keeps what the editor made it from, so that it opens in the editor again.
+//! until it is close, its liked colors locked, stepped toward the harmony, toward more or less
+//! contrast or a lighter or darker background, and each of its roles, one view away, set to
+//! follow another main color or to an exact color, with undo and redo, while a sample session
+//! shows it in the conversation's place. It can start from another theme's colors. It is saved
+//! as a theme file in Scramjet's format, which keeps what the editor made it from, so that it
+//! opens in the editor again.
 
 use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::palette::{
-    self, Background, Built, CONTRAST_STEPS, Draft, HARMONIES, Kind, Meaning, Oklch, Pick, Rgb,
-    Rng, Source, harmonies,
+    self, Background, Built, CONTRAST_STEPS, Draft, HARMONIES, Kind, LIGHTNESS_STEPS, Meaning,
+    Oklch, Pick, Rgb, Rng, Source, harmonies,
 };
 use super::record::Event;
 use super::style::{self, Band, RESET};
@@ -46,6 +47,7 @@ enum Row {
     Count,
     Harmony,
     Background,
+    Lightness,
     Contrast,
     Main(usize),
 }
@@ -214,10 +216,16 @@ impl ThemeEditor {
 
     fn rows(&self) -> Vec<Row> {
         let mains = (0..self.draft().mains.len()).map(Row::Main);
-        [Row::Count, Row::Harmony, Row::Background, Row::Contrast]
-            .into_iter()
-            .chain(mains)
-            .collect()
+        [
+            Row::Count,
+            Row::Harmony,
+            Row::Background,
+            Row::Lightness,
+            Row::Contrast,
+        ]
+        .into_iter()
+        .chain(mains)
+        .collect()
     }
 
     /// Shows `draft` from now on, after the one shown, which undo goes back to.
@@ -487,6 +495,14 @@ impl ThemeEditor {
                 let at = (at as i32 + by).rem_euclid(choices.len() as i32);
                 draft.background = choices[at as usize];
             }
+            Row::Lightness => {
+                let steps = draft.lightness + by;
+                if steps.abs() > LIGHTNESS_STEPS {
+                    let end = if by > 0 { "lightest" } else { "darkest" };
+                    return self.say(&format!("The background is at its {end}"), true);
+                }
+                draft.lightness = steps;
+            }
             Row::Contrast => {
                 let steps = draft.contrast + by;
                 if steps.abs() > CONTRAST_STEPS {
@@ -556,6 +572,29 @@ impl ThemeEditor {
                              switches."
                         ),
                     }
+                },
+            ),
+            Row::Lightness => (
+                "Lightness".into(),
+                match draft.lightness {
+                    0 => "as rolled".to_owned(),
+                    steps if steps == LIGHTNESS_STEPS => format!("+{steps}, the lightest"),
+                    steps if steps == -LIGHTNESS_STEPS => format!("{steps}, the darkest"),
+                    steps if steps > 0 => format!("+{steps}, lighter"),
+                    steps => format!("{steps}, darker"),
+                },
+                {
+                    let on = match draft.background {
+                        Background::Terminal(_) => {
+                            " A step from the terminal's own makes the theme set its own."
+                        }
+                        _ => "",
+                    };
+                    format!(
+                        "How much lighter or darker the background is than the one rolled or \
+                         chosen; rolls keep the steps, and every color is lit anew to read well \
+                         on it.{on} {left_right} steps it."
+                    )
                 },
             ),
             Row::Contrast => (
@@ -922,6 +961,7 @@ impl ThemeEditor {
             "depth": draft.depth,
             "tint": draft.tint,
             "contrast": draft.contrast,
+            "lightness": draft.lightness,
             "mains": mains,
             "picks": picks,
         });
@@ -972,6 +1012,13 @@ fn saved_draft(state: &Value) -> Option<(Draft, Vec<bool>)> {
     if contrast.abs() > i64::from(CONTRAST_STEPS) {
         return None;
     }
+    let lightness = match state.get("lightness") {
+        None => 0,
+        Some(steps) => steps.as_i64()?,
+    };
+    if lightness.abs() > i64::from(LIGHTNESS_STEPS) {
+        return None;
+    }
     let mut picks = vec![None; TOKENS.len()];
     for (key, pick) in state.get("picks")?.as_object()? {
         let at = KEYS.iter().position(|known| known == key)?;
@@ -991,6 +1038,7 @@ fn saved_draft(state: &Value) -> Option<(Draft, Vec<bool>)> {
         depth: unit(state.get("depth")?)?,
         tint: unit(state.get("tint")?)?,
         contrast: contrast as i32,
+        lightness: lightness as i32,
         picks,
         mains,
     };
@@ -1218,14 +1266,14 @@ mod tests {
         assert!(shown[0].starts_with("Theme editor  "), "{shown:?}");
         assert_eq!(shown[1], "› Colors      ‹ 3 ›");
         assert_eq!(shown[2], "  Harmony     triadic");
-        assert!(shown[5].starts_with("  Color 1     ████ #"), "{shown:?}");
+        assert!(shown[6].starts_with("  Color 1     ████ #"), "{shown:?}");
         // Down to the second color, locked; a roll keeps it.
-        for _ in 0..5 {
+        for _ in 0..6 {
             editor.key(&press(Code::Down));
         }
         assert_eq!(editor.key(&typed("l")), None);
         assert!(
-            lines(&editor)[6].ends_with(" · locked ›"),
+            lines(&editor)[7].ends_with(" · locked ›"),
             "{:?}",
             lines(&editor)
         );
@@ -1258,7 +1306,7 @@ mod tests {
     fn the_count_row_rolls_anew_and_keeps_the_locked_colors_and_the_harmony_row_keeps_all() {
         let mut editor = ThemeEditor::new(2, Background::Dark, None);
         // Lock the third color, then go down to two colors: it stays, as the first.
-        editor.row = 6;
+        editor.row = 7;
         editor.key(&typed("l"));
         let kept = editor.draft().mains[2].clone();
         editor.row = 0;
@@ -1308,7 +1356,7 @@ mod tests {
     #[test]
     fn stepping_toward_the_harmony_ends_in_harmony_and_contrast_stops_at_its_ends() {
         let mut editor = ThemeEditor::new(3, Background::Dark, None);
-        editor.row = 5;
+        editor.row = 6;
         for _ in 0..8 {
             editor.key(&press(Code::Right));
         }
@@ -1336,6 +1384,76 @@ mod tests {
     }
 
     #[test]
+    fn the_lightness_row_steps_the_background_through_rolls_undo_and_the_file() {
+        let mut editor = ThemeEditor::new(8, Background::Dark, None);
+        editor.row = 3;
+        let rolled = editor.built.background;
+        let text_before = editor.built.color(Token::Text);
+        assert_eq!(lines(&editor)[4], "› Lightness   ‹ as rolled ›");
+        editor.key(&press(Code::Right));
+        assert_eq!(editor.draft().lightness, 1);
+        assert_eq!(lines(&editor)[4], "› Lightness   ‹ +1, lighter ›");
+        let lighter = editor.built.background;
+        assert!(Oklch::of(lighter).l > Oklch::of(rolled).l + 0.01);
+        // Every color is lit anew on it: text keeps its contrast, so it is lighter too.
+        let ratio = |editor: &ThemeEditor| {
+            palette::contrast(editor.built.color(Token::Text), editor.built.background)
+        };
+        assert!((ratio(&editor) / palette::contrast(text_before, rolled) - 1.0).abs() < 0.03);
+        for _ in 0..LIGHTNESS_STEPS {
+            editor.key(&press(Code::Left));
+        }
+        assert_eq!(editor.draft().lightness, 1 - LIGHTNESS_STEPS);
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.draft().lightness, -LIGHTNESS_STEPS);
+        assert_eq!(lines(&editor)[4], "› Lightness   ‹ -3, the darkest ›");
+        editor.key(&press(Code::Left));
+        assert_eq!(
+            editor.status,
+            Some(("The background is at its darkest".into(), true))
+        );
+        // A roll keeps the steps; undo goes back through them.
+        editor.key(&typed("r"));
+        assert_eq!(editor.draft().lightness, -LIGHTNESS_STEPS);
+        editor.key(&typed("u"));
+        editor.key(&typed("u"));
+        assert_eq!(editor.draft().lightness, 1 - LIGHTNESS_STEPS);
+        // The file keeps them, and a file saved before they were kept opens at none.
+        let text = editor.file_text("dim");
+        let json: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(json[STATE]["lightness"], 1 - LIGHTNESS_STEPS);
+        let opened = ThemeEditor::open(&text, 1, None).unwrap();
+        assert_eq!(opened.draft(), editor.draft());
+        assert_eq!(opened.theme(), editor.theme());
+        let older = text.replacen("\"lightness\": -2,", "", 1);
+        assert_ne!(older, text);
+        assert_eq!(
+            ThemeEditor::open(&older, 1, None)
+                .unwrap()
+                .draft()
+                .lightness,
+            0
+        );
+        let broken = text.replacen("\"lightness\": -2", "\"lightness\": -4", 1);
+        assert!(ThemeEditor::open(&broken, 1, None).is_none());
+
+        // A step from the terminal's background makes the theme set its own, starting from it.
+        let campbell = (12, 12, 12);
+        let mut editor = ThemeEditor::new(11, Background::Terminal(campbell), Some(campbell));
+        editor.row = 3;
+        let shown = lines(&editor).join(" ");
+        let shown = shown.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(shown.contains("makes the theme set its own"), "{shown}");
+        editor.key(&press(Code::Right));
+        let own = editor.theme().background();
+        assert_ne!(own, Color::Default);
+        assert!(Oklch::of(editor.built.background).l > Oklch::of(campbell).l);
+        editor.key(&press(Code::Left));
+        assert_eq!(editor.theme().background(), Color::Default);
+        assert_eq!(editor.built.background, campbell);
+    }
+
+    #[test]
     fn a_short_dock_leaves_out_the_note_then_the_keys() {
         let editor = ThemeEditor::new(4, Background::Light, None);
         let tall = lines(&editor);
@@ -1344,8 +1462,8 @@ mod tests {
                 .any(|line| line.contains("How many main colors"))
         );
         assert!(tall.iter().any(|line| line.contains("R roll · L lock")));
-        let short: Vec<String> = editor.lines((100, 9)).iter().map(|l| plain(l)).collect();
-        assert_eq!(short.len(), 9);
+        let short: Vec<String> = editor.lines((100, 10)).iter().map(|l| plain(l)).collect();
+        assert_eq!(short.len(), 10);
         assert!(short.last().unwrap().contains("Harmony "), "{short:?}");
         let shorter: Vec<String> = editor.lines((100, 4)).iter().map(|l| plain(l)).collect();
         assert_eq!(shorter.len(), 4);
@@ -1575,7 +1693,7 @@ mod tests {
         draft.picks[link] = Some(Pick::Follow(0));
         editor.push(draft);
         // The third color locked goes first when there are two; the first is dropped.
-        editor.row = 6;
+        editor.row = 7;
         editor.key(&typed("l"));
         let kept = editor.draft().mains[2].clone();
         editor.row = 0;
@@ -1663,7 +1781,7 @@ mod tests {
         let mut editor = ThemeEditor::new(12, Background::Dark, None);
         editor.row = 0;
         editor.key(&press(Code::Right));
-        editor.row = 5;
+        editor.row = 6;
         editor.key(&typed("l"));
         editor.key(&typed("r"));
         editor.key(&typed("+"));
@@ -1840,7 +1958,7 @@ mod tests {
             ThemeEditor::from_theme("scramjet-dark", &dark, 2, Some(campbell)).unwrap();
         let start = editor.draft().clone();
         // Color 1 locked, a roll leaves its roles as they were and lights the others anew.
-        editor.row = 4;
+        editor.row = 5;
         editor.key(&typed("l"));
         editor.key(&typed("r"));
         assert!(kept(&editor, Token::Accent) || start.picks[token_at(Token::Accent)].is_none());
@@ -1900,7 +2018,23 @@ mod tests {
             editor.theme().color(Token::MdCodeBlockBorder),
             dark.color(Token::MdCodeBlockBorder)
         );
-        for _ in 0..3 {
+        // A lighter background keeps them too, each at its contrast on the one before.
+        let was: Vec<_> = (was.iter())
+            .map(|&(token, _)| (token, palette::contrast(editor.built.color(token), on)))
+            .collect();
+        editor.view = View::Main;
+        editor.row = 3;
+        editor.key(&press(Code::Right));
+        assert!(editor.status.is_none(), "{:?}", editor.status);
+        let lighter = editor.built.background;
+        assert!(Oklch::of(lighter).l > Oklch::of(on).l);
+        for (token, ratio) in was {
+            assert!(kept(&editor, token), "{token:?}");
+            let now = palette::contrast(editor.built.color(token), lighter);
+            assert!((now / ratio - 1.0).abs() < 0.06, "{token:?} {ratio} {now}");
+        }
+        editor.view = View::Roles;
+        for _ in 0..4 {
             editor.key(&typed("u"));
         }
         assert_eq!(*editor.draft(), start);
