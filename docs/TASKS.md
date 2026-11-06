@@ -4,6 +4,10 @@ Pending work only (`CLAUDE.md`). What was done and how it was verified is in the
 
 Last steer: b11ce00
 
+## From review
+
+- **Nested repositories in build and dependency trees pin those trees** (review of 80ec4e9): a CMake `FetchContent` checkout (`build/_deps/foo-src/.git`) or `pip install -e git+…` (`.venv/src/foo/.git`) makes `rm -rf build` fail with "Device or resource busy" and a reconfigure's `git fetch` there fail read-only, for the whole process. Skipping ignored directories would undo the protection where a build runs `git` outside the sandbox; a choice for the user at the next steer.
+
 ## Current focus
 
 Set by the user at the steer of 2026-11-06, in this order: the theme editor's fixes (17, with a background row added the same day; what is left needs the user), a sandbox for the main agent (27, in since 0.53.0, MCP servers inside since 0.54.0; Unix sockets left), spelling (26), session chains (25), a full disk survived (29), what is left of 23 (queued behind the provider package since 2026-11-05), `/usage` (32, polish, lower priority), and the scale work of item 7 last. Item 7 stays lower priority, but every design keeps it in mind so that nothing built now corners it ([design](DESIGN.md#current-direction-2026-11-03)). Item 21's live check, the last part of its Goal, runs whenever the user can sign in (Open questions).

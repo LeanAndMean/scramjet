@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.54.3 — Sandbox protections stay inside the project
+
+### Fixed
+
+- In `--sandbox workspace-write`, a `.git` file inside the project naming a Git directory outside it (under `/run`, `/tmp` or `/mnt/wslg`) no longer brings that directory into the sandbox, where host sockets such as WSL interop's could be reached; what is outside the project is read-only already.
+- A dangling `.git`, `.scramjet` or `.agents` symlink in the project no longer stops every sandboxed command from starting.
+- A worktree's common Git directory inside the project (a bare repository with its worktrees), where its config and hooks are, now stays read-only too.
+
 ## 0.54.2 — Nested repositories kept read-only in the sandbox
 
 ### Fixed

@@ -220,17 +220,30 @@ fn real_path(path: &Path) -> Option<PathBuf> {
 /// What stays read-only in the real directory `root`: what exists of `PROTECTED` at its top,
 /// the `.git` of each repository nested in it (a submodule's, or a checkout's in a directory
 /// holding several), whose hooks and `core.fsmonitor` would run at the user's next `git` there,
-/// and the Git directory each `.git` file points to (a worktree's or a submodule's).
+/// and the Git directory each `.git` file points to (a worktree's or a submodule's) with the
+/// common one it names. Each by its real place, and only in `root`: what is outside is read-only
+/// already, and binding it could bring back what the sandbox's empty `/run` and `/tmp` leave out.
 fn protected(root: &Path) -> Vec<PathBuf> {
-    let mut kept: Vec<PathBuf> = PROTECTED
+    let mut found: Vec<PathBuf> = PROTECTED
         .iter()
         .map(|name| root.join(name))
         .chain(nested_repositories(root))
-        .filter(|path| path.symlink_metadata().is_ok())
         .collect();
-    let pointed: Vec<PathBuf> = kept.iter().filter_map(|path| pointed_to(path)).collect();
-    kept.extend(pointed);
-    kept
+    let pointed: Vec<PathBuf> = found.iter().filter_map(|path| pointed_to(path)).collect();
+    let common = pointed.iter().filter_map(|gitdir| common_dir(gitdir));
+    found.extend(common.collect::<Vec<_>>());
+    found.extend(pointed);
+    found
+        .into_iter()
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .filter(|real| real.starts_with(root))
+        .collect()
+}
+
+/// The common Git directory, with the config and hooks, that a worktree's Git directory names.
+fn common_dir(gitdir: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
+    std::fs::canonicalize(gitdir.join(text.trim())).ok()
 }
 
 /// The Git directory that the `.git` file `dotgit` names.
@@ -881,15 +894,31 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
             "inner",
             "gitdirs/inner",
             "secrets/.git",
+            "bare.git/hooks",
+            "bare.git/worktrees/wt",
+            "wt",
+            "broken",
         ] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
+        std::fs::create_dir_all(home.join("outside")).unwrap();
+        std::fs::write(home.join("outside/visible"), "OUTSIDE\n").unwrap();
+        std::fs::create_dir_all(root.join("away")).unwrap();
+        std::fs::write(
+            root.join("away/.git"),
+            format!("gitdir: {}\n", home.join("outside").display()),
+        )
+        .unwrap();
+        std::fs::write(root.join("wt/.git"), "gitdir: ../bare.git/worktrees/wt\n").unwrap();
+        std::fs::write(root.join("bare.git/worktrees/wt/commondir"), "../..\n").unwrap();
+        std::os::unix::fs::symlink("/nonexistent", root.join("broken/.git")).unwrap();
         std::fs::write(root.join("sub/.git"), "gitdir: ../.git/modules/sub\n").unwrap();
         std::fs::write(root.join("inner/.git"), "gitdir: ../gitdirs/inner\n").unwrap();
         std::fs::write(root.join("secrets/key"), "SECRET\n").unwrap();
         let script = "touch vendor/lib/.git/hooks/post-checkout gitdirs/inner/config; \
 echo 'gitdir: /tmp/evil' > sub/.git; mv vendor v2; mv vendor/lib vendor/lib2; mv gitdirs g2; \
-mv inner inner2; cat secrets/key; echo made > vendor/lib/made && echo wrote";
+mv inner inner2; cat secrets/key; cat ../outside/visible; touch bare.git/hooks/post-checkout; \
+echo made > vendor/lib/made && echo wrote";
         let hidden = super::Hidden::under(&home, vec![root.join("secrets")]);
         let sandbox = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
@@ -916,6 +945,7 @@ mv inner inner2; cat secrets/key; echo made > vendor/lib/made && echo wrote";
             "vendor/lib2",
             "g2",
             "inner2",
+            "bare.git/hooks/post-checkout",
         ] {
             assert!(!root.join(left).exists(), "{left}");
         }
