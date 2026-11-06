@@ -3,8 +3,7 @@
 use super::calls::Calls;
 use super::{
     Agent, AgentError, AgentUi, AutoCompaction, CONTEXT, Completed, MAX_STEPS, PROBE, PRODUCER,
-    Purpose, Routing, Source, Step, Suggested, TYPED, USAGE, autonomy, message_text, status,
-    suggest,
+    Routing, Source, Step, Suggested, TYPED, USAGE, autonomy, message_text, status, suggest,
 };
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -198,20 +197,28 @@ finish and is not checked on. Reply to continue.",
             {
                 return Ok(());
             }
-            if cancel.load(Ordering::Relaxed) {
-                return Err(AgentError::Cancelled);
-            }
-            let steering = ui.steering();
-            self.add_queued(steering, ui)?;
-            if let Some(level) = ui.effort() {
-                self.set_effort(level)?;
-            }
-            if ui.pause() {
-                return Err(AgentError::Paused);
-            }
-            self.settle_mcp(ui, cancel)?;
-            let request = self.request();
-            let reply = match self.respond(&request, Purpose::Reply, ui, cancel) {
+            // As is a request a pause left streaming.
+            let replying = match self.replying.take() {
+                Some(replying) => replying,
+                None => {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Err(AgentError::Cancelled);
+                    }
+                    let steering = ui.steering();
+                    self.add_queued(steering, ui)?;
+                    if let Some(level) = ui.effort() {
+                        self.set_effort(level)?;
+                    }
+                    if ui.pause() {
+                        return Err(AgentError::Paused);
+                    }
+                    self.settle_mcp(ui, cancel)?;
+                    let request = self.request();
+                    self.start_reply(request)?
+                }
+            };
+            let model = replying.model.clone();
+            let reply = match self.wait_reply(replying, ui, cancel) {
                 Ok(reply) => reply,
                 Err(AgentError::ContextOverflow(message)) if !overflow_recovered => {
                     overflow_recovered = true;
@@ -236,7 +243,7 @@ to a larger-context model)"
             let saved = saved_usage(&reply);
             for (index, mut item) in reply.items.into_iter().enumerate() {
                 if let Some(object) = item.as_object_mut() {
-                    object.insert(PRODUCER.into(), json!(self.config.model));
+                    object.insert(PRODUCER.into(), json!(model));
                     if let Some(tokens) = self.usage.context_tokens.filter(|_| index == last) {
                         object.insert(CONTEXT.into(), json!(tokens));
                     }
@@ -452,6 +459,47 @@ mod tests {
         let bodies = server.join().unwrap();
         assert_eq!(last_output(&bodies[1]), "slept\n");
         assert_eq!(ui.replies, ["done"]);
+    }
+
+    #[test]
+    fn a_turn_pauses_while_a_reply_streams_which_goes_on_meanwhile() {
+        let response = stream(&fixture::text_events("streamed", fixture::known_usage()));
+        let half = response.len() / 2;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0; 65536];
+            while !String::from_utf8_lossy(&request).contains("\"stream\"") {
+                let read = std::io::Read::read(&mut connection, &mut buffer).unwrap();
+                request.extend_from_slice(&buffer[..read]);
+            }
+            std::io::Write::write_all(&mut connection, &response[..half]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(600));
+            std::io::Write::write_all(&mut connection, &response[half..]).unwrap();
+        });
+        let (mut agent, _scratch) = agent(endpoint, "paused-reply");
+        let mut ui = Recorder {
+            pauses: vec![false, true],
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let paused = agent.turn("go", &mut ui, &cancel);
+        assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert_eq!(agent.conversation().last().unwrap()["role"], "user");
+        // A model chosen meanwhile takes the next request; the reply is the first model's.
+        agent.set_model("other").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let resumed = std::time::Instant::now();
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        assert!(resumed.elapsed() < std::time::Duration::from_millis(400));
+        server.join().unwrap();
+        assert_eq!(ui.replies, ["streamed"]);
+        assert_eq!(agent.conversation().last().unwrap()[PRODUCER], "test/m");
+        assert_eq!(agent.usage.requests, 1);
     }
 
     #[test]

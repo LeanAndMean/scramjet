@@ -6,7 +6,7 @@ use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::settings::MarkdownReads;
 use crate::agent_cli::terminal::Terminal;
-use scramjet_rs::agent::StreamProgress;
+use scramjet_rs::agent::{Purpose, StreamProgress};
 use std::sync::{Arc, atomic::AtomicBool};
 
 /// How the conversation is rendered.
@@ -44,6 +44,9 @@ pub(super) struct Transcript {
     /// Where the calls running at the same time are, by part and event: what the session says
     /// while they run, such as a command's result, shows under them.
     calls: Option<(usize, usize)>,
+    /// Where the turn's latest reply has got to, by part and event: what the session says
+    /// while it streams shows under it.
+    reply: Option<(usize, usize)>,
 }
 
 #[derive(Default)]
@@ -60,12 +63,45 @@ impl Transcript {
             self.parts.push(Part::default());
         }
         let calls = matches!(event, Event::Calls(_));
+        let streamed = matches!(
+            event,
+            Event::Progress(_) | Event::Retrying(..) | Event::Assistant(_)
+        );
+        if streamed && let Some((part, at)) = self.reply {
+            return self.insert(part, at, event);
+        }
+        let replying = matches!(event, Event::Waiting(Purpose::Reply));
         let index = self.parts.len() - 1;
         let part = &mut self.parts[index];
         part.version += 1;
         add(&mut part.events, event);
         if calls {
             self.calls = Some((index, part.events.len() - 1));
+        }
+        if replying {
+            self.reply = Some((index, part.events.len() - 1));
+        }
+    }
+
+    /// The turn ended: what follows is no reply's.
+    pub(super) fn turn_ended(&mut self) {
+        self.reply = None;
+    }
+
+    /// Adds `event` after event `at` of part `part`, the reply's latest.
+    fn insert(&mut self, part: usize, at: usize, event: Event) {
+        let events = &mut self.parts[part].events;
+        let (before, after) = (events.len(), events.split_off(at + 1));
+        add(events, event);
+        let added = events.len() + after.len() - before;
+        self.reply = Some((part, events.len() - 1));
+        events.extend(after);
+        self.parts[part].version += 1;
+        if let Some((calls, index)) = &mut self.calls
+            && *calls == part
+            && *index > at
+        {
+            *index += added;
         }
     }
 
@@ -245,6 +281,34 @@ mod tests {
         transcript.split();
         transcript.split();
         assert_eq!(transcript.parts.len(), 2);
+    }
+
+    #[test]
+    fn a_streaming_reply_goes_on_in_its_place_above_what_is_said_meanwhile() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        transcript.push(Event::Waiting(Purpose::Reply));
+        transcript.push(Event::Progress(StreamProgress::Text("First ".into())));
+        transcript.push(Event::Text("Autopilot is on".into()));
+        transcript.split();
+        transcript.push(Event::Progress(StreamProgress::Text(
+            "line.\n\nSecond.".into(),
+        )));
+        transcript.push(Event::Assistant("First line.\n\nSecond.".into()));
+        transcript.render(look(40, false), &hide);
+        let lines = transcript.window(0, 100).into_iter();
+        let shown: Vec<_> = lines
+            .map(|line| plain(&line.shown).trim().to_owned())
+            .collect();
+        assert_eq!(
+            shown,
+            ["First line.", "", "Second.", "", "Autopilot is on", ""]
+        );
+        assert_eq!(text(&transcript.parts[0]), ["First line.\n\nSecond."]);
+        // The next reply starts under it all.
+        transcript.push(Event::Waiting(Purpose::Reply));
+        transcript.push(Event::Progress(StreamProgress::Text("Next.".into())));
+        assert_eq!(text(&transcript.parts[1]), ["Next."]);
     }
 
     #[test]

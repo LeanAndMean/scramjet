@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.44.0 — Commands at once while a reply streams
+
+### Changed
+
+- Built-in commands that act on the harness, and Ctrl+P, also run as soon as they are typed while a reply streams, rather than waiting for the reply to end, which with long reasoning could take minutes. The reply goes on in its place above what the command says; a model chosen meanwhile takes the next request.
+
 ## 0.43.0 — Commands at once while tools run
 
 ### Changed

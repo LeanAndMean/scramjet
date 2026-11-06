@@ -31,7 +31,8 @@ A scenario (scripts/screens/*.json) holds:
     "env":      more environment for scramjet-rs, `{root}` in a value being the repository;
     "prompt":   the first message;
     "replies":  each response's items, in turn: {"reasoning": TEXT}, {"text": TEXT} or
-                {"call": NAME, "arguments": {...}}; the tools run for real;
+                {"call": NAME, "arguments": {...}}; the tools run for real; a text with
+                "pace": SECONDS streams word by word, SECONDS apart;
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
                 {"sleep": SECONDS}, {"shot": NAME} writes NAME.ansi and NAME.png.
 
@@ -59,8 +60,9 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def item_events(index, item):
-    """The Responses events that stream `item` at `index`, each text in one delta."""
+def item_events(index, item, pace=None):
+    """The Responses events that stream `item` at `index`, each text in one delta, or with `pace`
+    word by word, each delta's event carrying the seconds to wait before it as `_pace`."""
     where = {'output_index': index, 'item_id': item['id']}
     if item['type'] == 'function_call':
         return [{'type': 'response.output_item.added', 'output_index': index,
@@ -75,17 +77,20 @@ def item_events(index, item):
         at = dict(where, **({'summary_index': number} if key == 'summary' else {'content_index': number}))
         parts = 'response.%spart.' % ('reasoning_summary_' if key == 'summary' else 'content_')
         text = 'response.%s%s' % (prefix, 'text' if prefix else 'output_text')
-        events += [dict(at, type=parts + 'added', part=dict(part, text='')),
-                   dict(at, type=text + '.delta', delta=part['text']),
-                   dict(at, type=text + '.done', text=part['text']),
+        deltas = re.findall(r'\S+\s*', part['text']) if pace else [part['text']]
+        events += [dict(at, type=parts + 'added', part=dict(part, text=''))]
+        events += [dict(at, type=text + '.delta', delta=delta, **({'_pace': pace} if pace else {}))
+                   for delta in deltas]
+        events += [dict(at, type=text + '.done', text=part['text']),
                    dict(at, type=parts + 'done', part=part)]
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
 def items(reply, number):
     """A scenario's reply as Responses output items."""
-    made = []
+    made, paces = [], []
     for index, entry in enumerate(reply):
+        paces.append(entry.get('pace'))
         name = '%d_%d' % (number, index)
         if 'reasoning' in entry:
             made.append({'type': 'reasoning', 'id': 'rs_' + name, 'status': 'completed',
@@ -97,17 +102,18 @@ def items(reply, number):
             made.append({'type': 'function_call', 'id': 'fc_' + name, 'call_id': 'call_' + name,
                          'name': entry['call'], 'status': 'completed',
                          'arguments': json.dumps(entry.get('arguments', {}))})
-    return made
+    return made, paces
 
 
-def stream(output):
+def stream(output, paces=()):
+    """The stream of `output`, in pieces each with the seconds to wait before it."""
     usage = {'input_tokens': 5200, 'output_tokens': 310, 'input_tokens_details': {'cached_tokens': 4096}}
     events = [{'type': 'response.created', 'response': {'id': 'resp', 'status': 'in_progress', 'output': []}}]
     for index, item in enumerate(output):
-        events += item_events(index, item)
+        events += item_events(index, item, paces[index] if index < len(paces) else None)
     events.append({'type': 'response.completed',
                    'response': {'id': 'resp', 'status': 'completed', 'output': output, 'usage': usage}})
-    return b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events)
+    return [(event.pop('_pace', 0), b'data: %s\n\n' % json.dumps(event).encode()) for event in events]
 
 
 def receive(connection):
@@ -133,16 +139,20 @@ def serve(replies):
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
-    streams = [stream(items(reply, number)) for number, reply in enumerate(replies)]
+    streams = [stream(*items(reply, number)) for number, reply in enumerate(replies)]
 
     def answer():
         pending = iter(streams)
         while True:
             connection, _ = listener.accept()
             receive(connection)
-            body = next(pending, None) or stream(items([{'text': 'No more replies.'}], len(streams)))
+            pieces = next(pending, None) or stream(*items([{'text': 'No more replies.'}], len(streams)))
+            body = b''.join(piece for _, piece in pieces)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
-                               b'connection: close\r\n\r\n%s' % (len(body), body))
+                               b'connection: close\r\n\r\n' % len(body))
+            for wait, piece in pieces:
+                time.sleep(wait)
+                connection.sendall(piece)
             connection.close()
 
     threading.Thread(target=answer, daemon=True).start()

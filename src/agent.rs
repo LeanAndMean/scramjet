@@ -515,6 +515,8 @@ pub struct Agent {
     mcp: Option<Arc<mcp::Servers>>,
     /// A reply's calls that a pause of the turn left running (`AgentError::Paused`).
     calls: Option<calls::Calls>,
+    /// A step's request that a pause of the turn left streaming.
+    replying: Option<request::Replying>,
     pub usage: Usage,
 }
 
@@ -665,6 +667,7 @@ impl Agent {
             autopilot,
             mcp: None,
             calls: None,
+            replying: None,
             config,
             conversation,
             prompts,

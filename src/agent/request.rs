@@ -9,6 +9,7 @@ use super::{
 use serde_json::{Value, json};
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -85,6 +86,110 @@ impl Agent {
             .collect()
     }
 
+    /// Fails when no provider offers the current model, after looking again.
+    fn routed(&mut self) -> Result<(), AgentError> {
+        if self.info.route.is_none() {
+            // A provider that could not list its models before may list them now.
+            self.config.providers.reload();
+            if let Some(model) = self.config.providers.find(&self.config.model) {
+                self.info = model.info.clone();
+            }
+        }
+        match self.info.route {
+            Some(_) => Ok(()),
+            None => Err(AgentError::Provider(self.unoffered())),
+        }
+    }
+
+    /// Counts a response's usage, and its output rate when it is a step of the turn.
+    fn count(&mut self, model: &str, reply: &client::Reply, purpose: Purpose) {
+        self.usage.count(reply);
+        if purpose == Purpose::Reply
+            && let Some(path) = &self.rates
+        {
+            // The rates are only shown; a session goes on without them.
+            let _ = rates::record(path, model, reply);
+        }
+    }
+
+    /// Starts sending `request`, the turn's next step, in a thread of its own, so that the turn
+    /// can pause for the user's commands while the reply streams (`wait_reply`).
+    pub(super) fn start_reply(&mut self, request: Value) -> Result<Replying, AgentError> {
+        self.routed()?;
+        let (info, retries) = (self.info.clone(), self.config.retries);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (to, from) = mpsc::channel();
+        let stop = cancel.clone();
+        std::thread::spawn(move || {
+            let executor = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build();
+            let ended = match executor {
+                Ok(executor) => {
+                    let mut on = |event: Sending| {
+                        let _ = to.send(match event {
+                            Sending::Attempt => Streamed::Attempt,
+                            Sending::Sent => Streamed::Sent,
+                            Sending::Progress(update) => Streamed::Progress(update.clone()),
+                            Sending::Retrying(error, attempt, delay) => {
+                                Streamed::Retrying(error.to_owned(), attempt, delay)
+                            }
+                        });
+                    };
+                    send(&executor, &info, retries, &request, true, &stop, &mut on)
+                }
+                Err(error) => Err(error.into()),
+            };
+            let _ = to.send(Streamed::Ended(ended));
+        });
+        Ok(Replying {
+            from,
+            cancel,
+            model: self.config.model.clone(),
+        })
+    }
+
+    /// Shows the reply `replying` streams until it ends, stopping it once `cancel` is set. When
+    /// `ui` asks for a pause, it is kept in `self.replying`, going on meanwhile, and this returns
+    /// `AgentError::Paused`.
+    pub(super) fn wait_reply(
+        &mut self,
+        replying: Replying,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<client::Reply, AgentError> {
+        let mut looked = Instant::now();
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                replying.cancel.store(true, Ordering::Relaxed);
+            } else if looked.elapsed() >= LOOK {
+                looked = Instant::now();
+                if ui.pause() {
+                    self.replying = Some(replying);
+                    return Err(AgentError::Paused);
+                }
+            }
+            match replying.from.recv_timeout(LOOK) {
+                Ok(Streamed::Attempt) => ui.waiting(Purpose::Reply),
+                Ok(Streamed::Sent) => self.usage.requests += 1,
+                Ok(Streamed::Progress(update)) => ui.progress(&update),
+                Ok(Streamed::Retrying(error, attempt, delay)) => {
+                    ui.retrying(&error, attempt, self.config.retries, delay)
+                }
+                Ok(Streamed::Ended(ended)) => {
+                    let reply = ended?;
+                    self.count(&replying.model, &reply, Purpose::Reply);
+                    return Ok(reply);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let ended = "the request's thread ended without a reply";
+                    return Err(AgentError::Provider(ended.into()));
+                }
+            }
+        }
+    }
+
     /// Sends `request` as `send` does, and counts its usage.
     pub(super) fn respond(
         &mut self,
@@ -93,16 +198,7 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<client::Reply, AgentError> {
-        if self.info.route.is_none() {
-            // A provider that could not list its models before may list them now.
-            self.config.providers.reload();
-            if let Some(model) = self.config.providers.find(&self.config.model) {
-                self.info = model.info.clone();
-            }
-        }
-        if self.info.route.is_none() {
-            return Err(AgentError::Provider(self.unoffered()));
-        }
+        self.routed()?;
         let retries = self.config.retries;
         let requests = &mut self.usage.requests;
         let reply = send(
@@ -122,15 +218,36 @@ impl Agent {
                 }
             },
         )?;
-        self.usage.count(&reply);
-        if purpose == Purpose::Reply
-            && let Some(path) = &self.rates
-        {
-            // The rates are only shown; a session goes on without them.
-            let _ = rates::record(path, &self.config.model, &reply);
-        }
+        let model = self.config.model.clone();
+        self.count(&model, &reply, purpose);
         Ok(reply)
     }
+}
+
+/// How long waiting for a reply's stream goes before it looks whether to pause.
+const LOOK: Duration = Duration::from_millis(50);
+
+/// A step's request sent in a thread of its own (`Agent::start_reply`). Dropped, it stops.
+pub(super) struct Replying {
+    from: mpsc::Receiver<Streamed>,
+    cancel: Arc<AtomicBool>,
+    /// The model asked, which produces the reply, though the session may change it meanwhile.
+    pub(super) model: String,
+}
+
+impl Drop for Replying {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// What a reply's thread tells the turn, as `Sending` says it, then how it ended.
+enum Streamed {
+    Attempt,
+    Sent,
+    Progress(StreamProgress),
+    Retrying(String, u32, Duration),
+    Ended(Result<client::Reply, AgentError>),
 }
 
 /// What happens while a request is sent.

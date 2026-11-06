@@ -1,0 +1,26 @@
+{
+  "size": "90x40",
+  "settings": {"theme": "scramjet-dark"},
+  "prompt": "Plan it",
+  "replies": [
+    [{"text": "First I read the build script to see which targets it has, then the tests that cover them, so that the plan starts from what is there. After that I list the steps in order, each small enough to check on its own, and I end with the one that ties them together.", "pace": 0.12},
+     {"call": "bash", "arguments": {"command": "echo planned"}}],
+    [{"text": "Planned."}]
+  ],
+  "steps": [
+    {"until": "build script"},
+    {"type": "/autopilot on\r"},
+    {"until": "Autopilot is on"},
+    {"shot": "command"},
+    {"type": "/model\r"},
+    {"sleep": 0.5},
+    {"shot": "picker"},
+    {"type": "\u001b"},
+    {"until": "steps in order"},
+    {"shot": "streaming"},
+    {"until": "Planned."},
+    {"sleep": 0.3},
+    {"shot": "ended"},
+    {"type": "\u0004"}
+  ]
+}

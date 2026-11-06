@@ -575,6 +575,7 @@ impl App {
                 }
                 // What the turn did not take is not sent unasked.
                 if !running {
+                    self.conversation_mut().turn_ended();
                     self.restore();
                 }
             }
