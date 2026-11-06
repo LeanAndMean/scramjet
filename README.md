@@ -9,8 +9,16 @@ A terminal coding agent written in Rust: an independent rewrite of Scramjet that
 You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`), and fail without it; `@` file completion uses `fd`.
 
 ```sh
-cargo build --release --offline --locked      # `cargo fetch` first if the crates are not cached
+cd /path/to/scramjet-rs
+cargo install --path . --locked --offline     # `cargo fetch` first if the crates are not cached
 cd /path/to/your/project
+scramjet-rs
+```
+
+`cargo install` puts the release build in `~/.cargo/bin` (on the `PATH` rustup sets up). That copy changes only when you run the command again, which replaces it with the checkout's current code, uncommitted changes included. To try the current code without replacing the copy you work in, run the build in the checkout, which changes with every build and goes with `cargo clean`:
+
+```sh
+cargo build --release --offline --locked
 /path/to/scramjet-rs/target/release/scramjet-rs
 ```
 
