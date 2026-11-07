@@ -1,7 +1,7 @@
 //! The desktop's clipboard as Scramjet uses it. Copying: with `pbcopy` on macOS, else with a
-//! PowerShell kept running under WSL (`powershell.rs`) outside a remote session, then `wl-copy`
-//! under Wayland, then the X server itself (`x11.rs`), `xclip` or `xsel`; else, and also in a
-//! remote session, through the terminal with OSC 52. Pasting: with the PowerShell under WSL,
+//! PowerShell kept running on Windows and under WSL (`powershell.rs`) outside a remote session,
+//! then `wl-copy` under Wayland, then the X server itself (`x11.rs`), `xclip` or `xsel`; else, and
+//! also in a remote session, through the terminal with OSC 52. Pasting: with that PowerShell,
 //! `pbpaste` on macOS, else from the X server itself, then with `wl-paste`, `xclip` or `xsel`;
 //! never in a remote session, whose clipboard is the terminal's. When no route reads it, the first
 //! failure names the key that pastes through the terminal itself.
@@ -85,15 +85,15 @@ pub(super) fn copy(text: &str, terminal: bool) -> Result<Option<String>, String>
     }
 }
 
-/// Under WSL, starts what reads and writes Windows' clipboard, for the first paste or copy not to
+/// On Windows and under WSL, starts what reads and writes Windows' clipboard, for the first paste or copy not to
 /// wait for it.
 pub(super) fn warm() {
-    if wsl(set) && !remote() {
+    if windows(set) && !remote() {
         powershell::warm();
     }
 }
 
-/// The text on the clipboard: under WSL Windows', else read with the first of the platform's
+/// The text on the clipboard: on Windows and under WSL Windows', else read with the first of the platform's
 /// tools that succeeds.
 pub(super) fn paste() -> Result<String, String> {
     let failed = |why: String| unreadable(why, &KEY_NAMED);
@@ -102,7 +102,7 @@ pub(super) fn paste() -> Result<String, String> {
             "Remote sessions paste only through the terminal".to_owned(),
         ));
     }
-    if wsl(set) {
+    if windows(set) {
         return match powershell::read("text", PASTE_MAX) {
             Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
             Err(error) => Err(failed(format!("Cannot read clipboard text ({error})"))),
@@ -208,11 +208,11 @@ fn saved_by(program: &str, arguments: &[&str], directory: &str) -> Result<Option
 }
 
 /// The clipboard's image, if any, and its extension, given which variables are `set`: under WSL
-/// Windows' as PNG, as for text; else from the X server, then with `wl-paste` under Wayland, then
+/// (and on Windows) Windows' as PNG, as for text; else from the X server, then with `wl-paste` under Wayland, then
 /// `xclip` under X11, in a type offered among `IMAGE_TYPES`.
 fn image(set: impl Fn(&str) -> bool) -> Result<Option<(Vec<u8>, &'static str)>, String> {
     let nonempty = |read: Option<(Vec<u8>, _)>| read.filter(|(bytes, _)| !bytes.is_empty());
-    if wsl(&set) {
+    if windows(&set) {
         return match powershell::read("image", IMAGE_MAX) {
             Ok(png) => Ok(nonempty(Some((png, "png")))),
             Err(error) => Err(format!("Cannot read the clipboard's image ({error})")),
@@ -292,17 +292,18 @@ fn set(name: &str) -> bool {
     env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
-fn wsl(set: impl Fn(&str) -> bool) -> bool {
-    set("WSL_DISTRO_NAME") || set("WSL_INTEROP")
+/// Whether the clipboard is Windows', used through PowerShell: on Windows, and under WSL.
+fn windows(set: impl Fn(&str) -> bool) -> bool {
+    cfg!(windows) || set("WSL_DISTRO_NAME") || set("WSL_INTEROP")
 }
 
 /// Whether the clipboard is read from an X server: on Linux, outside WSL, with a `DISPLAY`.
 fn x11(set: impl Fn(&str) -> bool) -> bool {
-    !cfg!(target_os = "macos") && !wsl(&set) && set("DISPLAY")
+    !cfg!(target_os = "macos") && !windows(&set) && set("DISPLAY")
 }
 
-/// The tools that read the clipboard outside WSL, in Scramjet's order, given which variables are
-/// `set`.
+/// The tools that read the clipboard outside Windows and WSL, in Scramjet's order, given which
+/// variables are `set`.
 fn readers(set: impl Fn(&str) -> bool) -> Vec<(&'static str, &'static [&'static str])> {
     if cfg!(target_os = "macos") {
         return vec![("pbpaste", &[])];
@@ -359,7 +360,7 @@ fn directly(text: &str) -> bool {
     if cfg!(target_os = "macos") {
         return give("pbcopy", &[], text);
     }
-    (wsl(set) && !remote() && powershell::write(text).is_ok())
+    (windows(set) && !remote() && powershell::write(text).is_ok())
         || (set("WAYLAND_DISPLAY") && give("wl-copy", &[], text))
         || x11(set) && x11::copy(text).is_ok()
         || set("DISPLAY")
@@ -438,10 +439,11 @@ mod tests {
                 .map(|(program, _)| program)
                 .collect()
         };
-        let wsl = |variables: &[&str]| wsl(|name: &str| variables.contains(&name));
-        assert!(wsl(&["WSL_INTEROP", "WAYLAND_DISPLAY", "DISPLAY"]) && wsl(&["WSL_DISTRO_NAME"]));
-        assert!(!wsl(&["WAYLAND_DISPLAY", "DISPLAY"]));
-        if cfg!(target_os = "macos") {
+        let windows = |variables: &[&str]| windows(|name: &str| variables.contains(&name));
+        assert!(windows(&["WSL_INTEROP", "WAYLAND_DISPLAY", "DISPLAY"]));
+        assert!(windows(&["WSL_DISTRO_NAME"]));
+        assert_eq!(windows(&["WAYLAND_DISPLAY", "DISPLAY"]), cfg!(windows));
+        if cfg!(any(target_os = "macos", windows)) {
             return;
         }
         let x11 = |variables: &[&str]| x11(|name: &str| variables.contains(&name));

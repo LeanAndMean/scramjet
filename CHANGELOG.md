@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.88.0 — The clipboard on Windows
+
+### Added
+
+- On Windows, pasting text or an image (Alt+V) and copying (`/copy`, copy-on-select) use Windows' clipboard through one PowerShell kept running, as under WSL, where before only copying through the terminal (OSC 52) worked. Not yet run on Windows itself.
+
 ## 0.87.2 — The external editor and `@` paths on Windows
 
 ### Fixed

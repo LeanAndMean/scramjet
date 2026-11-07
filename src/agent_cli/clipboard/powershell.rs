@@ -1,11 +1,12 @@
-//! Windows' clipboard under WSL, read and written by one PowerShell process kept for the next
-//! paste or copy, as Scramjet's reader is: starting PowerShell takes about 0.6 s, a read in it
-//! about 80 ms, a copy 30-200 ms. Copying here rather than with OSC 52 also works inside tmux,
-//! whose default `set-clipboard external` drops a program's OSC 52, and for any length. Its
-//! script, a plain `-Command`, only calls `System.Windows.Forms.Clipboard`: no code compiled with
-//! `Add-Type` (whose DLLs in Windows' `%TEMP%` alarmed endpoint security; Scramjet's #642) and no
-//! `-EncodedCommand`. WSLg's own X11 clipboard answers in 2 ms but can stop following Windows'
-//! after hours (microsoft/wslg#1202), which would paste old text without an error.
+//! Windows' clipboard, on Windows and under WSL, read and written by one PowerShell process kept
+//! for the next paste or copy, as Scramjet's reader is: starting PowerShell takes about 0.6 s, a
+//! read in it about 80 ms, a copy 30-200 ms. Copying here rather than with OSC 52 also works
+//! inside tmux, whose default `set-clipboard external` drops a program's OSC 52, and for any
+//! length. Scramjet reads it so on Windows too, and copies there with `clip`.
+//! Its script, a plain `-Command`, only calls `System.Windows.Forms.Clipboard`: no code compiled
+//! with `Add-Type` (whose DLLs in Windows' `%TEMP%` alarmed endpoint security; Scramjet's #642)
+//! and no `-EncodedCommand`. WSLg's own X11 clipboard answers in 2 ms but can stop following
+//! Windows' after hours (microsoft/wslg#1202), which would paste old text without an error.
 
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
