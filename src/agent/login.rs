@@ -602,7 +602,11 @@ mod tests {
     fn a_renewal_that_asking_again_may_cure_fails_transiently() {
         let fetched = |status, body: &str| {
             let body = body.as_bytes().to_vec();
-            Ok(Fetched { status, body })
+            Ok(Fetched {
+                status,
+                body,
+                location: None,
+            })
         };
         for (status, transient) in [(408, true), (429, true), (500, true), (503, true)]
             .into_iter()

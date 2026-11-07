@@ -364,10 +364,20 @@ def main():
         os.makedirs(os.path.join(work, 'config/scramjet-rs'))
         with open(os.path.join(work, 'config/scramjet-rs/settings.json'), 'w') as file:
             json.dump(settings, file)
+        # rg and fd as the harness finds them, linked into the scratch agent directory; nothing is
+        # downloaded.
+        user_bin = os.path.join(os.environ.get('SCRAMJET_CODING_AGENT_DIR') or os.path.expanduser('~/.scramjet/agent'),
+                                'bin')
+        os.makedirs(os.path.join(work, 'agent', 'bin'), exist_ok=True)
+        for program, names in [('rg', ['rg']), ('fd', ['fd', 'fdfind'])]:
+            local = os.path.join(user_bin, program)
+            found = local if os.access(local, os.X_OK) else next(filter(None, map(shutil.which, names)), None)
+            if found:
+                os.symlink(found, os.path.join(work, 'agent', 'bin', program))
         env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'),
                    XDG_CONFIG_HOME=os.path.join(work, 'config'), XDG_DATA_HOME=os.path.join(work, 'data'),
                    SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'), TERM='xterm-256color',
-                   COLORTERM='truecolor')
+                   COLORTERM='truecolor', SCRAMJET_OFFLINE='1')
         for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'TMUX', 'VISUAL', 'EDITOR',
                      'SCRAMJET_CACHE']:
             env.pop(name, None)

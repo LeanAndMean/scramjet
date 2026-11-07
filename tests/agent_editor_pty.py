@@ -369,7 +369,7 @@ fd = found['fd']
 # The settings journey switches the grep tool on, which needs rg.
 assert found['rg'], f'rg is needed: neither {user_bin}/rg nor rg on the PATH'
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'),
-           XDG_CONFIG_HOME=os.path.join(work, 'config'), SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'))
+           XDG_CONFIG_HOME=os.path.join(work, 'config'), SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'), SCRAMJET_OFFLINE='1')
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
 # The journeys never reach the desktop's clipboard: those that copy or paste give a stand-in tool.

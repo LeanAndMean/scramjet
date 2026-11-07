@@ -16,7 +16,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod download;
 mod matching;
+
+pub use download::{download_missing, unavailable};
 
 pub(super) const MAX_LINES: usize = 2000;
 pub(super) const MAX_BYTES: usize = 50 * 1024;
@@ -1212,7 +1215,7 @@ fn grep(
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(GREP_LIMIT, |n| n.max(1) as usize);
-    let program = search_program("grep").ok_or("ripgrep (rg) is not available")?;
+    let (program, _) = download::ensure("grep")?;
     let mut command = search(root, &path, &program, hidden)?;
     command.args(["--json", "--line-number", "--color=never", "--hidden"]);
     if call.arguments["ignoreCase"] == true {
@@ -1344,7 +1347,7 @@ fn find(
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
-    let program = search_program("find").ok_or("fd is not available")?;
+    let (program, _) = download::ensure("find")?;
     let mut command = search(root, &path, &program, hidden)?;
     command.args([
         "--glob",

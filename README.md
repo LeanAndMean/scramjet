@@ -6,7 +6,7 @@ A terminal coding agent written in Rust: an independent rewrite of Scramjet that
 
 ## Build and run
 
-You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`) on Linux, and fail without it, and under Seatbelt (`sandbox-exec`, built in) on macOS, not yet tried on a Mac; `@` file completion uses `fd`.
+You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`) on Linux, and fail without it, and under Seatbelt (`sandbox-exec`, built in) on macOS, not yet tried on a Mac; `@` file completion uses `fd`, and the `grep` and `find` tools ripgrep and `fd`: when they are neither on the `PATH` nor in `~/.scramjet/agent/bin`, scramjet-rs downloads their latest release from GitHub into that directory, as Scramjet does, at the full screen's start or at the tool's first call (`SCRAMJET_OFFLINE=1` turns that off).
 
 ```sh
 cd /path/to/scramjet-rs

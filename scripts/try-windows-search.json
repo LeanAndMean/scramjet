@@ -1,0 +1,41 @@
+{
+  "files": {
+    "README.md": "Project\n",
+    "notes/a.txt": "one\ntwo\n"
+  },
+  "settings": {
+    "tools": [
+      "read",
+      "bash",
+      "edit",
+      "write",
+      "grep",
+      "find"
+    ],
+    "hideCredentials": "never"
+  },
+  "prompt": "Find the notes",
+  "replies": [
+    [
+      {
+        "call": "grep",
+        "arguments": {
+          "pattern": "two"
+        }
+      }
+    ],
+    [
+      {
+        "call": "find",
+        "arguments": {
+          "pattern": "*.txt"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The notes are in `notes\\a.txt`."
+      }
+    ]
+  ]
+}

@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.89.0 — ripgrep and fd downloaded when missing
+
+### Added
+
+- When ripgrep or `fd` is not installed, scramjet-rs downloads its latest release from GitHub into `~/.scramjet/agent/bin`, as Scramjet does: at the full screen's start, saying so, and at a `grep` or `find` call. `@` completion uses the downloaded `fd`. `SCRAMJET_OFFLINE=1` (or `PI_OFFLINE`) turns it off.
+
+### Changed
+
+- The `tools` setting keeps `grep` and `find` when their program is missing but can be downloaded; they are left out only with `SCRAMJET_OFFLINE` set.
+
 ## 0.88.5 — Sessions with a cut last line, and paths, on Windows
 
 ### Fixed

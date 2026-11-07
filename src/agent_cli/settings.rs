@@ -9,8 +9,8 @@ use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, SandboxMode, Set, search_program,
-    sets_in, shortened, state_directory, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, SandboxMode, Set, sets_in,
+    shortened, state_directory, unavailable, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -850,22 +850,14 @@ impl Settings {
         let mut tools: Vec<String> = Vec::new();
         for name in names {
             match name.as_str() {
-                Some(tool) if CODING_TOOLS.contains(&tool) => {
-                    let missing = match tool {
-                        "grep" => search_program(tool).is_none().then_some("ripgrep (rg)"),
-                        "find" => search_program(tool).is_none().then_some("fd"),
-                        _ => None,
-                    };
-                    match missing {
-                        Some(program) => self.warnings.push(format!(
-                            "{path}: tools: {tool} left out, as {program} is not installed"
-                        )),
-                        None if !tools.iter().any(|known| known == tool) => {
-                            tools.push(tool.to_owned())
-                        }
-                        None => {}
-                    }
-                }
+                Some(tool) if CODING_TOOLS.contains(&tool) => match unavailable(tool) {
+                    Some(program) => self.warnings.push(format!(
+                        "{path}: tools: {tool} left out, as {program} is not installed and \
+                             SCRAMJET_OFFLINE turns its download off"
+                    )),
+                    None if !tools.iter().any(|known| known == tool) => tools.push(tool.to_owned()),
+                    None => {}
+                },
                 _ => self.warnings.push(format!(
                     "{path}: tools: {name} is not one of {}; ignored",
                     CODING_TOOLS.join(", ")
@@ -1438,10 +1430,6 @@ mod tests {
 
     #[test]
     fn tools_lists_the_agents_coding_tools() {
-        if cfg!(windows) && (search_program("grep").is_none() || search_program("find").is_none()) {
-            eprintln!("passed over: rg or fd is not here");
-            return;
-        }
         let scratch = Scratch::new("tools");
         let settings = settings_with(
             &scratch,

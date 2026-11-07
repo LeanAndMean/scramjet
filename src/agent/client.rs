@@ -453,6 +453,7 @@ async fn exchange(
 pub(super) struct Fetched {
     pub status: u16,
     pub body: Vec<u8>,
+    pub location: Option<String>,
 }
 
 const FETCHED_BYTES: usize = 4 << 20;
@@ -467,6 +468,28 @@ pub(super) async fn fetch(
     url: &str,
     headers: &[(&str, &str)],
     body: Option<(&str, Vec<u8>)>,
+) -> Result<Fetched, Failure> {
+    fetch_within(
+        what,
+        method,
+        url,
+        headers,
+        body,
+        FETCHED_BYTES,
+        FETCH_TIMEOUT,
+    )
+    .await
+}
+
+/// As `fetch`, with an answer of at most `limit` bytes within `timeout`.
+pub(super) async fn fetch_within(
+    what: &str,
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<(&str, Vec<u8>)>,
+    limit: usize,
+    timeout: Duration,
 ) -> Result<Fetched, Failure> {
     let (url, query) = match url.split_once('?') {
         Some((url, query)) => (url, format!("?{query}")),
@@ -508,6 +531,9 @@ pub(super) async fn fetch(
             Failure::new(format!("request to {} failed: {e}", route.authority), true)
         })?;
         let status = response.status().as_u16();
+        let location = (response.headers().get("location"))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let mut body = response.into_body();
         let mut bytes = Vec::new();
         while let Some(frame) = body.frame().await {
@@ -517,23 +543,25 @@ pub(super) async fn fetch(
             if let Ok(data) = frame.into_data() {
                 bytes.extend_from_slice(&data);
             }
-            if bytes.len() > FETCHED_BYTES {
-                return Err(format!("{}'s answer is over 4 MB", route.authority).into());
+            if bytes.len() > limit {
+                let megabytes = limit >> 20;
+                return Err(format!("{}'s answer is over {megabytes} MB", route.authority).into());
             }
         }
         driver.abort();
         Ok(Fetched {
             status,
             body: bytes,
+            location,
         })
     };
-    match tokio::time::timeout(FETCH_TIMEOUT, exchange).await {
+    match tokio::time::timeout(timeout, exchange).await {
         Ok(fetched) => fetched,
         Err(_) => Err(Failure::new(
             format!(
                 "{} gave no answer within {}s",
                 route.authority,
-                FETCH_TIMEOUT.as_secs()
+                timeout.as_secs()
             ),
             true,
         )),
