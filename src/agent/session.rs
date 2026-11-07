@@ -1322,6 +1322,15 @@ impl Session {
         (self.file.as_mut()).expect("a session with its header written has its file")
     }
 
+    /// Tries again to write the lines its file could not take, as the next write would.
+    pub fn write_held(&mut self) -> io::Result<()> {
+        if self.held.is_empty() {
+            return Ok(());
+        }
+        let _writing = self.writing()?;
+        self.write(&[])
+    }
+
     /// Whether lines its file could not take are kept in memory.
     pub fn holding(&self) -> bool {
         !self.held.is_empty()

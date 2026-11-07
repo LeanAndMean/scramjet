@@ -26,6 +26,9 @@ use std::{
 
 /// How long `/autopilot on` waits before it chooses the recommended next step, as Scramjet.
 const AUTOSELECT: Duration = Duration::from_secs(3);
+/// How often the full screen, waiting for a prompt, tries again to write the lines a full disk
+/// kept the session from writing.
+const RETRY_HELD: Duration = Duration::from_secs(5);
 
 pub(super) struct Interactive {
     pub(super) agent: Agent,
@@ -269,7 +272,14 @@ impl Interactive {
                 screen.footer(footer::Shown::of(&self.agent));
                 let kept = super::login::Kept::of(self.agent.providers());
                 *self.kept.lock().unwrap_or_else(PoisonError::into_inner) = kept;
-                match screen.input() {
+                let holding = self.agent.session_holding().then_some(RETRY_HELD);
+                let Some(input) = screen.input_within(holding) else {
+                    if let Some(notice) = self.agent.write_held() {
+                        screen.say(&notice);
+                    }
+                    continue;
+                };
+                match input {
                     screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
                     screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),
                     screen::Input::CycleEffort => {

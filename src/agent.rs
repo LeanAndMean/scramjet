@@ -882,6 +882,20 @@ impl Agent {
         })
     }
 
+    /// Whether the session keeps lines in memory that its file could not take.
+    pub fn session_holding(&self) -> bool {
+        self.session.holding()
+    }
+
+    /// Tries again to write what the session keeps in memory, with what to say of it, as a
+    /// quiet session has no next write to take it.
+    pub fn write_held(&mut self) -> Option<String> {
+        if let Err(error) = self.session.write_held() {
+            return Some(format!("Error: session not written: {error}"));
+        }
+        self.saving_notice()
+    }
+
     fn say_saving(&mut self, ui: &mut dyn AgentUi) {
         if let Some(notice) = self.saving_notice() {
             ui.notice(&notice);

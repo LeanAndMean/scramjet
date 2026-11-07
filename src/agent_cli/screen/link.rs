@@ -17,6 +17,7 @@ use scramjet_rs::agent::{
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
 };
 use std::{
+    cell::Cell,
     io::{self, PipeWriter, Write},
     path::{Path, PathBuf},
     sync::{
@@ -288,6 +289,8 @@ impl Link {
 pub(in crate::agent_cli) struct Handle {
     pub(in crate::agent_cli) link: Link,
     from: mpsc::Receiver<Input>,
+    /// The screen was told the session waits (`ToScreen::Ready`) and has not answered yet.
+    waiting: Cell<bool>,
     thread: Option<JoinHandle<io::Result<()>>>,
 }
 
@@ -344,14 +347,28 @@ impl Handle {
                 call: None,
             },
             from,
+            waiting: Cell::new(false),
             thread: Some(thread),
         })
     }
 
-    /// Waits for what the user enters next.
-    pub(in crate::agent_cli) fn input(&self) -> Input {
-        self.link.send(ToScreen::Ready);
-        self.from.recv().unwrap_or(Input::End)
+    /// Waits for what the user enters next, or `None` after `timeout`, the wait going on at the
+    /// next call. The screen is told once per wait, as a second `Ready` after it answered would
+    /// count the session waiting through the turn that answer starts.
+    pub(in crate::agent_cli) fn input_within(&self, timeout: Option<Duration>) -> Option<Input> {
+        if !self.waiting.replace(true) {
+            self.link.send(ToScreen::Ready);
+        }
+        let input = match timeout {
+            None => self.from.recv().unwrap_or(Input::End),
+            Some(timeout) => match self.from.recv_timeout(timeout) {
+                Ok(input) => input,
+                Err(RecvTimeoutError::Timeout) => return None,
+                Err(RecvTimeoutError::Disconnected) => Input::End,
+            },
+        };
+        self.waiting.set(false);
+        Some(input)
     }
 }
 

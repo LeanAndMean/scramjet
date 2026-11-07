@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.57.3 — A quiet session written once the disk has room
+
+### Fixed
+
+- A session kept in memory on a full disk is written within a few seconds of space being freed while the full screen waits for a prompt, where it waited for the next prompt or reply.
+
 ## 0.57.2 — `--no-session` on a full disk
 
 ### Fixed

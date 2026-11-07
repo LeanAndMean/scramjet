@@ -832,8 +832,12 @@ fn a_session_on_a_full_disk_keeps_its_lines_until_there_is_room() {
             .open(&path)
             .unwrap(),
     );
-    session.append(&say("fourth")).unwrap();
+    session.write_held().unwrap();
     assert_eq!(session.take_change(), Some(session::Saving::Saved));
+    assert!(!session.holding());
+    session.write_held().unwrap();
+    session.append(&say("fourth")).unwrap();
+    assert_eq!(session.take_change(), None);
     assert!(!session.holding());
     let (reopened, conversation, _) = Session::open(&path).unwrap();
     let prompts: Vec<_> = conversation.iter().map(|item| &item["content"]).collect();
@@ -846,6 +850,14 @@ fn a_session_on_a_full_disk_keeps_its_lines_until_there_is_room() {
     // Lines still held when it ends are tried once more.
     session.write_to(full());
     session.append(&say("fifth")).unwrap();
+    assert!(matches!(
+        session.take_change(),
+        Some(session::Saving::Held(_))
+    ));
+    // A try on a disk still full keeps them, saying nothing new.
+    session.write_held().unwrap();
+    assert_eq!(session.take_change(), None);
+    assert!(session.holding());
     session.write_to(
         std::fs::OpenOptions::new()
             .append(true)
