@@ -193,7 +193,7 @@ impl Interactive {
         };
         match written {
             Ok(Some(path)) => {
-                let path = std::fs::canonicalize(&path).unwrap_or(path);
+                let path = scramjet_rs::os::canonicalize(&path).unwrap_or(path);
                 let said = format!("Session exported to: {}", path.display());
                 self.say_styled(style::MUTED, &said)
             }

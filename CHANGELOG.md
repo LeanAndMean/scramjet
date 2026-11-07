@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.88.1 — Starting on Windows
+
+### Fixed
+
+- On Windows, scramjet-rs starts and saves its sessions: the project's path no longer carries `\\?\` (which made its sessions directory's name invalid), and the session directory is opened as Windows allows. A native build now runs a scripted turn on Windows, in `-p` and on the full screen.
+
 ## 0.88.0 — The clipboard on Windows
 
 ### Added

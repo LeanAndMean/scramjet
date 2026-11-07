@@ -1,0 +1,11 @@
+{
+  "files": {"README.md": "Project\n"},
+  "prompt": "Note the readme",
+  "replies": [
+    [{"call": "write", "arguments": {"path": "notes\\a.txt", "content": "one\ntwo\n"}}],
+    [{"call": "edit", "arguments": {"path": "notes/a.txt", "edits": [{"oldText": "two", "newText": "three"}]}}],
+    [{"call": "read", "arguments": {"path": "notes/a.txt"}}],
+    [{"call": "read", "arguments": {"path": "README.md"}}],
+    [{"text": "It says **Project**; the notes are in `notes\\a.txt`."}]
+  ]
+}

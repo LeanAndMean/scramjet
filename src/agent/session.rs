@@ -1464,7 +1464,7 @@ impl Session {
             Some(parent) if !parent.as_os_str().is_empty() => parent,
             _ => Path::new("."),
         };
-        let directory = match File::open(directory) {
+        let directory = match crate::os::open_directory(directory) {
             Ok(directory) => directory,
             Err(error) if error.kind() == io::ErrorKind::NotFound && self.file.is_none() => {
                 return Ok(None);

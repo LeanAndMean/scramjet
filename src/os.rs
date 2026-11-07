@@ -20,6 +20,18 @@ pub fn private_directory(builder: &mut DirBuilder) -> &mut DirBuilder {
     builder
 }
 
+/// Opens a directory to lock it, which Windows allows only with backup semantics.
+pub fn open_directory(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(
+        &mut options,
+        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
+    );
+    options.open(path)
+}
+
 /// Makes an open file readable by its owner only.
 pub fn make_private(file: &std::fs::File) -> std::io::Result<()> {
     #[cfg(unix)]
@@ -84,6 +96,50 @@ pub fn tilde(path: &Path) -> String {
         Some(rest) => Path::new("~").join(rest).display().to_string(),
         None => path.display().to_string(),
     }
+}
+
+/// `std::fs::canonicalize`, but on Windows without the verbatim `\\?\` it gives where the plain
+/// form names the same file: a verbatim path's `?` cannot be in a file name, and every path
+/// shown or given to programs would carry it.
+pub fn canonicalize(path: &Path) -> std::io::Result<PathBuf> {
+    let real = std::fs::canonicalize(path)?;
+    if cfg!(windows)
+        && let Some(plain) = real.to_str().and_then(plain_form)
+    {
+        return Ok(PathBuf::from(plain));
+    }
+    Ok(real)
+}
+
+/// A verbatim Windows path (`\\?\C:\…`, `\\?\UNC\server\…`) as a plain one, where that names the
+/// same file: shorter than `MAX_PATH`, and no component the plain form would read otherwise
+/// (`.`, `..`, a name ending in a dot or space, a device name such as `NUL` or `COM1.txt`).
+fn plain_form(verbatim: &str) -> Option<String> {
+    let (plain, rest) = if let Some(rest) = verbatim.strip_prefix(r"\\?\UNC\") {
+        (format!(r"\\{rest}"), rest)
+    } else {
+        let rest = verbatim.strip_prefix(r"\\?\")?;
+        let bytes = rest.as_bytes();
+        let disk = bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && &bytes[1..3] == br":\";
+        (disk.then(|| rest.to_owned())?, &rest[3..])
+    };
+    let device = |name: &str| {
+        let stem = name
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_uppercase();
+        let numbered = |prefix| {
+            stem.strip_prefix(prefix)
+                .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
+        };
+        matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
+    };
+    let unclear =
+        |name: &str| name == "." || name == ".." || name.ends_with(['.', ' ']) || device(name);
+    let components = rest.split('\\').filter(|name| !name.is_empty());
+    let clear = plain.len() < 260 && !rest.contains('/') && !components.clone().any(unclear);
+    clear.then_some(plain)
 }
 
 /// The name a program's file has here: `name.exe` on Windows.
@@ -253,6 +309,27 @@ mod tests {
         assert_eq!(after_tilde("~user/a"), None);
         assert_eq!(after_tilde("a/~/b"), None);
         assert_eq!(after_tilde("~\\a").is_some(), cfg!(windows));
+    }
+
+    #[test]
+    fn verbatim_paths_are_plain_only_where_that_names_the_same_file() {
+        assert_eq!(
+            plain_form(r"\\?\C:\Users\a\repo").as_deref(),
+            Some(r"C:\Users\a\repo")
+        );
+        assert_eq!(plain_form(r"\\?\C:\").as_deref(), Some(r"C:\"));
+        let share = plain_form(r"\\?\UNC\server\share\x");
+        assert_eq!(share.as_deref(), Some(r"\\server\share\x"));
+        assert_eq!(plain_form(r"C:\Users"), None);
+        assert_eq!(plain_form(r"\\?\Volume{1234}\x"), None);
+        assert_eq!(plain_form(r"\\?\C:\a\NUL"), None);
+        assert_eq!(plain_form(r"\\?\C:\a\com1.txt"), None);
+        assert_eq!(plain_form(r"\\?\C:\a\trailing."), None);
+        assert_eq!(plain_form(r"\\?\C:\a\space "), None);
+        assert_eq!(plain_form(r"\\?\C:\a\..\b"), None);
+        assert!(plain_form(r"\\?\C:\a\console").is_some());
+        let long = format!(r"\\?\C:\{}", "a\\".repeat(130));
+        assert_eq!(plain_form(&long), None);
     }
 
     #[test]

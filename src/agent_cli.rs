@@ -204,9 +204,8 @@ fn project_root(project: Option<PathBuf>) -> Result<PathBuf, String> {
         Some(path) => path,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
     };
-    let root = root
-        .canonicalize()
-        .map_err(|e| format!("{}: {e}", root.display()))?;
+    let root =
+        scramjet_rs::os::canonicalize(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
