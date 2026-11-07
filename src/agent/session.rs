@@ -1244,6 +1244,13 @@ impl Session {
         Ok(context.items)
     }
 
+    /// Moves to the end of the session, the lines held in memory included, as `open` resumes a
+    /// session at its file's end. Returns its conversation and every prompt, as `open` does.
+    pub fn resumed(&mut self) -> io::Result<(Vec<Value>, Vec<String>)> {
+        let prompts = self.read()?.prompts();
+        Ok((self.move_to(self.tail)?, prompts))
+    }
+
     /// The entries on the path to the leaf after the last one it shares with the path to
     /// `target`: the branch a move to `target` leaves, as Scramjet collects it for a summary.
     pub fn left_behind(&self, target: Option<usize>) -> io::Result<Vec<Value>> {

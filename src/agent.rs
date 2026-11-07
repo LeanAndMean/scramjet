@@ -1022,12 +1022,18 @@ impl Agent {
 
     /// Continues in the saved session `path` with the model it last used, as starting with
     /// `--session` does; on a failure to open it nothing changes. Approvals given with `a` still
-    /// apply.
+    /// apply. A session left here that still holds lines in memory is taken back with them.
     pub fn resume_session(&mut self, path: &Path) -> Result<(), AgentError> {
         if self.session.is_file(path) {
             return Err(AgentError::Session(std::io::Error::other(
                 "that is the current session",
             )));
+        }
+        let left = (self.left.iter()).position(|left| left.path() == path || left.is_file(path));
+        if let Some(index) = left {
+            let (conversation, prompts) = self.left[index].resumed()?;
+            let session = self.left.remove(index);
+            return self.switch_session((session, conversation, prompts));
         }
         self.switch_session(Session::open(path)?)
     }

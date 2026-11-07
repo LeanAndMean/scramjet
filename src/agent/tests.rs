@@ -1483,6 +1483,49 @@ fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
 }
 
 #[test]
+fn a_session_left_while_holding_lines_resumes_with_them() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "resume-held");
+    let original = scratch.0.join("1700000000000-1.jsonl");
+    write_session(
+        &original,
+        &[
+            json!({"type":"session","version":1}),
+            json!({"role":"user","content":"one"}),
+        ],
+        std::time::SystemTime::now(),
+    );
+    agent.resume_session(&original).unwrap();
+    let full = std::fs::OpenOptions::new().append(true).open("/dev/full");
+    agent.session.write_to(full.unwrap());
+    let two = json!({"role":"user","content":"two"});
+    agent.session.append(&two).unwrap();
+    assert!(agent.clone_session().unwrap());
+    agent.new_session().unwrap();
+    assert_eq!(agent.left.len(), 1);
+
+    agent.resume_session(&original).unwrap();
+    assert!(agent.left.is_empty());
+    assert_eq!(agent.session_path(), original);
+    assert_eq!(
+        agent.conversation,
+        [json!({"role":"user","content":"one"}), two.clone()]
+    );
+    assert_eq!(agent.prompts, ["one", "two"]);
+    let three = json!({"role":"user","content":"three"});
+    agent.session.append(&three).unwrap();
+
+    let room = std::fs::OpenOptions::new().append(true).open(&original);
+    agent.session.write_to(room.unwrap());
+    agent.write_held();
+    assert!(!agent.session_holding());
+    let (_, conversation, _) = Session::open(&original).unwrap();
+    assert_eq!(
+        conversation,
+        [json!({"role":"user","content":"one"}), two, three]
+    );
+}
+
+#[test]
 fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
     let (endpoint, server) = serve(vec![stream(&fixture::text_events(
         "again",

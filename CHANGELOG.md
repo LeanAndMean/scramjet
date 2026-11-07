@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.63.1 — Resuming a session held on a full disk
+
+### Fixed
+
+- `/resume` of a session you left while a full disk kept its lines in memory continues with those lines, where it opened its file without them and both then appended to it.
+
 ## 0.63.0 — MCP server names completed
 
 ### Added
