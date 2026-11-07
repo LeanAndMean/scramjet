@@ -284,7 +284,8 @@ impl Interactive {
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
-    /// `/usage`: what the saved sessions spent, read from their files.
+    /// `/usage`: what the saved sessions spent, read from their files; on the full screen, a
+    /// view of it, provider by provider.
     fn usage(&mut self) {
         let sessions = match scramjet_rs::agent::state_directory() {
             Ok(state) => state.join("sessions"),
@@ -294,14 +295,13 @@ impl Interactive {
         let history = scramjet_rs::agent::usage::History::read(&sessions, current);
         let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
             .map_or(0, |since| since.as_millis() as u64);
-        let report = super::usage::report(
-            &history,
-            &sessions,
-            current,
-            self.agent.model(),
-            now,
-            &self.ui,
-        );
+        let model = self.agent.model();
+        if let Some(screen) = &self.screen {
+            let view =
+                super::usage::UsageView::new(&history, &sessions, current, model, now, &self.ui);
+            return screen.show_usage(view);
+        }
+        let report = super::usage::report(&history, &sessions, current, model, now, None, &self.ui);
         self.say(report.trim_end());
     }
 

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.68.0 — /usage as a view, provider by provider
+
+### Changed
+
+- On the full screen, `/usage` opens in the conversation's place, which it gives back on Escape, showing the current provider's usage alone; Tab (or Left and Right) moves to all providers together or to each other provider that has responses. Without a terminal it still prints every provider's.
+
 ## 0.67.0 — The costliest sessions in /usage
 
 ### Added

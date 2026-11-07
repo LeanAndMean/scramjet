@@ -332,6 +332,13 @@ impl App {
                 None
             }
             Some(Open {
+                shown: Shown::Usage(view),
+                ..
+            }) => {
+                rows.extend(selection::rows(&view.lines(width)));
+                None
+            }
+            Some(Open {
                 shown: Shown::Approve(question),
                 ..
             }) => {

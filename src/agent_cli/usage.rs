@@ -2,6 +2,8 @@
 //! session, today and the last days, each day of the last two weeks, each provider's and each
 //! model's requests, tokens and cost, and each model's speed.
 
+use super::keymap::{self, Binding};
+use super::keys::Key;
 use super::slash::grouped;
 use super::style;
 use super::terminal::{self, Terminal};
@@ -132,18 +134,25 @@ fn grouped_by<'a>(
 }
 
 /// The report, `current` being this session's file and `model` its model, at `now`
-/// (milliseconds since 1970).
+/// (milliseconds since 1970): of `only`'s responses, or of every provider's.
 pub(super) fn report(
     history: &History,
     sessions: &Path,
     current: &Path,
     model: &str,
     now: u64,
+    only: Option<&str>,
     ui: &Terminal,
 ) -> String {
     let heading = |text: &str| format!("{}\n", ui.styled(style::INFO_HEADING, text));
-    let responses = &history.responses;
-    let mut text = heading("Usage") + "\n";
+    let responses: Vec<&Response> = (history.responses.iter())
+        .filter(|r| only.is_none_or(|only| provider(&r.model) == only))
+        .collect();
+    let title = match only {
+        Some(only) => format!("Usage of {only}"),
+        None => "Usage".to_owned(),
+    };
+    let mut text = heading(&title) + "\n";
     if responses.is_empty() {
         text += &ui.dim("No responses saved yet.");
         text.push('\n');
@@ -166,23 +175,28 @@ pub(super) fn report(
     ));
     text.push('\n');
     let session = history.session(current);
-    let this = Totals::of(responses.iter().filter(|r| Some(r.session) == session));
+    let this = Totals::of(
+        responses
+            .iter()
+            .copied()
+            .filter(|r| Some(r.session) == session),
+    );
     text += &row("This session", &this);
-    let today = Totals::of(responses.iter().filter(|r| same_day(r.at, now)));
+    let today = Totals::of(responses.iter().copied().filter(|r| same_day(r.at, now)));
     text += &row("Today", &today);
     for days in [7, 30] {
         let since = now.saturating_sub(days * DAY);
-        let totals = Totals::of(responses.iter().filter(|r| r.at >= since));
+        let totals = Totals::of(responses.iter().copied().filter(|r| r.at >= since));
         text += &row(&format!("Last {days} days"), &totals);
     }
-    text += &row("All", &Totals::of(responses.iter()));
+    text += &row("All", &Totals::of(responses.iter().copied()));
 
     text += "\n";
     text += &heading(&format!("Last {DAYS} days"));
     let mut days: Vec<(u64, Totals)> = Vec::new();
     for back in (0..DAYS).rev() {
         let at = now.saturating_sub(back * DAY);
-        let totals = Totals::of(responses.iter().filter(|r| same_day(r.at, at)));
+        let totals = Totals::of(responses.iter().copied().filter(|r| same_day(r.at, at)));
         if totals.requests > 0 {
             days.push((at, totals));
         }
@@ -207,7 +221,7 @@ pub(super) fn report(
     }
 
     let since = now.saturating_sub(30 * DAY);
-    let recent = || responses.iter().filter(|r| r.at >= since);
+    let recent = || responses.iter().copied().filter(|r| r.at >= since);
     let table = |label: &str, rows: &[(String, Totals)]| {
         let width = (rows.iter().map(|(name, _)| name.chars().count()))
             .chain([label.len()])
@@ -237,15 +251,17 @@ pub(super) fn report(
         text
     };
 
-    text += "\n";
-    text += &heading("Providers, last 30 days");
-    let current = provider(model);
-    let mut providers = grouped_by(recent(), |r| provider(&r.model).to_owned());
-    if !providers.iter().any(|(name, _)| name == current) {
-        providers.push((current.to_owned(), Totals::default()));
+    if only.is_none() {
+        text += "\n";
+        text += &heading("Providers, last 30 days");
+        let current = provider(model);
+        let mut providers = grouped_by(recent(), |r| provider(&r.model).to_owned());
+        if !providers.iter().any(|(name, _)| name == current) {
+            providers.push((current.to_owned(), Totals::default()));
+        }
+        providers.sort_by_key(|(name, _)| *name != current);
+        text += &table("Provider", &providers);
     }
-    providers.sort_by_key(|(name, _)| *name != current);
-    text += &table("Provider", &providers);
 
     text += "\n";
     text += &heading("Models, last 30 days");
@@ -326,9 +342,13 @@ pub(super) fn report(
 
     text += "\n";
     let first = responses.iter().map(|r| r.at).min().unwrap_or(now);
+    let order = match only {
+        None => " The current provider comes first.",
+        Some(_) => "",
+    };
     let mut said = format!(
-        "From {} session files in {}, since {}. The current provider comes first. First output and rate are \
-medians, beside the slowest tenth's (p90 and p10); cost is $? where the provider gives no price.",
+        "From {} session files in {}, since {}.{order} First output and rate are medians, beside \
+the slowest tenth's (p90 and p10); cost is $? where the provider gives no price.",
         grouped(history.files.len() as u64),
         sessions.display(),
         date(first, now),
@@ -341,9 +361,94 @@ medians, beside the slowest tenth's (p90 and p10); cost is $? where the provider
     text
 }
 
+/// `/usage` on the full screen: a report for each provider, the current one shown first, and
+/// one of them all, shown in the conversation's place one at a time.
+pub(super) struct UsageView {
+    /// Each tab's name and report: every provider's first, then each provider's.
+    tabs: Vec<(String, String)>,
+    at: usize,
+}
+
+/// What a key did in the view.
+#[derive(Debug, PartialEq)]
+pub(super) enum Took {
+    Moved,
+    Closed,
+    Nothing,
+}
+
+impl UsageView {
+    /// The reports, as `report` makes them, for every provider, the current provider (`model`'s)
+    /// and then the others that have responses, the costliest first.
+    pub(super) fn new(
+        history: &History,
+        sessions: &Path,
+        current: &Path,
+        model: &str,
+        now: u64,
+        ui: &Terminal,
+    ) -> Self {
+        let this = provider(model);
+        let mut names = vec![this.to_owned()];
+        let others = grouped_by(history.responses.iter(), |r| provider(&r.model).to_owned());
+        names.extend((others.into_iter().map(|(name, _)| name)).filter(|name| name != this));
+        let report = |only: Option<&str>| report(history, sessions, current, model, now, only, ui);
+        let mut tabs = vec![("All".to_owned(), report(None))];
+        for name in names {
+            let text = report(Some(&name));
+            tabs.push((name, text));
+        }
+        Self { tabs, at: 1 }
+    }
+
+    /// The report shown.
+    pub(super) fn report(&self) -> &str {
+        self.tabs[self.at].1.trim_end()
+    }
+
+    pub(super) fn key(&mut self, key: &Key) -> Took {
+        let count = self.tabs.len();
+        if key.is(Binding::Tab) || key.is(Binding::CursorRight) {
+            self.at = (self.at + 1) % count;
+            Took::Moved
+        } else if key.is(Binding::CursorLeft) {
+            self.at = (self.at + count - 1) % count;
+            Took::Moved
+        } else if key.is(Binding::SelectCancel) || key.is(Binding::SelectConfirm) {
+            Took::Closed
+        } else {
+            Took::Nothing
+        }
+    }
+
+    /// The dock's rows under the report: its title with the keys, then the tabs, the one shown
+    /// marked, each row within `width`.
+    pub(super) fn lines(&self, width: usize) -> Vec<String> {
+        use style::{MUTED, RESET, SELECTED, SELECTOR_TITLE};
+        let keys = keymap::hint([
+            keymap::part(&[Binding::Tab], "provider"),
+            keymap::part(&[Binding::PageUp, Binding::PageDown], "scroll"),
+            keymap::part(&[Binding::SelectCancel], "close"),
+        ]);
+        let title = format!("{SELECTOR_TITLE}Usage{RESET}  {MUTED}{keys}{RESET}");
+        let tabs: Vec<String> = (self.tabs.iter().enumerate())
+            .map(|(index, (name, _))| match index == self.at {
+                true => format!("{SELECTED} {name} {RESET}"),
+                false => format!("{MUTED} {name} {RESET}"),
+            })
+            .collect();
+        let width = width.saturating_sub(1);
+        vec![
+            super::text::clip(&title, width),
+            super::text::clip(&tabs.join(" "), width),
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_cli::keys::{Code, Press};
     use scramjet_rs::agent::usage::Summary;
     use std::sync::{Arc, atomic::AtomicBool};
 
@@ -362,10 +467,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_report_adds_up_sessions_days_and_models() {
-        let now = 1_794_000_000_000;
-        let history = History {
+    const NOW: u64 = 1_794_000_000_000;
+
+    fn history() -> History {
+        let now = NOW;
+        History {
             responses: vec![
                 response(now - 40 * DAY, "a/old", Some(9.0), 0),
                 response(now - 3 * DAY, "a/one", Some(1.0), 0),
@@ -389,14 +495,23 @@ mod tests {
                 Summary::default(),
             ],
             unreadable: Vec::new(),
-        };
-        let ui = Terminal::new(Arc::new(AtomicBool::new(false)), false);
+        }
+    }
+
+    fn ui() -> Terminal {
+        Terminal::new(Arc::new(AtomicBool::new(false)), false)
+    }
+
+    #[test]
+    fn the_report_adds_up_sessions_days_and_models() {
+        let (now, history, ui) = (NOW, history(), ui());
         let report = report(
             &history,
             Path::new("/s"),
             Path::new("/s/p/2.jsonl"),
             "b/new",
             now,
+            None,
             &ui,
         );
         let report = super::super::text::plain(&report);
@@ -462,5 +577,72 @@ mod tests {
             "{}",
             lines[33]
         );
+    }
+
+    #[test]
+    fn a_providers_report_counts_only_its_responses() {
+        let (now, history, ui) = (NOW, history(), ui());
+        let current = Path::new("/s/p/2.jsonl");
+        let report = report(
+            &history,
+            Path::new("/s"),
+            current,
+            "a/one",
+            now,
+            Some("a"),
+            &ui,
+        );
+        let report = super::super::text::plain(&report);
+        let lines: Vec<&str> = report.lines().map(str::trim_end).collect();
+        assert_eq!(
+            lines[..8],
+            [
+                "Usage of a",
+                "",
+                "                Requests    Input   Output  Cached       Cost",
+                "This session           1      400       50     75%      $2.00",
+                "Today                  1      400       50     75%      $2.00",
+                "Last 7 days            2      800      100     75%      $3.00",
+                "Last 30 days           2      800      100     75%      $3.00",
+                "All                    3     1.2k      150     75%     $12.00",
+            ]
+        );
+        assert!(!report.contains("Providers"), "{report}");
+        assert!(
+            report.contains("Models, last 30 days\nModel  Requests"),
+            "{report}"
+        );
+        assert!(!report.contains("\nsub "), "{report}");
+        assert!(
+            !report.contains("The current provider comes first"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn the_view_opens_on_the_current_provider_and_tabs_through_the_others() {
+        let (now, history, ui) = (NOW, history(), ui());
+        let current = Path::new("/s/p/2.jsonl");
+        let mut view = UsageView::new(&history, Path::new("/s"), current, "b/new", now, &ui);
+        let names: Vec<&str> = view.tabs.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["All", "b", "a", "unknown"]);
+        assert!(
+            view.report()
+                .starts_with("Usage of b\n\nNo responses saved yet.")
+        );
+        let tabs = |view: &UsageView| super::super::text::plain(&view.lines(80)[1]);
+        assert_eq!(tabs(&view), " All   b   a   unknown ");
+        let tab = Key::Press(Press::new(Code::Tab, 0));
+        let left = Key::Press(Press::new(Code::Left, 0));
+        assert_eq!(view.key(&tab), Took::Moved);
+        assert!(view.report().starts_with("Usage of a\n"));
+        assert_eq!(view.key(&left), Took::Moved);
+        assert_eq!(view.key(&left), Took::Moved);
+        assert!(view.report().starts_with("Usage\n"));
+        assert_eq!(view.key(&left), Took::Moved);
+        assert!(view.report().starts_with("Usage of unknown\n"));
+        assert_eq!(view.key(&Key::Text("x".into())), Took::Nothing);
+        let escape = Key::Press(Press::new(Code::Escape, 0));
+        assert_eq!(view.key(&escape), Took::Closed);
     }
 }

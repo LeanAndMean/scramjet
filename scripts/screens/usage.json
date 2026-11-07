@@ -10,6 +10,13 @@
     {"type": "/usage\r"},
     {"until": "session files"},
     {"sleep": 0.5},
-    {"shot": "usage"}
+    {"shot": "usage"},
+    {"type": "\t"},
+    {"until": "The current provider comes first"},
+    {"sleep": 0.3},
+    {"shot": "usage-all"},
+    {"type": "\u001b"},
+    {"sleep": 0.5},
+    {"shot": "usage-closed"}
   ]
 }

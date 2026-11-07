@@ -23,6 +23,7 @@ use super::slash::{self, Builtin};
 use super::terminal::next_spin;
 use super::theme::Watched;
 use super::theme_editor::{self, ThemeEditor};
+use super::usage::UsageView;
 use super::{external, job, style};
 use scramjet_rs::agent::{self, EffortCycle, Shell, Tokens};
 use std::{
@@ -142,6 +143,9 @@ pub(super) enum Dialog {
     Wait(String, String),
     /// The theme editor, a sample session showing its theme in the conversation's place.
     Theme(Box<ThemeEditor>),
+    /// `/usage`'s reports, one shown in the conversation's place, until Escape (answered
+    /// `Pressed(None)`).
+    Usage(Box<UsageView>),
 }
 
 /// Whether a dialog's text may be left empty.
@@ -253,6 +257,7 @@ enum Shown {
     Press(String, String),
     Wait(String, String),
     Theme(Box<ThemeEditor>),
+    Usage(Box<UsageView>),
 }
 
 struct TextDialog {
@@ -282,7 +287,7 @@ struct App {
     draft: Draft,
     transcript: Transcript,
     /// The conversation and where it was scrolled to, while the theme editor's sample session
-    /// is shown in its place.
+    /// or `/usage`'s report is shown in its place.
     conversation: Option<(Transcript, Option<Place>)>,
     /// What the status line said before the open dialog asked the user.
     before_dialog: Option<Activity>,
@@ -643,6 +648,7 @@ impl App {
                         style::set(&editor.theme());
                         Shown::Theme(editor)
                     }
+                    Dialog::Usage(view) => Shown::Usage(view),
                 };
                 self.dialog = Some(Open {
                     shown,
@@ -717,28 +723,39 @@ impl App {
         }
     }
 
-    /// Shows the theme editor's sample session from its start in the conversation's place while
-    /// the editor is open, and the conversation again, where it was, once it closes.
+    /// Shows the theme editor's sample session, or `/usage`'s report, from its start in the
+    /// conversation's place while it is open, and the conversation again, where it was, once it
+    /// closes.
     fn preview(&mut self) {
-        let editing = matches!(
-            self.dialog,
+        let shown = match &self.dialog {
             Some(Open {
                 shown: Shown::Theme(_),
                 ..
-            })
-        );
-        match (editing, self.conversation.take()) {
-            (true, None) => {
-                let mut sample = Transcript::default();
-                for part in theme_editor::sample() {
-                    sample.split();
-                    part.into_iter().for_each(|event| sample.push(event));
-                }
+            }) => Some(None),
+            Some(Open {
+                shown: Shown::Usage(view),
+                ..
+            }) => Some(Some(view)),
+            _ => None,
+        };
+        match (shown, self.conversation.take()) {
+            (Some(usage), None) => {
+                let sample = match usage {
+                    Some(view) => usage_shown(view),
+                    None => {
+                        let mut sample = Transcript::default();
+                        for part in theme_editor::sample() {
+                            sample.split();
+                            part.into_iter().for_each(|event| sample.push(event));
+                        }
+                        sample
+                    }
+                };
                 let conversation = std::mem::replace(&mut self.transcript, sample);
                 self.conversation = Some((conversation, self.top.take()));
                 self.top = Some(Place::START);
             }
-            (false, Some((conversation, top))) => {
+            (None, Some((conversation, top))) => {
                 self.transcript = conversation;
                 self.top = top;
             }
@@ -748,6 +765,20 @@ impl App {
             }
         }
         (self.selection, self.edge) = (None, None);
+    }
+
+    /// Shows the report `/usage`'s view moved to, from its start.
+    fn usage_moved(&mut self) {
+        if let Some(Open {
+            shown: Shown::Usage(view),
+            ..
+        }) = &self.dialog
+            && self.conversation.is_some()
+        {
+            self.transcript = usage_shown(view);
+            self.top = Some(Place::START);
+            (self.selection, self.edge) = (None, None);
+        }
     }
 
     fn exit(&mut self) {
@@ -798,7 +829,7 @@ impl App {
             Shown::Pick(_) => Answer::Picked(None),
             Shown::Text(_) => Answer::Text(None),
             Shown::Approve(_) => Answer::Approved(agent::Answer::Deny),
-            Shown::Press(..) | Shown::Wait(..) => Answer::Pressed(None),
+            Shown::Press(..) | Shown::Wait(..) | Shown::Usage(_) => Answer::Pressed(None),
             Shown::Theme(_) => Answer::Theme(None),
         });
         let _ = open.reply.send(answer);
@@ -1030,6 +1061,13 @@ impl Drop for Screen {
 /// What gives the terminal back from the screen, when it is shown, for a process exiting without
 /// dropping it: the end of a frame being drawn, bracketed paste off, as `RawMode` turns it off,
 /// and the screen left. Read it holding stderr's lock, so that no frame follows it.
+/// `view`'s report as the conversation shows a note.
+fn usage_shown(view: &UsageView) -> Transcript {
+    let mut shown = Transcript::default();
+    shown.push(Event::Text(view.report().to_owned()));
+    shown
+}
+
 pub(super) fn leave_on_exit() -> Option<String> {
     (SHOWN.load(Ordering::SeqCst)).then(|| format!("\x1b[?2026l\x1b[?2004l{LEAVE}"))
 }

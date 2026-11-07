@@ -13,6 +13,7 @@ use crate::agent_cli::settings::{Delivery, DoubleEscape, Settings};
 use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
 use crate::agent_cli::theme_editor::ThemeEditor;
+use crate::agent_cli::usage::UsageView;
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
@@ -253,6 +254,11 @@ impl Link {
             Some(Answer::Theme(saved)) => saved,
             _ => None,
         }
+    }
+
+    /// Shows `/usage`'s reports until the user closes them.
+    pub(in crate::agent_cli) fn show_usage(&self, view: UsageView) {
+        self.ask(Dialog::Usage(Box::new(view)), None);
     }
 
     /// The row chosen from `picker`, `None` when cancelled.

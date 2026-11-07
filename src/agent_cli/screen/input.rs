@@ -12,6 +12,7 @@ use crate::agent_cli::slash::Builtin;
 use crate::agent_cli::style;
 use crate::agent_cli::theme::{self, Theme};
 use crate::agent_cli::theme_editor::Ended;
+use crate::agent_cli::usage::Took;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -344,6 +345,18 @@ impl App {
             }
             return Flow::Go;
         }
+        if let Some(Open {
+            shown: Shown::Usage(view),
+            ..
+        }) = &mut self.dialog
+        {
+            match view.key(&key) {
+                Took::Moved => self.usage_moved(),
+                Took::Closed => self.answer(None),
+                Took::Nothing => {}
+            }
+            return Flow::Go;
+        }
         let Some(open) = &mut self.dialog else {
             return Flow::Go;
         };
@@ -394,7 +407,7 @@ impl App {
             },
             Shown::Press(..) => None,
             Shown::Wait(..) if key.is(Binding::SelectCancel) => Some(Answer::Pressed(None)),
-            Shown::Wait(..) | Shown::Theme(_) => None,
+            Shown::Wait(..) | Shown::Theme(_) | Shown::Usage(_) => None,
         };
         if answer.is_some() {
             self.answer(answer);
