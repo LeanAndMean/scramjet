@@ -227,6 +227,53 @@ fn a_call_stopped_cancels_its_request_and_ending_the_servers_kills_them() {
 }
 
 #[test]
+fn stopped_servers_get_their_input_closed_then_sigterm_then_sigkill() {
+    let scratch = scratch("quit");
+    let modes = ["", "linger", "stubborn"];
+    let logs: Vec<PathBuf> = (modes.iter())
+        .map(|mode| scratch.0.join(format!("log-{mode}")))
+        .collect();
+    let configs: Vec<Server> = (modes.iter().zip(&logs))
+        .map(|(mode, log)| {
+            let env = [
+                ("MCP_TEST_LOG", log.display().to_string()),
+                ("MCP_TEST_MODE", mode.to_string()),
+            ];
+            let mut server = test_server("test", &env);
+            server.name = format!("test{mode}");
+            server
+        })
+        .collect();
+    let servers = started(&configs, &scratch.0);
+    let pids: Vec<u32> = logs.iter().flat_map(|log| pids(log)).collect();
+    assert_eq!(pids.len(), 3);
+    let began = std::time::Instant::now();
+    drop(servers);
+    let took = began.elapsed();
+    assert!(
+        took >= QUIT * 2 && took < QUIT * 2 + Duration::from_secs(2),
+        "{took:?}"
+    );
+    let ends: Vec<Vec<String>> = (logs.iter())
+        .map(|log| {
+            (std::fs::read_to_string(log).unwrap().lines())
+                .filter(|line| ["end of input", "terminated"].contains(line))
+                .map(str::to_owned)
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        ends,
+        [
+            vec!["end of input"],
+            vec!["end of input", "terminated"],
+            vec!["end of input", "terminated"]
+        ]
+    );
+    assert!(pids.iter().all(|&pid| !alive(pid)));
+}
+
+#[test]
 fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
     use crate::agent::SandboxMode;
     if sandbox::available().is_err() {

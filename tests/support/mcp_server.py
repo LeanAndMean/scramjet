@@ -5,10 +5,13 @@ It speaks the `initialize` handshake (2025-11-25 and before) and answers `server
 unknown method, as servers written before 2026-07-28 do. `MCP_TEST_LOG` names a file its process
 id and each message's method are appended to; `MCP_TEST_MODE` is `exit` (it fails at once),
 `silent` (it never answers), `latin1` (its standard error has a byte that is not UTF-8, and each
-message is logged there) or `stuck` (it lists its tools once, then never again); `MCP_TEST_TOOLS`
-adds that many tools with long descriptions."""
+message is logged there), `stuck` (it lists its tools once, then never again), `linger` (it
+stays after its input ends, until SIGTERM) or `stubborn` (it stays after its input ends and
+SIGTERM); `MCP_TEST_TOOLS` adds that many tools with long descriptions. It logs `end of input` and
+`terminated` as they come."""
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -114,6 +117,13 @@ def main():
     if mode == "exit":
         sys.stderr.write("no configuration found\n")
         sys.exit(3)
+
+    def terminated(*_):
+        log("terminated")
+        if mode != "stubborn":
+            os._exit(0)
+
+    signal.signal(signal.SIGTERM, terminated)
     for line in sys.stdin:
         message = json.loads(line)
         method = message.get("method")
@@ -152,6 +162,9 @@ def main():
         elif id is not None:
             send({"jsonrpc": "2.0", "id": id,
                   "error": {"code": -32601, "message": "Method not found: " + method}})
+    log("end of input")
+    while mode in ("linger", "stubborn"):
+        time.sleep(1)
 
 
 main()

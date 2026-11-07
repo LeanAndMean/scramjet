@@ -56,6 +56,9 @@ pub(super) const CALL_SNIPPET: &str = "Call a tool mcp_search found";
 /// How long a server has to start and list its tools: Claude Code's default `MCP_TIMEOUT`
 /// (2.1.259).
 const START: Duration = Duration::from_secs(30);
+/// How long a program stopped has to exit, after its input closes and again after SIGTERM: the
+/// MCP SDK's stdio client in Claude Code 2.1.259.
+const QUIT: Duration = Duration::from_secs(2);
 /// How long listing a server's tools again for a search may take before its last list is used.
 const LIST: Duration = Duration::from_secs(10);
 /// The last lines of a server's standard error kept to say why it failed.
@@ -379,11 +382,20 @@ impl Servers {
         server
     }
 
-    /// Kills `servers` and closes their connections, and waits a moment for their processes, so
-    /// that none is left unreaped, and for their HTTP sessions to end.
+    /// Stops `servers` as MCP's stdio shutdown does: closes their connections, which closes a
+    /// program's standard input and ends an HTTP session, gives each program `QUIT` to exit, then
+    /// SIGTERM and `QUIT` again, then SIGKILL; and waits a moment, so that none is left unreaped.
+    /// One still starting is killed at once.
     fn end(&self, servers: &[Arc<Running>]) {
         for server in servers {
-            server.kill();
+            server.killed.store(true, Ordering::Relaxed);
+        }
+        let mut services = Vec::new();
+        for server in servers {
+            match lock(&server.service).take() {
+                Some(service) if self.runtime.is_some() => services.push(service),
+                _ => server.kill(),
+            }
         }
         let Some(runtime) = &self.runtime else {
             return;
@@ -391,15 +403,21 @@ impl Servers {
         let watchers: Vec<_> = (servers.iter())
             .filter_map(|server| lock(&server.watcher).take())
             .collect();
-        let mut services: Vec<_> = (servers.iter())
-            .filter_map(|server| lock(&server.service).take())
-            .collect();
+        let ended = || async {
+            while !watchers.iter().all(tokio::task::JoinHandle::is_finished) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
         runtime.block_on(async {
             let closed =
                 futures_util::future::join_all(services.iter_mut().map(RunningService::close));
-            let ended = futures_util::future::join_all(watchers);
-            let ended = async { tokio::join!(closed, ended) };
-            let _ = tokio::time::timeout(Duration::from_secs(1), ended).await;
+            let _ = tokio::time::timeout(QUIT, async { tokio::join!(closed, ended()) }).await;
+            if !watchers.iter().all(tokio::task::JoinHandle::is_finished) {
+                servers.iter().for_each(|server| server.terminate());
+                let _ = tokio::time::timeout(QUIT, ended()).await;
+            }
+            servers.iter().for_each(|server| server.kill());
+            let _ = tokio::time::timeout(Duration::from_secs(1), ended()).await;
         });
     }
 
@@ -711,6 +729,12 @@ impl Running {
             Status::Ready(ready) => Ok(ready.clone()),
             Status::Starting => Err(format!("{} is still starting", self.config.name)),
             Status::Failed(why) => Err(format!("{} is not available: {why}", self.config.name)),
+        }
+    }
+
+    fn terminate(&self) {
+        if let Some(group) = &*lock(&self.group) {
+            group.terminate();
         }
     }
 

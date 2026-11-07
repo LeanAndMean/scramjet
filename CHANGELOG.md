@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.76.1 — MCP servers stopped gently
+
+### Fixed
+
+- An MCP server run as a program is stopped as MCP says: its input is closed and it is given 2 seconds to exit, then asked with SIGTERM and given 2 more, and only then killed, so that its own clean-up runs. It was killed at once before.
+
 ## 0.76.0 — The last hours' usage, and sessions by size
 
 ### Added

@@ -1084,6 +1084,12 @@ impl Group {
     pub(super) fn kill(&self) {
         kill_group(self.0);
     }
+
+    pub(super) fn terminate(&self) {
+        if let Some(pid) = rustix::process::Pid::from_raw(self.0) {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);
+        }
+    }
 }
 
 impl Drop for Group {
