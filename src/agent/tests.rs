@@ -345,10 +345,28 @@ pub(super) fn serve_answering(
 ) -> (SocketAddr, std::thread::JoinHandle<Vec<(String, Value)>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
+    // A test whose agent makes fewer requests fails rather than waiting for good.
+    listener.set_nonblocking(true).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
         for _ in 0..count {
-            let (connection, _) = listener.accept().unwrap();
+            let connection = loop {
+                match listener.accept() {
+                    Ok((connection, _)) => break connection,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "the scripted server got {} of {count} requests",
+                            requests.len()
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            // Windows' accepted sockets inherit the listener's mode.
+            connection.set_nonblocking(false).unwrap();
             let mut reader = BufReader::new(connection);
             let mut length = 0;
             let mut head = String::new();

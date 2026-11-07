@@ -482,6 +482,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_paused_turn_goes_on_where_it_stopped_with_what_the_session_changed() {
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", json!({"command":"true"})),
@@ -528,6 +532,9 @@ mod tests {
 
     #[test]
     fn a_turn_pauses_while_a_call_runs_which_goes_on_meanwhile() {
+        if missing("bash") {
+            return;
+        }
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", json!({"command":"sleep 1; echo slept"})),
             stream(&fixture::text_events("done", fixture::known_usage())),
@@ -597,6 +604,9 @@ mod tests {
 
     #[test]
     fn what_a_paused_turn_left_running_shows_from_another_thread_meanwhile() {
+        if missing("bash") {
+            return;
+        }
         let (endpoint, server) = serve(vec![
             tool_call(
                 "call_1",
@@ -740,6 +750,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_command_queued_during_a_turn_starts_there_in_place_of_the_one_running() {
         let report = |id: &str, next: &str| {
             let next = json!([{"message":next,"fresh_session":false,"reason":"More."}]);
@@ -792,6 +806,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_command_prompt_sends_its_expansion_and_is_recalled_as_typed() {
         let (endpoint, server) = serve(vec![
             stream(&fixture::text_events("one", fixture::known_usage())),
@@ -888,7 +906,7 @@ mod tests {
             stream(&fixture::text_events("two", fixture::known_usage())),
         ]);
         let (mut agent, scratch) = agent(endpoint, "skill");
-        let file = scratch.0.join("skills/pdf/SKILL.md");
+        let file = scratch.0.join("skills").join("pdf").join("SKILL.md");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(
             &file,
@@ -1006,6 +1024,10 @@ scramjet-rs\n",
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_resumed_session_keeps_its_command_waiting_for_the_user() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let completed = json!({"summary":"Done.","status":"completed"});
@@ -1141,6 +1163,10 @@ scramjet-rs\n",
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn autopilot_is_saved_restored_and_told_to_the_model() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let events = fixture::call_events(
@@ -1434,6 +1460,10 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_suggestion_waits_for_the_turns_end_unless_the_user_goes_on_or_it_stops() {
         let suggest = |id: &str| {
             let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
@@ -1564,6 +1594,10 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_command_is_reported_inline_or_after_a_status_check() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let next = json!([{"message":"/rs:work again","fresh_session":true,"reason":"More."}]);
@@ -1674,6 +1708,10 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn status_checks_stop_after_three_in_a_row_without_the_users_input() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let confirm = json!({"type":"confirm","message":"Use a.txt?"});
@@ -1717,6 +1755,10 @@ did not finish or ask you anything. Reply to continue.";
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_command_without_the_status_tool_waits_for_the_user_unchecked() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let (endpoint, server) = serve(vec![reply("worked"), reply("more")]);
@@ -1739,6 +1781,10 @@ among this run's tools, so it cannot finish and is not checked on. Reply to cont
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_command_no_longer_installed_ends_with_its_turn() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let freetext = json!({"type":"freetext","message":"Which file?"});
@@ -1768,6 +1814,10 @@ among this run's tools, so it cannot finish and is not checked on. Reply to cont
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_reply_with_neither_text_nor_tool_calls_gets_the_status_check() {
         let empty = messages_stream(&[
             json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}),
@@ -1799,6 +1849,10 @@ among this run's tools, so it cannot finish and is not checked on. Reply to cont
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_command_is_abandoned_only_once_the_user_confirms() {
         let abandoned = json!({"summary":"Half **done**.","status":"abandoned",
             "next_steps":[{"message":"/rs:other","fresh_session":false}]});
@@ -1846,6 +1900,10 @@ will run.";
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_message_after_a_report_keeps_it_and_a_skill_is_a_reply_to_the_command() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let freetext = json!({"type":"freetext","message":"Which file?"});
