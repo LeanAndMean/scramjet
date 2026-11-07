@@ -1209,6 +1209,47 @@ fn resume_lists_sessions_with_a_conversation_and_switches_to_one() {
 }
 
 #[test]
+fn a_new_session_is_written_at_its_first_prompt_with_what_came_before() {
+    let (mut agent, _scratch) = agent("127.0.0.1:9".parse().unwrap(), "written-at-prompt");
+    agent.new_session().unwrap();
+    let path = agent.session_path().to_owned();
+    agent.set_model("other").unwrap();
+    agent.set_effort("high").unwrap();
+    agent.set_session_name("Named").unwrap();
+    assert!(!path.exists());
+    assert!(agent.sessions().unwrap().is_empty());
+    assert!(!agent.session_holding());
+    assert_eq!(agent.write_held(), None);
+    assert!(!path.exists());
+
+    agent.add(json!({"role":"user","content":"one"})).unwrap();
+    let lines: Vec<Value> = (std::fs::read_to_string(&path).unwrap().lines())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let kinds: Vec<_> = (lines.iter())
+        .map(|line| line["type"].as_str().or(line["role"].as_str()).unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session",
+            "model_change",
+            "model_change",
+            "thinking_level_change",
+            "session_info",
+            "user"
+        ]
+    );
+    assert_eq!(agent.saving_notice(), None);
+    let (session, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(
+        (session.model(), session.effort(), session.name()),
+        (Some("test/other"), Some("high"), Some("Named"))
+    );
+    assert_eq!(conversation.len(), 1);
+}
+
+#[test]
 fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
     let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "manage-sessions");
     let current = agent.session_path().to_owned();
@@ -1293,7 +1334,7 @@ fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
     let unused = agent.session_path().to_owned();
     agent.set_model("other").unwrap();
     agent.set_effort("high").unwrap();
-    assert!(unused.exists());
+    assert!(!unused.exists());
     agent.new_session().unwrap();
     assert!(!unused.exists());
     let used = agent.session_path().to_owned();
@@ -1302,28 +1343,11 @@ fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
         .unwrap();
     agent.resume_session(&current).unwrap();
     assert!(used.exists());
-    // The one opened stays, and so does one another process wrote to.
+    // The one opened stays; one ended before a conversation leaves nothing.
     agent.new_session().unwrap();
     assert!(current.exists());
-    let shared = agent.session_path().to_owned();
-    std::fs::OpenOptions::new()
-        .append(true)
-        .open(&shared)
-        .unwrap()
-        .write_all(b"{\"role\":\"user\",\"content\":\"elsewhere\"}\n")
-        .unwrap();
-    agent.resume_session(&current).unwrap();
-    assert!(shared.exists());
-    // One another process has open stays too, as when its `--continue` took it.
-    agent.new_session().unwrap();
-    let continued = agent.session_path().to_owned();
-    let elsewhere = Session::open(&continued).unwrap();
-    agent.resume_session(&current).unwrap();
-    assert!(continued.exists());
-    drop(elsewhere);
-    agent.new_session().unwrap();
     let last = agent.session_path().to_owned();
-    agent.discard_unused_session().unwrap();
+    drop(agent);
     assert!(!last.exists());
 }
 
@@ -1368,7 +1392,7 @@ fn a_run_that_saves_no_session_keeps_its_sessions_apart_until_it_ends() {
     agent.resume_session(&first).unwrap();
     server.join().unwrap();
 
-    agent.discard_unused_session().unwrap();
+    drop(agent);
     assert!(!directory.exists());
     // An agent that ends otherwise takes its directory with it too.
     let other = Agent::start(config(endpoint, &scratch.0), SessionChoice::Unsaved).unwrap();
@@ -1613,15 +1637,15 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
     assert!(agent.conversation().is_empty());
     assert_eq!(agent.model(), "test/c");
     let empty = agent.session_path().to_owned();
-    assert_eq!(Session::open(&empty).unwrap().0.model(), Some("test/c"));
-    // As Scramjet writes no fork without a reply, it is not kept when left before a prompt or on
-    // quitting, so `--continue` takes the conversation before it.
+    // As Scramjet writes no fork without a reply, it is not written before a prompt, so neither
+    // leaving it nor quitting leaves it, and `--continue` takes the conversation before it.
+    assert!(!empty.exists());
     agent.resume_session(&original).unwrap();
     assert!(!empty.exists());
     let saved = std::fs::read_to_string(&original).unwrap();
     agent.fork(0).unwrap();
     let empty = agent.session_path().to_owned();
-    agent.discard_unused_session().unwrap();
+    drop(agent);
     assert!(!empty.exists());
     assert_eq!(std::fs::read_to_string(&original).unwrap(), saved);
 }
@@ -1911,8 +1935,8 @@ fn model_switches_are_saved_at_once_and_resumed() {
 
     agent.new_session().unwrap();
     assert_eq!(agent.last_model(), Some("test/m"));
-    let (session, _, _) = Session::open(agent.session_path()).unwrap();
-    assert_eq!(session.model(), Some("test/m"));
+    assert_eq!(agent.session.model(), Some("test/m"));
+    assert!(agent.session.text().contains("\"model\":\"test/m\""));
 }
 
 #[test]
@@ -2070,10 +2094,8 @@ fn shift_tab_cycles_the_models_levels_and_the_effort_is_sent_fitted_saved_and_re
             {"id": "plain"},
         ],
     }}})));
-    let saved = |path: &Path| -> Vec<String> {
-        std::fs::read_to_string(path)
-            .unwrap()
-            .lines()
+    let saved = |text: String| -> Vec<String> {
+        text.lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
             .filter(|line| line["type"] == "thinking_level_change")
             .map(|line| line["level"].as_str().unwrap().to_owned())
@@ -2087,7 +2109,7 @@ fn shift_tab_cycles_the_models_levels_and_the_effort_is_sent_fitted_saved_and_re
     assert_eq!(cycled, ["high", "xhigh", "max", "none", "low"]);
     assert_eq!(agent.request()["reasoning"]["effort"], "low");
     assert_eq!(
-        saved(agent.session_path()),
+        saved(agent.session.text()),
         [&["medium".to_owned()], &cycled[..]].concat()
     );
 
@@ -2115,7 +2137,10 @@ fn shift_tab_cycles_the_models_levels_and_the_effort_is_sent_fitted_saved_and_re
     agent.load_model_info();
     assert_eq!(agent.effort(), Some("max"));
     assert_eq!(agent.cycle_effort().unwrap().as_deref(), Some("none"));
-    assert_eq!(saved(&path), ["max", "none"]);
+    assert_eq!(
+        saved(std::fs::read_to_string(&path).unwrap()),
+        ["max", "none"]
+    );
     // `/tree` lists the change while it is the current entry, as Scramjet does.
     let tree = agent.tree().unwrap();
     let current = tree
@@ -2134,7 +2159,7 @@ fn shift_tab_cycles_the_models_levels_and_the_effort_is_sent_fitted_saved_and_re
 
     // A new session starts with the effort recorded, as with the model.
     agent.new_session().unwrap();
-    assert_eq!(saved(agent.session_path()), ["none"]);
+    assert_eq!(saved(agent.session.text()), ["none"]);
 }
 
 #[test]

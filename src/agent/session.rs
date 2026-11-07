@@ -203,8 +203,11 @@ pub struct Session {
     /// process appended lines (a name given in its `/resume`).
     size: u64,
     /// Created by this process with no conversation entry yet: only model and effort changes,
-    /// names and `/autopilot` toggles, which Scramjet would not have written yet.
+    /// names and `/autopilot` toggles, which Scramjet would not have written yet. Its lines wait
+    /// in `held`, with no file, until its first conversation entry.
     unused: bool,
+    /// Whether the last write failed for want of room, its lines held since.
+    failing: bool,
     /// The lines after the header that could not be read and were passed over.
     skipped: Vec<usize>,
     /// Whether the file's last line lacks its newline, which the next write starts with.
@@ -605,29 +608,21 @@ fn now_ms() -> u64 {
     since.unwrap_or_default().as_millis() as u64
 }
 
-/// Creates a session file in `directory`, named for the millisecond it is created in and this
-/// process; returns it with that time. On a disk too full to create it, the file is that error,
-/// to be created under that name once there is room.
-fn new_file(directory: &Path) -> io::Result<(PathBuf, io::Result<File>, u128)> {
-    let mut created = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
+/// A name in `directory` for a new session file, for the millisecond it is started in and this
+/// process, with that time; the file is created at its first conversation entry.
+fn new_name(directory: &Path) -> (PathBuf, u128) {
+    // Sessions started in the same millisecond (a quick `/new` or `/fork`) take the next ones.
+    static LAST: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let name = |created| directory.join(format!("{created}-{}.jsonl", std::process::id()));
-    match make_directory(directory) {
-        Err(error) if full(&error) => return Ok((name(created), Err(error), created)),
-        made => made?,
+    let mut created = now_ms().max(*last + 1);
+    while name(created).exists() {
+        created += 1;
     }
-    // A session created in the same millisecond (a quick `/new` or `/fork`) has that name.
-    loop {
-        let path = name(created);
-        match OpenOptions::new().append(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, Ok(file), created)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => created += 1,
-            Err(error) if full(&error) => return Ok((path, Err(error), created)),
-            Err(error) => return Err(error),
-        }
-    }
+    *last = created;
+    (name(created), created as u128)
 }
 
 /// Creates a session directory, private to the user, and its parents. One already there must be
@@ -776,7 +771,7 @@ pub fn state_directory() -> io::Result<PathBuf> {
 impl Drop for Session {
     /// Tries once more to write what the file could not take; a file left empty goes.
     fn drop(&mut self) {
-        if self.held.is_empty() {
+        if self.held.is_empty() || self.unused {
             return;
         }
         let writing = self.writing();
@@ -917,47 +912,23 @@ impl Session {
     }
 
     /// Starts a session in `directory` whose first line is `header`, given the millisecond its
-    /// file is named for; on a full disk the line is held in memory, as later ones are.
+    /// file is named for. Its lines wait in memory until its first conversation entry, as
+    /// Scramjet writes no session before the first reply, so that a run ended or killed before
+    /// any prompt leaves no file.
     fn begin(
         directory: &Path,
         header: impl FnOnce(u128) -> io::Result<Vec<u8>>,
     ) -> io::Result<Self> {
-        let (path, file, created) = new_file(directory)?;
-        let mut header = match header(created) {
-            Ok(header) => header,
-            Err(error) => {
-                if file.is_ok() {
-                    let _ = std::fs::remove_file(&path);
-                }
-                return Err(error);
-            }
-        };
-        let mut held = Vec::new();
-        let mut change = None;
-        let (file, written) = match file {
-            Ok(mut file) => {
-                let written = write_whole(&mut file, &header);
-                (Some(file), written)
-            }
-            Err(error) => (None, Err(error)),
-        };
-        if let Err(error) = written {
-            if !full(&error) {
-                let _ = std::fs::remove_file(&path);
-                return Err(error);
-            }
-            if let Some(file) = &file {
-                let _ = file.set_len(0);
-            }
-            change = Some(Saving::Held(error.to_string()));
-            held = std::mem::take(&mut header);
+        // A directory that cannot be made fails now, not at the first prompt.
+        match make_directory(directory) {
+            Err(error) if full(&error) => {}
+            made => made?,
         }
-        if let Some(file) = &file {
-            let _ = file.lock_shared();
-        }
+        let (path, created) = new_name(directory);
+        let held = header(created)?;
         Ok(Self {
             path,
-            file,
+            file: None,
             model: None,
             contributors: Vec::new(),
             name: None,
@@ -970,12 +941,13 @@ impl Session {
             leaf: None,
             tail: None,
             lines: 1,
-            size: header.len() as u64,
+            size: 0,
             unused: true,
+            failing: false,
             skipped: Vec::new(),
             unterminated: false,
             held,
-            change,
+            change: None,
             continues: None,
         })
     }
@@ -1014,8 +986,6 @@ impl Session {
         let entries = read(path)?;
         let context = entries.context(path, entries.tail)?;
         let file = OpenOptions::new().append(true).open(path)?;
-        // Held while open, so that the process that created it does not discard it.
-        let _ = file.lock_shared();
         Ok((
             Self {
                 path: path.to_owned(),
@@ -1034,6 +1004,7 @@ impl Session {
                 lines: entries.lines,
                 size: entries.size,
                 unused: false,
+                failing: false,
                 skipped: entries.skipped.clone(),
                 unterminated: entries.unterminated,
                 held: Vec::new(),
@@ -1151,6 +1122,8 @@ impl Session {
             if entries.unterminated {
                 lines.push(b'\n');
             }
+            // A fork from before the first prompt is not written before its own.
+            self.unused = context.items.is_empty();
             self.write(&lines)?;
             Ok((entries, context))
         })();
@@ -1177,7 +1150,6 @@ impl Session {
         self.leaf = entries.tail;
         self.tail = entries.tail;
         self.lines = entries.lines;
-        self.unused = false;
         self.skipped = entries.skipped;
         Ok((self, context.items, prompts))
     }
@@ -1363,31 +1335,6 @@ impl Session {
         Ok(Removal::Deleted)
     }
 
-    /// Counts this session, a fork this process just wrote without a conversation, as one created
-    /// here, which `discard_if_unused` removes unless something is said in it.
-    pub fn forked_unused(&mut self) {
-        self.unused = true;
-    }
-
-    /// Whether this process created it and nothing was said in it yet.
-    pub fn unused(&self) -> bool {
-        self.unused
-    }
-
-    /// Removes the file of a session this process created and left without a conversation, as
-    /// Scramjet writes none before the first reply; one another process wrote to or has open stays.
-    pub fn discard_if_unused(mut self) -> io::Result<()> {
-        let Some(file) = &self.file else {
-            self.held.clear();
-            return Ok(());
-        };
-        if self.unused && file.try_lock().is_ok() && file.metadata()?.len() == self.size {
-            self.held.clear();
-            std::fs::remove_file(&self.path)?;
-        }
-        Ok(())
-    }
-
     /// The session's file as written here: what is in it, then the lines it could not take yet.
     fn bytes(&self) -> io::Result<Vec<u8>> {
         let mut bytes = match self.file {
@@ -1409,15 +1356,26 @@ impl Session {
     /// Writes go to `file` in place of the session's file from now on, as `/dev/full` fills a disk.
     #[cfg(test)]
     pub(super) fn write_to(&mut self, file: File) {
+        if std::mem::take(&mut self.unused) {
+            self.write(&[]).unwrap();
+        }
         self.file = Some(file);
+    }
+
+    /// The session's lines as written here, those not in its file yet included.
+    #[cfg(test)]
+    pub(super) fn text(&self) -> String {
+        String::from_utf8(self.bytes().unwrap()).unwrap()
     }
 
     /// The session as one started on a disk too full to create its file, to be created at `path`.
     #[cfg(test)]
     pub(super) fn not_created_at(&mut self, path: &Path) {
         self.held = self.bytes().unwrap();
-        std::fs::remove_file(&self.path).unwrap();
-        (self.path, self.file, self.size) = (path.to_owned(), None, 0);
+        if self.file.take().is_some() {
+            std::fs::remove_file(&self.path).unwrap();
+        }
+        (self.path, self.size, self.unused) = (path.to_owned(), 0, false);
     }
 
     /// The file of a session whose file exists: one opened, or one whose header was written.
@@ -1427,7 +1385,7 @@ impl Session {
 
     /// Tries again to write the lines its file could not take, as the next write would.
     pub fn write_held(&mut self) -> io::Result<()> {
-        if self.held.is_empty() {
+        if self.held.is_empty() || self.unused {
             return Ok(());
         }
         let _writing = self.writing()?;
@@ -1436,12 +1394,15 @@ impl Session {
 
     /// Whether lines its file could not take are kept in memory.
     pub fn holding(&self) -> bool {
-        !self.held.is_empty()
+        !self.held.is_empty() && !self.unused
     }
 
     /// How many bytes of lines its file could not take are kept in memory.
     pub fn held_len(&self) -> usize {
-        self.held.len()
+        match self.unused {
+            true => 0,
+            false => self.held.len(),
+        }
     }
 
     /// The change in whether its lines reach its file since this was last asked.
@@ -1474,6 +1435,10 @@ impl Session {
     /// On a full disk the lines are kept in memory, up to `HELD_LIMIT`, and written ahead of the
     /// next ones; the write counts as done.
     fn write(&mut self, lines: &[u8]) -> io::Result<()> {
+        if self.unused {
+            self.held.extend_from_slice(lines);
+            return Ok(());
+        }
         let before = std::mem::take(&mut self.held);
         let mut bytes = Vec::with_capacity(1 + before.len() + lines.len());
         if self.unterminated {
@@ -1484,7 +1449,6 @@ impl Session {
         let written = match self.file.as_mut() {
             Some(file) => write_whole(file, &bytes),
             None => create_file(&self.path).and_then(|mut file| {
-                let _ = file.lock_shared();
                 let written = write_whole(&mut file, &bytes);
                 self.file = Some(file);
                 written
@@ -1498,16 +1462,17 @@ impl Session {
                 self.held = before;
                 return Err(error);
             }
-            if before.is_empty() {
+            if !self.failing {
                 self.change = Some(Saving::Held(error.to_string()));
             }
+            self.failing = true;
             self.held = bytes;
             self.unterminated = false;
             return Ok(());
         }
         self.size += bytes.len() as u64;
         self.unterminated = false;
-        if !before.is_empty() {
+        if std::mem::take(&mut self.failing) {
             self.change = match self.change {
                 Some(Saving::Held(_)) => None,
                 _ => Some(Saving::Saved),
@@ -1633,18 +1598,21 @@ impl Session {
         }
         lines.extend(serde_json::to_vec(item)?);
         lines.push(b'\n');
-        self.write(&lines)?;
+        let kind = item["type"].as_str();
+        let used = !matches!(
+            kind,
+            Some("model_change" | "thinking_level_change" | "autopilot")
+        );
+        let unused = self.unused;
+        self.unused &= !used;
+        if let Err(error) = self.write(&lines) {
+            self.unused = unused;
+            return Err(error);
+        }
         let line = self.lines + usize::from(branched);
         self.lines = line + 1;
         self.leaf = Some(line);
         self.tail = self.leaf;
-        let kind = item["type"].as_str();
-        if !matches!(
-            kind,
-            Some("model_change" | "thinking_level_change" | "autopilot")
-        ) {
-            self.unused = false;
-        }
         if item["type"] == "model_change" {
             self.model = item["model"].as_str().map(str::to_owned);
         } else if item["type"] == "thinking_level_change" {

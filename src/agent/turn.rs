@@ -221,10 +221,8 @@ finish and is not checked on. Reply to continue.",
             .as_nanos();
         let call_id = format!("harness-tool-{nanos}");
         let mut arguments = status::record_arguments(source, steps, chosen);
-        if let Some(stale) = self.next_session.take() {
-            let _ = stale.discard_if_unused();
-        }
-        // A fresh session's file is made now, so that the record names it.
+        self.next_session = None;
+        // A fresh session's name is taken now, so that the record names its file.
         if chosen.is_some_and(|at| steps[at].fresh()) {
             let directory = self.session_directory();
             let from = self.session.path();
@@ -1197,7 +1195,7 @@ auto-dispatches it only when its message is a slash command."
         assert!(agent.autopilot());
         agent.new_session().unwrap();
         assert!(agent.autopilot());
-        let saved = std::fs::read_to_string(agent.session_path()).unwrap();
+        let saved = agent.session.text();
         assert!(!saved.contains(r#""type":"autopilot""#), "{saved}");
         agent.resume_session(&without).unwrap();
         assert!(!agent.autopilot());
@@ -1321,7 +1319,7 @@ auto-dispatches it only when its message is a slash command."
             .unwrap();
         assert_eq!(dir_len(), before);
         agent.new_session().unwrap();
-        let cleared = std::fs::read_to_string(agent.session_path()).unwrap();
+        let cleared = agent.session.text();
         assert!(!cleared.contains("parentSession"), "{cleared}");
     }
 

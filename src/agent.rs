@@ -900,26 +900,16 @@ impl Agent {
         Ok(Session::delete(path)?)
     }
 
-    /// Ends the agent, removing its session's file when this process created it and only model
-    /// and effort changes went in, as Scramjet writes no session before the first reply.
-    pub fn discard_unused_session(self) -> Result<(), AgentError> {
-        Ok(self.session.discard_if_unused()?)
-    }
-
-    /// Continues in `session`; the one before goes, its file too when it stayed unused
-    /// (`Session::discard_if_unused`), as Scramjet would not have written it. That file is left
-    /// when it cannot be removed, as all were before.
     fn session_directory(&self) -> &Path {
         self.session.path().parent().unwrap_or(Path::new("."))
     }
 
+    /// Continues in `session`; the one before goes, kept only while its file cannot take lines it
+    /// holds. One left without a conversation was never written, as Scramjet would not have.
     fn replace_session(&mut self, session: Session) {
         let left = std::mem::replace(&mut self.session, session);
-        match left.holding() && !left.unused() {
-            true => self.left.push(left),
-            false => {
-                let _ = left.discard_if_unused();
-            }
+        if left.holding() {
+            self.left.push(left);
         }
     }
 
@@ -959,16 +949,12 @@ impl Agent {
 
     /// How many bytes of lines the session and those switched away from keep in memory, for want
     /// of room, that would be lost if the agent ended now: none for an unsaved session's, which
-    /// go with their directory, or for a session left without a conversation, which is removed.
+    /// go with their directory, or for a session without a conversation, never written.
     pub fn held_len(&self) -> usize {
         if !self.session_saved() {
             return 0;
         }
-        let current = match self.session.unused() {
-            true => 0,
-            false => self.session.held_len(),
-        };
-        current + self.left.iter().map(Session::held_len).sum::<usize>()
+        self.session.held_len() + self.left.iter().map(Session::held_len).sum::<usize>()
     }
 
     /// Tries again to write what the session and those switched away from keep in memory, with
@@ -1092,12 +1078,7 @@ impl Agent {
         // As in Scramjet, a fork without a conversation keeps the current model, and is not
         // written before the first reply (its lines are the current session's).
         if conversation.is_empty() {
-            if let Err(error) = session.record_model(&self.config.model) {
-                session.forked_unused();
-                let _ = session.discard_if_unused();
-                return Err(error.into());
-            }
-            session.forked_unused();
+            session.record_model(&self.config.model)?;
         }
         self.switch_session((session, conversation, prompts))?;
         Ok(Some(prompt))

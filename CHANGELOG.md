@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.63.2 — No session file before the first prompt
+
+### Fixed
+
+- A new session's file is written at its first prompt, with the model, effort and name chosen before it, so a run killed or ended before any prompt leaves no empty session for `/resume` and `--continue`. On a full disk the start no longer says the session was not written; that comes at the first prompt.
+
 ## 0.63.1 — Resuming a session held on a full disk
 
 ### Fixed
