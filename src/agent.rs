@@ -67,7 +67,7 @@ pub use session::{
 };
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};
-pub use status::{Completed, FRESH_MARK, Next, Routing, Source, Step};
+pub use status::{Completed, FRESH_MARK, Next, Reopened, Routing, Source, Step};
 pub use subagent::agent_directory;
 pub use suggest::Suggested;
 pub use tools::{

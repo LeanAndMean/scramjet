@@ -268,6 +268,7 @@ impl Branch {
                     | "command_state"
                     | "autopilot",
                 ) => {}
+                Some("function_call") if entry["name"] == super::status::RECORD => {}
                 Some("compaction") => items.push(summary_message(
                     entry["summary"].as_str().unwrap_or_default(),
                 )),

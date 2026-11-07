@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.81.0 — Going back reopens a next-step list
+
+### Changed
+
+- Going back with `/tree` (or Escape twice) to where a next-step list was offered offers it again, with its options and its recommendation, instead of leaving you after it as if dismissed: pick the report or reply that offered it, the list's record, or the prompt your pick sent. What you pick then branches from there; Escape puts that prompt in the editor, as going back to a prompt does.
+
 ## 0.80.0 — /usage at a glance
 
 ### Changed

@@ -1055,15 +1055,26 @@ pub fn record(source: Source, steps: &[Step], chosen: Option<usize>) -> String {
 
 /// The arguments of the `RECORD` call for `record`'s choice, as Scramjet's
 /// `NextStepRecordParams`.
-pub(super) fn record_arguments(source: Source, steps: &[Step], chosen: Option<usize>) -> Value {
-    let options: Vec<_> = (steps.iter())
-        .map(|step| {
+/// Besides Scramjet's fields, `recommendedIndex` and each step's `index` in the model's list
+/// when it differs from its position keep the list as offered, to be offered again
+/// (`Reopened`).
+pub(super) fn record_arguments(
+    source: Source,
+    steps: &[Step],
+    recommended: Option<usize>,
+    chosen: Option<usize>,
+) -> Value {
+    let options: Vec<_> = (steps.iter().enumerate())
+        .map(|(position, step)| {
             let mut option = json!({"message":step.message});
             if !step.reason.is_empty() {
                 option["reason"] = json!(step.reason);
             }
             if step.fresh() {
                 option["freshSession"] = json!(true);
+            }
+            if step.index != position {
+                option["index"] = json!(step.index);
             }
             option
         })
@@ -1076,8 +1087,62 @@ pub(super) fn record_arguments(source: Source, steps: &[Step], chosen: Option<us
         Source::Completion(command) => (Some(command), "completion"),
         Source::Suggestion => (None, "suggestion"),
     };
-    json!({"outcome":outcome,"options":options,"selectedIndex":chosen,"sourceCommand":command,
-        "source":source})
+    let mut arguments = json!({"outcome":outcome,"options":options,"selectedIndex":chosen,
+        "sourceCommand":command,"source":source});
+    if let Some(recommended) = recommended {
+        arguments["recommendedIndex"] = json!(recommended);
+    }
+    arguments
+}
+
+/// A next-step list as its record keeps it, to be offered again where it was offered.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reopened {
+    /// The command whose report offered it; `None`: the agent suggested it.
+    pub command: Option<String>,
+    pub steps: Vec<Step>,
+    /// A position in `steps`.
+    pub recommended: Option<usize>,
+}
+
+impl Reopened {
+    /// The list a `RECORD` call's arguments keep; `None` if they keep none.
+    pub(super) fn of(arguments: &Value) -> Option<Self> {
+        let command = match arguments["source"].as_str()? {
+            "completion" => Some(arguments["sourceCommand"].as_str()?.to_owned()),
+            "suggestion" => None,
+            _ => return None,
+        };
+        let options = arguments["options"].as_array().filter(|o| !o.is_empty())?;
+        let mut steps = Vec::new();
+        for (position, option) in options.iter().enumerate() {
+            let message = option["message"].as_str()?;
+            steps.push(Step {
+                index: (option["index"].as_u64()).map_or(position, |index| index as usize),
+                message: message.to_owned(),
+                reason: option["reason"].as_str().unwrap_or_default().to_owned(),
+                fresh_session: option["freshSession"] == true,
+                command: parse_slash(message).map(|(name, args)| {
+                    format!("/{name}{}", args.map_or(String::new(), |a| format!(" {a}")))
+                }),
+            });
+        }
+        let recommended = (arguments["recommendedIndex"].as_u64())
+            .map(|at| at as usize)
+            .filter(|at| *at < steps.len());
+        Some(Self {
+            command,
+            steps,
+            recommended,
+        })
+    }
+
+    pub fn source(&self) -> Source<'_> {
+        match &self.command {
+            Some(command) => Source::Completion(command),
+            None => Source::Suggestion,
+        }
+    }
 }
 
 /// A `RECORD` call's line: the step chosen, or that the list was dismissed.
@@ -1740,11 +1805,18 @@ auto-dispatches it only when its message is a slash command."
             "Next step (from rs:loop):\n- /rs:loop (fresh session) — Continue now.\n- /rs:steer\n\
 Cancelled"
         );
+        let arguments = record_arguments(Source::Completion("rs:loop"), &steps, Some(1), Some(0));
         assert_eq!(
-            record_arguments(Source::Completion("rs:loop"), &steps, Some(0))["options"],
+            arguments["options"],
             json!([{"message":"/rs:loop","reason":"Continue\nnow.","freshSession":true},
-                {"message":"/rs:steer"}])
+                {"message":"/rs:steer","index":2}])
         );
+        assert_eq!(arguments["recommendedIndex"], 1);
+        // The record keeps the list as it was offered.
+        let reopened = Reopened::of(&arguments).unwrap();
+        assert_eq!(reopened.steps, steps);
+        assert_eq!(reopened.recommended, Some(1));
+        assert_eq!(reopened.source(), Source::Completion("rs:loop"));
         // A text step goes into the editor, in this session.
         let text = Step {
             command: None,

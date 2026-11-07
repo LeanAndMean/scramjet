@@ -423,10 +423,15 @@ impl Interactive {
             };
             match result {
                 Ok(Navigated::AlreadyThere) => self.say("Already at this point"),
-                Ok(Navigated::Moved { prompt }) => {
+                Ok(Navigated::Moved { prompt, offer }) => {
                     self.replaced("✓ Navigated to selected point");
-                    if let Some(prompt) = prompt {
-                        self.set_text(prompt);
+                    match offer {
+                        Some(offer) => self.reopen(offer, prompt),
+                        None => {
+                            if let Some(prompt) = prompt {
+                                self.set_text(prompt);
+                            }
+                        }
                     }
                 }
                 Err(AgentError::Cancelled) => {

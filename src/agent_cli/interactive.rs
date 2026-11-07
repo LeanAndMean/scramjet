@@ -13,7 +13,7 @@ use super::theme::{ThemeOptions, Themes, Watched};
 use super::{editor, footer, installed, keymap, scope, select, settings, style, terminal, tree};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, EarlierSession, Installed,
-    Next, Problem, Source, Step, Suggested,
+    Next, Problem, Reopened, Source, Step, Suggested,
 };
 use std::{
     io::{BufRead, IsTerminal},
@@ -56,6 +56,8 @@ pub(super) struct Interactive {
     /// The packages' logins and the providers that list their models themselves, as the
     /// session last read them, for those lists to be kept current (`login::keep_lists_current`).
     pub(super) kept: Arc<Mutex<super::login::Kept>>,
+    /// A next step chosen from a list offered again (`reopen`), to run as if typed.
+    chosen: Option<(String, Start)>,
 }
 
 /// How a prompt came to run.
@@ -139,6 +141,7 @@ impl Interactive {
             scope: Vec::new(),
             in_turn: false,
             kept,
+            chosen: None,
         };
         interactive.use_theme();
         Ok(interactive)
@@ -253,6 +256,8 @@ impl Interactive {
             }
             if !self.builtin(prompt) {
                 queued = self.send(prompt, start.unwrap_or(Start::Typed));
+            } else {
+                queued = self.chosen.take();
             }
         }
     }
@@ -496,7 +501,7 @@ impl Interactive {
                 return None;
             }
             Next::Run { steps, chosen } => {
-                self.record(source, &steps, Some(chosen));
+                self.record(source, &steps, Some(chosen), Some(chosen));
                 (steps[chosen].clone(), Start::Unattended, Routed::default())
             }
             Next::Offer {
@@ -516,6 +521,28 @@ impl Interactive {
         let (step, start, routed) =
             self.offer(title, Source::Suggestion, steps, recommended, false)?;
         self.take_step(step, start, routed)
+    }
+
+    /// Offers again on the full screen the next-step list going back in the session reached;
+    /// the step chosen runs next, and `prompt`, the prompt gone back to, goes into the editor if
+    /// none is.
+    pub(super) fn reopen(&mut self, offer: Reopened, prompt: Option<String>) {
+        if self.screen.is_some() {
+            let title = match offer.command {
+                Some(_) => "Select next step",
+                None => "Agent suggests a next step",
+            };
+            let (source, steps) = (offer.source(), &offer.steps);
+            if let Some((step, start, routed)) =
+                self.offer(title, source, steps, offer.recommended, false)
+            {
+                self.chosen = self.take_step(step, start, routed);
+                return;
+            }
+        }
+        if let Some(prompt) = prompt {
+            self.set_text(prompt);
+        }
     }
 
     /// Lets the user choose one of `steps` from `source` under `title`, `recommended` selected
@@ -560,7 +587,12 @@ impl Interactive {
         {
             steps[*at].fresh_session = fresh;
         }
-        self.record(source, &steps, chosen.as_ref().map(|(at, ..)| *at));
+        self.record(
+            source,
+            &steps,
+            recommended,
+            chosen.as_ref().map(|(at, ..)| *at),
+        );
         let (at, timed, mut routed) = chosen?;
         routed.fresh = None;
         let start = if timed {
@@ -655,8 +687,17 @@ impl Interactive {
     }
 
     /// Records and shows the next step chosen, or that the list was dismissed.
-    fn record(&mut self, source: Source, steps: &[Step], chosen: Option<usize>) {
-        match self.agent.record_next_step(source, steps, chosen) {
+    fn record(
+        &mut self,
+        source: Source,
+        steps: &[Step],
+        recommended: Option<usize>,
+        chosen: Option<usize>,
+    ) {
+        match self
+            .agent
+            .record_next_step(source, steps, recommended, chosen)
+        {
             Ok(record) => {
                 self.ui().next_step(&record);
                 self.spaced = true;

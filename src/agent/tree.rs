@@ -1,5 +1,6 @@
 //! The session as a tree: the entries `/tree` lists, and continuing the conversation from
 //! one of them.
+use super::status::{self, Reopened};
 use super::tools::Call;
 use super::{Agent, AgentError, AgentUi, Label, Purpose, TYPED, compaction, message_text, session};
 use serde_json::{Value, json};
@@ -55,6 +56,8 @@ struct Destination {
     prompt: Option<String>,
     /// The entries of the branch it leaves.
     left: Vec<Value>,
+    /// The next-step list offered there.
+    offer: Option<Reopened>,
 }
 
 /// Where `Agent::navigate` left the conversation.
@@ -62,8 +65,12 @@ struct Destination {
 pub enum Navigated {
     /// The conversation already ended at that entry.
     AlreadyThere,
-    /// It now ends there; `prompt`, if the entry was one, is to be edited and sent again.
-    Moved { prompt: Option<String> },
+    /// It now ends there; `prompt`, if the entry was one, is to be edited and sent again, and
+    /// `offer` is the next-step list offered there, to be offered again.
+    Moved {
+        prompt: Option<String>,
+        offer: Option<Reopened>,
+    },
 }
 
 impl Agent {
@@ -226,21 +233,31 @@ impl Agent {
         }
         Ok(Navigated::Moved {
             prompt: destination.prompt,
+            offer: destination.offer,
         })
     }
 
     /// Where continuing from the entry on `line` ends the conversation; `None` if it already
-    /// ends there.
+    /// ends there. Where a next-step list was offered, it ends before the list's record: at the
+    /// record itself, at the prompt its choice sent, and after the report or the call that
+    /// offered it, so that the list is offered again.
     fn destination(&self, line: usize) -> Result<Option<Destination>, AgentError> {
-        if self.session.leaf() == Some(line) {
-            return Ok(None);
-        }
         let entries = self.session.entries()?;
-        let Some(entry) = entries.iter().find(|entry| entry.line == line) else {
+        let at =
+            |line: Option<usize>| line.and_then(|line| entries.iter().find(|e| e.line == line));
+        let Some(entry) = at(Some(line)) else {
             return Err(AgentError::Session(std::io::Error::other(
                 "no such entry in the session",
             )));
         };
+        let record = |value: &Value| value["name"] == status::RECORD;
+        let record_output = |output: &session::Entry| {
+            output.value["type"] == "function_call_output"
+                && at(output.parent).is_some_and(|call| record(&call.value))
+        };
+        if self.session.leaf() == Some(line) && !record_output(entry) {
+            return Ok(None);
+        }
         let (mut leaf, prompt) = if session::is_prompt(&entry.value) {
             let prompt = session::prompt_text(&entry.value);
             (entry.parent, Some(prompt.to_owned()))
@@ -267,16 +284,25 @@ impl Agent {
             {
                 leaf = Some(next.line);
             }
-            if leaf == self.session.leaf() {
-                return Ok(None);
-            }
         }
         // As in Scramjet, a prompt chosen to be sent again is not part of the branch left.
         let kept = if prompt.is_some() { Some(line) } else { leaf };
+        if let Some(output) = at(leaf).filter(|output| record_output(output)) {
+            leaf = at(output.parent).and_then(|call| call.parent);
+        }
+        let offer = (entries.iter().rev())
+            .filter(|next| next.parent == leaf && next.value["type"] == "function_call")
+            .find(|next| record(&next.value))
+            .and_then(|call| serde_json::from_str(call.value["arguments"].as_str()?).ok())
+            .and_then(|arguments| Reopened::of(&arguments));
+        if leaf == self.session.leaf() && offer.is_none() {
+            return Ok(None);
+        }
         Ok(Some(Destination {
             leaf,
             prompt,
             left: self.session.left_behind(kept)?,
+            offer,
         }))
     }
 
@@ -319,6 +345,103 @@ mod tests {
     use crate::agent::tests::*;
     use crate::agent::{Session, show_items};
     use crate::provider_fixture as fixture;
+
+    #[test]
+    fn going_back_to_where_a_next_step_list_was_offered_offers_it_again() {
+        let replies = ["Done.", "Looped.", "Steered."];
+        let (endpoint, _server) = serve(
+            replies
+                .iter()
+                .map(|text| stream(&fixture::text_events(text, fixture::known_usage())))
+                .collect(),
+        );
+        let (mut agent, _scratch) = agent(endpoint, "tree-reopen");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("work", &mut ui, &cancel).unwrap();
+        let step = |index, message: &str| status::Step {
+            index,
+            message: message.into(),
+            reason: "Because.".into(),
+            fresh_session: false,
+            command: Some(message.into()),
+        };
+        let steps = vec![step(0, "/rs:loop"), step(2, "/rs:steer")];
+        let source = status::Source::Completion("rs:work");
+        agent
+            .record_next_step(source, &steps, Some(1), Some(0))
+            .unwrap();
+        agent.turn("/rs:loop", &mut ui, &cancel).unwrap();
+        let offered = Some(Reopened {
+            command: Some("rs:work".into()),
+            steps: steps.clone(),
+            recommended: Some(1),
+        });
+        let tree = agent.tree().unwrap();
+        let line = |wanted: &dyn Fn(&TreeItem) -> bool| {
+            (tree.entries.iter())
+                .find(|entry| wanted(&entry.item))
+                .unwrap()
+                .line
+        };
+        let reply = line(&|item| *item == TreeItem::Reply("Done.".into()));
+        let record =
+            line(&|item| matches!(item, TreeItem::Tool(name, _) if name == status::RECORD));
+        let chosen = line(&|item| *item == TreeItem::Prompt("/rs:loop".into()));
+
+        // The prompt the choice sent, and the record itself, go back to before the record, which
+        // the conversation no longer holds, and offer its list again.
+        assert_eq!(
+            agent.navigate(chosen, None, &mut ui, &cancel).unwrap(),
+            Navigated::Moved {
+                prompt: Some("/rs:loop".into()),
+                offer: offered.clone()
+            }
+        );
+        assert_eq!(agent.conversation().len(), 2);
+        assert!(!agent.leaves_branch(record).unwrap());
+        assert_eq!(
+            agent.navigate(record, None, &mut ui, &cancel).unwrap(),
+            Navigated::Moved {
+                prompt: None,
+                offer: offered.clone()
+            }
+        );
+        // A choice made there branches from there.
+        agent
+            .record_next_step(source, &steps, Some(1), Some(1))
+            .unwrap();
+        agent.turn("/rs:steer", &mut ui, &cancel).unwrap();
+        let conversation = agent.conversation();
+        assert_eq!(conversation.len(), 6);
+        assert!(
+            conversation[3]["output"]
+                .as_str()
+                .unwrap()
+                .contains("→ /rs:steer")
+        );
+
+        // From after the reply that offered it, it is offered again; so is a list dismissed,
+        // from right after it.
+        assert_eq!(
+            agent.navigate(reply, None, &mut ui, &cancel).unwrap(),
+            Navigated::Moved {
+                prompt: None,
+                offer: offered.clone()
+            }
+        );
+        agent
+            .record_next_step(source, &steps, Some(1), None)
+            .unwrap();
+        let dismissed = agent.session.leaf().unwrap();
+        let Navigated::Moved { offer, .. } =
+            agent.navigate(dismissed, None, &mut ui, &cancel).unwrap()
+        else {
+            panic!("not moved");
+        };
+        assert_eq!(offer, offered);
+        assert_eq!(agent.conversation().len(), 2);
+    }
 
     #[test]
     fn tree_navigation_branches_the_session_in_place() {
@@ -373,7 +496,8 @@ mod tests {
         assert_eq!(
             agent.navigate(3, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
-                prompt: Some("two".into())
+                prompt: Some("two".into()),
+                offer: None
             }
         );
         assert_eq!(agent.conversation().len(), 2);
@@ -404,7 +528,10 @@ mod tests {
         // From after a reply, its branch continues.
         assert_eq!(
             agent.navigate(4, None, &mut ui, &cancel).unwrap(),
-            Navigated::Moved { prompt: None }
+            Navigated::Moved {
+                prompt: None,
+                offer: None
+            }
         );
         agent.turn("three", &mut ui, &cancel).unwrap();
 
@@ -412,7 +539,8 @@ mod tests {
         assert_eq!(
             agent.navigate(1, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
-                prompt: Some("one".into())
+                prompt: Some("one".into()),
+                offer: None
             }
         );
         assert!(agent.conversation().is_empty());
@@ -634,7 +762,10 @@ mod tests {
         let saved = std::fs::read_to_string(&path).unwrap();
         assert_eq!(
             agent.navigate(6, None, &mut ui, &cancel).unwrap(),
-            Navigated::Moved { prompt: None }
+            Navigated::Moved {
+                prompt: None,
+                offer: None
+            }
         );
         assert_eq!(agent.conversation().len(), 6);
         assert_eq!(agent.conversation()[5]["call_id"], "c2");
@@ -708,7 +839,8 @@ mod tests {
         assert_eq!(
             agent.navigate(4, Some("focus"), &mut ui, &cancel).unwrap(),
             Navigated::Moved {
-                prompt: Some("explore".into())
+                prompt: Some("explore".into()),
+                offer: None
             }
         );
         assert_eq!(ui.waits.last(), Some(&Purpose::BranchSummary));
@@ -735,7 +867,10 @@ Summary of that exploration:\n\n## Goal\nlook\n\n<read-files>\nold.rs\nx.rs\n</r
         assert!(agent.leaves_branch(13).unwrap());
         assert_eq!(
             agent.navigate(3, None, &mut ui, &cancel).unwrap(),
-            Navigated::Moved { prompt: None }
+            Navigated::Moved {
+                prompt: None,
+                offer: None
+            }
         );
         assert!(!agent.leaves_branch(14).unwrap());
         let tree = agent.tree().unwrap();

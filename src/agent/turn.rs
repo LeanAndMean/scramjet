@@ -205,13 +205,14 @@ finish and is not checked on. Reply to continue.",
     }
 
     /// Adds Scramjet's record of the next step chosen from `steps` from the command `source`
-    /// (`None`: the list was dismissed) to the conversation, as Scramjet invokes its harness
-    /// tool: a call the model never made and its result, which the model sees. Returns the
-    /// record as the result has it.
+    /// (`None`: the list was dismissed), `recommended` selected at first, to the conversation,
+    /// as Scramjet invokes its harness tool: a call the model never made and its result, which
+    /// the model sees. Returns the record as the result has it.
     pub fn record_next_step(
         &mut self,
         source: Source,
         steps: &[Step],
+        recommended: Option<usize>,
         chosen: Option<usize>,
     ) -> Result<String, AgentError> {
         let record = status::record(source, steps, chosen);
@@ -220,7 +221,7 @@ finish and is not checked on. Reply to continue.",
             .unwrap_or_default()
             .as_nanos();
         let call_id = format!("harness-tool-{nanos}");
-        let mut arguments = status::record_arguments(source, steps, chosen);
+        let mut arguments = status::record_arguments(source, steps, recommended, chosen);
         self.next_session = None;
         // A fresh session's name is taken now, so that the record names its file.
         if chosen.is_some_and(|at| steps[at].fresh()) {
@@ -1247,18 +1248,18 @@ auto-dispatches it only when its message is a slash command."
         // A step in the same session, or a text step, names no other.
         let source = Source::Completion("rs:loop");
         agent
-            .record_next_step(source, &[step(false, Some("/rs:loop"))], Some(0))
+            .record_next_step(source, &[step(false, Some("/rs:loop"))], None, Some(0))
             .unwrap();
         assert_eq!(record(&agent).get("nextSession"), None);
         agent
-            .record_next_step(source, &[step(true, None)], Some(0))
+            .record_next_step(source, &[step(true, None)], None, Some(0))
             .unwrap();
         assert_eq!(record(&agent).get("nextSession"), None);
 
         // A fresh session's record names the file the session continues in, and that file's
         // header names the session before it, marked as a next step's.
         agent
-            .record_next_step(source, &[step(true, Some("/rs:loop"))], Some(0))
+            .record_next_step(source, &[step(true, Some("/rs:loop"))], None, Some(0))
             .unwrap();
         let named = std::path::PathBuf::from(record(&agent)["nextSession"].as_str().unwrap());
         agent.new_session().unwrap();
@@ -1287,7 +1288,7 @@ auto-dispatches it only when its message is a slash command."
             "arguments":report.to_string()});
         agent.add(call).unwrap();
         agent
-            .record_next_step(source, &[step(true, Some("/rs:loop"))], Some(0))
+            .record_next_step(source, &[step(true, Some("/rs:loop"))], None, Some(0))
             .unwrap();
         agent.new_session().unwrap();
         let third = agent.session_path().to_owned();
@@ -1322,7 +1323,7 @@ auto-dispatches it only when its message is a slash command."
         let dir_len = || std::fs::read_dir(third.parent().unwrap()).unwrap().count();
         let before = dir_len();
         agent
-            .record_next_step(source, &[step(true, Some("/rs:loop"))], None)
+            .record_next_step(source, &[step(true, Some("/rs:loop"))], None, None)
             .unwrap();
         assert_eq!(dir_len(), before);
         agent.new_session().unwrap();
@@ -1346,14 +1347,14 @@ auto-dispatches it only when its message is a slash command."
         };
         let steps = [step(0, "/rs:review", "risky"), step(2, "/rs:loop", "")];
         let shown = agent
-            .record_next_step(Source::Completion("rs:loop"), &steps, Some(1))
+            .record_next_step(Source::Completion("rs:loop"), &steps, None, Some(1))
             .unwrap();
         assert_eq!(
             shown,
             "Next step (from rs:loop):\n  /rs:review — risky\n→ /rs:loop"
         );
         let dismissed = agent
-            .record_next_step(Source::Completion("rs:loop"), &steps, None)
+            .record_next_step(Source::Completion("rs:loop"), &steps, None, None)
             .unwrap();
         let mut ui = Recorder::default();
         agent
@@ -1370,7 +1371,7 @@ auto-dispatches it only when its message is a slash command."
         assert_eq!(
             arguments,
             json!({"outcome":"selected","options":[{"message":"/rs:review","reason":"risky"},
-                {"message":"/rs:loop"}],"selectedIndex":1,"sourceCommand":"rs:loop",
+                {"message":"/rs:loop","index":2}],"selectedIndex":1,"sourceCommand":"rs:loop",
                 "source":"completion"})
         );
         assert_eq!(input[1]["call_id"], input[0]["call_id"]);
