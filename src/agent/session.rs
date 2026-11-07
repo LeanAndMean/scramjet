@@ -608,7 +608,7 @@ fn new_file(directory: &Path) -> io::Result<(PathBuf, io::Result<File>, u128)> {
         .unwrap_or_default()
         .as_millis();
     let name = |created| directory.join(format!("{created}-{}.jsonl", std::process::id()));
-    match std::fs::create_dir_all(directory) {
+    match make_directory(directory) {
         Err(error) if full(&error) => return Ok((name(created), Err(error), created)),
         made => made?,
     }
@@ -624,10 +624,34 @@ fn new_file(directory: &Path) -> io::Result<(PathBuf, io::Result<File>, u128)> {
     }
 }
 
+/// Creates a session directory, private to the user, and its parents. One already there must be
+/// the user's own directory, not a link: an `Unsaved` directory a full disk kept from being made at
+/// start is made in the shared temporary directory, where another user could have made its name.
+fn make_directory(directory: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    if let Some(parent) = directory.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::DirBuilder::new().mode(0o700).create(directory) {
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+            let found = std::fs::symlink_metadata(directory)?;
+            // SAFETY: `geteuid` cannot fail.
+            if !found.is_dir() || found.uid() != unsafe { libc::geteuid() } {
+                return Err(io::Error::other(format!(
+                    "{}: not a directory of this user's",
+                    directory.display()
+                )));
+            }
+            Ok(())
+        }
+        made => made,
+    }
+}
+
 /// Creates the session file `path` and its directory; one already there is an error.
 fn create_file(path: &Path) -> io::Result<File> {
     if let Some(directory) = path.parent() {
-        std::fs::create_dir_all(directory)?;
+        make_directory(directory)?;
     }
     OpenOptions::new().append(true).create_new(true).open(path)
 }
@@ -676,16 +700,20 @@ impl Unsaved {
             let name = format!("scramjet-rs-unsaved-{}-{n}", std::process::id());
             let path = std::env::temp_dir().join(name);
             match builder.create(&path) {
-                Ok(()) => {
-                    let unsaved = UNSAVED.lock();
-                    let mut unsaved = unsaved.unwrap_or_else(std::sync::PoisonError::into_inner);
-                    unsaved.push(path.clone());
-                    return Ok(Self(path));
-                }
+                Ok(()) => return Ok(Self::named(path)),
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => n += 1,
+                // The session made in it keeps its lines, and makes it once there is room.
+                Err(error) if full(&error) => return Ok(Self::named(path)),
                 Err(error) => return Err(error),
             }
         }
+    }
+
+    fn named(path: PathBuf) -> Self {
+        let unsaved = UNSAVED.lock();
+        let mut unsaved = unsaved.unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsaved.push(path.clone());
+        Self(path)
     }
 
     pub fn path(&self) -> &Path {

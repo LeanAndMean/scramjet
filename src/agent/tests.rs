@@ -765,9 +765,28 @@ fn a_session_whose_file_could_not_be_created_creates_it_once_there_is_room() {
         .unwrap();
     assert!(!session.holding());
     assert!(session.is_file(&path));
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(directory.0.join("later"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
     let (reopened, conversation, _) = Session::open(&path).unwrap();
     assert_eq!(conversation, [json!({"role":"user","content":"first"})]);
     assert_eq!(reopened.name(), Some("kept"));
+
+    // A name another user could have made in the shared temporary directory is not written into.
+    let elsewhere = directory.0.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, directory.0.join("planted")).unwrap();
+    let mut session = Session::create(&directory.0, Path::new("/project"), None).unwrap();
+    session.not_created_at(&directory.0.join("planted/1-1.jsonl"));
+    let error = (session.append(&json!({"role":"user","content":"x"}))).unwrap_err();
+    assert!(
+        error.to_string().contains("not a directory of this user's"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
 }
 
 #[test]

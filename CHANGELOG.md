@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.57.2 — `--no-session` on a full disk
+
+### Fixed
+
+- `--no-session` runs (as `-p --no-session`) also start on a disk with no room for a new directory, where they stopped with `session: No space left on device`, and no longer say "Session not written" of a session they do not save.
+
 ## 0.57.1 — Starting on a disk with no room for a session file
 
 ### Fixed

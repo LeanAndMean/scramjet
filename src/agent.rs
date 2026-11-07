@@ -868,7 +868,11 @@ impl Agent {
     /// What to say, once, of a change in whether the session's lines reach its file: a full disk
     /// keeps them in memory (`Session::write`).
     pub fn saving_notice(&mut self) -> Option<String> {
-        Some(match self.session.take_change()? {
+        let change = self.session.take_change()?;
+        if !self.session_saved() {
+            return None;
+        }
+        Some(match change {
             session::Saving::Held(error) => format!(
                 "Session not written: {error}. It is kept in memory and written once there is room."
             ),
