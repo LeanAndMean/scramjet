@@ -1,7 +1,7 @@
 //! What saved sessions spent: each response's model, tokens, cost and timing, read back from the
 //! session files, for `/usage`.
 
-use super::{PRODUCER, SUBAGENTS, TIMING, USAGE};
+use super::{PRODUCER, SUBAGENTS, TIMING, TYPED, USAGE};
 use serde_json::Value;
 use std::{
     collections::HashSet,
@@ -31,11 +31,22 @@ pub struct Response {
     pub session: usize,
 }
 
+/// A session file's project and title.
+#[derive(Debug, Default, PartialEq)]
+pub struct Summary {
+    /// The project directory it ran in, as its header says.
+    pub root: Option<PathBuf>,
+    /// Its name, else the first line of its first prompt as typed.
+    pub title: Option<String>,
+}
+
 #[derive(Debug, Default)]
 pub struct History {
     pub responses: Vec<Response>,
     /// The session files read, oldest first.
     pub files: Vec<PathBuf>,
+    /// What each of `files` is, by its index there.
+    pub summaries: Vec<Summary>,
     /// The files that could not be read, with why.
     pub unreadable: Vec<(PathBuf, String)>,
 }
@@ -73,8 +84,9 @@ impl History {
             match std::fs::read(&path) {
                 Ok(bytes) => {
                     let session = history.files.len();
-                    history.add(&bytes, session, &mut seen);
+                    let summary = history.add(&bytes, session, &mut seen);
                     history.files.push(path);
+                    history.summaries.push(summary);
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => history.unreadable.push((path, error.to_string())),
@@ -88,20 +100,40 @@ impl History {
         self.files.iter().position(|file| file == path)
     }
 
-    fn add(&mut self, bytes: &[u8], session: usize, seen: &mut HashSet<u64>) {
+    /// Adds the session's responses.
+    fn add(&mut self, bytes: &[u8], session: usize, seen: &mut HashSet<u64>) -> Summary {
         let mut lines = bytes.split(|&byte| byte == b'\n');
         let header: Value = (lines.next())
             .and_then(|line| serde_json::from_slice(line).ok())
             .unwrap_or_default();
         if header["type"] != "session" {
-            return;
+            return Summary::default();
         }
         let created = header["created"].as_u64().unwrap_or(0);
         let (usage, subagents) = (format!("\"{USAGE}\""), format!("\"{SUBAGENTS}\""));
+        let (mut name, mut prompt) = (None, None);
         for line in lines {
             let Ok(text) = std::str::from_utf8(line) else {
                 continue;
             };
+            let titled = |value: &Value, key: &str| {
+                (value[key].as_str())
+                    .map(|text| text.lines().next().unwrap_or("").trim().to_owned())
+            };
+            if text.contains("\"session_info\"")
+                && let Ok(item) = serde_json::from_str::<Value>(text)
+                && item["type"] == "session_info"
+            {
+                name = titled(&item, "name").filter(|name| !name.is_empty());
+                continue;
+            }
+            if prompt.is_none()
+                && text.contains("\"role\":\"user\"")
+                && let Ok(item) = serde_json::from_str::<Value>(text)
+                && super::session::is_prompt(&item)
+            {
+                prompt = titled(&item, TYPED).or_else(|| titled(&item, "content"));
+            }
             if !text.contains(&usage) && !text.contains(&subagents) {
                 continue;
             }
@@ -123,6 +155,10 @@ impl History {
             for run in item[SUBAGENTS]["runs"].as_array().into_iter().flatten() {
                 self.add_run(run, created, session);
             }
+        }
+        Summary {
+            root: header["root"].as_str().map(PathBuf::from),
+            title: name.or(prompt).filter(|title| !title.is_empty()),
         }
     }
 
@@ -215,13 +251,14 @@ mod tests {
             {"model": "b/old", "usage": {"turns": 2, "input_tokens": 50,
                 "cached_input_tokens": 30, "cache_write_tokens": 5, "output_tokens": 7}},
             {"model": "b/none", "usage": {"turns": 0}}]}});
-        let header = |created: u64| json!({"type": "session", "created": created});
+        let header = |created: u64| json!({"type": "session", "created": created, "root": "/p"});
         let first = sessions.join("home-p").join("1000-1.jsonl");
         write(
             &first,
             &[
                 header(1000),
-                json!({"type": "message", "role": "user"}),
+                json!({"type": "message", "role": "user", "content": "typed\nmore",
+                    "_scramjet_typed": "/rs:loop\nmore"}),
                 reply.clone(),
                 old,
             ],
@@ -229,7 +266,8 @@ mod tests {
         // A fork of it, which copies the reply, then says one of its own.
         let own = json!({"type": "message", "_scramjet_usage": {"input": 7, "output": 0}});
         let fork = sessions.join("home-p").join("2000-1.jsonl");
-        write(&fork, &[header(2000), reply, own]);
+        let named = json!({"type": "session_info", "name": "Forked"});
+        write(&fork, &[header(2000), reply, named, own]);
         let other = sessions.join("home-q").join("3000-1.jsonl");
         write(&other, &[header(3000), subagents]);
         write(&sessions.join("home-q").join("notes.txt"), &[json!({})]);
@@ -242,6 +280,11 @@ mod tests {
             [first, fork.clone(), other, elsewhere.clone()]
         );
         assert_eq!(history.session(&fork), Some(1));
+        let titles: Vec<_> = (history.summaries.iter())
+            .map(|summary| summary.title.as_deref())
+            .collect();
+        assert_eq!(titles, [Some("/rs:loop"), Some("Forked"), None, None]);
+        assert_eq!(history.summaries[0].root.as_deref(), Some(Path::new("/p")));
         let got: Vec<_> = (history.responses.iter())
             .map(|r| {
                 let timing = (r.first_output_ms, r.duration_ms);

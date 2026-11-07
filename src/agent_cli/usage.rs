@@ -14,6 +14,10 @@ const DAY: u64 = 24 * 60 * 60 * 1000;
 const DAYS: u64 = 14;
 const BAR: usize = 20;
 const MODEL_WIDTH: usize = 36;
+/// The sessions the costliest list shows.
+const SESSIONS: usize = 10;
+const PROJECT_WIDTH: usize = 16;
+const TITLE_WIDTH: usize = 40;
 
 #[derive(Default)]
 struct Totals {
@@ -280,6 +284,46 @@ pub(super) fn report(
         }
     }
 
+    let mut costliest = grouped_by(recent(), |r| r.session.to_string());
+    costliest.truncate(SESSIONS);
+    if !costliest.is_empty() {
+        text += "\n";
+        text += &heading("Costliest sessions, last 30 days");
+        text += &ui.dim(&format!(
+            "{:<8}{:>10}{:>9}{:>11}  {:<PROJECT_WIDTH$}  Session",
+            "Started", "Requests", "Tokens", "Cost", "Project"
+        ));
+        text.push('\n');
+        for (index, totals) in &costliest {
+            let index: usize = index.parse().unwrap_or(usize::MAX);
+            let started = (responses.iter())
+                .filter(|r| r.session == index)
+                .map(|r| r.at)
+                .min()
+                .unwrap_or(now);
+            let summary = history.summaries.get(index);
+            let project = (summary.and_then(|summary| summary.root.as_deref()))
+                .and_then(Path::file_name)
+                .map_or("?".into(), |name| name.to_string_lossy());
+            let project = super::text::clip(&project, PROJECT_WIDTH);
+            let title = match summary.and_then(|summary| summary.title.as_deref()) {
+                Some(title) => super::text::clip(title, TITLE_WIDTH),
+                None => ui.dim("(no prompt)"),
+            };
+            let mark = match Some(index) == session {
+                true => ui.dim(" (this one)"),
+                false => String::new(),
+            };
+            text += &format!(
+                "{:<8}{:>10}{:>9}{:>11}  {project:<PROJECT_WIDTH$}  {title}{mark}\n",
+                date(started, now),
+                grouped(totals.requests),
+                terminal::tokens(totals.input + totals.output),
+                totals.cost(),
+            );
+        }
+    }
+
     text += "\n";
     let first = responses.iter().map(|r| r.at).min().unwrap_or(now);
     let mut said = format!(
@@ -300,6 +344,7 @@ medians, beside the slowest tenth's (p90 and p10); cost is $? where the provider
 #[cfg(test)]
 mod tests {
     use super::*;
+    use scramjet_rs::agent::usage::Summary;
     use std::sync::{Arc, atomic::AtomicBool};
 
     fn response(at: u64, model: &str, cost: Option<f64>, session: usize) -> Response {
@@ -336,6 +381,13 @@ mod tests {
                 },
             ],
             files: vec!["/s/p/1.jsonl".into(), "/s/p/2.jsonl".into()],
+            summaries: vec![
+                Summary {
+                    root: Some("/home/me/scramjet-rs".into()),
+                    title: Some("/rs:loop".into()),
+                },
+                Summary::default(),
+            ],
             unreadable: Vec::new(),
         };
         let ui = Terminal::new(Arc::new(AtomicBool::new(false)), false);
@@ -391,13 +443,24 @@ mod tests {
                 "Model   Timed First output     p90         Rate         p10",
                 "a/one       2         1.5s    3.5s      25tok/s     25tok/s",
                 "",
-                lines[28],
+                "Costliest sessions, last 30 days",
+                "Started   Requests   Tokens       Cost  Project           Session",
+                &format!(
+                    "{:<8}         2      900    $2.00+?  ?                 (no prompt) (this one)",
+                    day(0)
+                ),
+                &format!(
+                    "{:<8}         1      450      $1.00  scramjet-rs       /rs:loop",
+                    day(40)
+                ),
+                "",
+                lines[33],
             ]
         );
         assert!(
-            lines[28].starts_with("From 2 session files in /s, since "),
+            lines[33].starts_with("From 2 session files in /s, since "),
             "{}",
-            lines[28]
+            lines[33]
         );
     }
 }

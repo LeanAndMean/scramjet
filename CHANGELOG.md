@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.67.0 — The costliest sessions in /usage
+
+### Added
+
+- `/usage` lists the 10 costliest sessions of the last 30 days, each with when it started, its requests, tokens and cost, its project and its name or first prompt (such as the command it ran), marking the current one.
+
 ## 0.66.0 — Usage by provider, and speed percentiles
 
 ### Changed
