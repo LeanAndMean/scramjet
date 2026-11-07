@@ -13,7 +13,8 @@ use scramjet_rs::agent::quota::{Credits, Quota, Window};
 use scramjet_rs::agent::usage::{History, Response, civil_days};
 use std::path::Path;
 
-const DAY: u64 = 24 * 60 * 60 * 1000;
+const HOUR: u64 = 60 * 60 * 1000;
+const DAY: u64 = 24 * HOUR;
 /// The days the daily rows go back, today among them.
 const DAYS: i64 = 14;
 /// The weeks the weekly rows go back, this one among them.
@@ -452,6 +453,55 @@ fn grouped_by<'a>(
     groups
 }
 
+/// Each session's tokens (input with the cache's, and output) under which a row of `sizes`
+/// counts it, the last row counting the rest.
+const SIZES: [(u64, &str); 5] = [
+    (10_000, "Under 10k"),
+    (100_000, "10k to 100k"),
+    (1_000_000, "100k to 1M"),
+    (10_000_000, "1M to 10M"),
+    (u64::MAX, "10M and more"),
+];
+
+/// How many of `sessions` used how many tokens, a row for each size from the smallest to the
+/// largest used, with their cost and a bar of their count.
+fn sizes(sessions: &[(String, Totals)], ui: &Terminal) -> String {
+    let mut rows: Vec<(u64, Totals)> = SIZES.iter().map(|_| (0, Totals::default())).collect();
+    for (_, totals) in sessions {
+        let size = (SIZES.iter())
+            .position(|&(under, _)| totals.input + totals.output < under)
+            .unwrap_or(SIZES.len() - 1);
+        let (count, sum) = &mut rows[size];
+        *count += 1;
+        sum.cost += totals.cost;
+        sum.unpriced |= totals.unpriced;
+    }
+    let first = rows.iter().position(|(count, _)| *count > 0).unwrap_or(0);
+    let last = rows.iter().rposition(|(count, _)| *count > 0).unwrap_or(0);
+    let most = rows
+        .iter()
+        .map(|(count, _)| *count)
+        .max()
+        .unwrap_or(0)
+        .max(1);
+    let mut text = ui.dim(&format!("{:<14}{:>10}{:>11}", "Tokens", "Sessions", "Cost"));
+    text.push('\n');
+    for ((_, label), (count, totals)) in SIZES.iter().zip(&rows).take(last + 1).skip(first) {
+        let width = match *count {
+            0 => 0,
+            count => ((count * BAR as u64) as f64 / most as f64).round().max(1.0) as usize,
+        };
+        let bar = ui.styled(style::USAGE_BAR, &"█".repeat(width));
+        text += &format!(
+            "{}{:>10}{:>11} {bar}\n",
+            ui.dim(&format!("{label:<14}")),
+            grouped(*count),
+            totals.cost(),
+        );
+    }
+    text
+}
+
 /// The report, `current` being this session's file and `model` its model, at `now`
 /// (milliseconds since 1970): of `only`'s responses, or of every provider's.
 pub(super) fn report(
@@ -502,6 +552,11 @@ pub(super) fn report(
             .filter(|r| Some(r.session) == session),
     );
     text += &row("This session", &this);
+    for (hours, label) in [(1, "Last hour"), (5, "Last 5 hours")] {
+        let since = now.saturating_sub(hours * HOUR);
+        let totals = Totals::of(responses.iter().copied().filter(|r| r.at >= since));
+        text += &row(label, &totals);
+    }
     let today = Totals::of(responses.iter().copied().filter(|r| same_day(r.at, now)));
     text += &row("Today", &today);
     for days in [7, 30] {
@@ -594,6 +649,11 @@ pub(super) fn report(
     }
 
     let mut costliest = grouped_by(recent(), |r| r.session.to_string());
+    if !costliest.is_empty() {
+        text += "\n";
+        text += &heading("Sessions by tokens, last 30 days");
+        text += &sizes(&costliest, ui);
+    }
     costliest.truncate(SESSIONS);
     if !costliest.is_empty() {
         text += "\n";
@@ -812,12 +872,14 @@ mod tests {
         let lines: Vec<&str> = report.lines().map(str::trim_end).collect();
         let day = |back: u64| date(now - back * DAY, now);
         assert_eq!(
-            lines[..9],
+            lines[..11],
             [
                 "Usage",
                 "",
                 "                Requests    Input   Output  Cached       Cost",
                 "This session           2      800      100     75%    $2.00+?",
+                "Last hour              2      800      100     75%    $2.00+?",
+                "Last 5 hours           2      800      100     75%    $2.00+?",
                 "Today                  2      800      100     75%    $2.00+?",
                 "Last 7 days            3     1.2k      150     75%    $3.00+?",
                 "Last 30 days           3     1.2k      150     75%    $3.00+?",
@@ -825,19 +887,19 @@ mod tests {
                 "",
             ]
         );
-        assert_eq!(lines[9], "Last 14 days");
+        assert_eq!(lines[11], "Last 14 days");
         assert_eq!(
-            lines[10],
+            lines[12],
             format!("{:<8}      $1.00         1 {}", day(3), "█".repeat(10))
         );
         assert_eq!(
-            lines[11],
+            lines[13],
             format!("{:<8}    $2.00+?         2 {}", day(0), "█".repeat(20))
         );
         let providers = (lines.iter())
             .position(|line| *line == "Providers, last 30 days")
             .unwrap();
-        assert_eq!(lines[13], "Last 12 weeks, from Mondays");
+        assert_eq!(lines[15], "Last 12 weeks, from Mondays");
         assert_eq!(
             lines[providers - 2],
             "Bars: cost by provider: █ a  ▓ unknown"
@@ -860,6 +922,10 @@ mod tests {
                 "Model   Timed First output     p90         Rate         p10",
                 "a/one       2         1.5s    3.5s      25tok/s     25tok/s",
                 "",
+                "Sessions by tokens, last 30 days",
+                "Tokens          Sessions       Cost",
+                &format!("Under 10k              2    $3.00+? {}", "█".repeat(20)),
+                "",
                 "Costliest sessions, last 30 days",
                 "Started   Requests   Tokens       Cost  Project           Session",
                 &format!(
@@ -878,6 +944,63 @@ mod tests {
             lines[lines.len() - 1].starts_with("From 2 session files in /s, since "),
             "{}",
             lines[lines.len() - 1]
+        );
+    }
+
+    #[test]
+    fn sessions_are_counted_by_their_tokens_from_the_smallest_size_to_the_largest() {
+        let session = |tokens: u64, cost: Option<f64>| {
+            let response = Response {
+                input: tokens,
+                output: 0,
+                cache_read: 0,
+                ..response(NOW, "a/m", cost, 0)
+            };
+            Totals::of([&response].into_iter())
+        };
+        let sessions: Vec<(String, Totals)> = [
+            (20_000, Some(0.5)),
+            (99_999, Some(1.0)),
+            (100_000, None),
+            (5_000_000, Some(4.0)),
+            (40_000, Some(0.25)),
+            (60_000, Some(0.25)),
+            (70_000, Some(0.25)),
+            (80_000, Some(0.25)),
+            (90_000, Some(0.25)),
+            (95_000, Some(0.25)),
+            (96_000, Some(0.25)),
+            (97_000, Some(0.25)),
+            (98_000, Some(0.25)),
+            (98_500, Some(0.25)),
+            (98_600, Some(0.25)),
+            (98_700, Some(0.25)),
+            (98_800, Some(0.25)),
+            (98_900, Some(0.25)),
+            (98_950, Some(0.25)),
+            (98_990, Some(0.25)),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (tokens, cost))| (index.to_string(), session(tokens, cost)))
+        .collect();
+        let text = super::super::text::plain(&sizes(&sessions, &ui()));
+        let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+        assert_eq!(
+            lines,
+            [
+                "Tokens          Sessions       Cost",
+                &format!("10k to 100k           18      $5.50 {}", "█".repeat(20)),
+                "100k to 1M             1         $? █",
+                "1M to 10M              1      $4.00 █",
+            ]
+        );
+
+        let one = [("0".to_owned(), session(10_000_000, Some(1.0)))];
+        let text = super::super::text::plain(&sizes(&one, &ui()));
+        assert!(
+            text.ends_with("10M and more           1      $1.00 ████████████████████\n"),
+            "{text}"
         );
     }
 
@@ -960,12 +1083,14 @@ mod tests {
         let report = super::super::text::plain(&report);
         let lines: Vec<&str> = report.lines().map(str::trim_end).collect();
         assert_eq!(
-            lines[..8],
+            lines[..10],
             [
                 "Usage of a",
                 "",
                 "                Requests    Input   Output  Cached       Cost",
                 "This session           1      400       50     75%      $2.00",
+                "Last hour              1      400       50     75%      $2.00",
+                "Last 5 hours           1      400       50     75%      $2.00",
                 "Today                  1      400       50     75%      $2.00",
                 "Last 7 days            2      800      100     75%      $3.00",
                 "Last 30 days           2      800      100     75%      $3.00",

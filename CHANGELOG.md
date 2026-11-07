@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.76.0 — The last hours' usage, and sessions by size
+
+### Added
+
+- `/usage` shows the last hour's and the last 5 hours' requests, tokens and cost beside today's, so the current rate of spending is one row away.
+- `/usage` counts the last 30 days' sessions by their tokens (under 10k, to 100k, to 1M, to 10M, and more), with each size's cost and a bar.
+
 ## 0.75.0 — When a quota runs out at the current pace
 
 ### Added
