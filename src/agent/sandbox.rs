@@ -440,7 +440,6 @@ impl Hidden {
     /// mount points, but can rename the directories above them while a path is looked up.
     fn holds(&self, file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
         use rustix::fs::{AtFlags, FileType, Mode, OFlags};
-        use std::os::fd::AsRawFd;
         let up = LOOKUP | OFlags::DIRECTORY | OFlags::CLOEXEC;
         // As std's `MetadataExt::dev`: macOS's `st_dev` is an `i32`.
         #[allow(clippy::unnecessary_cast)]
@@ -452,8 +451,7 @@ impl Hidden {
         let mut directory = if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
             rustix::fs::openat(file, ".", up, Mode::empty())?
         } else {
-            let real = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
-                .or_else(|_| std::fs::canonicalize(path))?;
+            let real = opened_path(file).or_else(|_| std::fs::canonicalize(path))?;
             let (Some(parent), Some(name)) = (real.parent(), real.file_name()) else {
                 return Err(std::io::Error::other("not a file"));
             };
@@ -476,6 +474,21 @@ impl Hidden {
             directory = parent;
         }
     }
+}
+
+/// Where an open file is now, as the system knows it, not by its path, which a rename can change.
+#[cfg(not(target_vendor = "apple"))]
+fn opened_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+}
+#[cfg(target_vendor = "apple")]
+fn opened_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let path = rustix::fs::getpath(file)?;
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(
+        path.into_bytes(),
+    )))
 }
 
 /// Opens a directory to look in, needing no permission to list it where the system allows.

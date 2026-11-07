@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.86.0 — A clipboard image pastes on macOS
+
+### Added
+
+- On macOS, Ctrl+V (or Alt+V) pastes a clipboard image as the path of a PNG file it is saved to, read through `osascript` as Claude Code reads it. Not yet tried on a Mac.
+
+### Fixed
+
+- On macOS, the sandbox's check that a file is not in a credential store finds an open file by the file itself, so that a rename while it is checked cannot point it elsewhere.
+
 ## 0.85.1 — The Seatbelt sandbox keeps a project under /tmp read-only
 
 ### Fixed

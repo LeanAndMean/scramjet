@@ -5,7 +5,8 @@
 //! `pbpaste` on macOS, else from the X server itself, then with `wl-paste`, `xclip` or `xsel`;
 //! never in a remote session, whose clipboard is the terminal's. When no route reads it, the first
 //! failure names the key that pastes through the terminal itself.
-//! An image is pasted as Scramjet pastes it, as the path of a file it is saved to.
+//! An image is pasted as Scramjet pastes it, as the path of a file it is saved to; on macOS as PNG
+//! through `osascript`, as Claude Code reads it.
 
 use std::{
     env,
@@ -140,10 +141,52 @@ pub(super) fn paste_image() -> Result<String, String> {
         return Err("Images cannot be pasted from the clipboard in remote sessions".to_owned());
     }
     if cfg!(target_os = "macos") {
-        return Err("Pasting images is not supported on macOS yet".to_owned());
+        let script = MAC_IMAGE.iter().flat_map(|line| ["-e", line]);
+        let arguments: Vec<&str> = script.collect();
+        return saved_by("osascript", &arguments, &env::temp_dir().to_string_lossy())?
+            .ok_or_else(|| "No image on the clipboard".to_owned());
     }
     let (bytes, extension) = image(set)?.ok_or("No image on the clipboard")?;
     save(&bytes, extension, &env::temp_dir().to_string_lossy())
+}
+
+/// The AppleScript that writes the clipboard's image as PNG, as Claude Code reads it, into the file
+/// its argument names; it says `none` when the clipboard has no image.
+const MAC_IMAGE: [&str; 11] = [
+    "on run argv",
+    "try",
+    "set png to the clipboard as «class PNGf»",
+    "on error",
+    "return \"none\"",
+    "end try",
+    "set fp to open for access (POSIX file (item 1 of argv)) with write permission",
+    "write png to fp",
+    "close access fp",
+    "return \"saved\"",
+    "end run",
+];
+
+/// The path of a new PNG file in `directory` that `program`, given `arguments` and that path,
+/// wrote the clipboard's image into, saying `saved`; `None` when it says `none`.
+fn saved_by(program: &str, arguments: &[&str], directory: &str) -> Result<Option<String>, String> {
+    let path = save(&[], "png", directory)?;
+    let said = output(program, &[arguments, &[path.as_str()]].concat(), PASTE_MAX);
+    let size = fs::metadata(&path).map_or(0, |metadata| metadata.len());
+    let said = said.map(|said| String::from_utf8_lossy(&said).trim().to_owned());
+    let saved = match said.as_deref() {
+        Some("saved") if size == 0 => Ok(None),
+        Some("saved") if size > IMAGE_MAX as u64 => Err(format!(
+            "The clipboard's image is over {} MB",
+            IMAGE_MAX >> 20
+        )),
+        Some("saved") => return Ok(Some(path)),
+        Some("none") => Ok(None),
+        _ => Err(format!(
+            "Cannot read the clipboard's image ({program} failed)"
+        )),
+    };
+    let _ = fs::remove_file(&path);
+    saved
 }
 
 /// The clipboard's image, if any, and its extension, given which variables are `set`: under WSL
@@ -491,6 +534,29 @@ mod tests {
                 .unwrap_err()
                 .starts_with("Cannot save the image to ")
         );
+    }
+
+    #[test]
+    fn a_macs_image_is_kept_only_when_the_script_saved_one() {
+        let directory =
+            env::temp_dir().join(format!("scramjet-rs-clipboard-mac-{}", process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let directory = directory.to_string_lossy().into_owned();
+        let run = |script: &str| saved_by("sh", &["-c", script, "sh"], &directory);
+        let path = run("printf '\\211PNG' > \"$1\"; echo saved")
+            .unwrap()
+            .unwrap();
+        assert!(path.ends_with(".png"), "{path}");
+        assert_eq!(fs::read(&path).unwrap(), b"\x89PNG");
+        fs::remove_file(&path).unwrap();
+        assert_eq!(run("echo none"), Ok(None));
+        assert_eq!(run("echo saved"), Ok(None));
+        assert_eq!(
+            run("printf x > \"$1\"; exit 1"),
+            Err("Cannot read the clipboard's image (sh failed)".to_owned())
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+        fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
