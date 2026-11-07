@@ -1215,7 +1215,7 @@ fn grep(
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(GREP_LIMIT, |n| n.max(1) as usize);
-    let (program, _) = download::ensure("grep")?;
+    let program = download::ensure_unless("grep", cancel)?;
     let mut command = search(root, &path, &program, hidden)?;
     command.args(["--json", "--line-number", "--color=never", "--hidden"]);
     if call.arguments["ignoreCase"] == true {
@@ -1347,7 +1347,7 @@ fn find(
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
-    let (program, _) = download::ensure("find")?;
+    let program = download::ensure_unless("find", cancel)?;
     let mut command = search(root, &path, &program, hidden)?;
     command.args([
         "--glob",

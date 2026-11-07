@@ -7,6 +7,8 @@ use crate::agent::client;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 
 const API: &str = "https://api.github.com";
@@ -131,6 +133,39 @@ pub(super) fn ensure(tool: &str) -> Result<(PathBuf, bool), String> {
     downloaded
         .map(|path| (path, true))
         .map_err(|error| format!("{missing}, and downloading it failed: {error}"))
+}
+
+/// What `ensure` gives, given up on once `cancel` is set; the download then goes on behind, for
+/// a later call.
+pub(super) fn ensure_unless(tool: &'static str, cancel: &AtomicBool) -> Result<PathBuf, String> {
+    if let Some(found) = search_program(tool) {
+        return Ok(found);
+    }
+    let failed = format!("downloading {} failed", program(tool).shown);
+    unless(cancel, failed, move || ensure(tool).map(|(path, _)| path))
+}
+
+/// `work`'s result, run on a thread of its own and waited for until `cancel` is set; `failed`
+/// if it panics.
+fn unless<T: Send + 'static>(
+    cancel: &AtomicBool,
+    failed: String,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let (send, done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = send.send(work());
+    });
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Operation aborted".into());
+        }
+        match done.recv_timeout(Duration::from_millis(50)) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Err(failed),
+        }
+    }
 }
 
 /// Downloads `program`'s latest release from `releases`, as `api` names it, into `directory`.
@@ -457,5 +492,28 @@ mod tests {
         );
         assert!(!bin.exists());
         server.join().unwrap();
+    }
+
+    #[test]
+    fn a_download_that_does_not_answer_is_given_up_on_once_cancelled() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let bin = std::env::temp_dir().join(format!(
+            "scramjet-rs-download-silent-{}",
+            std::process::id()
+        ));
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let cancelling = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            cancelling.store(true, Ordering::Relaxed);
+        });
+        let started = std::time::Instant::now();
+        let given_up = unless(&cancel, "failed".into(), move || {
+            download(&program("grep"), &base, &base, &bin)
+        });
+        assert_eq!(given_up, Err("Operation aborted".into()));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let (_accepted, _) = listener.accept().unwrap();
     }
 }

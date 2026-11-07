@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.89.1 — Escape stops a waiting download
+
+### Fixed
+
+- Escape stops a `grep` or `find` call waiting for ripgrep or `fd` to download; the download goes on behind it, for the next call.
+
 ## 0.89.0 — ripgrep and fd downloaded when missing
 
 ### Added
