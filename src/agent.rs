@@ -759,11 +759,12 @@ impl Agent {
 
     /// The MCP servers and how each is, in the settings' order.
     pub fn mcp_servers(&self) -> Vec<(McpServer, McpState)> {
-        let states = self
-            .mcp
-            .as_deref()
-            .map(mcp::Servers::states)
-            .unwrap_or_default();
+        let states = (self.mcp.as_deref()).map(|servers| {
+            // Settles which are offered directly, as the next request would, once none starts.
+            servers.section(self.info.window);
+            servers.states()
+        });
+        let states = states.unwrap_or_default();
         (states.into_iter())
             .map(|(server, state)| (server.clone(), state))
             .collect()
@@ -1088,7 +1089,8 @@ impl Agent {
             }
         }
         let model = &self.config.model;
-        let servers = self.mcp.as_deref().map(mcp::Servers::section);
+        let window = self.info.window;
+        let servers = (self.mcp.as_deref()).map(|servers| servers.section(window));
         self.instructions.clone()
             + &servers.unwrap_or_default()
             + &instructions::identity(model, &contributors, &self.identities)
@@ -1100,7 +1102,14 @@ impl Agent {
 
     /// The definitions of the tools the model's requests offer.
     pub fn tool_definitions(&self) -> Value {
-        tools::definitions(&self.offered())
+        let offered = self.offered();
+        let mut definitions = tools::definitions(&offered);
+        if let (Some(servers), Value::Array(listed)) = (&self.mcp, &mut definitions)
+            && offered.contains(&mcp::CALL)
+        {
+            listed.extend(servers.direct(self.info.window));
+        }
+        definitions
     }
 
     /// The tools the model has, coding tools first.

@@ -1,7 +1,8 @@
 //! MCP servers' tools. The servers the settings list start in the background as the agent does;
 //! the model finds their tools with `mcp_search`, which shows how to call each, and runs one with
-//! `mcp_call`. So the tools it is offered, and the cached start of its requests, stay the same
-//! however many servers and tools there are.
+//! `mcp_call`. The tools of servers small enough are also offered directly, as
+//! `mcp__SERVER__TOOL`. Which are is settled once no server is starting, so the tools offered,
+//! and the cached start of the requests, stay the same while the servers run.
 use super::image;
 use super::sandbox::{self, Hidden, Sandbox};
 
@@ -39,6 +40,14 @@ mod http;
 pub const SEARCH: &str = "mcp_search";
 pub const CALL: &str = "mcp_call";
 pub(super) const TOOLS: [&str; 2] = [SEARCH, CALL];
+/// What starts the name of a tool offered directly, `mcp__SERVER__TOOL`, as Claude Code names
+/// them.
+const DIRECT: &str = "mcp__";
+/// The tools offered directly take at most this share of the context window (1/50: 2%; MCP's
+/// client best practices suggest 1–5%), in tokens counted as 4 bytes of their definitions.
+const DIRECT_SHARE: u64 = 50;
+/// The longest tool name OpenAI's API takes.
+const NAME_CHARS: usize = 64;
 
 pub(super) const SEARCH_SNIPPET: &str =
     "Find tools of the MCP servers listed below, with how to call each";
@@ -164,10 +173,12 @@ impl Server {
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
     Starting,
-    /// With its tools' names and what it says it is.
+    /// With its tools' names, what it says it is, and whether its tools are offered directly,
+    /// once that is settled.
     Ready {
         tools: Vec<String>,
         about: Option<String>,
+        direct: Option<bool>,
     },
     /// Why it could not start, or that it ended, with the end of its standard error.
     Failed(String),
@@ -179,10 +190,18 @@ pub(super) struct Servers {
     servers: Vec<Arc<Running>>,
     /// How long each has to start.
     within: Duration,
-    /// The instructions' list of the servers, made once none is starting.
-    section: Mutex<Option<String>>,
+    /// The instructions' list of the servers and the tools offered directly, made once none is
+    /// starting.
+    listing: Mutex<Option<Arc<Listing>>>,
     /// The sandbox the servers that run as programs start in.
     confined: Option<Arc<Confined>>,
+}
+
+struct Listing {
+    section: String,
+    /// The definitions of the tools offered directly, and their servers' names.
+    direct: Vec<Value>,
+    servers: Vec<String>,
 }
 
 struct Running {
@@ -244,7 +263,7 @@ impl Servers {
             runtime: None,
             servers: Vec::new(),
             within,
-            section: Mutex::new(None),
+            listing: Mutex::new(None),
             confined,
         };
         match runtime {
@@ -290,7 +309,7 @@ impl Servers {
             .collect();
         self.servers = servers;
         if !same {
-            *lock(&self.section) = None;
+            *lock(&self.listing) = None;
         }
     }
 
@@ -382,6 +401,12 @@ impl Servers {
     }
 
     pub fn states(&self) -> Vec<(&Server, State)> {
+        let listing = lock(&self.listing).clone();
+        self.states_of(listing.as_ref().map(|listing| &listing.servers[..]))
+    }
+
+    /// Their states, those named in `direct` offered directly.
+    fn states_of(&self, direct: Option<&[String]>) -> Vec<(&Server, State)> {
         let state = |server: &Running| match &*lock(&server.state) {
             Status::Starting => State::Starting,
             Status::Ready(ready) => State::Ready {
@@ -389,6 +414,7 @@ impl Servers {
                     .map(|tool| tool["name"].as_str().unwrap_or("").to_owned())
                     .collect(),
                 about: ready.about.clone(),
+                direct: direct.map(|direct| direct.contains(&server.config.name)),
             },
             Status::Failed(why) => State::Failed(server.failure(why)),
         };
@@ -399,36 +425,80 @@ impl Servers {
 
     /// The instructions' list of the servers, one line each, as it was once none was starting,
     /// so that it stays the same while they run; empty while one is starting.
-    pub fn section(&self) -> String {
-        let mut section = lock(&self.section);
-        if let Some(section) = &*section {
-            return section.clone();
+    pub fn section(&self, window: Option<u64>) -> String {
+        (self.listing(window)).map_or_else(String::new, |listing| listing.section.clone())
+    }
+
+    /// The definitions of the tools offered directly, settled with `section`: those of the
+    /// servers, in order, that fit in what is left of a fiftieth of a `window` known.
+    pub fn direct(&self, window: Option<u64>) -> Vec<Value> {
+        (self.listing(window)).map_or_else(Vec::new, |listing| listing.direct.clone())
+    }
+
+    fn listing(&self, window: Option<u64>) -> Option<Arc<Listing>> {
+        let mut listing = lock(&self.listing);
+        if let Some(listing) = &*listing {
+            return Some(listing.clone());
         }
         if !self.starting().is_empty() {
-            return String::new();
+            return None;
         }
-        let lines: Vec<String> = (self.states().into_iter())
+        let mut left = window.unwrap_or(0) / DIRECT_SHARE;
+        let (mut direct, mut servers, mut others) = (Vec::new(), Vec::new(), 0);
+        let lines: Vec<String> = (self.states_of(None).into_iter())
             .map(|(config, state)| match state {
-                State::Ready { tools, about } => {
+                State::Ready { tools, about, .. } => {
                     let count = match tools.len() {
                         1 => "1 tool".to_owned(),
                         count => format!("{count} tools"),
+                    };
+                    let server = self.named(&config.name).ok().and_then(|server| {
+                        let definitions = direct_definitions(server)?;
+                        let tokens = serde_json::to_string(&definitions).ok()?.len() as u64 / 4;
+                        left = left.checked_sub(tokens)?;
+                        Some(definitions)
+                    });
+                    let count = match server {
+                        Some(definitions) => {
+                            direct.extend(definitions);
+                            servers.push(config.name.clone());
+                            format!("{count}, in your tool list as {DIRECT}{}__*", config.name)
+                        }
+                        None => {
+                            others += 1;
+                            count
+                        }
                     };
                     match about {
                         Some(about) => format!("- {}: {about} ({count})", config.name),
                         None => format!("- {} ({count})", config.name),
                     }
                 }
-                _ => format!("- {}: not available", config.name),
+                _ => {
+                    others += 1;
+                    format!("- {}: not available", config.name)
+                }
             })
             .collect();
-        let text = format!(
-            "\n\n# MCP servers\n\nThese MCP servers' tools are not in your tool list: find them \
-with {SEARCH}, which shows how to call each, then run one with {CALL}.\n{}",
-            lines.join("\n")
-        );
-        *section = Some(text.clone());
-        text
+        let text = match (direct.is_empty(), others == 0) {
+            (true, _) => format!(
+                "These MCP servers' tools are not in your tool list: find them with {SEARCH}, \
+which shows how to call each, then run one with {CALL}."
+            ),
+            (false, true) => "These MCP servers' tools are in your tool list.".to_owned(),
+            (false, false) => format!(
+                "The tools of the MCP servers marked as in your tool list are there; find the \
+others' with {SEARCH}, which shows how to call each, then run one with {CALL}."
+            ),
+        };
+        let section = format!("\n\n# MCP servers\n\n{text}\n{}", lines.join("\n"));
+        let made = Arc::new(Listing {
+            section,
+            direct,
+            servers,
+        });
+        *listing = Some(made.clone());
+        Some(made)
     }
 
     /// `mcp_search`: the tools whose names and descriptions best match the query's words, each
@@ -837,6 +907,46 @@ fn cut(text: &str, chars: usize) -> String {
         Some((end, _)) => format!("{}…", &text[..end]),
         None => text.to_owned(),
     }
+}
+
+/// The server and tool a direct tool's name names, if it is one.
+pub(super) fn direct_name(name: &str) -> Option<(&str, &str)> {
+    let (server, tool) = name.strip_prefix(DIRECT)?.split_once("__")?;
+    (!server.is_empty() && !tool.is_empty()).then_some((server, tool))
+}
+
+/// The definitions of the server's tools offered directly, if each can be: its name and theirs
+/// fit in a tool's name that `direct_name` reads back, and each takes an object.
+fn direct_definitions(server: &Running) -> Option<Vec<Value>> {
+    let name = server.config.name.as_str();
+    let word = |text: &str| {
+        !text.is_empty()
+            && (text.chars()).all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if !word(name) || name.contains("__") || name.starts_with('_') || name.ends_with('_') {
+        return None;
+    }
+    let ready = server.ready().ok()?;
+    let tools = lock(&ready.tools);
+    if tools.is_empty() {
+        return None;
+    }
+    (tools.iter())
+        .map(|tool| {
+            let tool_name = tool["name"].as_str().filter(|tool| word(tool))?;
+            let full = format!("{DIRECT}{name}__{tool_name}");
+            let schema = tool
+                .get("inputSchema")
+                .filter(|schema| schema["type"] == "object")?;
+            let description = (tool["description"].as_str())
+                .or(tool["title"].as_str())
+                .unwrap_or("");
+            (full.len() <= NAME_CHARS).then(|| {
+                json!({"type":"function","name":full,"strict":false,
+                    "description":description.trim(),"parameters":schema})
+            })
+        })
+        .collect()
 }
 
 /// The first line of a tool's description, cut short.

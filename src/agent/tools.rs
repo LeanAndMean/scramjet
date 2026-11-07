@@ -177,6 +177,13 @@ impl<'a> Call<'a> {
         let name = item["name"].as_str().unwrap_or_default();
         let arguments = serde_json::from_str(item["arguments"].as_str().unwrap_or("{}"))
             .map_err(|e| format!("invalid tool arguments: {e}"))?;
+        // An MCP server's tool offered directly runs, shows and asks as its `mcp_call`.
+        if let Some((server, tool)) = super::mcp::direct_name(name) {
+            return Ok(Self {
+                name: super::mcp::CALL,
+                arguments: json!({"server": server, "tool": tool, "arguments": arguments}),
+            });
+        }
         Ok(Self { name, arguments })
     }
     fn str(&self, field: &str) -> Result<&str, String> {

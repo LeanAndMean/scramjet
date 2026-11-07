@@ -51,12 +51,12 @@ fn a_servers_tools_are_listed_found_by_their_words_and_called() {
     let scratch = scratch("tools");
     let servers = started(&[test_server("test", &[])], &scratch.0);
     assert_eq!(
-        servers.section(),
+        servers.section(None),
         "\n\n# MCP servers\n\nThese MCP servers' tools are not in your tool list: find them \
 with mcp_search, which shows how to call each, then run one with mcp_call.\n- test: Tools for \
 scramjet-rs's tests (7 tools)"
     );
-    let [(config, State::Ready { tools, about })] = &servers.states()[..] else {
+    let [(config, State::Ready { tools, about, .. })] = &servers.states()[..] else {
         panic!("{:?}", servers.states());
     };
     assert_eq!(config.name, "test");
@@ -350,7 +350,7 @@ fn servers_that_cannot_start_say_why_once_and_the_others_run() {
         ]
     );
     assert!(servers.unreported_failures().is_empty());
-    let section = servers.section();
+    let section = servers.section(None);
     assert!(section.ends_with("\n- exits: not available\n- missing: not available\n- test: Tools for scramjet-rs's tests (7 tools)"), "{section}");
     let found = servers
         .search(&json!({"query": "echo"}), &AtomicBool::new(false))
@@ -498,6 +498,85 @@ fn the_model_finds_a_servers_tool_and_calls_it_through_the_pair_of_tools() {
 }
 
 #[test]
+fn a_small_servers_tools_are_offered_directly_and_called_as_mcp_call() {
+    let (endpoint, server) = serve(vec![
+        tool_call("call_1", "mcp__test__echo", json!({"text": "hi"})),
+        stream(&fixture::text_events("done", fixture::known_usage())),
+    ]);
+    let (mut agent, _scratch) = agent(endpoint, "mcp-direct");
+    agent.info.window = Some(200_000);
+    agent.config.mcp_servers = vec![
+        test_server("test", &[]),
+        test_server("big", &[("MCP_TEST_TOOLS", "300".to_owned())]),
+        test_server("dot.ted", &[]),
+    ];
+    agent.start_mcp();
+    let mut ui = Recorder::default();
+    agent
+        .turn("say hi", &mut ui, &AtomicBool::new(false))
+        .unwrap();
+    let bodies = server.join().unwrap();
+    let names: Vec<&str> = (bodies[0]["tools"].as_array().unwrap().iter())
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    let direct: Vec<&str> = (names.iter().copied())
+        .filter(|name| name.starts_with("mcp__"))
+        .collect();
+    assert_eq!(
+        direct,
+        ["echo", "add", "forecast", "fail", "slow", "picture", "grow"]
+            .map(|tool| format!("mcp__test__{tool}")),
+        "{names:?}"
+    );
+    assert!(
+        names.contains(&SEARCH) && names.contains(&CALL),
+        "{names:?}"
+    );
+    let echo = &bodies[0]["tools"].as_array().unwrap()[names
+        .iter()
+        .position(|name| *name == "mcp__test__echo")
+        .unwrap()];
+    assert_eq!(echo["description"], "Repeat the text it is given.");
+    assert_eq!(echo["parameters"]["type"], "object");
+    assert_eq!(bodies[1]["tools"], bodies[0]["tools"]);
+    let instructions = bodies[0]["instructions"].as_str().unwrap();
+    for line in [
+        "The tools of the MCP servers marked as in your tool list are there; find the others' with mcp_search,",
+        "\n- test: Tools for scramjet-rs's tests (7 tools, in your tool list as mcp__test__*)\n",
+        "\n- big: Tools for scramjet-rs's tests (307 tools)\n",
+        "\n- dot.ted: Tools for scramjet-rs's tests (7 tools)\n",
+    ] {
+        assert!(instructions.contains(line), "{line}\n{instructions}");
+    }
+    assert_eq!(bodies[1]["instructions"], bodies[0]["instructions"]);
+    assert_eq!(
+        outputs(&bodies[1])[0],
+        ("call_1".to_owned(), "echo: hi".to_owned())
+    );
+    assert!(
+        ui.shown
+            .contains(&"call mcp_call test/echo {\"text\":\"hi\"}".to_owned()),
+        "{:?}",
+        ui.shown
+    );
+}
+
+#[test]
+fn direct_names_read_back_their_server_and_tool() {
+    assert_eq!(direct_name("mcp__test__echo"), Some(("test", "echo")));
+    assert_eq!(direct_name("mcp__a_b__get__it"), Some(("a_b", "get__it")));
+    for name in [
+        "mcp_call",
+        "mcp__test",
+        "mcp____echo",
+        "mcp__test__",
+        "read",
+    ] {
+        assert_eq!(direct_name(name), None, "{name}");
+    }
+}
+
+#[test]
 fn without_servers_the_model_has_no_mcp_tools_and_none_start() {
     let (endpoint, _server) = serve(Vec::new());
     let (mut agent, _scratch) = agent(endpoint, "no-mcp");
@@ -609,7 +688,7 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
     reload(&mut agent, vec![a]);
     until(|| !alive(second_b[1]));
     assert!(!alive(second_b[1]));
-    let section = agent.mcp.as_ref().unwrap().section();
+    let section = agent.mcp.as_ref().unwrap().section(None);
     assert!(
         section.ends_with("mcp_call.\n- a: Tools for scramjet-rs's tests (7 tools)"),
         "{section}"
@@ -733,7 +812,7 @@ fn an_http_servers_tools_are_called_in_its_session_which_ends_with_the_servers()
         ("URL:", format!("http://127.0.0.1:{}/mcp?…", remote.1))
     );
     let servers = started(&[server], &scratch.0);
-    let [(_, State::Ready { tools, about })] = &servers.states()[..] else {
+    let [(_, State::Ready { tools, about, .. })] = &servers.states()[..] else {
         panic!("{:?}", servers.states());
     };
     assert_eq!(tools, &["echo", "fail", "slow"]);

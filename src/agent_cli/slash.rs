@@ -318,12 +318,24 @@ impl Interactive {
             let (label, address) = server.address();
             info += &row(label, &address);
             match &state {
-                McpState::Ready { tools, about } => {
+                McpState::Ready {
+                    tools,
+                    about,
+                    direct,
+                } => {
                     if let Some(about) = about {
                         info += &row("About:", about);
                     }
                     if !tools.is_empty() {
                         info += &row("Tools:", &tools.join(", "));
+                        let offered = match direct {
+                            Some(true) => {
+                                format!("in the tool list, as mcp__{}__TOOL", server.name)
+                            }
+                            Some(false) => "through mcp_search and mcp_call".to_owned(),
+                            None => "decided once every server has started".to_owned(),
+                        };
+                        info += &row("Offered:", &offered);
                     }
                 }
                 McpState::Failed(why) => info += &row("Error:", &why.replace('\n', "\n    ")),

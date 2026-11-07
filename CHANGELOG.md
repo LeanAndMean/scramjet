@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.59.0 — Small MCP servers' tools in the tool list
+
+### Added
+
+- The tools of MCP servers small enough (together within 2% of the model's context window) are in the model's tool list, named `mcp__SERVER__TOOL` as in Claude Code, so a call takes one request where a search and a call took two. Others are still found with `mcp_search` and run with `mcp_call`. A direct call shows and asks (under `--ask`) as its `mcp_call` does. `/mcp` says how each server's tools are offered.
+
 ## 0.58.1 — Logins kept on a full disk
 
 ### Fixed

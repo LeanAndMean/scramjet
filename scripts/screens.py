@@ -22,6 +22,7 @@ A scenario (scripts/screens/*.json) holds:
     "files":    the project's files, committed to a Git repository first;
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
     "model":    the scripted server's model (default gpt-6-luna);
+    "window":   its context window, unknown unless given;
     "providers": more models.json providers, listed after the scripted server's ("screens");
     "models":   more of models.json's fields, such as "logins", `{root}` in a text being the
                 repository; programs scramjet-rs runs find the scripted server's base URL in
@@ -370,6 +371,8 @@ def main():
         env['SCREENS_BASE_URL'] = base
         provider = {'baseUrl': base, 'api': 'openai-responses',
                     'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}
+        if 'window' in scenario:
+            provider['models'][0]['contextWindow'] = scenario['window']
         document = dict(rooted(scenario.get('models', {})),
                         providers=dict({'screens': provider}, **scenario.get('providers', {})))
         with open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w') as file:

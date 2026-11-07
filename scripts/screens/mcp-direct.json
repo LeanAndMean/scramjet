@@ -1,0 +1,27 @@
+{
+  "size": "100x50",
+  "window": 200000,
+  "settings": {
+    "theme": "scramjet-dark",
+    "mcpServers": {
+      "time": {"command": "uvx", "args": ["mcp-server-time", "--local-timezone", "UTC"]},
+      "everything": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]}
+    }
+  },
+  "files": {
+    "README.md": "# Clock\n"
+  },
+  "prompt": "What time is it in Tokyo?",
+  "replies": [
+    [{"call": "mcp__time__get_current_time", "arguments": {"timezone": "Asia/Tokyo"}}],
+    [{"text": "It is evening in Tokyo."}]
+  ],
+  "steps": [
+    {"until": "It is evening in Tokyo."},
+    {"shot": "turn"},
+    {"type": "/mcp\r"},
+    {"until": "MCP Servers"},
+    {"sleep": 0.5},
+    {"shot": "servers"}
+  ]
+}
