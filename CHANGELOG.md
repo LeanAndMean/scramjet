@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.61.0 — MCP servers reconnected
+
+### Added
+
+- `/mcp reconnect SERVER` starts an MCP server again, and `/mcp reconnect` (or `all`) every one, as Claude Code's `/mcp reconnect` does, then says whether each started and with how many tools. A server that ended or failed to start no longer needs `/reload`, and a running one can be restarted. During a response it is refused, as `/reload` is.
+
 ## 0.60.0 — A full disk's held session lines kept at exit
 
 ### Changed

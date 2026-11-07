@@ -44,7 +44,10 @@ const SLASH_COMMANDS: [(&str, &str); 22] = [
         "autopilot",
         "Toggle command auto-continuation: /autopilot on|off|status",
     ),
-    ("mcp", "Show the MCP servers and their tools"),
+    (
+        "mcp",
+        "Show the MCP servers and their tools: /mcp reconnect [SERVER|all]",
+    ),
     ("exit", "Quit scramjet-rs"),
 ];
 
@@ -194,11 +197,14 @@ impl Completion {
             description: String::new(),
         };
         let items = match name {
-            "autopilot" => ["on", "off", "status"]
-                .into_iter()
-                .filter(|word| word.starts_with(typed))
-                .map(word)
-                .collect(),
+            "autopilot" | "mcp" => (match name {
+                "autopilot" => &["on", "off", "status"][..],
+                _ => &["reconnect"][..],
+            })
+            .iter()
+            .filter(|word| word.starts_with(typed))
+            .map(|&text| word(text))
+            .collect(),
             "model" => {
                 let parts = |reference: &'_ str| {
                     let (provider, id) = reference.split_once('/').unwrap_or(("", reference));
@@ -617,6 +623,7 @@ mod tests {
         assert_eq!(words("/autopilot st").unwrap(), "status");
         assert!(words("/autopilot O").is_none());
         assert!(words("/autopilot on x").is_none());
+        assert_eq!(words("/mcp r").unwrap(), "reconnect");
         // Nothing else completes: other commands, a later line, no models.
         assert!(Completion::argument("/name ", &models).is_none());
         assert!(Completion::argument("/model x\nhai", &models).is_none());

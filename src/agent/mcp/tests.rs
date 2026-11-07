@@ -696,6 +696,63 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
 }
 
 #[test]
+fn reconnect_starts_one_server_again_or_all_and_says_how_each_is() {
+    let (endpoint, _server) = serve(Vec::new());
+    let (mut agent, scratch) = agent(endpoint, "mcp-reconnect");
+    let (log_a, log_b) = (scratch.0.join("a.log"), scratch.0.join("b.log"));
+    let a = test_server("a", &[("MCP_TEST_LOG", log_a.display().to_string())]);
+    let b = test_server("b", &[("MCP_TEST_LOG", log_b.display().to_string())]);
+    agent.config.mcp_servers = vec![a, b];
+    agent.start_mcp();
+    agent.mcp.as_ref().unwrap().settle(&AtomicBool::new(false));
+    let first_b = pids(&log_b);
+    let reconnect = |agent: &mut Agent, name| {
+        let mut ui = Recorder::default();
+        let states = agent.reconnect_mcp(name, &mut ui, &AtomicBool::new(false));
+        (states, ui.shown)
+    };
+
+    // A server that is running is started again, the other kept.
+    let (states, notices) = reconnect(&mut agent, Some("a"));
+    let states = states.unwrap();
+    assert_eq!(notices, ["notice Reconnecting to MCP servers: a"]);
+    let [(server, State::Ready { tools, .. })] = &states[..] else {
+        panic!("{states:?}");
+    };
+    assert_eq!((server.name.as_str(), tools.len()), ("a", 7));
+    let second_a = pids(&log_a);
+    assert_eq!(second_a.len(), 2);
+    until(|| !alive(second_a[0]));
+    assert!(!alive(second_a[0]));
+    assert_eq!(pids(&log_b), first_b);
+
+    // One that ended is started again with all, and its failure is not said again.
+    std::process::Command::new("kill")
+        .args(["-9", &first_b[0].to_string()])
+        .status()
+        .unwrap();
+    until(|| matches!(agent.mcp_servers()[1].1, State::Failed(_)));
+    let (states, _) = reconnect(&mut agent, None);
+    let names: Vec<_> = (states.unwrap().into_iter())
+        .map(|(server, state)| (server.name, matches!(state, State::Ready { .. })))
+        .collect();
+    assert_eq!(names, [("a".to_owned(), true), ("b".to_owned(), true)]);
+    assert_eq!((pids(&log_a).len(), pids(&log_b).len()), (3, 2));
+    assert!(agent.mcp.as_ref().unwrap().unreported_failures().is_empty());
+
+    let (unknown, _) = reconnect(&mut agent, Some("c"));
+    assert_eq!(
+        unknown.unwrap_err(),
+        "no MCP server is named c; the servers: a, b"
+    );
+    // A call still running holds the servers.
+    let held = agent.mcp.clone();
+    let (busy, _) = reconnect(&mut agent, None);
+    assert!(busy.unwrap_err().starts_with("a tool call still uses"));
+    drop(held);
+}
+
+#[test]
 fn a_search_returning_more_than_a_tool_output_holds_is_cut() {
     let scratch = scratch("many");
     let servers = started(

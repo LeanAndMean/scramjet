@@ -313,6 +313,44 @@ impl Servers {
         }
     }
 
+    /// `/mcp reconnect`: kills the server named `name`, or every server with `None`, and starts
+    /// it again as its entry says. Returns the names started again.
+    pub fn reconnect(&mut self, name: Option<&str>, root: &Path) -> Result<Vec<String>, String> {
+        if let Some(name) = name {
+            self.named(name)?;
+        }
+        if self.runtime.is_none() {
+            let configs: Vec<Server> = (self.servers.iter())
+                .map(|server| server.config.clone())
+                .collect();
+            *self = Self::start_within(&configs, root, self.within, self.confined.clone());
+            return Ok(configs.into_iter().map(|config| config.name).collect());
+        }
+        let chosen = |server: &Running| name.is_none_or(|name| server.config.name == name);
+        let old: Vec<Arc<Running>> = (self.servers.iter())
+            .filter(|server| chosen(server))
+            .cloned()
+            .collect();
+        self.end(&old);
+        let mut names = Vec::new();
+        for index in 0..self.servers.len() {
+            if chosen(&self.servers[index]) {
+                let config = self.servers[index].config.clone();
+                names.push(config.name.clone());
+                self.servers[index] = self.launch(&config, root);
+            }
+        }
+        *lock(&self.listing) = None;
+        Ok(names)
+    }
+
+    /// Takes `name`'s failure as said, so that the next request does not say it again.
+    pub fn reported(&self, name: &str) {
+        if let Ok(server) = self.named(name) {
+            server.reported.store(true, Ordering::Relaxed);
+        }
+    }
+
     /// Starts `config`'s server in the background.
     fn launch(&self, config: &Server, root: &Path) -> Arc<Running> {
         let server = Running::new(config);

@@ -770,6 +770,40 @@ impl Agent {
             .collect()
     }
 
+    /// `/mcp reconnect`: starts the server named `name` again, or every one with `None`, and waits
+    /// until they started or `cancel` is set. Returns each with how it is then.
+    pub fn reconnect_mcp(
+        &mut self,
+        name: Option<&str>,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<(McpServer, McpState)>, String> {
+        let root = self.config.root.clone();
+        let Some(servers) = self.mcp.as_mut() else {
+            return Err("no MCP servers are running".into());
+        };
+        let Some(servers) = Arc::get_mut(servers) else {
+            return Err("a tool call still uses the MCP servers; try again once it ended".into());
+        };
+        let names = servers.reconnect(name, &root)?;
+        ui.notice(&format!(
+            "Reconnecting to MCP servers: {}",
+            names.join(", ")
+        ));
+        servers.settle(cancel);
+        let states = (self.mcp_servers().into_iter())
+            .filter(|(server, _)| names.contains(&server.name))
+            .collect::<Vec<_>>();
+        if let Some(servers) = &self.mcp {
+            for (server, state) in &states {
+                if matches!(state, McpState::Failed(_)) {
+                    servers.reported(&server.name);
+                }
+            }
+        }
+        Ok(states)
+    }
+
     /// Waits for the MCP servers still starting, saying so, and says which could not start, each
     /// once, before a request: the instructions list them as they are then.
     fn settle_mcp(&self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Result<(), AgentError> {

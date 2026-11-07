@@ -38,7 +38,8 @@ pub(super) enum Builtin<'a> {
     Logout,
     Compact(&'a str),
     Autopilot(&'a str),
-    Mcp,
+    /// With its argument: `reconnect`, with a server's name or `all`.
+    Mcp(&'a str),
     Reload,
     Exit,
 }
@@ -71,7 +72,7 @@ impl<'a> Builtin<'a> {
             "logout" if argument.is_empty() => Self::Logout,
             "compact" => Self::Compact(argument),
             "autopilot" => Self::Autopilot(argument),
-            "mcp" if argument.is_empty() => Self::Mcp,
+            "mcp" => Self::Mcp(argument),
             "reload" if argument.is_empty() => Self::Reload,
             "exit" if argument.is_empty() => Self::Exit,
             _ => return None,
@@ -97,7 +98,7 @@ impl<'a> Builtin<'a> {
                 | Self::Login
                 | Self::Logout
                 | Self::Autopilot(_)
-                | Self::Mcp
+                | Self::Mcp(_)
                 | Self::Reload
         )
     }
@@ -136,7 +137,7 @@ impl Interactive {
             Some(Builtin::Logout) => self.logout(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
-            Some(Builtin::Mcp) => self.mcp(),
+            Some(Builtin::Mcp(argument)) => self.mcp(argument),
             Some(Builtin::Reload) => self.reload(),
             Some(Builtin::Exit) | None => return false,
         }
@@ -279,8 +280,16 @@ impl Interactive {
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
-    /// `/mcp`, as Codex's: the MCP servers, how each is, and its tools.
-    fn mcp(&mut self) {
+    /// `/mcp`, as Codex's: the MCP servers, how each is, and its tools; `/mcp reconnect`, as
+    /// Claude Code's, starts one again, or all.
+    fn mcp(&mut self, argument: &str) {
+        match reconnecting(argument) {
+            Some(Ok(name)) => return self.reconnect(name),
+            Some(Err(())) | None if !argument.is_empty() => {
+                return self.say("Usage: /mcp [reconnect [SERVER|all]]");
+            }
+            _ => {}
+        }
         let servers = self.agent.mcp_servers();
         if servers.is_empty() {
             let settings = (self.settings.path()).map_or("the settings".into(), |path| {
@@ -343,6 +352,33 @@ impl Interactive {
             }
         }
         self.say(info.trim_end());
+    }
+
+    fn reconnect(&mut self, name: Option<&str>) {
+        let result = self.during_turn(|agent, ui, cancel| agent.reconnect_mcp(name, ui, cancel));
+        let states = match result {
+            Ok(states) => states,
+            Err(error) => return self.say(&format!("Error: {error}")),
+        };
+        for (server, state) in states {
+            let name = visible(&server.name);
+            match state {
+                McpState::Ready { tools, .. } => {
+                    let tools = match tools.len() {
+                        1 => "1 tool".to_owned(),
+                        count => format!("{count} tools"),
+                    };
+                    self.say_styled(style::MUTED, &format!("Reconnected to {name} ({tools})"));
+                }
+                McpState::Starting => {
+                    self.say_styled(style::MUTED, &format!("{name} is still starting"));
+                }
+                McpState::Failed(why) => {
+                    let why = visible(&why).replace('\n', "\n  ");
+                    self.say(&format!("Error: could not reconnect to {name}: {why}"));
+                }
+            }
+        }
     }
 
     /// `/reload`, as Scramjet's: the settings, the themes, the command sets with their commands and
@@ -413,6 +449,20 @@ impl Interactive {
         }
         true
     }
+}
+
+/// The server `/mcp ARGUMENT` reconnects to (`None` for all) if it is `reconnect`, or `Err` for
+/// `reconnect` with more than a name.
+pub(super) fn reconnecting(argument: &str) -> Option<Result<Option<&str>, ()>> {
+    let rest = argument.strip_prefix("reconnect")?;
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    Some(match rest.split_whitespace().collect::<Vec<_>>()[..] {
+        [] | ["all"] => Ok(None),
+        [name] => Ok(Some(name)),
+        _ => Err(()),
+    })
 }
 
 /// `/session`: the session's name, file and id, its messages, token usage and cost over the
@@ -599,5 +649,16 @@ mod tests {
     fn token_counts_are_grouped_by_thousands() {
         let counts = [0, 999, 1_000, 15_224, 1_234_567].map(grouped);
         assert_eq!(counts, ["0", "999", "1,000", "15,224", "1,234,567"]);
+    }
+
+    #[test]
+    fn mcp_reconnect_takes_a_server_or_all() {
+        assert_eq!(Builtin::parse("/mcp"), Some(Builtin::Mcp("")));
+        assert_eq!(reconnecting(""), None);
+        assert_eq!(reconnecting("reconnect"), Some(Ok(None)));
+        assert_eq!(reconnecting("reconnect all"), Some(Ok(None)));
+        assert_eq!(reconnecting("reconnect  time "), Some(Ok(Some("time"))));
+        assert_eq!(reconnecting("reconnect a b"), Some(Err(())));
+        assert_eq!(reconnecting("reconnected"), None);
     }
 }

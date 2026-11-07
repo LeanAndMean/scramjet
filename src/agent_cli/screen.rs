@@ -18,7 +18,7 @@ use super::record::{self, Event};
 use super::select::{Act, Picker, Routed, Spot, Toggle};
 use super::selection::Line;
 use super::settings::MarkdownReads;
-use super::slash::Builtin;
+use super::slash::{self, Builtin};
 use super::terminal::next_spin;
 use super::theme::Watched;
 use super::theme_editor::{self, ThemeEditor};
@@ -70,6 +70,8 @@ const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
+const RECONNECT_BUSY: &str =
+    "Wait for the current response to finish before reconnecting MCP servers.";
 const MODEL_NEXT: &str = "The model changes before the next request";
 const NOTHING_QUEUED: &str = "No queued messages to restore";
 
@@ -868,6 +870,10 @@ impl App {
             Some(Builtin::Reload) => {
                 self.draft = self.editor.draft(String::new());
                 return self.draft.set_note(Note::Info(RELOAD_BUSY.to_owned()));
+            }
+            Some(Builtin::Mcp(argument)) if slash::reconnecting(argument).is_some() => {
+                self.draft = self.editor.draft(String::new());
+                return self.draft.set_note(Note::Info(RECONNECT_BUSY.to_owned()));
             }
             Some(builtin) if builtin.interrupts() => self.cancel.store(true, Ordering::Relaxed),
             _ => {}
