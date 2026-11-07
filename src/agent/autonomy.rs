@@ -75,10 +75,7 @@ pub(super) fn project_path(root: &Path) -> PathBuf {
 
 /// Scramjet's global file: `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`, else under `~/.config`.
 pub(super) fn global_path() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|home| home.join(".config")))?;
+    let config = crate::os::base_directory("XDG_CONFIG_HOME", ".config")?;
     Some(config.join("scramjet/autonomy.yaml"))
 }
 

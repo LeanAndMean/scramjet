@@ -333,11 +333,8 @@ pub(super) struct Settings {
 
 impl Settings {
     pub(super) fn load() -> Self {
-        let path = std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|config| !config.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-            .map(|config| config.join("scramjet-rs/settings.json"));
+        let path = scramjet_rs::os::base_directory("XDG_CONFIG_HOME", ".config")
+            .map(|config| config.join("scramjet-rs").join("settings.json"));
         let mut settings = Self::read_with(path, packages::clones());
         settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
         settings
@@ -655,9 +652,8 @@ impl Settings {
     /// is relative to the settings file's directory.
     fn resolve(&self, entry: &str) -> PathBuf {
         let entry = entry.trim();
-        let home = std::env::home_dir().filter(|_| entry == "~" || entry.starts_with("~/"));
-        if let Some(home) = home {
-            return home.join(entry[1..].trim_start_matches('/'));
+        if let Some((rest, home)) = scramjet_rs::os::after_tilde(entry).zip(std::env::home_dir()) {
+            return home.join(rest);
         }
         let directory = self.path.as_deref().and_then(Path::parent);
         directory.unwrap_or(Path::new("/")).join(entry)

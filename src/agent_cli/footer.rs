@@ -70,12 +70,7 @@ pub(super) struct Footer {
 
 impl Footer {
     pub(super) fn new(root: &Path) -> Self {
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let directory = match home.and_then(|home| root.strip_prefix(home).ok()) {
-            Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
-            Some(rest) => format!("~/{}", rest.display()),
-            None => root.display().to_string(),
-        };
+        let directory = scramjet_rs::os::tilde(root);
         let head = head(root);
         Self {
             directory,

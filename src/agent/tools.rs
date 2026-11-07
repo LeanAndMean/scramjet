@@ -481,7 +481,9 @@ pub fn shortened(path: &str) -> String {
         .and_then(|home| home.to_str())
         .map(|home| path.strip_prefix(home))
     {
-        Some(Some(rest)) if rest.is_empty() || rest.starts_with('/') => format!("~{rest}"),
+        Some(Some(rest)) if rest.is_empty() || rest.starts_with(std::path::is_separator) => {
+            format!("~{rest}")
+        }
         _ => path.to_owned(),
     }
 }
@@ -489,11 +491,9 @@ pub fn shortened(path: &str) -> String {
 /// Resolves `path` against the project root without following symlinks. A leading `~` is the
 /// home directory, as in Scramjet.
 pub(super) fn resolve(root: &Path, path: &str) -> PathBuf {
-    let joined = match (path.strip_prefix('~'), std::env::home_dir()) {
-        (Some(rest), Some(home)) if rest.is_empty() || rest.starts_with('/') => {
-            home.join(rest.trim_start_matches('/'))
-        }
-        _ => root.join(path),
+    let joined = match crate::os::after_tilde(path).zip(std::env::home_dir()) {
+        Some((rest, home)) => home.join(rest),
+        None => root.join(path),
     };
     let mut resolved = PathBuf::new();
     for component in joined.components() {

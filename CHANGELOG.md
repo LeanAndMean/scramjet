@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.87.1 — Settings, sessions and state found on Windows
+
+### Fixed
+
+- Settings, sessions, logins and other state are found in the home directory where `HOME` is not set, as on Windows (`%USERPROFILE%`, in the same `.config`, `.local/state` and `.local/share` layout as on Linux), and `~\` starts a path in the home directory there as `~/` does. A project's sessions on Windows go in a directory named after its path (`C--Users-…`), not into the project's own directory. A relative `XDG_CONFIG_HOME`, `XDG_DATA_HOME` or `XDG_STATE_HOME` is now ignored everywhere, as the XDG specification says.
+
 ## 0.87.0 — The terminal UI's code builds for Windows
 
 ### Changed

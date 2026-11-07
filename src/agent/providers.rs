@@ -988,9 +988,8 @@ fn listed(output: &[u8], what: &str) -> Result<Option<Ordered>, String> {
 /// `directory`, the file's.
 fn in_directory(path: &str, directory: &Path) -> PathBuf {
     let path = path.trim();
-    let home = std::env::home_dir().filter(|_| path == "~" || path.starts_with("~/"));
-    match home {
-        Some(home) => home.join(path[1..].trim_start_matches('/')),
+    match crate::os::after_tilde(path).zip(std::env::home_dir()) {
+        Some((rest, home)) => home.join(rest),
         None => directory.join(path),
     }
 }
@@ -998,9 +997,9 @@ fn in_directory(path: &str, directory: &Path) -> PathBuf {
 /// The program a file in `directory` names: `~/` starts a path in the home directory, a path
 /// with a `/` is from `directory`, and a name is looked for in `PATH`.
 pub(super) fn program_path(program: &str, directory: &Path) -> PathBuf {
-    match program.strip_prefix("~/").zip(std::env::home_dir()) {
+    match crate::os::after_tilde(program).zip(std::env::home_dir()) {
         Some((rest, home)) => home.join(rest),
-        None if program.contains('/') => directory.join(program),
+        None if program.contains(std::path::is_separator) => directory.join(program),
         None => PathBuf::from(program),
     }
 }

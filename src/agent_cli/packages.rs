@@ -117,11 +117,8 @@ fn split_reference(path: &str) -> Result<(&str, Option<String>), String> {
 /// Where packages are cloned: `$XDG_DATA_HOME/scramjet-rs/git`, by default
 /// `~/.local/share/scramjet-rs/git`.
 pub(super) fn clones() -> Option<PathBuf> {
-    let data = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|data| data.is_absolute())
-        .or_else(|| std::env::home_dir().map(|home| home.join(".local/share")))?;
-    Some(data.join("scramjet-rs/git"))
+    let data = scramjet_rs::os::base_directory("XDG_DATA_HOME", ".local/share")?;
+    Some(data.join("scramjet-rs").join("git"))
 }
 
 /// Clones `source` into `directory`, which must not exist, at its ref. Nothing of it is left

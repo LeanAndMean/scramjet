@@ -39,11 +39,7 @@ pub const CANCELLED: &str = "cancelled";
 
 /// `$XDG_CONFIG_HOME/scramjet-rs`, by default `~/.config/scramjet-rs`: where the settings are.
 pub fn config_directory() -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|config| !config.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
-    config.map(|config| config.join("scramjet-rs"))
+    crate::os::base_directory("XDG_CONFIG_HOME", ".config").map(|config| config.join("scramjet-rs"))
 }
 
 /// The credentials file.

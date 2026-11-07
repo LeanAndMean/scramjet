@@ -700,10 +700,15 @@ pub fn read_earlier(path: &Path) -> io::Result<Earlier> {
     })
 }
 
-/// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->`.
+/// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->` (and on Windows `\` and
+/// `:`, so that `C:\…` names a directory there rather than itself).
 pub fn directory(root: &Path) -> io::Result<PathBuf> {
-    let slug = root.to_string_lossy().trim_matches('/').replace('/', "-");
-    Ok(projects_directory()?.join(slug))
+    Ok(projects_directory()?.join(slug(&root.to_string_lossy())))
+}
+
+fn slug(root: &str) -> String {
+    let replaced = |c: char| std::path::is_separator(c) || (cfg!(windows) && c == ':');
+    root.trim_matches(replaced).replace(replaced, "-")
 }
 
 /// `$XDG_STATE_HOME/scramjet-rs/sessions`, holding each project's sessions' directory.
@@ -774,10 +779,7 @@ impl Drop for Unsaved {
 
 /// `$XDG_STATE_HOME/scramjet-rs`, by default `~/.local/state/scramjet-rs`.
 pub fn state_directory() -> io::Result<PathBuf> {
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .map(PathBuf::from)
-        .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
+    let state = crate::os::base_directory("XDG_STATE_HOME", ".local/state")
         .ok_or_else(|| io::Error::other("neither XDG_STATE_HOME nor HOME is set"))?;
     Ok(state.join("scramjet-rs"))
 }
@@ -1704,5 +1706,16 @@ impl Session {
         }
         self.tokens.add(item);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod slug_tests {
+    #[test]
+    fn a_projects_sessions_directory_is_named_by_its_path_in_one_component() {
+        assert_eq!(super::slug("/home/a/repos/x"), "home-a-repos-x");
+        assert_eq!(super::slug("/"), "");
+        let windows = super::slug(r"C:\Users\a\repo");
+        assert_eq!(windows == "C--Users-a-repo", cfg!(windows));
     }
 }

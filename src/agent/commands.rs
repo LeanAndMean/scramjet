@@ -246,9 +246,7 @@ fn global_root() -> Option<PathBuf> {
     if let Some(cache) = std::env::var_os("SCRAMJET_CACHE") {
         return Some(PathBuf::from(cache));
     }
-    let data = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::home_dir().map(|home| home.join(".local/share")))?;
+    let data = crate::os::base_directory("XDG_DATA_HOME", ".local/share")?;
     Some(data.join("scramjet"))
 }
 

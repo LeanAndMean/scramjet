@@ -59,6 +59,33 @@ pub fn executable(metadata: &Metadata) -> bool {
     metadata.is_file()
 }
 
+/// An XDG base directory: `$variable` when it is an absolute path, else `under_home` in the home
+/// directory (`%USERPROFILE%` on Windows, which keeps the same layout).
+pub fn base_directory(variable: &str, under_home: &str) -> Option<PathBuf> {
+    std::env::var_os(variable)
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| std::env::home_dir().map(|home| home.join(under_home)))
+}
+
+/// The rest of a path in the home directory written with `~` (`~`, `~/…`, and on Windows `~\…`),
+/// without its leading separators.
+pub fn after_tilde(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix('~')?;
+    let separator = |c: char| std::path::is_separator(c);
+    (rest.is_empty() || rest.starts_with(separator)).then(|| rest.trim_start_matches(separator))
+}
+
+/// `path` in the home directory as `~/…` (`~\…` on Windows), else as it is.
+pub fn tilde(path: &Path) -> String {
+    let home = std::env::home_dir().filter(|home| home.parent().is_some());
+    match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => Path::new("~").join(rest).display().to_string(),
+        None => path.display().to_string(),
+    }
+}
+
 /// The name a program's file has here: `name.exe` on Windows.
 pub fn program_file(name: &str) -> String {
     match cfg!(windows) {
@@ -211,5 +238,31 @@ mod windows {
     pub(super) fn control_break(id: u32) {
         // SAFETY: no pointers; a group that is gone makes it fail.
         unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, id) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_tilde_names_the_home_directory_only_before_a_separator() {
+        assert_eq!(after_tilde("~"), Some(""));
+        assert_eq!(after_tilde("~/a/b"), Some("a/b"));
+        assert_eq!(after_tilde("~//a"), Some("a"));
+        assert_eq!(after_tilde("~user/a"), None);
+        assert_eq!(after_tilde("a/~/b"), None);
+        assert_eq!(after_tilde("~\\a").is_some(), cfg!(windows));
+    }
+
+    #[test]
+    fn paths_in_the_home_directory_are_shown_with_a_tilde() {
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(tilde(&home), "~");
+        let shown = Path::new("~").join("repos").join("x");
+        assert_eq!(tilde(&home.join("repos/x")), shown.display().to_string());
+        assert_eq!(tilde(Path::new("/elsewhere/x")), "/elsewhere/x");
+        let beside = format!("{}x", home.display());
+        assert_eq!(tilde(Path::new(&beside)), beside);
     }
 }
