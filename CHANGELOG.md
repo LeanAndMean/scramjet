@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.85.0 — A Seatbelt sandbox for macOS
+
+### Added
+
+- On macOS, subagents' commands, `--sandbox` and unattended turns' hidden credential stores run under Seatbelt (`sandbox-exec`), as Codex confines its commands there, where they needed bubblewrap before and so failed: every file readable, writes only to `/tmp`, `/var/tmp`, `TMPDIR` and, in `workspace-write`, the project but its `.git`, `.scramjet` and `.agents` (also before they exist), the network and Unix sockets only when it is on. Not yet tried on a Mac.
+
 ## 0.84.0 — /fork offers a next-step list again
 
 ### Changed

@@ -2,7 +2,10 @@
 //! filesystem mounted read-only, a private `/tmp` discarded after each command, no network, and
 //! the user's credential stores hidden; the main agent's commands in it too under `--sandbox`,
 //! with the project writable in `workspace-write` and the network as `sandboxNetwork` says; and
-//! otherwise the main agent's commands with only the credential stores hidden.
+//! otherwise the main agent's commands with only the credential stores hidden. On macOS the
+//! same through Seatbelt (`seatbelt`).
+
+mod seatbelt;
 
 use std::{
     os::unix::fs::MetadataExt,
@@ -10,7 +13,16 @@ use std::{
     process::{Command, Stdio},
 };
 
-pub(super) const PROGRAM: &str = "bwrap";
+pub(super) const PROGRAM: &str = match cfg!(target_os = "macos") {
+    true => seatbelt::PROGRAM,
+    false => "bwrap",
+};
+
+/// How the sandbox's program starts its own error messages.
+pub(super) const FAILED: &str = match cfg!(target_os = "macos") {
+    true => "sandbox-exec:",
+    false => "bwrap:",
+};
 
 /// Credential stores in the home directory that subagents, and the main agent when its
 /// credentials are hidden, do not see, after an agent printed `~/.scramjet/agent/auth.json` to
@@ -517,6 +529,16 @@ pub(super) fn server(root: &Path, program: &str, hidden: &Hidden, sandbox: Sandb
 /// sandbox, it shares the process ids and session, so that a command's `setsid nohup … &` outlives
 /// it, as outside.
 pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
+    if cfg!(target_os = "macos") {
+        let (files, directories) = hidden.mounted();
+        let mut process = seatbelt::open(root, (files.collect(), directories.collect()));
+        hide_variables(&mut process);
+        if let Some(own) = &hidden.tmux {
+            process.env("TMUX_TMPDIR", own);
+        }
+        process.args(["bash", "-c"]).arg(command);
+        return process;
+    }
     let mut process = Command::new(PROGRAM);
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
     hide(&mut process, hidden);
@@ -558,6 +580,9 @@ fn confined(
 ) -> Command {
     let writable = sandbox.is_some_and(|sandbox| sandbox.mode == SandboxMode::WorkspaceWrite);
     let network = sandbox.is_some_and(|sandbox| sandbox.network);
+    if cfg!(target_os = "macos") {
+        return closed(root, hidden, writable, network, writable_too);
+    }
     let mut process = Command::new(PROGRAM);
     process.args([
         "--unshare-all",
@@ -621,16 +646,59 @@ fn confined(
     process
 }
 
-/// Mounts an empty file over each hidden file and an empty directory over each hidden directory,
-/// both read-only, and leaves out the environment variables that hold credentials and those
-/// that lead tmux to the server the agent runs in.
-fn hide(process: &mut Command, hidden: &Hidden) {
+/// `confined` on macOS: Seatbelt's closed profile, with the temporary directories writable
+/// (`seatbelt::temporary`), the project too in `workspace-write` but what it protects, also
+/// where it does not exist yet.
+fn closed(
+    root: &Path,
+    hidden: &Hidden,
+    writable: bool,
+    network: bool,
+    writable_too: Option<&Path>,
+) -> Command {
+    let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    let mut closed = seatbelt::Closed {
+        writable: seatbelt::temporary(),
+        protected: Vec::new(),
+        anchored: Vec::new(),
+        network,
+        hidden: Default::default(),
+    };
+    if writable {
+        let named = PROTECTED.iter().map(|name| real_root.join(name));
+        closed.protected = named.chain(protected(&real_root)).collect();
+        closed.protected.sort();
+        closed.protected.dedup();
+        closed.anchored = pinned(&real_root, &closed.protected).into_iter().collect();
+        closed.anchored.push(real_root.clone());
+        closed.writable.push(real_root);
+    }
+    closed.writable.extend(writable_too.map(Path::to_owned));
+    let (files, directories) = hidden.mounted();
+    // Servers that commands with the stores hidden started run what a client asks writable and
+    // on the network.
+    closed.hidden = (files.collect(), directories.chain(&hidden.tmux).collect());
+    let mut process = seatbelt::closed(root, closed);
+    hide_variables(&mut process);
+    process
+}
+
+/// Leaves out the environment variables that hold credentials and those that lead tmux to the
+/// server the agent runs in.
+fn hide_variables(process: &mut Command) {
     for (name, _) in std::env::vars_os() {
         if holds_credential(&name.to_string_lossy()) {
             process.env_remove(name);
         }
     }
     process.env_remove("TMUX").env_remove("TMUX_PANE");
+}
+
+/// Mounts an empty file over each hidden file and an empty directory over each hidden directory,
+/// both read-only, and leaves out the environment variables that hold credentials and those
+/// that lead tmux to the server the agent runs in.
+fn hide(process: &mut Command, hidden: &Hidden) {
+    hide_variables(process);
     let (files, directories) = hidden.mounted();
     let files: Vec<&PathBuf> = files.collect();
     if !files.is_empty() {

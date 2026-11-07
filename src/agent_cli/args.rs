@@ -93,7 +93,8 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
                          .scramjet and .agents. MCP servers that run as programs start
                          inside too. Commands reach the network unless the
                          setting sandboxNetwork is false. It needs bubblewrap (bwrap) and
-                         refuses to start without it. `!` commands you type stay outside
+                         refuses to start without it; on macOS it runs under Seatbelt
+                         (sandbox-exec). `!` commands you type stay outside
   -p, --print            run the messages and exit; a message `-` is read from stdin
   @FILE                  send FILE with the first message (or alone), as Scramjet does: a
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down

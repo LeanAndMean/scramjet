@@ -1231,8 +1231,8 @@ fn grep(
     })?;
     if found.is_empty() {
         return match status.and_then(|status| status.code()) {
-            // bubblewrap's own failures exit with 1 too.
-            Some(0 | 1) if !stderr.starts_with("bwrap:") => Ok("No matches found".into()),
+            // The sandbox's own failures exit with 1 too.
+            Some(0 | 1) if !stderr.starts_with(sandbox::FAILED) => Ok("No matches found".into()),
             code => Err(match stderr.trim() {
                 "" => format!("ripgrep exited with code {}", code.unwrap_or(-1)),
                 error => error.to_owned(),
