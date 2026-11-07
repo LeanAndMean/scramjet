@@ -1461,6 +1461,8 @@ fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
     let said = json!({"role":"user","content":"two"});
     agent.session.append(&said).unwrap();
     assert!(agent.saving_notice().is_some());
+    let held = agent.held_len();
+    assert!(held > said.to_string().len(), "{held}");
 
     assert!(agent.clone_session().unwrap());
     assert_ne!(agent.session_path(), original);
@@ -1475,6 +1477,7 @@ fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
     let notice = agent.write_held().unwrap();
     assert!(notice.contains("1700000000000-1.jsonl written"), "{notice}");
     assert!(!agent.session_holding());
+    assert_eq!(agent.held_len(), 0);
     let (_, conversation, _) = Session::open(&original).unwrap();
     assert_eq!(conversation, [json!({"role":"user","content":"one"}), said]);
 }

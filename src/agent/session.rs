@@ -1432,6 +1432,11 @@ impl Session {
         !self.held.is_empty()
     }
 
+    /// How many bytes of lines its file could not take are kept in memory.
+    pub fn held_len(&self) -> usize {
+        self.held.len()
+    }
+
     /// The change in whether its lines reach its file since this was last asked.
     pub fn take_change(&mut self) -> Option<Saving> {
         self.change.take()

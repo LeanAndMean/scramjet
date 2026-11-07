@@ -915,6 +915,20 @@ impl Agent {
         self.session.holding() || !self.left.is_empty()
     }
 
+    /// How many bytes of lines the session and those switched away from keep in memory, for want
+    /// of room, that would be lost if the agent ended now: none for an unsaved session's, which
+    /// go with their directory, or for a session left without a conversation, which is removed.
+    pub fn held_len(&self) -> usize {
+        if !self.session_saved() {
+            return 0;
+        }
+        let current = match self.session.unused() {
+            true => 0,
+            false => self.session.held_len(),
+        };
+        current + self.left.iter().map(Session::held_len).sum::<usize>()
+    }
+
     /// Tries again to write what the session and those switched away from keep in memory, with
     /// what to say of it, as a quiet session has no next write to take it.
     pub fn write_held(&mut self) -> Option<String> {

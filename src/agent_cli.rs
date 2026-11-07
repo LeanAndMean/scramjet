@@ -194,6 +194,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
         eprintln!("Error: settings not saved: {error}");
     }
+    write_held_at_exit(&mut agent);
     result
 }
 
@@ -468,6 +469,40 @@ fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> 
     }
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Before the agent ends, writes once more what its sessions keep in memory for want of room. On a
+/// terminal the user can free space and try again, as what is still held then is lost.
+fn write_held_at_exit(agent: &mut Agent) {
+    let asking = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    while agent.held_len() > 0 {
+        agent.write_held();
+        let held = agent.held_len();
+        if held == 0 {
+            eprintln!("Session written, with what was kept in memory.");
+            return;
+        }
+        let size = match held {
+            ..1024 => format!("{held} bytes"),
+            1024..1_048_576 => format!("{:.1} KB", held as f64 / 1024.0),
+            _ => format!("{:.1} MB", held as f64 / 1_048_576.0),
+        };
+        if !asking {
+            eprintln!(
+                "Error: session not written: the {size} kept in memory for want of room are lost."
+            );
+            return;
+        }
+        eprint!(
+            "The session keeps {size} in memory that the disk has no room for. Free space, then \
+             press Enter to write it, or Ctrl+D to leave without it. "
+        );
+        let mut line = String::new();
+        if !matches!(std::io::stdin().read_line(&mut line), Ok(1..)) {
+            eprintln!("\nSession left without the {size} kept in memory.");
+            return;
+        }
+    }
 }
 
 /// `-p`: runs a prompt (`-` reads it from stdin) and names the next step that would run after it,

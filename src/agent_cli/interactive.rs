@@ -180,6 +180,7 @@ impl Interactive {
         if let Ok(Ended::NothingResumed) = result {
             eprintln!("{}", self.ui.dim("No session selected"));
         }
+        super::write_held_at_exit(&mut self.agent);
         // As Scramjet writes no session before the first reply: `--continue` then passes over it.
         let discarded = self.agent.discard_unused_session();
         result?;

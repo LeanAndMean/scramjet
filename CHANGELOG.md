@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.60.0 — A full disk's held session lines kept at exit
+
+### Changed
+
+- On leaving while the disk is full, lines of the session kept in memory are tried once more. On a terminal scramjet-rs then waits: free space and press Enter to write them, or Ctrl+D to leave without them. Without a terminal it says they are lost, where they were lost without a word before.
+
 ## 0.59.0 — Small MCP servers' tools in the tool list
 
 ### Added
