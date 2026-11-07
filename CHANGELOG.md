@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.74.1 — Repositories made during a sandboxed session kept read-only
+
+### Fixed
+
+- Under `--sandbox workspace-write`, a repository cloned or created inside the project after the session's first command now has its `.git` kept read-only from the next command on; before, it stayed writable until scramjet-rs restarted.
+
 ## 0.74.0 — A full disk's session lines kept past the exit
 
 ### Changed

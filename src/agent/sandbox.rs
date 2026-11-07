@@ -256,37 +256,65 @@ fn pointed_to(dotgit: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(dotgit.parent()?.join(gitdir)).ok()
 }
 
-/// The `.git` of each repository below the real directory `root`, found once per process, as a
-/// walk of a large tree takes about a second (830,000 entries); one made later stays writable.
+/// The `.git` of each repository below the real directory `root`, at each command. A walk of a
+/// large tree takes about a second (830,000 entries), so each directory's listing is kept with
+/// its change time and read again only once that changed: an entry made, removed or renamed in
+/// it changes it, and unlike the modification time a command cannot set it back.
 fn nested_repositories(root: &Path) -> Vec<PathBuf> {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashMap},
+        ffi::OsString,
+        os::unix::fs::MetadataExt,
         sync::{Mutex, PoisonError},
     };
-    static FOUND: Mutex<BTreeMap<PathBuf, Vec<PathBuf>>> = Mutex::new(BTreeMap::new());
-    fn walk(directory: &Path, top: bool, found: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            return;
+    struct Listing {
+        changed: (i64, i64),
+        directories: Vec<OsString>,
+        git: bool,
+    }
+    type Listings = HashMap<PathBuf, Listing>;
+    static KNOWN: Mutex<BTreeMap<PathBuf, Listings>> = Mutex::new(BTreeMap::new());
+    fn read(directory: &Path, changed: (i64, i64)) -> Listing {
+        let mut listing = Listing {
+            changed,
+            directories: Vec::new(),
+            git: false,
         };
-        for entry in entries.flatten() {
+        for entry in std::fs::read_dir(directory).into_iter().flatten().flatten() {
             if entry.file_name() == ".git" {
-                if !top {
-                    found.push(entry.path());
-                }
+                listing.git = true;
             } else if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                walk(&entry.path(), false, found);
+                listing.directories.push(entry.file_name());
             }
         }
+        listing
     }
-    let mut found = FOUND.lock().unwrap_or_else(PoisonError::into_inner);
+    fn walk(directory: PathBuf, old: &mut Listings, new: &mut Listings) {
+        let Ok(metadata) = std::fs::symlink_metadata(&directory) else {
+            return;
+        };
+        let changed = (metadata.ctime(), metadata.ctime_nsec());
+        let listing = match old.remove(&directory) {
+            Some(listing) if listing.changed == changed => listing,
+            _ => read(&directory, changed),
+        };
+        for name in &listing.directories {
+            walk(directory.join(name), old, new);
+        }
+        new.insert(directory, listing);
+    }
+    let mut known = KNOWN.lock().unwrap_or_else(PoisonError::into_inner);
+    let old = known.entry(root.to_owned()).or_default();
+    let mut new = Listings::with_capacity(old.len());
+    walk(root.to_owned(), old, &mut new);
+    let mut found: Vec<PathBuf> = new
+        .iter()
+        .filter(|(directory, listing)| listing.git && *directory != root)
+        .map(|(directory, _)| directory.join(".git"))
+        .collect();
+    found.sort();
+    *old = new;
     found
-        .entry(root.to_owned())
-        .or_insert_with(|| {
-            let mut found = Vec::new();
-            walk(root, true, &mut found);
-            found
-        })
-        .clone()
 }
 
 /// The directories between the real directory `root` and each path `kept` in it, to be mounted
@@ -966,6 +994,31 @@ echo made > vendor/lib/made && echo wrote";
                 .check_write(&root, &root.join("vendor/lib/a.rs"))
                 .is_ok()
         );
+        // Repositories made after the first command, by the user or by a command that sets its
+        // directory's modification time back, are kept at the next one.
+        std::fs::create_dir_all(root.join("later/clone/.git/hooks")).unwrap();
+        let made = super::sandboxed(
+            &root,
+            "stamp=$(stat -c %y vendor/lib); mkdir -p vendor/lib/deep/.git/hooks && touch -m -d \"$stamp\" vendor/lib",
+            &hidden,
+            sandbox,
+        )
+        .status()
+        .unwrap();
+        assert!(made.success());
+        let output = super::sandboxed(
+            &root,
+            "touch later/clone/.git/hooks/x vendor/lib/deep/.git/hooks/x; touch later/clone/a && echo wrote",
+            &hidden,
+            sandbox,
+        )
+        .output()
+        .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "wrote\n");
+        assert!(root.join("later/clone/a").exists());
+        for left in ["later/clone/.git/hooks/x", "vendor/lib/deep/.git/hooks/x"] {
+            assert!(!root.join(left).exists(), "{left}");
+        }
     }
 
     #[test]
