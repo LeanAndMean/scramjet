@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.79.0 — Nested repositories writable under --sandbox
+
+### Changed
+
+- Under `--sandbox workspace-write` only the project's own `.git` (with the Git directory a `.git` file names), `.scramjet` and `.agents` stay read-only, as in Codex. Repositories inside the project are writable again, so `rm -rf build` works over a CMake or pip checkout, and `write` and `edit` refuse only what the sandbox keeps read-only.
+
 ## 0.78.0 — Waiting for you at every hand-off
 
 ### Changed

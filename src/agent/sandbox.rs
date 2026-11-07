@@ -123,10 +123,7 @@ impl Sandbox {
         if !real.starts_with(&root) {
             return refused("outside the project, which the sandbox leaves read-only");
         }
-        let in_git = real
-            .strip_prefix(&root)
-            .is_ok_and(|inside| inside.components().any(|name| name.as_os_str() == ".git"));
-        match in_git || protected(&root).iter().any(|kept| real.starts_with(kept)) {
+        match protected(&root).iter().any(|kept| real.starts_with(kept)) {
             true => refused("kept read-only in the sandbox"),
             false => Ok((real, root)),
         }
@@ -217,33 +214,21 @@ fn real_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// What stays read-only in the real directory `root`: what exists of `PROTECTED` at its top,
-/// the `.git` of each repository nested in it (a submodule's, or a checkout's in a directory
-/// holding several), whose hooks and `core.fsmonitor` would run at the user's next `git` there,
-/// and the Git directory each `.git` file points to (a worktree's or a submodule's) with the
-/// common one it names. Each by its real place, and only in `root`: what is outside is read-only
-/// already, and binding it could bring back what the sandbox's empty `/run` and `/tmp` leave out.
+/// What stays read-only in the real directory `root`, as Codex keeps it: what exists of
+/// `PROTECTED` at its top, and the Git directory a top-level `.git` file points to (a worktree's
+/// or a submodule's) with the common one it names. Repositories nested in it stay writable, so
+/// that removing a build directory holding a checkout works. Each by its real place, and only in
+/// `root`: what is outside is read-only already, and binding it could bring back what the
+/// sandbox's empty `/run` and `/tmp` leave out.
 fn protected(root: &Path) -> Vec<PathBuf> {
-    let nested = nested_repositories(root);
-    let mut found: Vec<PathBuf> = PROTECTED
-        .iter()
-        .map(|name| root.join(name))
-        .chain(nested.iter().cloned())
-        .collect();
+    let mut found: Vec<PathBuf> = PROTECTED.iter().map(|name| root.join(name)).collect();
     let pointed: Vec<PathBuf> = found.iter().filter_map(|path| pointed_to(path)).collect();
     let common = pointed.iter().filter_map(|gitdir| common_dir(gitdir));
     found.extend(common.collect::<Vec<_>>());
     found.extend(pointed);
     found
         .into_iter()
-        .filter_map(|path| match std::fs::canonicalize(&path) {
-            Ok(real) => Some(real),
-            // The walk's paths are real already; one a command made unsearchable stays kept.
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                nested.contains(&path).then_some(path)
-            }
-            Err(_) => None,
-        })
+        .filter_map(|path| std::fs::canonicalize(path).ok())
         .filter(|real| real.starts_with(root))
         .collect()
 }
@@ -264,102 +249,9 @@ fn pointed_to(dotgit: &Path) -> Option<PathBuf> {
     std::fs::canonicalize(dotgit.parent()?.join(gitdir)).ok()
 }
 
-/// The `.git` of each repository below the real directory `root`, at each command. A walk of a
-/// large tree takes about a second (830,000 entries), so each directory's listing is kept with
-/// its change time and read again only once that changed: an entry made, removed or renamed in
-/// it changes it, and unlike the modification time a command cannot set it back.
-fn nested_repositories(root: &Path) -> Vec<PathBuf> {
-    use std::{
-        collections::{BTreeMap, HashMap},
-        ffi::OsString,
-        os::unix::fs::MetadataExt,
-        sync::{Mutex, PoisonError},
-    };
-    struct Listing {
-        changed: (i64, i64),
-        directories: Vec<OsString>,
-        git: bool,
-    }
-    type Listings = HashMap<PathBuf, Listing>;
-    static KNOWN: Mutex<BTreeMap<PathBuf, Listings>> = Mutex::new(BTreeMap::new());
-    fn read(directory: &Path, changed: (i64, i64), old: Option<Listing>) -> Listing {
-        let Ok(entries) = std::fs::read_dir(directory) else {
-            // Unreadable (a command can `chmod 300` it): keep what it held, and its `.git`.
-            let mut listing = old.unwrap_or(Listing {
-                changed,
-                directories: Vec::new(),
-                git: false,
-            });
-            listing.changed = changed;
-            listing.git |= std::fs::symlink_metadata(directory.join(".git")).is_ok();
-            return listing;
-        };
-        let mut listing = Listing {
-            changed,
-            directories: Vec::new(),
-            git: false,
-        };
-        for entry in entries.flatten() {
-            if entry.file_name() == ".git" {
-                listing.git = true;
-            } else if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                listing.directories.push(entry.file_name());
-            }
-        }
-        listing
-    }
-    fn walk(directory: PathBuf, old: &mut Listings, new: &mut Listings) {
-        let metadata = match std::fs::symlink_metadata(&directory) {
-            Ok(metadata) => metadata,
-            // Behind a directory a command made unsearchable: keep what was known below it.
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-                if let Some(listing) = old.remove(&directory) {
-                    for name in &listing.directories {
-                        walk(directory.join(name), old, new);
-                    }
-                    new.insert(directory, listing);
-                }
-                return;
-            }
-            Err(_) => return,
-        };
-        let changed = (metadata.ctime(), metadata.ctime_nsec());
-        // A change in the same clock tick as the read leaves the change time as it was, so a
-        // listing changed in the last second is read again next time.
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs() as i64);
-        let recent = changed.0 >= now - 1;
-        let listing = match old.remove(&directory) {
-            Some(listing) if listing.changed == changed => listing,
-            listing => read(&directory, changed, listing),
-        };
-        let listing = Listing {
-            changed: if recent { (i64::MIN, 0) } else { changed },
-            ..listing
-        };
-        for name in &listing.directories {
-            walk(directory.join(name), old, new);
-        }
-        new.insert(directory, listing);
-    }
-    let mut known = KNOWN.lock().unwrap_or_else(PoisonError::into_inner);
-    let old = known.entry(root.to_owned()).or_default();
-    let mut new = Listings::with_capacity(old.len());
-    walk(root.to_owned(), old, &mut new);
-    let mut found: Vec<PathBuf> = new
-        .iter()
-        .filter(|(directory, listing)| listing.git && *directory != root)
-        .map(|(directory, _)| directory.join(".git"))
-        .collect();
-    found.sort();
-    *old = new;
-    found
-}
-
 /// The directories between the real directory `root` and each path `kept` in it, to be mounted
-/// on themselves: a command can rename a directory holding a mount, then put another `.git`
-/// where the protected one was, but not rename a mount point itself.
+/// on themselves: a command can rename a directory holding a mount, then put another Git
+/// directory where the protected one was, but not rename a mount point itself.
 fn pinned(root: &Path, kept: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
     kept.iter()
         .filter_map(|path| path.strip_prefix(root).ok())
@@ -950,43 +842,35 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
     }
 
     #[test]
-    fn the_main_agents_sandbox_keeps_nested_repositories_read_only() {
+    fn the_main_agents_sandbox_protects_only_the_projects_own_repository() {
         use super::{Sandbox, SandboxMode};
         let home = std::env::temp_dir().join(format!("scramjet-nested-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
         let root = home.join("project");
         for directory in [
-            ".git/modules/sub",
+            "gitdirs/main/hooks",
+            "gitdirs/main/worktrees/project",
             "vendor/lib/.git/hooks",
-            "sub",
-            "inner",
-            "gitdirs/inner",
+            "build/_deps/fetched/.git/hooks",
             "secrets/.git",
-            "bare.git/hooks",
-            "bare.git/worktrees/wt",
-            "wt",
-            "broken",
         ] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
-        std::fs::create_dir_all(home.join("outside")).unwrap();
-        std::fs::write(home.join("outside/visible"), "OUTSIDE\n").unwrap();
-        std::fs::create_dir_all(root.join("away")).unwrap();
+        // The project is a worktree whose Git directory, and the common one, are in it.
         std::fs::write(
-            root.join("away/.git"),
-            format!("gitdir: {}\n", home.join("outside").display()),
+            root.join(".git"),
+            "gitdir: gitdirs/main/worktrees/project\n",
         )
         .unwrap();
-        std::fs::write(root.join("wt/.git"), "gitdir: ../bare.git/worktrees/wt\n").unwrap();
-        std::fs::write(root.join("bare.git/worktrees/wt/commondir"), "../..\n").unwrap();
-        std::os::unix::fs::symlink("/nonexistent", root.join("broken/.git")).unwrap();
-        std::fs::write(root.join("sub/.git"), "gitdir: ../.git/modules/sub\n").unwrap();
-        std::fs::write(root.join("inner/.git"), "gitdir: ../gitdirs/inner\n").unwrap();
+        std::fs::write(
+            root.join("gitdirs/main/worktrees/project/commondir"),
+            "../..\n",
+        )
+        .unwrap();
         std::fs::write(root.join("secrets/key"), "SECRET\n").unwrap();
-        let script = "touch vendor/lib/.git/hooks/post-checkout gitdirs/inner/config; \
-echo 'gitdir: /tmp/evil' > sub/.git; mv vendor v2; mv vendor/lib vendor/lib2; mv gitdirs g2; \
-mv inner inner2; cat secrets/key; cat ../outside/visible; touch bare.git/hooks/post-checkout; \
-echo made > vendor/lib/made && echo wrote";
+        let script = "touch gitdirs/main/hooks/post-checkout gitdirs/main/worktrees/project/HEAD; \
+echo 'gitdir: /tmp/evil' > .git; mv gitdirs g2; cat secrets/key; \
+touch vendor/lib/.git/hooks/post-checkout && rm -rf build && mv vendor v2 && echo wrote";
         let hidden = super::Hidden::under(&home, vec![root.join("secrets")]);
         let sandbox = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
@@ -1003,83 +887,33 @@ echo made > vendor/lib/made && echo wrote";
         );
         assert!(!errors.contains("SECRET"), "{errors}");
         assert_eq!(
-            std::fs::read_to_string(root.join("sub/.git")).unwrap(),
-            "gitdir: ../.git/modules/sub\n"
+            std::fs::read_to_string(root.join(".git")).unwrap(),
+            "gitdir: gitdirs/main/worktrees/project\n"
         );
         for left in [
-            "vendor/lib/.git/hooks/post-checkout",
-            "gitdirs/inner/config",
-            "v2",
-            "vendor/lib2",
+            "gitdirs/main/hooks/post-checkout",
+            "gitdirs/main/worktrees/project/HEAD",
             "g2",
-            "inner2",
-            "bare.git/hooks/post-checkout",
+            "build",
         ] {
             assert!(!root.join(left).exists(), "{left}");
         }
-        assert!(root.join("vendor/lib/made").exists());
+        assert!(root.join("v2/lib/.git/hooks/post-checkout").exists());
         for path in [
-            "vendor/lib/.git/config",
-            "gitdirs/inner/HEAD",
-            "sub/.git",
-            "new/.git/config",
+            ".git",
+            "gitdirs/main/config",
+            "gitdirs/main/worktrees/project/HEAD",
         ] {
             let refused = sandbox
                 .check_write(&root, &root.join(path))
                 .expect_err(path);
             assert!(refused.contains("kept read-only"), "{path}: {refused}");
         }
-        assert!(
-            sandbox
-                .check_write(&root, &root.join("vendor/lib/a.rs"))
-                .is_ok()
-        );
-        // Repositories made after the first command, by the user or by a command that sets its
-        // directory's modification time back, are kept at the next one.
-        std::fs::create_dir_all(root.join("later/clone/.git/hooks")).unwrap();
-        let made = super::sandboxed(
-            &root,
-            "stamp=$(stat -c %y vendor/lib); mkdir -p vendor/lib/deep/.git/hooks && touch -m -d \"$stamp\" vendor/lib",
-            &hidden,
-            sandbox,
-        )
-        .status()
-        .unwrap();
-        assert!(made.success());
-        let output = super::sandboxed(
-            &root,
-            "touch later/clone/.git/hooks/x vendor/lib/deep/.git/hooks/x; touch later/clone/a && echo wrote",
-            &hidden,
-            sandbox,
-        )
-        .output()
-        .unwrap();
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "wrote\n");
-        assert!(root.join("later/clone/a").exists());
-        for left in ["later/clone/.git/hooks/x", "vendor/lib/deep/.git/hooks/x"] {
-            assert!(!root.join(left).exists(), "{left}");
-        }
-        // A directory a command makes unreadable or unsearchable hides no repository below it.
-        for mode in ["300", "000"] {
-            let hid = super::sandboxed(&root, &format!("chmod {mode} vendor"), &hidden, sandbox)
-                .status()
-                .unwrap();
-            assert!(hid.success());
-            let output = super::sandboxed(
-                &root,
-                "chmod 700 vendor; touch vendor/lib/.git/hooks/y; echo done",
-                &hidden,
-                sandbox,
-            )
-            .output()
-            .unwrap();
-            std::fs::set_permissions(
-                root.join("vendor"),
-                std::os::unix::fs::PermissionsExt::from_mode(0o700),
-            )
-            .unwrap();
-            assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n", "{mode}");
-            assert!(!root.join("vendor/lib/.git/hooks/y").exists(), "{mode}");
+        for path in ["v2/lib/.git/config", "new/.git/config", "gitdirs2/a"] {
+            assert!(
+                sandbox.check_write(&root, &root.join(path)).is_ok(),
+                "{path}"
+            );
         }
     }
 
