@@ -1116,6 +1116,7 @@ response is incomplete; retry the request."});
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_packages_login_renews_its_token_before_the_request_that_carries_it() {
         let (endpoint, server) = serve_requests(vec![stream(&fixture::text_events(
             "Hi.",

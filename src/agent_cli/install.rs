@@ -403,14 +403,15 @@ fn print_warnings(warnings: &[&Problem]) {
 
 /// `texts` under a heading, with the home directory in them as `~`.
 fn print_texts<'a>(texts: impl IntoIterator<Item = &'a str>) {
-    let home = std::env::home_dir().map(|home| format!("{}/", home.display()));
+    let home = scramjet_rs::os::home_prefix();
+    let tilde = format!("~{}", std::path::MAIN_SEPARATOR);
     for (number, text) in texts.into_iter().enumerate() {
         if number == 0 {
             println!("\nWarnings:");
         }
         match &home {
-            Some(home) if home != "/" => println!("  {}", text.replace(home, "~/")),
-            _ => println!("  {text}"),
+            Some(home) => println!("  {}", text.replace(home, &tilde)),
+            None => println!("  {text}"),
         }
     }
 }

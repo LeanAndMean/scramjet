@@ -400,6 +400,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_packages_program_logs_in_renews_the_token_and_lists_the_models() {
         let (scratch, logins) = scratch("login-program");
         let expires = (super::super::now_ms() + 600_000.0) as u64;
@@ -501,6 +502,7 @@ esac"#
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn what_goes_wrong_in_a_login_program_is_said_and_escape_stops_it() {
         let (scratch, logins) = scratch("login-program-failures");
         let cancel = AtomicBool::new(false);

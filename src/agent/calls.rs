@@ -685,6 +685,10 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_command_delegates_to_another_once_per_turn_for_the_same_arguments() {
         let delegate = |id: &str, args: &str| {
             let arguments = json!({"command":"rs:read","args":args});
@@ -746,6 +750,7 @@ instructions are in that earlier result.";
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn a_subagent_runs_its_task_read_only_and_returns_its_last_reply() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let (endpoint, server) = serve(vec![
@@ -892,6 +897,7 @@ here\n\nkept.txt says original";
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn the_stores_providers_name_are_hidden_from_the_agent_and_its_subagents() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let peek = json!({"command":"cat store/token; echo ran"});
@@ -948,6 +954,7 @@ here\n\nkept.txt says original";
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn the_sandbox_confines_the_agents_bash_writes_and_edits() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let (endpoint, server) = serve(vec![
@@ -1010,6 +1017,7 @@ here\n\nkept.txt says original";
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn a_subagent_reply_at_the_output_limit_returns_its_text_as_a_failure_without_its_call() {
         let reply = |blocks: Vec<Value>, reason: &str| {
             let mut events = vec![
@@ -1209,7 +1217,7 @@ Unknown agent: \"nope\". Available agents: \"a\", \"b\".\n\n[b] completed: Task:
         ]);
         let (mut agent, _scratch) = agent(endpoint, "subagent-checks");
         let agents = agent.root().join("agents");
-        let project = agent.root().join(".scramjet/agents");
+        let project = crate::os::join(agent.root(), ".scramjet/agents");
         std::fs::create_dir_all(&agents).unwrap();
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(agents.join("a.md"), "---\nname: a\ndescription: A\n---\n").unwrap();
@@ -1277,7 +1285,7 @@ or changed.",
             reply("four"),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "subagent-approvals");
-        let project = agent.root().join(".scramjet/agents");
+        let project = crate::os::join(agent.root(), ".scramjet/agents");
         std::fs::create_dir_all(&project).unwrap();
         let p = "---\nname: p\ndescription: P\ntools: read\n---\n";
         let q = "---\nname: q\ndescription: Q\n---\n";
@@ -1332,6 +1340,9 @@ files is added or changed.",
 
     #[test]
     fn allowing_all_stops_later_approval_questions() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let bash = |id: &str| {
             let events = fixture::call_events(r#"{"command":"true"}"#, fixture::known_usage());
             let text = serde_json::to_string(&events).unwrap();
@@ -1366,6 +1377,9 @@ files is added or changed.",
 
     #[test]
     fn the_configured_coding_tools_are_offered_and_only_they_run() {
+        if cfg!(windows) && crate::agent::tests::missing("rg") {
+            return;
+        }
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "grep", json!({"pattern":"needle","path":"src"})),
             tool_call("call_2", "ls", json!({"path":"src"})),
@@ -1513,6 +1527,9 @@ sed.\n- Be concise";
 
     #[test]
     fn tool_calls_run_without_questions_unless_asked() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let bash = |id: &str, command: &str| {
             let arguments = json!({ "command": command }).to_string();
             let events = fixture::call_events(&arguments, fixture::known_usage());
@@ -1546,6 +1563,9 @@ sed.\n- Be concise";
 
     #[test]
     fn calls_after_the_one_a_stop_interrupted_are_answered_as_not_run() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         // With a question among them, a reply's calls run one after another.
         let question = json!({"type":"confirm","message":"Go on?"});
         let (endpoint, server) = serve(vec![
@@ -1604,6 +1624,9 @@ sed.\n- Be concise";
 
     #[test]
     fn a_replys_calls_run_together_and_show_one_after_another_in_their_order() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         // Each command waits up to 5 s for the other's file, which one after the other the first
         // would not see.
         let meet = |mine: &str, theirs: &str| {
@@ -1650,6 +1673,9 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
 
     #[test]
     fn a_question_of_calls_running_together_waits_for_the_calls_before_it() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let (endpoint, server) = serve(vec![
             tool_calls(&[
                 ("bash", json!({"command":"sleep 0.3; echo slept"})),
@@ -1661,7 +1687,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "calls-together-question");
-        let project = agent.root().join(".scramjet/agents");
+        let project = crate::os::join(agent.root(), ".scramjet/agents");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
         let mut ui = Recorder {
@@ -1697,6 +1723,9 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
 
     #[test]
     fn calls_running_together_show_each_as_it_runs_where_the_interface_can() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let meet = |mine: &str, theirs: &str| {
             json!({"command":format!("touch {mine}; for _ in $(seq 100); do [ -e {theirs} ] && \
 break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
@@ -1749,7 +1778,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         assert_eq!(each(calls)[0], meeting);
         assert_eq!(each(calls)[1], ["call bash touch b", "result bash met"]);
         // A question among them is asked at once, while the call before it runs.
-        let project = agent.root().join(".scramjet/agents");
+        let project = crate::os::join(agent.root(), ".scramjet/agents");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
         ui.shown.clear();
@@ -1776,6 +1805,9 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
 
     #[test]
     fn a_stop_during_calls_running_together_stops_each_with_its_own_result() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let (endpoint, server) = serve(vec![
             tool_calls(&[
                 ("bash", json!({"command":"sleep 30"})),

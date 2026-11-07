@@ -911,6 +911,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn sets_are_the_installed_ones_then_the_global_and_project_ones() {
         let scratch = Scratch::new("sets");
         let (global, project) = (scratch.0.join("global"), scratch.0.join("project"));
@@ -987,6 +991,10 @@ or agents directory, nor a models.json",
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn discovery_takes_global_then_project_and_skips_what_scramjet_skips() {
         let scratch = Scratch::new("discover");
         let global = scratch.0.join("global");
@@ -1077,6 +1085,10 @@ or agents directory, nor a models.json",
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_sets_publication_defaults_hold_for_its_own_commands_and_their_declared_tools() {
         let scratch = Scratch::new("publication-defaults");
         let project = scratch.0.join("project");
@@ -1144,6 +1156,10 @@ other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_project_command_is_found_without_a_global_root() {
         let scratch = Scratch::new("no-global");
         scratch.file("project/rs/commands/rs:only.md", "Only\n");
@@ -1351,6 +1367,10 @@ at byte 14 line 1 column 15"
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_prompt_runs_a_command_only_when_it_names_one() {
         let scratch = Scratch::new("expand");
         scratch.file("project/rs/commands/rs:echo.md", "Say $1 and ${@:2}");

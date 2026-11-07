@@ -70,20 +70,20 @@ pub(super) struct Edges {
 
 /// The project's file, under its `root`.
 pub(super) fn project_path(root: &Path) -> PathBuf {
-    root.join(PROJECT_FILE)
+    crate::os::join(root, PROJECT_FILE)
 }
 
 /// Scramjet's global file: `$XDG_CONFIG_HOME/scramjet/autonomy.yaml`, else under `~/.config`.
 pub(super) fn global_path() -> Option<PathBuf> {
     let config = crate::os::base_directory("XDG_CONFIG_HOME", ".config")?;
-    Some(config.join("scramjet/autonomy.yaml"))
+    Some(crate::os::join(&config, "scramjet/autonomy.yaml"))
 }
 
 impl Edges {
     /// Reads the project's file under `root`, then the global one; a missing file has no edges.
     /// Names that are not among `commands` are warned about, as Scramjet does.
     pub fn load(global: Option<&Path>, root: &Path, commands: &Commands) -> Self {
-        let project = root.join(PROJECT_FILE);
+        let project = crate::os::join(root, PROJECT_FILE);
         let mut edges = Self::default();
         let mut invalid = false;
         for (scope, path) in [("project", Some(project.as_path())), ("global", global)] {
@@ -196,7 +196,7 @@ impl NextSteps {
     /// file sets or a set suggests one, its `*`, with the setting that applies to it, read
     /// afresh.
     pub(super) fn load(global: Option<&Path>, root: &Path, commands: &Commands) -> Self {
-        let project = root.join(PROJECT_FILE);
+        let project = crate::os::join(root, PROJECT_FILE);
         let mut problems = Vec::new();
         let mut load = |path: Option<&Path>, in_project| {
             let path = path?;
@@ -387,7 +387,7 @@ pub(super) fn choose(
     (source, target): (&str, Option<&str>),
     choice: Option<(Edge, Scope)>,
 ) -> Result<(), String> {
-    let project = root.join(PROJECT_FILE);
+    let project = crate::os::join(root, PROJECT_FILE);
     let target = target.unwrap_or("*");
     let global = || global.ok_or("no file for all projects: HOME is not set");
     match choice {
@@ -415,7 +415,7 @@ pub(super) fn apply(
     scope: Scope,
 ) -> Result<usize, String> {
     let (path, in_project) = match scope {
-        Scope::Project => (root.join(PROJECT_FILE), true),
+        Scope::Project => (crate::os::join(root, PROJECT_FILE), true),
         Scope::Global => {
             let global = global.ok_or("no file for all projects: HOME is not set")?;
             (global.to_path_buf(), false)
@@ -948,7 +948,8 @@ rs:loop; edge settings ignored this dispatch",
         assert!(broken.steps.iter().all(|step| step.setting.is_none()));
         assert_eq!(broken.problems.len(), 1);
         assert!(
-            broken.problems[0].starts_with(&format!("{}: autonomy.yaml:", global.display())),
+            broken.problems[0]
+                .starts_with(&format!("{}: autonomy.yaml:", crate::os::tilde(&global))),
             "{:?}",
             broken.problems
         );
@@ -961,7 +962,7 @@ rs:loop; edge settings ignored this dispatch",
         );
         let root = &scratch.0;
         let global = root.join("config/scramjet/autonomy.yaml");
-        let project = root.join(".scramjet/autonomy.yaml");
+        let project = crate::os::join(root, ".scramjet/autonomy.yaml");
         let choose = |target, choice| choose(Some(&global), root, ("rs:loop", target), choice);
         let edges = || Edges::load(Some(&global), root, &flow());
         let text = |path: &Path| std::fs::read_to_string(path).ok();
@@ -1021,7 +1022,7 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
         // A file that cannot be read is not overwritten.
         std::fs::write(&project, "edges: [\n").unwrap();
         let error = choose(Some("rs:loop"), Some((Edge::Pause, Scope::Project))).unwrap_err();
-        assert!(error.starts_with(&project.display().to_string()), "{error}");
+        assert!(error.starts_with(&crate::os::tilde(&project)), "{error}");
         assert_eq!(text(&project).as_deref(), Some("edges: [\n"));
         assert!(choose(Some("rs:loop"), None).is_err());
         let without_home = super::choose(
@@ -1037,6 +1038,10 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn sets_suggest_next_steps_which_hold_once_applied_where_nothing_is_set() {
         let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
             "scramjet-autonomy-suggested-{}",
@@ -1071,7 +1076,7 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
         let text = format!("{}: unknown source command \"rs:gone\"", defaults.display());
         assert_eq!(commands.warnings(), [Problem::in_file(text, &defaults)]);
         let global = root.join("config/autonomy.yaml");
-        let project = root.join(".scramjet/autonomy.yaml");
+        let project = crate::os::join(root, ".scramjet/autonomy.yaml");
         file(
             "config/autonomy.yaml",
             "edges:\n  rs:loop:\n    rs:review: chain\n",
@@ -1143,6 +1148,10 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn approvals_list_each_publishing_commands_tools_with_who_says_what() {
         let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
             "scramjet-autonomy-approvals-{}",
@@ -1274,7 +1283,7 @@ create_pr: auto-approve\n    add_pr_comment: always-ask\n"
         // A file that cannot be read is not overwritten.
         std::fs::write(&global, "publications: [\n").unwrap();
         let error = choose_publication(Some(&global), "rs:post", "create_pr", None).unwrap_err();
-        assert!(error.starts_with(&global.display().to_string()), "{error}");
+        assert!(error.starts_with(&crate::os::tilde(&global)), "{error}");
         assert_eq!(text().as_deref(), Some("publications: [\n"));
         assert_eq!(
             choose_publication(None, "rs:post", "create_pr", Some(Publication::Ask)).unwrap_err(),

@@ -816,7 +816,7 @@ mod tests {
         assert_eq!(list("'Alpha-dir/I").unwrap(), ["Alpha-dir/inner.rs"]);
         let absolute = format!("{}/b", root.display());
         assert_eq!(list(&absolute).unwrap(), [format!("{absolute}eta")]);
-        assert_eq!(list("").unwrap().len(), 5);
+        assert_eq!(list("").unwrap().len(), if cfg!(unix) { 5 } else { 4 });
         assert!(list("nothing").is_none());
         assert!(list("missing/a").is_none());
 
@@ -867,14 +867,13 @@ mod tests {
             list("~")
                 .unwrap()
                 .iter()
-                .all(|value| value.starts_with("~/"))
+                .all(|value| value.trim_start_matches('"').starts_with("~/"))
         );
-        assert!(
-            list(&format!("~/{name}"))
-                .unwrap()
-                .iter()
-                .any(|value| value.starts_with(&format!("~/{name}")))
-        );
+        assert!(list(&format!("~/{name}")).unwrap().iter().any(|value| {
+            value
+                .trim_start_matches('"')
+                .starts_with(&format!("~/{name}"))
+        }));
     }
 
     #[test]

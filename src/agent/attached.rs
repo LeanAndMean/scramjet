@@ -116,7 +116,10 @@ mod tests {
         std::fs::write(dir.join("shots/a shot.png"), &png).unwrap();
         let paths = ["notes.md", "empty.txt", "shots/a shot.png"].map(String::from);
         let attached = Attached::read(&paths, dir).unwrap();
-        let (notes, shot) = (dir.join("notes.md"), dir.join("shots/a shot.png"));
+        let (notes, shot) = (
+            dir.join("notes.md"),
+            crate::os::join(dir, "shots/a shot.png"),
+        );
         let text = format!(
             "<file name=\"{}\">\nline one\nline two\n</file>\n<file name=\"{}\"></file>\nWhat is \
 this?",

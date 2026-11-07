@@ -631,6 +631,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn a_sandbox_running_while_a_login_is_saved_still_sees_the_file_empty() {
         use crate::agent::sandbox;
         let scratch = scratch("login-hidden");

@@ -362,9 +362,10 @@ mod tests {
             assert!(row.width() <= 80, "{row}");
         }
         assert!(
-            lines.last().unwrap().starts_with(
-                "Other keys for an action go in /config/scramjet-rs/keybindings.json, as in"
-            ),
+            lines.last().unwrap().starts_with(&format!(
+                "Other keys for an action go in {}, as in",
+                settings.with_file_name("keybindings.json").display()
+            )),
             "{text}"
         );
     }

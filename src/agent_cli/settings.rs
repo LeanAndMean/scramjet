@@ -653,10 +653,10 @@ impl Settings {
     fn resolve(&self, entry: &str) -> PathBuf {
         let entry = entry.trim();
         if let Some((rest, home)) = scramjet_rs::os::after_tilde(entry).zip(std::env::home_dir()) {
-            return home.join(rest);
+            return scramjet_rs::os::join(&home, rest);
         }
         let directory = self.path.as_deref().and_then(Path::parent);
-        directory.unwrap_or(Path::new("/")).join(entry)
+        scramjet_rs::os::join(directory.unwrap_or(Path::new("/")), entry)
     }
 
     /// Adds the command set in `directory` to `commandSets`, by its absolute path, unless a set
@@ -1438,6 +1438,10 @@ mod tests {
 
     #[test]
     fn tools_lists_the_agents_coding_tools() {
+        if cfg!(windows) && (search_program("grep").is_none() || search_program("find").is_none()) {
+            eprintln!("passed over: rg or fd is not here");
+            return;
+        }
         let scratch = Scratch::new("tools");
         let settings = settings_with(
             &scratch,
@@ -1493,6 +1497,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "expands $HOME, which Windows does not set")]
     fn mcp_servers_are_read_as_claude_codes_entries() {
         let scratch = Scratch::new("mcp");
         let settings = settings_with(
@@ -1597,8 +1602,18 @@ mod tests {
                 home.join(".claude/skills"),
                 home.clone(),
                 scratch.0.join("own"),
-                PathBuf::from("/abs/one.md"),
+                // On Windows, on the settings file's drive: here the current one.
+                std::path::absolute("/abs/one.md").unwrap(),
             ]
+        );
+        // Shown with the platform's separators, and `~` alone without one after it.
+        let displayed: Vec<String> = (settings.skills.iter().take(2))
+            .map(|path| path.display().to_string())
+            .collect();
+        let claude = home.join(".claude").join("skills");
+        assert_eq!(
+            displayed,
+            [claude.display(), home.display()].map(|path| path.to_string())
         );
         assert_eq!(settings.themes, [scratch.0.join("mine.json")]);
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
@@ -2014,7 +2029,7 @@ mod tests {
         let scratch = Scratch::new("sets");
         let path = scratch.0.join("config/settings.json");
         let set = |name: &str| {
-            let directory = scratch.0.join(name);
+            let directory = scramjet_rs::os::join(&scratch.0, name);
             std::fs::create_dir_all(directory.join("commands")).unwrap();
             directory
         };

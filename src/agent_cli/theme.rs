@@ -226,7 +226,10 @@ impl Themes {
         if !options.no_themes {
             let user = agent_directory().map(|directory| directory.join("themes"));
             places.extend(user.map(|directory| (directory, Place::Directory)));
-            places.push((root.join(".scramjet/themes"), Place::Directory));
+            places.push((
+                scramjet_rs::os::join(root, ".scramjet/themes"),
+                Place::Directory,
+            ));
             places.extend(listed.iter().map(|path| (path.clone(), Place::Listed)));
         }
         places.extend((options.paths.iter()).map(|path| (path.clone(), Place::Given)));
@@ -937,7 +940,7 @@ mod tests {
                 .map(|problem| (problem.text.clone(), problem.file.clone()))
                 .collect()
         };
-        let shown = |name: &str| root.join(name).display().to_string();
+        let shown = |name: &str| scramjet_rs::os::join(root, name).display().to_string();
 
         let themes = Themes::discover(root, &settings, &options);
         assert_eq!(names(&themes), ["Project", "Listed", "File", "Given"]);

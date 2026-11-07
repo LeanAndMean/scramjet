@@ -53,6 +53,16 @@ pub fn make_private(file: &std::fs::File) -> std::io::Result<()> {
     }
 }
 
+/// Cuts `file`, opened at `path` for appending, to `size` bytes. On Windows a file opened for
+/// appending may not change its length (it lacks `FILE_WRITE_DATA`), so another handle cuts it.
+pub fn truncate(file: &std::fs::File, path: &Path, size: u64) -> std::io::Result<()> {
+    if cfg!(windows) {
+        OpenOptions::new().write(true).open(path)?.set_len(size)
+    } else {
+        file.set_len(size)
+    }
+}
+
 /// Whether the directory found is this user's own (on Windows, any).
 pub fn owned(metadata: &Metadata) -> bool {
     #[cfg(unix)]
@@ -84,7 +94,22 @@ pub fn base_directory(variable: &str, under_home: &str) -> Option<PathBuf> {
     std::env::var_os(variable)
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
-        .or_else(|| std::env::home_dir().map(|home| home.join(under_home)))
+        .or_else(|| std::env::home_dir().map(|home| join(&home, under_home)))
+}
+
+/// `base` joined with `relative` as `Path::join` does, but one component at a time, so that a
+/// `/` in it shows as `\` on Windows and an empty one adds no trailing separator.
+pub fn join(base: &Path, relative: impl AsRef<Path>) -> PathBuf {
+    let mut joined = base.to_path_buf();
+    joined.extend(relative.as_ref().components());
+    joined
+}
+
+/// The home directory with a separator after it, as it starts the paths in it.
+pub fn home_prefix() -> Option<String> {
+    let home = std::env::home_dir()?.display().to_string();
+    let home = home.trim_end_matches(std::path::is_separator);
+    (!home.is_empty()).then(|| format!("{home}{}", std::path::MAIN_SEPARATOR))
 }
 
 /// The rest of a path in the home directory written with `~` (`~`, `~/…`, and on Windows `~\…`),

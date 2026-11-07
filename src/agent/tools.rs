@@ -1708,7 +1708,10 @@ disjoint regions."
             .unwrap();
         assert_eq!(
             written.text,
-            format!("Wrote 5 bytes to {}", root.join("new/g.txt").display())
+            format!(
+                "Wrote 5 bytes to {}",
+                crate::os::join(&root, "new/g.txt").display()
+            )
         );
         assert_eq!(
             written.detail,
@@ -1788,15 +1791,24 @@ inline image size limit.]",
         );
         assert_eq!(
             compact(json!({"path":"/work/project/sub/AGENTS.MD"})),
-            Some(CompactRead::Resource("sub/AGENTS.MD".into()))
+            Some(CompactRead::Resource(
+                Path::new("sub").join("AGENTS.MD").display().to_string()
+            ))
         );
         assert_eq!(
             compact(json!({"path":home.join("AGENTS.md"),"offset":2})),
-            Some(CompactRead::Resource("~/AGENTS.md:2".into()))
+            Some(CompactRead::Resource(format!(
+                "~{}AGENTS.md:2",
+                std::path::MAIN_SEPARATOR
+            )))
         );
         assert_eq!(
             compact(json!({"path":"../CLAUDE.md"})),
-            Some(CompactRead::Resource("/work/CLAUDE.md".into()))
+            Some(CompactRead::Resource(
+                crate::os::join(Path::new(""), "/work/CLAUDE.md")
+                    .display()
+                    .to_string()
+            ))
         );
         assert_eq!(
             compact(json!({"path":instructions::README})),
@@ -1817,6 +1829,9 @@ inline image size limit.]",
 
     #[test]
     fn read_pages_long_files_and_bash_reports_exit_and_tail() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let root = std::env::temp_dir().join(format!("scramjet-agent-read-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
         let text: String = (1..=3000).map(|n| format!("line {n}\n")).collect();
@@ -1909,6 +1924,10 @@ inline image size limit.]",
 
     #[test]
     fn read_only_search_tools_answer_as_pis_do() {
+        let missing = crate::agent::tests::missing;
+        if cfg!(windows) && (missing("rg") || missing("fd")) {
+            return;
+        }
         assert!(search_program("grep").is_some() && search_program("find").is_some());
         let root =
             std::env::temp_dir().join(format!("scramjet-agent-search-{}", std::process::id()));
@@ -2197,6 +2216,7 @@ to see full lines]",
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn a_cancelled_command_with_hidden_credentials_stops_with_everything_it_started() {
         let marker = format!("{}.{}", 400 + std::process::id() % 100, std::process::id());
         let cancel = AtomicBool::new(false);
@@ -2320,6 +2340,7 @@ to see full lines]",
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_search_stops_its_program_when_done_or_cancelled() {
         let started = Instant::now();
         let mut command = Command::new("sh");

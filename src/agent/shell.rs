@@ -104,6 +104,9 @@ mod tests {
 
     #[test]
     fn bang_commands_run_without_a_turn_and_are_recalled_as_typed() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let (endpoint, server) = serve(vec![stream(&fixture::text_events(
             "ok",
             fixture::known_usage(),
@@ -167,6 +170,9 @@ mod tests {
 
     #[test]
     fn a_cancelled_bang_command_is_recorded_as_cancelled() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let (endpoint, _server) = serve(vec![]);
         let (mut agent, _scratch) = agent(endpoint, "bang-cancel");
         let mut ui = Recorder::default();

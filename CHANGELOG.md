@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.88.5 — Sessions with a cut last line, and paths, on Windows
+
+### Fixed
+
+- On Windows, a session whose file ends in a cut line (another program's write, or a crash) takes new prompts again: they failed with `Error: session: Access is denied. (os error 5)` and were not sent. A write cut short by a full disk is now cut back there too.
+- On Windows, paths are shown with `\` throughout: settings' `~/…` and relative entries, the skills, themes, agents and `autonomy.yaml` places, the XDG directories, and `~` alone without a `\` after it; problems in `/settings`' Installed and `install`'s warnings show the home as `~\`.
+
 ## 0.88.4 — Ctrl+G and pasted images on Windows
 
 ### Fixed

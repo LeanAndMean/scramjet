@@ -643,6 +643,9 @@ Comment\\n\\nMe too.\")",
 
     #[test]
     fn results_keep_what_was_shown_for_a_resume_but_not_for_the_model() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let call = |id: &str, name: &str, arguments: Value| {
             let events = fixture::call_events(&arguments.to_string(), fixture::known_usage());
             let text = serde_json::to_string(&events).unwrap();

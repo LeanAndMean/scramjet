@@ -989,8 +989,8 @@ fn listed(output: &[u8], what: &str) -> Result<Option<Ordered>, String> {
 fn in_directory(path: &str, directory: &Path) -> PathBuf {
     let path = path.trim();
     match crate::os::after_tilde(path).zip(std::env::home_dir()) {
-        Some((rest, home)) => home.join(rest),
-        None => directory.join(path),
+        Some((rest, home)) => crate::os::join(&home, rest),
+        None => crate::os::join(directory, path),
     }
 }
 
@@ -998,8 +998,8 @@ fn in_directory(path: &str, directory: &Path) -> PathBuf {
 /// with a `/` is from `directory`, and a name is looked for in `PATH`.
 pub(super) fn program_path(program: &str, directory: &Path) -> PathBuf {
     match crate::os::after_tilde(program).zip(std::env::home_dir()) {
-        Some((rest, home)) => home.join(rest),
-        None if program.contains(std::path::is_separator) => directory.join(program),
+        Some((rest, home)) => crate::os::join(&home, rest),
+        None if program.contains(std::path::is_separator) => crate::os::join(directory, program),
         None => PathBuf::from(program),
     }
 }
@@ -1228,6 +1228,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_program_lists_more_providers_and_its_failures_are_said() {
         let scratch = ScratchDir::new(
             std::env::temp_dir().join(format!("scramjet-rs-providers-{}", std::process::id())),
@@ -1572,6 +1573,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn credential_files_come_from_files_and_stay_while_one_has_problems() {
         let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
             "scramjet-rs-providers-credentials-{}",

@@ -127,7 +127,7 @@ pub fn agent_directory() -> Option<PathBuf> {
             Path::new("/"),
             &dir.to_string_lossy(),
         )),
-        None => std::env::home_dir().map(|home| home.join(".scramjet/agent")),
+        None => std::env::home_dir().map(|home| crate::os::join(&home, ".scramjet/agent")),
     }
 }
 
@@ -195,7 +195,7 @@ tool:\n\n{}",
 /// The project's agent directory: the nearest `.scramjet/agents` from `cwd` up.
 pub(super) fn project_directory(cwd: &Path) -> Option<PathBuf> {
     cwd.ancestors()
-        .map(|directory| directory.join(".scramjet/agents"))
+        .map(|directory| crate::os::join(directory, ".scramjet/agents"))
         .find(|candidate| candidate.is_dir())
 }
 
@@ -1590,6 +1590,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- z:a: z:a 
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn children_get_only_the_read_only_tools_they_list() {
         let agent = |tools: Option<&str>| Definition {
             name: "x".into(),

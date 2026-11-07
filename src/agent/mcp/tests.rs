@@ -48,6 +48,9 @@ fn call(servers: &Servers, tool: &str, arguments: Value) -> Result<Output, Strin
 
 #[test]
 fn a_servers_tools_are_listed_found_by_their_words_and_called() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("tools");
     let servers = started(&[test_server("test", &[])], &scratch.0);
     assert_eq!(
@@ -135,6 +138,9 @@ for a city.\nArguments (JSON Schema): {\"properties\":{\"city\":{\"type\":\"stri
 
 #[test]
 fn a_tool_a_server_adds_is_found_once_it_says_its_tools_changed() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("grow");
     let servers = started(&[test_server("test", &[])], &scratch.0);
     assert!(
@@ -159,6 +165,9 @@ fn a_tool_a_server_adds_is_found_once_it_says_its_tools_changed() {
 
 #[test]
 fn a_call_stopped_cancels_its_request_and_ending_the_servers_kills_them() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("cancel");
     let log = scratch.0.join("log");
     let servers = started(
@@ -227,7 +236,11 @@ fn a_call_stopped_cancels_its_request_and_ending_the_servers_kills_them() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "Windows has no SIGTERM")]
 fn stopped_servers_get_their_input_closed_then_sigterm_then_sigkill() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("quit");
     let modes = ["", "linger", "stubborn"];
     let logs: Vec<PathBuf> = (modes.iter())
@@ -380,6 +393,9 @@ fn a_server_started_again_in_the_sandbox_cannot_read_a_store_made_since() {
 
 #[test]
 fn servers_that_cannot_start_say_why_once_and_the_others_run() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("failing");
     let missing = program("missing", "/nonexistent/mcp-server", Vec::new(), &[]);
     let configs = [
@@ -416,6 +432,9 @@ fn servers_that_cannot_start_say_why_once_and_the_others_run() {
 
 #[test]
 fn a_server_that_does_not_answer_is_given_up_and_killed() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("silent");
     let log = scratch.0.join("log");
     let env = [
@@ -487,6 +506,9 @@ not shown]\n[Audio [audio/wav] not shown]\n[Image [image/png] not shown: it coul
 
 #[test]
 fn the_model_finds_a_servers_tool_and_calls_it_through_the_pair_of_tools() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let (endpoint, server) = serve(vec![
         tool_call("call_1", SEARCH, json!({"query": "repeat text"})),
         tool_call(
@@ -546,6 +568,9 @@ fn the_model_finds_a_servers_tool_and_calls_it_through_the_pair_of_tools() {
 
 #[test]
 fn a_small_servers_tools_are_offered_directly_and_called_as_mcp_call() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let (endpoint, server) = serve(vec![
         tool_call("call_1", "mcp__test__echo", json!({"text": "hi"})),
         stream(&fixture::text_events("done", fixture::known_usage())),
@@ -646,6 +671,9 @@ fn without_servers_the_model_has_no_mcp_tools_and_none_start() {
 
 #[test]
 fn disabled_servers_do_not_start_until_enabled_and_their_tools_follow() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let (endpoint, _server) = serve(Vec::new());
     let (mut agent, scratch) = agent(endpoint, "mcp-disabled");
     let log = scratch.0.join("a.log");
@@ -700,6 +728,9 @@ fn until(done: impl Fn() -> bool) {
 
 #[test]
 fn a_server_writing_bytes_that_are_not_utf8_keeps_its_standard_error() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("latin1");
     let servers = started(
         &[test_server(
@@ -720,6 +751,9 @@ fn a_server_writing_bytes_that_are_not_utf8_keeps_its_standard_error() {
 
 #[test]
 fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let (endpoint, _server) = serve(Vec::new());
     let (mut agent, scratch) = agent(endpoint, "mcp-reload");
     let (log_a, log_b) = (scratch.0.join("a.log"), scratch.0.join("b.log"));
@@ -779,6 +813,9 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
 
 #[test]
 fn reconnect_starts_one_server_again_or_all_and_says_how_each_is() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let (endpoint, _server) = serve(Vec::new());
     let (mut agent, scratch) = agent(endpoint, "mcp-reconnect");
     let (log_a, log_b) = (scratch.0.join("a.log"), scratch.0.join("b.log"));
@@ -836,6 +873,9 @@ fn reconnect_starts_one_server_again_or_all_and_says_how_each_is() {
 
 #[test]
 fn a_search_returning_more_than_a_tool_output_holds_is_cut() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("many");
     let servers = started(
         &[test_server(
@@ -853,6 +893,9 @@ fn a_search_returning_more_than_a_tool_output_holds_is_cut() {
 
 #[test]
 fn escape_stops_a_search_waiting_for_a_server_to_list_its_tools() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("stuck");
     let servers = started(
         &[test_server(
@@ -937,6 +980,9 @@ impl Drop for Remote {
 
 #[test]
 fn an_http_servers_tools_are_called_in_its_session_which_ends_with_the_servers() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("http");
     let log = scratch.0.join("log");
     let remote = Remote::start(&[
@@ -1003,6 +1049,9 @@ fn an_http_servers_tools_are_called_in_its_session_which_ends_with_the_servers()
 
 #[test]
 fn http_servers_that_cannot_be_reached_or_refuse_say_why() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("http-failing");
     let remote = Remote::start(&[("MCP_TEST_TOKEN", "secret".to_owned())]);
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1083,6 +1132,9 @@ fn http_entries_are_checked_and_shown_without_their_query() {
 
 #[test]
 fn a_session_the_server_forgot_is_started_again() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("http-restart");
     let log = scratch.0.join("log");
     let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1135,6 +1187,9 @@ fn a_session_the_server_forgot_is_started_again() {
 
 #[test]
 fn redirects_on_the_same_host_are_followed_and_the_others_say_where() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
     let scratch = scratch("http-redirect");
     let log = scratch.0.join("log");
     let remote = Remote::start(&[

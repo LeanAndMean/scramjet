@@ -379,9 +379,9 @@ fn shown(path: &Path) -> String {
 
 /// `text` with the home directory shown as `~` wherever a path in it starts with it.
 fn home_shortened(text: &str) -> String {
-    match std::env::home_dir().map(|home| format!("{}/", home.display())) {
-        Some(home) if home != "/" => text.replace(&home, "~/"),
-        _ => text.to_owned(),
+    match scramjet_rs::os::home_prefix() {
+        Some(home) => text.replace(&home, &format!("~{}", std::path::MAIN_SEPARATOR)),
+        None => text.to_owned(),
     }
 }
 
@@ -405,6 +405,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn lists_what_is_loaded_with_its_source_under_headings_problems_first() {
         let base = std::env::temp_dir().join(format!("scramjet-installed-{}", std::process::id()));
         let _scratch = Scratch(base.clone());
@@ -611,7 +615,8 @@ mod tests {
 
     #[test]
     fn project_agents_say_whether_the_approval_covers_them_and_offer_to_forget_it() {
-        let directory = PathBuf::from("/repo/.scramjet/agents");
+        let directory = scramjet_rs::os::join(Path::new(""), "/repo/.scramjet/agents");
+        let shown = |name: &str| directory.join(name).display().to_string();
         let agent = |name: &str, approval| AgentFile {
             name: name.to_owned(),
             description: format!("Does {name}."),
@@ -651,15 +656,23 @@ mod tests {
         assert_eq!(
             list.notes[1..4],
             [
-                "/repo/.scramjet/agents/kept.md\nIn this project's .scramjet/agents. You approved \
-                 running this project's agents with this file as it is; Enter opens it or \
-                 forgets the approval. Does kept.",
-                "/repo/.scramjet/agents/edited.md\nIn this project's .scramjet/agents, changed \
-                 since you approved running this project's agents: a subagent call naming one \
-                 asks again. Enter opens it or forgets the approval. Does edited.",
-                "/repo/.scramjet/agents/added.md\nIn this project's .scramjet/agents, not \
-                 approved: a subagent call naming one of this project's agents asks before it \
-                 runs. Does added.",
+                format!(
+                    "{}\nIn this project's .scramjet/agents. You approved running this \
+                     project's agents with this file as it is; Enter opens it or forgets the \
+                     approval. Does kept.",
+                    shown("kept.md")
+                ),
+                format!(
+                    "{}\nIn this project's .scramjet/agents, changed since you approved running \
+                     this project's agents: a subagent call naming one asks again. Enter opens it \
+                     or forgets the approval. Does edited.",
+                    shown("edited.md")
+                ),
+                format!(
+                    "{}\nIn this project's .scramjet/agents, not approved: a subagent call naming \
+                     one of this project's agents asks before it runs. Does added.",
+                    shown("added.md")
+                ),
             ]
         );
     }

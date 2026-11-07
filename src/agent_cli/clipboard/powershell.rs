@@ -249,6 +249,7 @@ mod tests {
     const QUICK: Duration = Duration::from_millis(300);
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_reader_answers_each_request_with_the_bytes_it_sent() {
         let mut reader = scripted().unwrap();
         assert_eq!(reader.ask("text", QUICK).unwrap(), b"hello");
@@ -269,6 +270,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_reader_that_stopped_is_started_again_once() {
         let mut slot = Some(scripted().unwrap());
         assert!(slot.as_mut().unwrap().ask("stop", QUICK).is_err());

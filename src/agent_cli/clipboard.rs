@@ -507,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_paste_takes_what_the_tool_writes_when_it_succeeds() {
         let sh = |script: &str| read("sh", &["-c", script]);
         assert_eq!(
@@ -519,6 +520,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn an_image_is_taken_in_the_first_type_read_sends_that_the_tool_lists() {
         let listed = "TARGETS\ntext/plain\nimage/bmp\nimage/gif\nIMAGE/JPEG; q=1\n";
         assert_eq!(preferred(listed), Some(("image/jpeg", "jpg")));
@@ -567,6 +569,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_macs_image_is_kept_only_when_the_script_saved_one() {
         let directory =
             env::temp_dir().join(format!("scramjet-rs-clipboard-mac-{}", process::id()));

@@ -1500,7 +1500,7 @@ impl Session {
         };
         if let Err(error) = written {
             if let Some(file) = &self.file {
-                let _ = file.set_len(self.size);
+                let _ = crate::os::truncate(file, &self.path, self.size);
             }
             if !full(&error) || bytes.len() > HELD_LIMIT {
                 self.held = before;
@@ -1567,7 +1567,7 @@ impl Session {
         if self.held.is_empty() && file.metadata()?.len() != self.size {
             let entries = read(&self.path)?;
             if file.metadata()?.len() > entries.size {
-                file.set_len(entries.size)?;
+                crate::os::truncate(file, &self.path, entries.size)?;
             }
             self.skipped = entries.skipped;
             self.unterminated = entries.unterminated;

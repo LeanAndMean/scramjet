@@ -186,7 +186,7 @@ fn write_out(taken: Taken) -> Result<(PathBuf, usize), (Taken, io::Error)> {
             .create(taken.size == 0)
             .open(&taken.session)?;
         if let Err(error) = write_whole(&mut file, &taken.lines) {
-            let _ = file.set_len(taken.size);
+            let _ = crate::os::truncate(&file, &taken.session, taken.size);
             return Err(error);
         }
         Ok(())

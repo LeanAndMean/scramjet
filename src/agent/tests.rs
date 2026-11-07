@@ -235,6 +235,26 @@ impl AgentUi for Watching {
     }
 }
 
+/// Whether `program` (`bash`, `python3`, `rg`, `fd`…), which a test runs, is missing, as on Windows
+/// without Git Bash or Python; the test then says so and is passed over.
+pub(crate) fn missing(program: &str) -> bool {
+    let found = match program {
+        "bash" => crate::os::bash().is_ok(),
+        "rg" => super::tools::search_program("grep").is_some(),
+        "fd" => super::tools::search_program("find").is_some(),
+        _ => std::process::Command::new(program)
+            .args(["-c", ""])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success()),
+    };
+    if !found {
+        eprintln!("passed over: {program} is not here");
+    }
+    !found
+}
+
 /// Writes the shell script `body` to `path`, executable. A child process writes it: a file this
 /// process held open for writing would be inherited by any child another test forks meanwhile,
 /// and running the script while that child holds it fails with `ETXTBSY`.
@@ -797,6 +817,7 @@ fn a_session_whose_file_could_not_be_created_creates_it_once_there_is_room() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
 fn a_copy_on_a_full_disk_holds_its_lines_until_there_is_room() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-full-copy-{}", std::process::id())),
@@ -841,6 +862,7 @@ fn a_copy_on_a_full_disk_holds_its_lines_until_there_is_room() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
 fn a_session_on_a_full_disk_keeps_its_lines_until_there_is_room() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-full-{}", std::process::id())),
@@ -999,7 +1021,7 @@ fn a_fork_from_a_session_file_holds_all_of_it_in_a_new_session_of_the_project() 
         json!({"type":"message","role":"assistant",
             "content":[{"type":"output_text","text":text}],"_scramjet_model":"a"})
     };
-    let source = scratch.0.join("other/1700000000000-1.jsonl");
+    let source = crate::os::join(&scratch.0, "other/1700000000000-1.jsonl");
     std::fs::create_dir_all(source.parent().unwrap()).unwrap();
     write_session(
         &source,
@@ -1328,6 +1350,7 @@ fn a_new_session_is_written_at_its_first_prompt_with_what_came_before() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
 fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
     let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "manage-sessions");
     let current = agent.session_path().to_owned();
@@ -1552,6 +1575,7 @@ fn names_another_process_gives_while_entries_go_in_keep_the_file_readable() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
 fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
     let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "left-held");
     let original = scratch.0.join("1700000000000-1.jsonl");
@@ -1591,6 +1615,7 @@ fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
 fn a_session_left_while_holding_lines_resumes_with_them() {
     let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "resume-held");
     let original = scratch.0.join("1700000000000-1.jsonl");
@@ -2614,6 +2639,7 @@ fn models_that_replied_before_a_compaction_are_still_on_the_branch() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
 fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-kept-{}", std::process::id())),

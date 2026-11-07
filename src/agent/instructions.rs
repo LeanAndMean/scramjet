@@ -581,9 +581,13 @@ them in implementation plans, never flag their absence in reviews, and never per
 feature implementation. A dedicated pre-merge step handles them at the correct time; doing them \
 earlier causes version conflicts between parallel PRs."
         ));
+        let readme = match Path::new(README).is_file() {
+            true => format!("{README}; "),
+            false => String::new(),
+        };
         assert!(text.contains(&format!(
             "about scramjet-rs itself — its commands, command sets, \
-next steps, delegation, settings, keys or the /autopilot on/off flag): {README}; `{} --help` \
+next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`{} --help` \
 (every option, key and built-in command)\n",
             std::env::current_exe().unwrap().display()
         )));
@@ -640,7 +644,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {README};
         std::fs::create_dir(root.join(".scramjet/APPEND_SYSTEM.md")).unwrap();
         let loaded = load(&SystemPrompt::default(), &root, Some(&home));
         assert!(loaded.appended.is_empty());
-        let unread = root.join(".scramjet/APPEND_SYSTEM.md");
+        let unread = crate::os::join(&root, ".scramjet/APPEND_SYSTEM.md");
         assert_eq!(loaded.problems.len(), 1);
         assert_eq!(
             loaded.problems[0].file,
@@ -728,9 +732,14 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
             .into_iter()
             .filter(|(path, _)| path.starts_with(&scratch))
             .collect();
+        // A file system that ignores case (Windows', macOS's by default) finds it as CLAUDE.md.
+        let claude = match outer.join("CLAUDE.md").is_file() {
+            true => "CLAUDE.md",
+            false => "CLAUDE.MD",
+        };
         let expected = [
             (home.join("AGENTS.md"), "Home."),
-            (outer.join("CLAUDE.MD"), "Outer claude."),
+            (outer.join(claude), "Outer claude."),
             (outer.join("AGENTS.md"), "Outer agents."),
             (root.join("CLAUDE.md"), "Same."),
         ]
@@ -743,7 +752,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
         let scratch =
             std::env::temp_dir().join(format!("sjrs-child-skills-{}", std::process::id()));
         let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
-        let file = scratch.join("pdf/SKILL.md");
+        let file = crate::os::join(&scratch, "pdf/SKILL.md");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "---\ndescription: PDFs.\n---\nBody").unwrap();
         let skills = Skills::in_directory(&scratch);

@@ -65,13 +65,13 @@ fn places(
     if options.no_skills {
         return given.collect();
     }
-    let user_agents = home.map(|home| home.join(".agents/skills"));
+    let user_agents = home.map(|home| crate::os::join(home, ".agents/skills"));
     let mut places = vec![(
-        root.join(".scramjet/skills"),
+        crate::os::join(root, ".scramjet/skills"),
         Place::Directory { top_files: true },
     )];
     for directory in root.ancestors() {
-        let skills = directory.join(".agents/skills");
+        let skills = crate::os::join(directory, ".agents/skills");
         if user_agents.as_ref() != Some(&skills) {
             places.push((skills, Place::Directory { top_files: false }));
         }
@@ -691,7 +691,7 @@ hyphens only)",
     #[test]
     fn the_catalog_lists_skills_the_model_may_load_and_a_skill_prompt_sends_its_instructions() {
         let scratch = scratch("expand");
-        let pdf = scratch.0.join("pdf/SKILL.md");
+        let pdf = crate::os::join(&scratch.0, "pdf/SKILL.md");
         write(&pdf, &skill("pdf", "Fills <forms> & \"merges\" PDFs."));
         write(
             &scratch.0.join("manual/SKILL.md"),

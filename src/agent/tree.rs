@@ -628,6 +628,9 @@ mod tests {
 
     #[test]
     fn going_back_to_a_question_asks_it_again_and_keeps_the_other_calls_results() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let question = json!({"type":"select","message":"Which?",
             "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]});
         let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
@@ -728,6 +731,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
     fn a_freetext_question_kept_after_one_asked_again_leaves_the_command_waiting() {
         let select = json!({"type":"select","message":"Which?",
             "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]});

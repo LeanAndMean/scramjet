@@ -997,6 +997,7 @@ Validation Failed (HTTP 422)",
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn the_system_runs_a_program_with_its_input_and_reports_how_it_ended() {
         let root = std::env::temp_dir();
         let cancel = AtomicBool::new(false);
