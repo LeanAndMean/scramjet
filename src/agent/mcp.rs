@@ -847,7 +847,7 @@ async fn run(
 ) -> Result<RunningService<RoleClient, ClientConfig>, String> {
     let mut command = match confined {
         Some((sandbox, named)) => {
-            sandbox::server(&root, program, &Hidden::current(named), *sandbox).into()
+            sandbox::server(&root, program, &Hidden::current(named), *sandbox)?.into()
         }
         None => tokio::process::Command::new(program),
     };
@@ -855,10 +855,10 @@ async fn run(
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value)))
         .current_dir(root)
-        .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    crate::os::own_group_async(&mut command);
     let (mut child, group) = Group::started(|| {
         let child = command.spawn()?;
         let id = child

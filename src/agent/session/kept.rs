@@ -7,8 +7,7 @@ use super::{full, make_directory, write_whole};
 use serde_json::{Value, json};
 use std::{
     fs::{File, OpenOptions},
-    io::{self, BufRead, BufReader, Read},
-    os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt},
+    io::{self, BufRead, BufReader, Read, Seek, Write},
     path::{Path, PathBuf},
 };
 
@@ -21,11 +20,15 @@ pub(super) fn directory() -> Option<PathBuf> {
     if let Some(runtime) = runtime.filter(|runtime| runtime.is_absolute() && runtime.is_dir()) {
         return Some(runtime.join("scramjet-rs-kept"));
     }
-    let shm = Path::new("/dev/shm");
-    // SAFETY: `geteuid` cannot fail.
-    let user = unsafe { libc::geteuid() };
-    shm.is_dir()
-        .then(|| shm.join(format!("scramjet-rs-kept-{user}")))
+    #[cfg(unix)]
+    {
+        let shm = Path::new("/dev/shm");
+        let user = rustix::process::geteuid().as_raw();
+        shm.is_dir()
+            .then(|| shm.join(format!("scramjet-rs-kept-{user}")))
+    }
+    #[cfg(not(unix))]
+    None
 }
 
 #[cfg(test)]
@@ -70,12 +73,9 @@ impl Kept {
         let id = std::process::id();
         for n in 0u32.. {
             let making = directory.join(format!("{name}.{id}-{n}.making"));
-            let opened = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&making);
+            let opened =
+                crate::os::private_file(OpenOptions::new().read(true).write(true).create_new(true))
+                    .open(&making);
             let file = match opened {
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 opened => opened?,
@@ -103,8 +103,9 @@ impl Kept {
         let mut header = serde_json::to_vec(&json!({"session": session, "size": size}))?;
         header.push(b'\n');
         self.file.set_len(0)?;
-        self.file.write_all_at(&header, 0)?;
-        self.file.write_all_at(held, header.len() as u64)
+        self.file.rewind()?;
+        self.file.write_all(&header)?;
+        self.file.write_all(held)
     }
 
     /// Removes the copy, its lines written or no longer wanted.
@@ -137,7 +138,7 @@ fn take(path: &Path) -> io::Result<Option<Taken>> {
         Err(std::fs::TryLockError::Error(error)) => return Err(error),
     }
     // Written out by another run between the open and the lock.
-    if file.metadata()?.nlink() == 0 {
+    if crate::os::removed(&file)? {
         return Ok(None);
     }
     let mut reader = BufReader::new(&file);

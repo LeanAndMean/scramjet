@@ -339,7 +339,7 @@ impl<'a> Call<'a> {
                 }
             }
             "bash" => {
-                let process = sandbox::sandboxed(root, self.str("command")?, hidden, sandbox);
+                let process = sandbox::sandboxed(root, self.str("command")?, hidden, sandbox)?;
                 let timeout = Some(timeout(self));
                 Ok(
                     run_process(process, sandbox::PROGRAM, timeout, cancel, progress)?
@@ -597,7 +597,6 @@ type Put<'a> = dyn Fn(&Path, &str) -> Result<(), String> + 'a;
 /// Writes `content` to `path`, checked against the stores `hidden` as opened, before the file
 /// is cut.
 fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String> {
-    use std::io::Write;
     let failed = |e: io::Error| format!("{}: {e}", path.display());
     let Some(hidden) = hidden else {
         if let Some(parent) = path.parent() {
@@ -605,6 +604,30 @@ fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String
         }
         return std::fs::write(path, content).map_err(failed);
     };
+    #[cfg(windows)]
+    {
+        use std::io::Write;
+        hidden.check(path)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path);
+        let mut file = hidden.opened(path, file)?;
+        file.set_len(0).map_err(failed)?;
+        file.write_all(content.as_bytes()).map_err(failed)
+    }
+    #[cfg(unix)]
+    put_checked(path, content, hidden)
+}
+
+#[cfg(unix)]
+fn put_checked(path: &Path, content: &str, hidden: &Hidden) -> Result<(), String> {
+    use std::io::Write;
+    let failed = |e: io::Error| format!("{}: {e}", path.display());
     use rustix::{
         fs::{Mode, OFlags},
         io::Errno,
@@ -630,6 +653,7 @@ fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String
 
 /// The directory `path`, checked against the stores `hidden` as opened, made where missing in
 /// the directory above it, itself checked first.
+#[cfg(unix)]
 fn checked_directory(path: &Path, hidden: &Hidden) -> Result<std::fs::File, String> {
     use rustix::{
         fs::{Mode, OFlags},
@@ -944,7 +968,7 @@ fn bash(
     let ran = match hidden {
         None => run_command(root, command, timeout, cancel, progress)?,
         Some(hidden) => {
-            let process = sandbox::hiding(root, command, hidden);
+            let process = sandbox::hiding(root, command, hidden)?;
             run_process(process, sandbox::PROGRAM, timeout, cancel, progress).map_err(|error| {
                 format!("{error}; it hides the credential stores from this command")
             })?
@@ -1024,10 +1048,8 @@ pub fn search_program(tool: &str) -> Option<PathBuf> {
         "grep" => ("rg", &["rg"]),
         _ => ("fd", &["fd", "fdfind"]),
     };
-    let executable = |path: &Path| {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    };
+    let executable = |path: &Path| std::fs::metadata(path).is_ok_and(|m| crate::os::executable(&m));
+    let binary = crate::os::program_file(binary);
     let local = super::subagent::agent_directory().map(|dir| dir.join("bin").join(binary));
     if let Some(local) = local.filter(|path| executable(path)) {
         return Some(local);
@@ -1035,37 +1057,41 @@ pub fn search_program(tool: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     names.iter().find_map(|name| {
         std::env::split_paths(&path)
-            .map(|directory| directory.join(name))
+            .map(|directory| directory.join(crate::os::program_file(name)))
             .find(|candidate| executable(candidate))
     })
 }
 
 /// `program` searching `path`: confined when there are credential stores to hide.
-fn search(root: &Path, path: &Path, program: &Path, hidden: Option<&Hidden>) -> Command {
+fn search(
+    root: &Path,
+    path: &Path,
+    program: &Path,
+    hidden: Option<&Hidden>,
+) -> Result<Command, String> {
     match hidden {
         Some(hidden) => sandbox::program(root, path, program, hidden),
         None => {
             let mut command = Command::new(program);
             command.current_dir(root);
-            command
+            Ok(command)
         }
     }
 }
 
 /// The process groups of the commands running, which `end_commands` kills.
-static GROUPS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 /// A command started in a process group of its own, which `end_commands` kills until this is
 /// dropped. Drop it once the command was waited for.
-pub(super) struct Group(i32);
+pub(super) struct Group(u32);
 
 impl Group {
     pub(super) fn spawn(command: &mut Command) -> io::Result<(std::process::Child, Self)> {
-        use std::os::unix::process::CommandExt;
         // Held while spawning, so that none starts once `end_commands` has run.
         let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
-        let child = command.process_group(0).spawn()?;
-        let group = child.id() as i32;
+        let child = crate::os::own_group(command).spawn()?;
+        let group = child.id();
         groups.push(group);
         Ok((child, Self(group)))
     }
@@ -1077,18 +1103,16 @@ impl Group {
     ) -> io::Result<(T, Self)> {
         let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
         let (started, id) = start()?;
-        groups.push(id as i32);
-        Ok((started, Self(id as i32)))
+        groups.push(id);
+        Ok((started, Self(id)))
     }
 
     pub(super) fn kill(&self) {
-        kill_group(self.0);
+        crate::os::kill_group(self.0);
     }
 
     pub(super) fn terminate(&self) {
-        if let Some(pid) = rustix::process::Pid::from_raw(self.0) {
-            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::TERM);
-        }
+        crate::os::end_group(self.0);
     }
 }
 
@@ -1099,17 +1123,11 @@ impl Drop for Group {
     }
 }
 
-fn kill_group(group: i32) {
-    if let Some(pid) = rustix::process::Pid::from_raw(group) {
-        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-    }
-}
-
 /// Kills the commands running, as cancelling them does, and keeps any other from starting, for a
 /// process about to exit.
 pub(super) fn end_commands() {
     let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
-    groups.drain(..).for_each(kill_group);
+    groups.drain(..).for_each(crate::os::kill_group);
     std::mem::forget(groups);
 }
 
@@ -1195,7 +1213,7 @@ fn grep(
         .as_u64()
         .map_or(GREP_LIMIT, |n| n.max(1) as usize);
     let program = search_program("grep").ok_or("ripgrep (rg) is not available")?;
-    let mut command = search(root, &path, &program, hidden);
+    let mut command = search(root, &path, &program, hidden)?;
     command.args(["--json", "--line-number", "--color=never", "--hidden"]);
     if call.arguments["ignoreCase"] == true {
         command.arg("--ignore-case");
@@ -1327,7 +1345,7 @@ fn find(
         .as_u64()
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
     let program = search_program("find").ok_or("fd is not available")?;
-    let mut command = search(root, &path, &program, hidden);
+    let mut command = search(root, &path, &program, hidden)?;
     command.args([
         "--glob",
         "--color=never",
@@ -1391,7 +1409,7 @@ pub(super) fn run_command(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let mut process = Command::new("bash");
+    let mut process = Command::new(crate::os::bash());
     process.arg("-c").arg(command).current_dir(root);
     run_process(process, "bash", timeout, cancel, progress)
 }
@@ -1405,7 +1423,7 @@ pub(super) fn run_sandboxed(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let process = sandbox::command(root, command, hidden);
+    let process = sandbox::command(root, command, hidden)?;
     run_process(process, sandbox::PROGRAM, timeout, cancel, progress)
 }
 

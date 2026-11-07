@@ -23,7 +23,6 @@ use crate::agent::client::Failure;
 use serde_json::{Map, Value, json};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    os::unix::process::CommandExt,
     path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
@@ -198,13 +197,13 @@ impl LoginProgram {
         }
         let path = crate::agent::providers::program_path(program, &self.directory);
         // In a group of its own, so that the processes it starts end with it.
-        let mut child = Command::new(&path)
+        let mut command = Command::new(&path);
+        let mut child = crate::os::own_group(&mut command)
             .args(&self.command[1..])
             .current_dir(&self.directory)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .process_group(0)
             .spawn()
             .map_err(|error| Failure::from(format!("cannot run {program}: {error}")))?;
         let mut input = child.stdin.take().expect("piped");
@@ -321,9 +320,7 @@ impl LoginProgram {
 
 /// Ends the program and what it started.
 fn stop(child: &mut Child) {
-    if let Some(group) = rustix::process::Pid::from_raw(child.id() as i32) {
-        let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
-    }
+    crate::os::kill_group(child.id());
     let _ = child.kill();
     let _ = child.wait();
 }

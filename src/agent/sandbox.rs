@@ -5,24 +5,30 @@
 //! otherwise the main agent's commands with only the credential stores hidden. On macOS the
 //! same through Seatbelt (`seatbelt`).
 
+#[cfg(unix)]
 mod seatbelt;
 
 use std::{
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
-pub(super) const PROGRAM: &str = match cfg!(target_os = "macos") {
-    true => seatbelt::PROGRAM,
-    false => "bwrap",
-};
+#[cfg(target_os = "macos")]
+pub(super) const PROGRAM: &str = seatbelt::PROGRAM;
+#[cfg(windows)]
+pub(super) const PROGRAM: &str = "the sandbox";
+#[cfg(not(any(target_os = "macos", windows)))]
+pub(super) const PROGRAM: &str = "bwrap";
 
 /// How the sandbox's program starts its own error messages.
 pub(super) const FAILED: &str = match cfg!(target_os = "macos") {
     true => "sandbox-exec:",
     false => "bwrap:",
 };
+
+/// Why nothing runs confined on Windows, where scramjet-rs has no sandbox yet.
+#[cfg(windows)]
+const UNAVAILABLE: &str = "scramjet-rs has no sandbox on Windows yet";
 
 /// Credential stores in the home directory that subagents, and the main agent when its
 /// credentials are hidden, do not see, after an agent printed `~/.scramjet/agent/auth.json` to
@@ -54,6 +60,7 @@ const HIDDEN_DIRECTORIES: [&str; 9] = [
 
 /// Words that mark an environment variable as holding a credential, at the end of its name or
 /// between underscores: `ANTHROPIC_API_KEY`, `HF_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `PGPASSWORD`.
+#[cfg(unix)]
 const CREDENTIAL_WORDS: [&str; 6] = [
     "TOKEN",
     "SECRET",
@@ -153,6 +160,12 @@ impl Sandbox {
 
 /// Writes `content` to `real`, a path in the real directory `root`, opening each directory
 /// below `root` from the one above it and the file without following a symlink.
+#[cfg(windows)]
+fn write_beneath(_: &Path, _: &Path, _: &[u8]) -> Result<(), String> {
+    Err(UNAVAILABLE.to_owned())
+}
+
+#[cfg(unix)]
 fn write_beneath(root: &Path, real: &Path, content: &[u8]) -> Result<(), String> {
     use rustix::{
         fs::{Mode, OFlags},
@@ -264,6 +277,7 @@ fn pointed_to(dotgit: &Path) -> Option<PathBuf> {
 /// The directories between the real directory `root` and each path `kept` in it, to be mounted
 /// on themselves: a command can rename a directory holding a mount, then put another Git
 /// directory where the protected one was, but not rename a mount point itself.
+#[cfg(unix)]
 fn pinned(root: &Path, kept: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
     kept.iter()
         .filter_map(|path| path.strip_prefix(root).ok())
@@ -274,7 +288,9 @@ fn pinned(root: &Path, kept: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> 
 }
 
 /// WSL2 mounts the root filesystem again here (`distro`), next to WSLg's X11 and audio sockets.
+#[cfg(unix)]
 const WSLG: &str = "/mnt/wslg";
+#[cfg(unix)]
 const WSLG_DISTRO: &str = "/mnt/wslg/distro";
 
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
@@ -286,6 +302,7 @@ pub(super) struct Hidden {
     /// Device and inode of each, which another mount of the same filesystem shares.
     identities: Vec<(u64, u64)>,
     /// The `TMUX_TMPDIR` of tmux servers that commands with the stores hidden start.
+    #[cfg_attr(windows, allow(dead_code))]
     tmux: Option<PathBuf>,
 }
 
@@ -294,11 +311,15 @@ impl Hidden {
     /// `SCRAMJET_CODING_AGENT_DIR` puts it, scramjet-rs's own (`login::auth_file`), the files and
     /// directories `named` (the providers' `credentialFiles`), and this user's tmux servers.
     pub(super) fn current(named: &[PathBuf]) -> Hidden {
+        #[cfg_attr(windows, allow(unused_mut))]
         let mut hidden = Hidden::stores(named);
-        let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
-        let base = base.map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
-        let own = super::session::state_directory().map(|directory| directory.join("tmux"));
-        hidden.keep_tmux_apart(&base, own.ok());
+        #[cfg(unix)]
+        {
+            let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
+            let base = base.map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+            let own = super::session::state_directory().map(|directory| directory.join("tmux"));
+            hidden.keep_tmux_apart(&base, own.ok());
+        }
         hidden
     }
 
@@ -344,6 +365,7 @@ impl Hidden {
 
     /// Whether `path` is in a hidden directory or holds a hidden store, which a mount there would
     /// fail or uncover.
+    #[cfg(unix)]
     fn overlaps(&self, path: &Path) -> bool {
         let mut directories = self.directories.iter();
         directories.any(|directory| path.starts_with(directory))
@@ -357,13 +379,13 @@ impl Hidden {
     /// Hides the sockets of tmux servers under `base` (as `TMUX_TMPDIR`), which run what a client
     /// asks with everything visible, and has hidden commands start their own under `own`, so that
     /// sessions the user opens on a server of `base` never have the stores hidden.
+    #[cfg(unix)]
     fn keep_tmux_apart(&mut self, base: &Path, own: Option<PathBuf>) {
-        use std::os::unix::fs::DirBuilderExt;
         let name = format!("tmux-{}", rustix::process::getuid().as_raw());
         let sockets = base.join(&name);
         // Made as tmux makes it: bubblewrap would leave a mount point it made open to others,
         // which tmux then refuses to use.
-        let _ = std::fs::DirBuilder::new().mode(0o700).create(&sockets);
+        let _ = crate::os::private_directory(&mut std::fs::DirBuilder::new()).create(&sockets);
         let own = own
             .filter(|own| std::fs::create_dir_all(own).is_ok())
             .and_then(|own| std::fs::canonicalize(own).ok());
@@ -407,7 +429,14 @@ impl Hidden {
     pub(super) fn check(&self, path: &Path) -> Result<(), String> {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         let mut identities = real.ancestors().filter_map(identity);
-        match identities.any(|found| self.identities.contains(&found)) {
+        let found = match cfg!(unix) {
+            true => identities.any(|found| self.identities.contains(&found)),
+            // No identity to compare: by the stores' real paths.
+            false => {
+                (self.files.iter().chain(&self.directories)).any(|store| real.starts_with(store))
+            }
+        };
+        match found {
             true => Err(format!(
                 "{}: hidden, as it holds credentials",
                 path.display()
@@ -438,6 +467,12 @@ impl Hidden {
     /// Whether `file` (opened at `path`) is, or is in, a store, walking up from the directory
     /// holding it by `..`, never by path: a bash call with the stores hidden cannot move their
     /// mount points, but can rename the directories above them while a path is looked up.
+    #[cfg(windows)]
+    fn holds(&self, _: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+        Ok(self.check(path).is_err())
+    }
+
+    #[cfg(unix)]
     fn holds(&self, file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
         use rustix::fs::{AtFlags, FileType, Mode, OFlags};
         let up = LOOKUP | OFlags::DIRECTORY | OFlags::CLOEXEC;
@@ -477,7 +512,7 @@ impl Hidden {
 }
 
 /// Where an open file is now, as the system knows it, not by its path, which a rename can change.
-#[cfg(not(target_vendor = "apple"))]
+#[cfg(all(unix, not(target_vendor = "apple")))]
 fn opened_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
     use std::os::fd::AsRawFd;
     std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
@@ -494,39 +529,58 @@ fn opened_path(file: &std::fs::File) -> std::io::Result<PathBuf> {
 /// Opens a directory to look in, needing no permission to list it where the system allows.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(super) const LOOKUP: rustix::fs::OFlags = rustix::fs::OFlags::PATH;
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
 pub(super) const LOOKUP: rustix::fs::OFlags = rustix::fs::OFlags::RDONLY;
 
 fn identity(path: &Path) -> Option<(u64, u64)> {
-    std::fs::metadata(path)
-        .ok()
-        .map(|metadata| (metadata.dev(), metadata.ino()))
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path)
+            .ok()
+            .map(|metadata| (metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 /// `bash -c command` in `root`, confined.
-pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Command {
-    let mut process = confined(root, None, hidden, None, None);
+pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Result<Command, String> {
+    let mut process = confined(root, None, hidden, None, None)?;
     process.args(["bash", "-c"]).arg(command);
-    process
+    Ok(process)
 }
 
 /// `bash -c command` in `root`, confined as `sandbox` says.
-pub(super) fn sandboxed(root: &Path, command: &str, hidden: &Hidden, sandbox: Sandbox) -> Command {
-    let mut process = confined(root, None, hidden, Some(sandbox), None);
+pub(super) fn sandboxed(
+    root: &Path,
+    command: &str,
+    hidden: &Hidden,
+    sandbox: Sandbox,
+) -> Result<Command, String> {
+    let mut process = confined(root, None, hidden, Some(sandbox), None)?;
     process.args(["bash", "-c"]).arg(command);
-    process
+    Ok(process)
 }
 
 /// `program` (its arguments to follow) in `root`, confined as `sandbox` says: an MCP server.
 /// Its package managers' caches (uv's, npm's, and others' under `XDG_CACHE_HOME`) are moved to
 /// a directory only sandboxed servers use, writable to them, as `uvx` and `npx` fail on a
 /// read-only cache; nothing outside the sandbox runs what is put there.
-pub(super) fn server(root: &Path, program: &str, hidden: &Hidden, sandbox: Sandbox) -> Command {
+pub(super) fn server(
+    root: &Path,
+    program: &str,
+    hidden: &Hidden,
+    sandbox: Sandbox,
+) -> Result<Command, String> {
     let cache = super::session::state_directory().map(|directory| directory.join("sandbox-cache"));
     let cache = (cache.ok())
         .filter(|cache| std::fs::create_dir_all(cache).is_ok())
         .and_then(|cache| std::fs::canonicalize(cache).ok());
-    let mut process = confined(root, None, hidden, Some(sandbox), cache.as_deref());
+    let mut process = confined(root, None, hidden, Some(sandbox), cache.as_deref())?;
     if let Some(cache) = &cache {
         process
             .env("XDG_CACHE_HOME", cache)
@@ -534,14 +588,20 @@ pub(super) fn server(root: &Path, program: &str, hidden: &Hidden, sandbox: Sandb
             .env("npm_config_cache", cache.join("npm"));
     }
     process.arg(program);
-    process
+    Ok(process)
 }
 
 /// `bash -c command` in `root` with everything as it is, writable and on the network, except the
 /// credential stores, hidden as in the sandbox (`scripts/without-credentials.sh`). Unlike the
 /// sandbox, it shares the process ids and session, so that a command's `setsid nohup … &` outlives
 /// it, as outside.
-pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
+#[cfg(windows)]
+pub(super) fn hiding(_: &Path, _: &str, _: &Hidden) -> Result<Command, String> {
+    Err(format!("{UNAVAILABLE} to hide the credential stores in"))
+}
+
+#[cfg(unix)]
+pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Command, String> {
     if cfg!(target_os = "macos") {
         let (files, directories) = hidden.mounted();
         let mut process = seatbelt::open(root, (files.collect(), directories.collect()));
@@ -550,7 +610,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
             process.env("TMUX_TMPDIR", own);
         }
         process.args(["bash", "-c"]).arg(command);
-        return process;
+        return Ok(process);
     }
     let mut process = Command::new(PROGRAM);
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
@@ -563,15 +623,20 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Command {
     }
     process.arg("--chdir").arg(root).args(["--", "bash", "-c"]);
     process.arg(command);
-    process
+    Ok(process)
 }
 
 /// `program` (its arguments to follow) confined as `command` is, with `path`, which it reads,
 /// mounted again too.
-pub(super) fn program(root: &Path, path: &Path, program: &Path, hidden: &Hidden) -> Command {
-    let mut process = confined(root, Some(path), hidden, None, None);
+pub(super) fn program(
+    root: &Path,
+    path: &Path,
+    program: &Path,
+    hidden: &Hidden,
+) -> Result<Command, String> {
+    let mut process = confined(root, Some(path), hidden, None, None)?;
     process.arg(program);
-    process
+    Ok(process)
 }
 
 /// Bubblewrap up to the program to run. Its own namespaces keep the program off the network
@@ -584,17 +649,29 @@ pub(super) fn program(root: &Path, path: &Path, program: &Path, hidden: &Hidden)
 /// protected in it, and shares the network as it says, with the name servers that
 /// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's). `writable_too`, a real
 /// path, is mounted writable last.
+#[cfg(windows)]
+fn confined(
+    _: &Path,
+    _: Option<&Path>,
+    _: &Hidden,
+    _: Option<Sandbox>,
+    _: Option<&Path>,
+) -> Result<Command, String> {
+    Err(UNAVAILABLE.to_owned())
+}
+
+#[cfg(unix)]
 fn confined(
     root: &Path,
     also: Option<&Path>,
     hidden: &Hidden,
     sandbox: Option<Sandbox>,
     writable_too: Option<&Path>,
-) -> Command {
+) -> Result<Command, String> {
     let writable = sandbox.is_some_and(|sandbox| sandbox.mode == SandboxMode::WorkspaceWrite);
     let network = sandbox.is_some_and(|sandbox| sandbox.network);
     if cfg!(target_os = "macos") {
-        return closed(root, hidden, writable, network, writable_too);
+        return Ok(closed(root, hidden, writable, network, writable_too));
     }
     let mut process = Command::new(PROGRAM);
     process.args([
@@ -656,12 +733,13 @@ fn confined(
         process.arg("--bind").arg(path).arg(path);
     }
     process.arg("--chdir").arg(root).arg("--");
-    process
+    Ok(process)
 }
 
 /// `confined` on macOS: Seatbelt's closed profile, with the temporary directories writable
 /// (`seatbelt::temporary`), the project too in `workspace-write` but what it protects, also
 /// where it does not exist yet.
+#[cfg(unix)]
 fn closed(
     root: &Path,
     hidden: &Hidden,
@@ -705,6 +783,7 @@ fn closed(
 
 /// Leaves out the environment variables that hold credentials and those that lead tmux to the
 /// server the agent runs in.
+#[cfg(unix)]
 fn hide_variables(process: &mut Command) {
     for (name, _) in std::env::vars_os() {
         if holds_credential(&name.to_string_lossy()) {
@@ -717,6 +796,7 @@ fn hide_variables(process: &mut Command) {
 /// Mounts an empty file over each hidden file and an empty directory over each hidden directory,
 /// both read-only, and leaves out the environment variables that hold credentials and those
 /// that lead tmux to the server the agent runs in.
+#[cfg(unix)]
 fn hide(process: &mut Command, hidden: &Hidden) {
     hide_variables(process);
     let (files, directories) = hidden.mounted();
@@ -733,6 +813,7 @@ fn hide(process: &mut Command, hidden: &Hidden) {
     }
 }
 
+#[cfg(unix)]
 fn holds_credential(name: &str) -> bool {
     let name = name.to_ascii_uppercase();
     CREDENTIAL_WORDS
@@ -742,6 +823,7 @@ fn holds_credential(name: &str) -> bool {
 
 /// An empty file for hidden files to show, in scramjet-rs's state directory; else `/dev/null`,
 /// which reads as permission denied, so that a search reports an error for it.
+#[cfg(unix)]
 fn empty_file() -> PathBuf {
     super::session::state_directory()
         .and_then(|directory| empty_in(&directory))
@@ -751,8 +833,9 @@ fn empty_file() -> PathBuf {
 /// `directory/empty`, made again when it is anything but an empty file of its own. Commands with
 /// the stores hidden can write `directory`, so it is never written through: a link there to a
 /// credential store would have it emptied.
+#[cfg(unix)]
 fn empty_in(directory: &Path) -> std::io::Result<PathBuf> {
-    use std::io::ErrorKind;
+    use std::{io::ErrorKind, os::unix::fs::MetadataExt};
     let path = directory.join("empty");
     match std::fs::symlink_metadata(&path) {
         Ok(m) if m.is_file() && m.len() == 0 && m.nlink() == 1 => return Ok(path),
@@ -769,7 +852,7 @@ fn empty_in(directory: &Path) -> std::io::Result<PathBuf> {
 
 /// Whether commands can run in the sandbox here; otherwise why not.
 pub(super) fn available() -> Result<(), String> {
-    let output = command(Path::new("/"), "true", &Hidden::current(&[]))
+    let output = command(Path::new("/"), "true", &Hidden::current(&[]))?
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("cannot start {PROGRAM}: {error}"))?;
@@ -867,6 +950,7 @@ ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
         ] {
             let sandbox = Sandbox { mode, network };
             let output = super::sandboxed(&root, &script, &hidden, sandbox)
+                .unwrap()
                 .output()
                 .unwrap();
             let _ = std::fs::remove_file(&probe);
@@ -967,6 +1051,7 @@ touch vendor/lib/.git/hooks/post-checkout && rm -rf build && mv vendor v2 && ech
             network: false,
         };
         let output = super::sandboxed(&root, script, &hidden, sandbox)
+            .unwrap()
             .output()
             .unwrap();
         let errors = String::from_utf8_lossy(&output.stderr);
@@ -1135,6 +1220,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             script,
             &super::Hidden::under(&home, Vec::new()),
         )
+        .unwrap()
         .output()
         .unwrap();
         let errors = String::from_utf8_lossy(&output.stderr);
@@ -1179,8 +1265,8 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let script = "cat a.txt; ls -A ../.config; cat ../token.txt ../.ssh/named; grep -r SECRET ..; echo done";
         let root = home.join("project");
         for mut process in [
-            super::command(&root, script, &hidden),
-            super::hiding(&root, script, &hidden),
+            super::command(&root, script, &hidden).unwrap(),
+            super::hiding(&root, script, &hidden).unwrap(),
         ] {
             let output = process.output().unwrap();
             let errors = String::from_utf8_lossy(&output.stderr);
@@ -1278,6 +1364,7 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
             &script,
             &super::Hidden::under(&home, Vec::new()),
         )
+        .unwrap()
         .output()
         .unwrap();
         let errors = String::from_utf8_lossy(&output.stderr);
@@ -1368,7 +1455,7 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
             out = outside.display(),
             socket = socket.display(),
         );
-        let mut process = super::hiding(&home.join("project"), &script, &hidden);
+        let mut process = super::hiding(&home.join("project"), &script, &hidden).unwrap();
         let envs: Vec<_> = process.get_envs().collect();
         assert!(envs.contains(&("TMUX".as_ref(), None)), "{envs:?}");
         assert!(envs.contains(&("TMUX_TMPDIR".as_ref(), Some(own.as_ref()))));
@@ -1401,7 +1488,10 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
             own.display(),
             reached.display()
         );
-        let output = super::command(&own, &script, &hidden).output().unwrap();
+        let output = super::command(&own, &script, &hidden)
+            .unwrap()
+            .output()
+            .unwrap();
         assert!(!reached.exists(), "{output:?}");
 
         // scramjet-rs run where TMUX_TMPDIR is already its own, as in a session a hidden command
@@ -1410,6 +1500,7 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
         nested.keep_tmux_apart(&own, Some(own.clone()));
         let script = "tmux new-session -d -s nested 'sleep 300' && tmux ls -F '#S'";
         let output = super::hiding(&home.join("project"), script, &nested)
+            .unwrap()
             .output()
             .unwrap();
         assert_eq!(

@@ -18,12 +18,11 @@ pub use program::{LoginProgram, Said};
 
 use super::client::{Failure, Fetched};
 use super::{codex, copilot};
-use rustix::{fs::FallocateFlags, io::Errno};
+use crate::os;
 use serde_json::{Map, Value};
 use std::{
     collections::BTreeMap,
     io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -268,13 +267,9 @@ fn access_with(
 /// hides only the files that exist when it starts, and a tmux server started in one keeps it.
 pub(super) fn make(path: &Path) {
     let directory = path.parent().unwrap_or(Path::new("."));
-    let made = std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(directory);
-    let file = (std::fs::OpenOptions::new().write(true).create_new(true))
-        .mode(0o600)
-        .open(path);
+    let made = os::private_directory(std::fs::DirBuilder::new().recursive(true)).create(directory);
+    let file =
+        os::private_file(std::fs::OpenOptions::new().write(true).create_new(true)).open(path);
     if let (Ok(()), Ok(mut file)) = (made, file) {
         let _ = file.write_all(b"{}\n");
     }
@@ -336,7 +331,7 @@ pub(super) fn saved(path: &Path) -> Result<Map<String, Value>, String> {
     // Without the lock, in a sandbox that cannot open it, the file is read anyway.
     let lock = std::fs::File::open(lock_file(path)).ok();
     if let Some(lock) = &lock {
-        let _ = rustix::fs::flock(lock, rustix::fs::FlockOperation::LockShared);
+        let _ = lock.lock_shared();
     }
     let mut saved = read(path)?;
     let held = held(path);
@@ -389,19 +384,12 @@ fn update<T, E: From<String>>(
 ) -> Result<T, E> {
     let failed = |error: std::io::Error| E::from(format!("{}: {error}", path.display()));
     let directory = path.parent().unwrap_or(Path::new("."));
-    let made = std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(directory);
+    let made = os::private_directory(std::fs::DirBuilder::new().recursive(true)).create(directory);
     made.map_err(failed)?;
-    let lock = (std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .mode(0o600))
-    .open(lock_file(path))
-    .map_err(failed)?;
-    rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)
-        .map_err(|error| failed(error.into()))?;
+    let lock = os::private_file(std::fs::OpenOptions::new().create(true).append(true))
+        .open(lock_file(path))
+        .map_err(failed)?;
+    lock.lock().map_err(failed)?;
     let file = read(path)?;
     let held = held(path);
     let mut saved = file.clone();
@@ -432,17 +420,22 @@ fn update<T, E: From<String>>(
 /// Writes `text` over the contents of `path`, in place (the module says why), once the disk has
 /// given it room: a full disk leaves them as they were, where truncating first would lose them.
 fn write_in_place(path: &Path, text: &[u8]) -> std::io::Result<()> {
-    let mut file = (std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false))
-    .mode(0o600)
+    let mut file = os::private_file(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false),
+    )
     .open(path)?;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    let room = rustix::fs::fallocate(&file, FallocateFlags::empty(), 0, text.len() as u64);
-    match room {
-        Ok(()) | Err(Errno::OPNOTSUPP | Errno::NOSYS) => {}
-        Err(error) => return Err(error.into()),
+    os::make_private(&file)?;
+    #[cfg(unix)]
+    {
+        use rustix::{fs::FallocateFlags, io::Errno};
+        let room = rustix::fs::fallocate(&file, FallocateFlags::empty(), 0, text.len() as u64);
+        match room {
+            Ok(()) | Err(Errno::OPNOTSUPP | Errno::NOSYS) => {}
+            Err(error) => return Err(error.into()),
+        }
     }
     file.write_all(text)?;
     file.set_len(text.len() as u64)?;
@@ -643,6 +636,7 @@ mod tests {
             path.display()
         );
         let running = sandbox::hiding(&scratch.0, &script, &hidden)
+            .unwrap()
             .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();

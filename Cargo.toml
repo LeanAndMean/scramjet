@@ -33,3 +33,6 @@ x11rb = { version = "=0.13.2", default-features = false }
 sse-stream = { version = "=0.2.6", default-features = false }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Threading"] }

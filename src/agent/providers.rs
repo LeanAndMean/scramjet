@@ -23,7 +23,6 @@ use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
     io::Read,
-    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc,
@@ -1012,16 +1011,16 @@ fn run(words: &[&str], directory: &Path) -> Result<Vec<u8>, String> {
     let program = words[0];
     let path = program_path(program, directory);
     // In a group of its own, so that the processes it starts end with it.
-    let mut child = Command::new(&path)
+    let mut command = Command::new(&path);
+    let mut child = crate::os::own_group(&mut command)
         .args(&words[1..])
         .current_dir(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
         .spawn()
         .map_err(|error| format!("cannot run {program}: {error}"))?;
-    let group = rustix::process::Pid::from_raw(child.id() as i32);
+    let group = child.id();
     let (mut stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     // What is past the limits is read and dropped: a closed pipe would end the program.
     let (sender, output) = mpsc::channel();
@@ -1042,9 +1041,7 @@ fn run(words: &[&str], directory: &Path) -> Result<Vec<u8>, String> {
     });
     let deadline = Instant::now() + COMMAND_TIMEOUT;
     let timed_out = |child: &mut std::process::Child| {
-        if let Some(group) = group {
-            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
-        }
+        crate::os::kill_group(group);
         let _ = child.kill();
         let _ = child.wait();
         let seconds = COMMAND_TIMEOUT.as_secs();

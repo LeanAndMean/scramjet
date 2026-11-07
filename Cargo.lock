@@ -928,6 +928,7 @@ dependencies = [
  "two-face",
  "unicode-segmentation",
  "unicode-width",
+ "windows-sys 0.61.2",
  "x11rb",
  "yaml-rust2",
 ]

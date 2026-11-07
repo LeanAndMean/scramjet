@@ -641,15 +641,13 @@ fn new_name(directory: &Path) -> (PathBuf, u128) {
 /// the user's own directory, not a link: an `Unsaved` directory a full disk kept from being made at
 /// start is made in the shared temporary directory, where another user could have made its name.
 fn make_directory(directory: &Path) -> io::Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     if let Some(parent) = directory.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
-    match std::fs::DirBuilder::new().mode(0o700).create(directory) {
+    match crate::os::private_directory(&mut std::fs::DirBuilder::new()).create(directory) {
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             let found = std::fs::symlink_metadata(directory)?;
-            // SAFETY: `geteuid` cannot fail.
-            if !found.is_dir() || found.uid() != unsafe { libc::geteuid() } {
+            if !found.is_dir() || !crate::os::owned(&found) {
                 return Err(io::Error::other(format!(
                     "{}: not a directory of this user's",
                     directory.display()
@@ -732,14 +730,13 @@ extern "C" fn remove_unsaved() {
 
 impl Unsaved {
     pub fn create() -> io::Result<Self> {
-        use std::os::unix::fs::DirBuilderExt;
         static AT_EXIT: std::sync::Once = std::sync::Once::new();
         // SAFETY: `remove_unsaved` neither unwinds nor exits.
         AT_EXIT.call_once(|| unsafe {
             libc::atexit(remove_unsaved);
         });
         let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
+        crate::os::private_directory(&mut builder);
         let mut n = 0u64;
         loop {
             let name = format!("scramjet-rs-unsaved-{}-{n}", std::process::id());
@@ -1292,14 +1289,10 @@ impl Session {
 
     /// Whether `path` is this session's file, however it is named.
     pub fn is_file(&self, path: &Path) -> bool {
-        use std::os::unix::fs::MetadataExt;
         let Some(file) = &self.file else {
             return false;
         };
-        match (file.metadata(), std::fs::metadata(path)) {
-            (Ok(own), Ok(other)) => own.dev() == other.dev() && own.ino() == other.ino(),
-            _ => false,
-        }
+        crate::os::same_file(file, path)
     }
 
     pub fn path(&self) -> &Path {
