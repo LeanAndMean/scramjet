@@ -1,0 +1,33 @@
+{
+  "size": "100x40",
+  "settings": {"theme": "scramjet-dark"},
+  "provider": {
+    "api": "openai-codex-responses",
+    "apiKey": "eyJhbGciOiJSUzI1NiJ9.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOiB7ImNoYXRncHRfYWNjb3VudF9pZCI6ICJhY2Mtc2NyZWVucyJ9LCAiZXhwIjogNDEwMjQ0NDgwMH0.c2ln"
+  },
+  "headers": {
+    "x-codex-primary-used-percent": "41",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-at": "1794040000"
+  },
+  "prompt": "Say hello.",
+  "replies": [
+    [{"text": "Hello."}],
+    {"status": 429,
+     "body": {"error": {"code": "usage_limit_reached", "plan_type": "plus", "resets_at": 4102444800}},
+     "headers": {
+       "x-codex-primary-used-percent": "100",
+       "x-codex-primary-window-minutes": "300",
+       "x-codex-primary-reset-at": "4102444800"
+     }}
+  ],
+  "steps": [
+    {"until": "Hello."},
+    {"type": "Again.\r"},
+    {"until": "usage limit"},
+    {"type": "/usage\r"},
+    {"until": "session files"},
+    {"sleep": 0.5},
+    {"shot": "usage-limit"}
+  ]
+}

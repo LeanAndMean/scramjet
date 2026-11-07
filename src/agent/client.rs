@@ -148,6 +148,8 @@ pub(super) struct Failure {
     pub overflow: bool,
     /// The provider's Retry-After wait; `Duration::MAX` when it is unrepresentable.
     pub wait: Option<Duration>,
+    /// What its response's headers said of the account's quota, as a reply's.
+    pub quota: Option<super::quota::Quota>,
 }
 
 /// A failure nothing says another attempt may cure, such as a file's.
@@ -170,6 +172,7 @@ impl Failure {
             transient,
             overflow: false,
             wait: None,
+            quota: None,
         }
     }
     /// A failure the provider explained, classified by its error code, then by its message.
@@ -406,6 +409,7 @@ async fn exchange(
                 overflow: overflows(&text)
                     || (matches!(status.as_u16(), 400 | 413) && text.trim().is_empty()),
                 wait,
+                quota: None,
             }),
         }
     } else {
@@ -428,13 +432,17 @@ async fn exchange(
         }
     };
     driver.abort();
-    result.map(|reply| Reply {
-        priced_by,
-        quota,
-        headers_at,
-        first_output_at,
-        ..reply
-    })
+    match result {
+        Ok(reply) => Ok(Reply {
+            priced_by,
+            quota,
+            headers_at,
+            first_output_at,
+            ..reply
+        }),
+        // A response refused at the limit reports the quota too.
+        Err(failure) => Err(Failure { quota, ..failure }),
+    }
 }
 
 /// What a request other than a model's (a login's) was answered: its status and body.

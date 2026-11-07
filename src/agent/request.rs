@@ -105,7 +105,6 @@ impl Agent {
     /// Counts a response's usage, and its output rate when it is a step of the turn.
     fn count(&mut self, model: &str, reply: &client::Reply, purpose: Purpose) {
         self.usage.count(reply);
-        super::quota::kept_from(model, reply);
         if purpose == Purpose::Reply
             && let Some(path) = &self.rates
         {
@@ -394,6 +393,7 @@ pub(super) fn send(
                 match executor.block_on(client::respond(sent, body.clone(), cancel, &mut progress))
                 {
                     Ok(mut reply) => {
+                        super::quota::keep(&route.provider, reply.quota.as_ref());
                         reply.elapsed = started.elapsed();
                         reply.timing = Some(client::Timing {
                             started_at: sent_at.map_or_else(SystemTime::now, |(at, _)| at),
@@ -407,7 +407,10 @@ pub(super) fn send(
                         return Ok(reply);
                     }
                     Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
-                    Err(ClientError::Failed(failure)) => failure,
+                    Err(ClientError::Failed(failure)) => {
+                        super::quota::keep(&route.provider, failure.quota.as_ref());
+                        failure
+                    }
                 }
             }
         };

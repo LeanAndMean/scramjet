@@ -220,14 +220,11 @@ pub(super) fn path() -> Option<PathBuf> {
     Some(super::session::state_directory().ok()?.join("quota.json"))
 }
 
-/// Keeps the quota `reply` from `model` (`provider/id`) reported, as its provider's.
-pub(super) fn kept_from(model: &str, reply: &super::client::Reply) {
-    let (Some(quota), Some(path)) = (&reply.quota, path()) else {
+/// Keeps the quota a response from `provider` reported, if any, as that provider's.
+pub(super) fn keep(provider: &str, quota: Option<&Quota>) {
+    let (Some(quota), Some(path)) = (quota, path()) else {
         return;
     };
-    let provider = model
-        .split_once('/')
-        .map_or(model, |(provider, _)| provider);
     // The quota is only shown; a session goes on without it.
     let _ = record(&path, provider, quota);
 }
@@ -372,7 +369,17 @@ mod tests {
             "x-quota-snapshot-premium_interactions: ent=300&ov=0.0&ovPerm=false&rem=80&\
              rst=2026-12-01T00%3A00%3A00Z\r\n",
         );
-        let (endpoint, server) = super::super::tests::serve(vec![codex, copilot, response("")]);
+        let limit = br#"{"error":{"code":"usage_limit_reached","plan_type":"plus"}}"#;
+        let mut refused = format!(
+            "HTTP/1.1 429 Too Many Requests\r\ncontent-type: application/json\r\n\
+             x-codex-primary-used-percent: 100\r\nx-codex-primary-window-minutes: 300\r\n\
+             content-length: {}\r\n\r\n",
+            limit.len()
+        )
+        .into_bytes();
+        refused.extend(limit);
+        let (endpoint, server) =
+            super::super::tests::serve(vec![codex, copilot, response(""), refused]);
         let route = Route {
             provider: "openai-codex".into(),
             tls: false,
@@ -388,7 +395,7 @@ mod tests {
             .build()
             .unwrap();
         let compat = Default::default();
-        let reply = |protocol| {
+        let respond = |protocol| {
             let sent = Sent {
                 route: &route,
                 protocol,
@@ -398,9 +405,9 @@ mod tests {
             };
             let cancel = std::sync::atomic::AtomicBool::new(false);
             let body = br#"{"model":"m"}"#.to_vec();
-            let reply = runtime.block_on(respond(sent, body, &cancel, &mut |_| {}));
-            reply.ok().unwrap()
+            runtime.block_on(respond(sent, body, &cancel, &mut |_| {}))
         };
+        let reply = |protocol| respond(protocol).ok().unwrap();
         let quota = reply(Protocol::Codex).quota.unwrap();
         assert_eq!(
             quota.windows,
@@ -431,6 +438,18 @@ mod tests {
             }]
         );
         assert_eq!(reply(Protocol::Responses).quota, None);
+        let Err(super::super::client::ClientError::Failed(failure)) = respond(Protocol::Codex)
+        else {
+            panic!("a refused response is a failure");
+        };
+        assert!(
+            failure.message.contains("usage limit"),
+            "{}",
+            failure.message
+        );
+        let windows = failure.quota.unwrap().windows;
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].used_percent, 100.0);
         server.join().unwrap();
     }
 

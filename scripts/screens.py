@@ -35,7 +35,9 @@ A scenario (scripts/screens/*.json) holds:
     "prompt":   the first message;
     "replies":  each response's items, in turn: {"reasoning": TEXT}, {"text": TEXT} or
                 {"call": NAME, "arguments": {...}}; the tools run for real; a text with
-                "pace": SECONDS streams word by word, SECONDS apart;
+                "pace": SECONDS streams word by word, SECONDS apart; or a refusal,
+                {"status": CODE, "body": JSON, "headers": {NAME: TEXT}}, its headers replacing
+                "headers";
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
                 {"sleep": SECONDS}, {"shot": NAME} writes NAME.ansi and NAME.png.
 
@@ -144,7 +146,8 @@ def serve(replies, headers=None):
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
-    streams = [stream(*items(reply, number)) for number, reply in enumerate(replies)]
+    streams = [reply if isinstance(reply, dict) else stream(*items(reply, number))
+               for number, reply in enumerate(replies)]
 
     def answer():
         pending = iter(streams)
@@ -152,6 +155,15 @@ def serve(replies, headers=None):
             connection, _ = listener.accept()
             receive(connection)
             pieces = next(pending, None) or stream(*items([{'text': 'No more replies.'}], len(streams)))
+            if isinstance(pieces, dict):
+                body = json.dumps(pieces.get('body', {})).encode()
+                own = b''.join(b'%s: %s\r\n' % (name.encode(), str(text).encode())
+                               for name, text in pieces.get('headers', {}).items())
+                connection.sendall(b'HTTP/1.1 %d Refused\r\ncontent-type: application/json\r\n'
+                                   b'content-length: %d\r\nconnection: close\r\n%s\r\n%s'
+                                   % (pieces['status'], len(body), own, body))
+                connection.close()
+                continue
             body = b''.join(piece for _, piece in pieces)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
                                b'connection: close\r\n%s\r\n' % (len(body), extra))

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.71.1 — The quota of a refused response
+
+### Fixed
+
+- `/usage` keeps the quota a refused response reports, such as ChatGPT's or Copilot's when a limit is reached, where it kept only replies', so it showed the last one before the limit. Compaction requests' quota is kept too.
+
 ## 0.71.0 — GitHub Copilot's quota in /usage
 
 ### Added
