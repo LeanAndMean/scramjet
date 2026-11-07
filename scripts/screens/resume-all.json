@@ -1,0 +1,31 @@
+{
+  "size": "100x30",
+  "files": {"README.md": "Project\n"},
+  "prompt": "Make another project's session",
+  "replies": [
+    [
+      {"call": "bash", "arguments": {"command": "d=\"$XDG_STATE_HOME/scramjet-rs/sessions/work-other\" && mkdir -p \"$d\" && printf '%s\\n' '{\"type\":\"session\",\"version\":1,\"root\":\"/work/other\"}' '{\"role\":\"user\",\"content\":\"Fix the parser in the other project\"}' '{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"The parser is fixed.\"}]}' > \"$d/1700000000000-1.jsonl\" && echo made"}}
+    ],
+    [{"text": "Made it."}],
+    [{"text": "Continuing the other project's work here."}]
+  ],
+  "steps": [
+    {"until": "Made it."},
+    {"type": "/resume\r"},
+    {"until": "Resume session"},
+    {"sleep": 0.3},
+    {"shot": "resume-here"},
+    {"type": "\t"},
+    {"until": "all folders"},
+    {"sleep": 0.3},
+    {"shot": "resume-all"},
+    {"type": "parser"},
+    {"sleep": 0.3},
+    {"type": "\r"},
+    {"until": "Forked session"},
+    {"type": "Go on\r"},
+    {"until": "Continuing the other"},
+    {"sleep": 0.3},
+    {"shot": "resume-forked"}
+  ]
+}

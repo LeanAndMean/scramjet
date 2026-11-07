@@ -913,6 +913,44 @@ impl Agent {
         Ok(sessions)
     }
 
+    /// The sessions `sessions` lists, with every other project's saved sessions, newest first,
+    /// as Scramjet's `/resume` lists all folders' with Tab. As in Scramjet's, a project whose
+    /// sessions cannot be read is passed over.
+    pub fn all_sessions(&self) -> Result<Vec<SessionInfo>, AgentError> {
+        let mut sessions = self.sessions()?;
+        let here = self.session_directory();
+        // A saved session's directory is one of the projects'; an unsaved run's is elsewhere.
+        let projects = match (self.unsaved.is_none(), here.parent()) {
+            (true, Some(projects)) => Ok(projects.to_owned()),
+            _ => session::projects_directory(),
+        };
+        let projects = projects.and_then(std::fs::read_dir);
+        for entry in projects.into_iter().flatten().flatten() {
+            let other = entry.path();
+            if other != here {
+                sessions.extend(Session::list(&other).unwrap_or_default());
+            }
+        }
+        sessions.retain(|session| session.item_count > 0);
+        sessions.sort_by(|a, b| (b.modified, &b.path).cmp(&(a.modified, &a.path)));
+        Ok(sessions)
+    }
+
+    /// Whether the saved session `path` is one `sessions` lists, which `resume_session` continues
+    /// in; another project's is forked here (`fork_session_file`).
+    pub fn session_here(&self, path: &Path) -> bool {
+        path.parent() == Some(self.session_directory())
+    }
+
+    /// Continues in a new session of this project with every entry of the saved session `path`,
+    /// another project's, as `--fork` copies one; that session stays as it is. On failure nothing
+    /// changes.
+    pub fn fork_session_file(&mut self, path: &Path) -> Result<(), AgentError> {
+        let directory = self.session_directory().to_owned();
+        let opened = Session::fork_from(&directory, &self.config.root, path)?;
+        self.switch_session(opened)
+    }
+
     /// Names the saved session `path`, the current one too, as `set_session_name` does, as
     /// Scramjet's `/resume` renames one.
     pub fn rename_session(&mut self, path: &Path, name: &str) -> Result<(), AgentError> {

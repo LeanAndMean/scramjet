@@ -137,9 +137,10 @@ Ctrl+S saves them as enabledModels. /clear [NAME] starts a new session;
 /resume chooses one of this project's sessions to switch to, forks under the session they came
 from; in its list Ctrl+S sorts them (threaded, recent, relevance), Ctrl+N shows only named ones,
 Ctrl+P their paths, Ctrl+R renames the selected session and Ctrl+D deletes it once Enter confirms
-(to the trash when a `trash` command is installed). /fork chooses one of this
-session's prompts and continues in a new session from before it, with it in the prompt for
-editing; /branch [NAME] continues in a new session with the conversation as it is.
+(to the trash when a `trash` command is installed), and Tab lists every project's sessions with
+their folders, one of another project's continuing in a new session of this one. /fork chooses
+one of this session's prompts and continues in a new session from before it, with it in the
+prompt for editing; /branch [NAME] continues in a new session with the conversation as it is.
 /tree shows this session's branches and continues from the entry chosen, in the same session:
 from before a prompt, which is put in the prompt for editing, or from after a reply
 or tool result. When that leaves part of the conversation, it asks whether the model should

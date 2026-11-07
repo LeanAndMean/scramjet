@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.73.0 — Every folder's sessions in /resume
+
+### Added
+
+- Tab in `/resume` lists the sessions of every project, each with its folder, and Tab again only this one's, as in Scramjet. Choosing another project's session continues it in a new session of this project, as `--session` with its id offers; that session stays as it was.
+
 ## 0.72.0 — ChatGPT's other limits and credits in /usage
 
 ### Added

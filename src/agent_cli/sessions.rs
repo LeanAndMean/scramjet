@@ -10,8 +10,10 @@ use scramjet_rs::agent::{AgentError, Navigated, Removal, SessionInfo, shortened}
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
-fn resume_keys() -> String {
+fn resume_keys(all: bool) -> String {
+    let scope = if all { "this folder" } else { "all folders" };
     keymap::hint([
+        keymap::part(&[Binding::Tab], scope),
         keymap::part(&[Binding::SessionToggleSort], "sort"),
         keymap::part(&[Binding::SessionToggleNamedFilter], "named"),
         keymap::part(&[Binding::SessionTogglePath], "path"),
@@ -24,7 +26,7 @@ impl Interactive {
     /// `/resume`: chooses a session to continue in, by its number with piped input. Returns
     /// whether it switched to one.
     pub(super) fn resume(&mut self, wanted: &str) -> bool {
-        let sessions = match self.agent.sessions() {
+        let mut sessions = match self.agent.sessions() {
             Ok(sessions) => threaded(sessions),
             Err(error) => {
                 self.say(&format!("Error: {error}"));
@@ -45,7 +47,7 @@ impl Interactive {
                     let mark = if current == Some(index) { "*" } else { " " };
                     let number = format!("{}{mark} {tree}", index + 1);
                     let width = width.saturating_sub(number.width());
-                    let line = session_line(session, width, None, false);
+                    let line = session_line(session, width, None, false, false);
                     eprintln!("{number}{line}");
                 }
                 if sessions.len() > 20 {
@@ -68,18 +70,24 @@ impl Interactive {
                     self.say(&format!("Error: session {number} is the current one"));
                     None
                 }
-                Ok(number) => Some(sessions[number - 1].0.path.clone()),
+                Ok(number) => Some(sessions.swap_remove(number - 1).0),
             },
         };
-        let Some(path) = chosen else {
+        let Some(session) = chosen else {
             return false;
         };
-        match self.agent.resume_session(&path) {
-            Ok(()) => {
+        let path = &session.path;
+        let done = match self.agent.session_here(path) {
+            true => (self.agent.resume_session(path)).map(|()| "Resumed session".to_owned()),
+            false => (self.agent.fork_session_file(path))
+                .map(|()| format!("Forked session from {} into this project", folder(&session))),
+        };
+        match done {
+            Ok(done) => {
                 self.agent.load_model_info();
                 self.remember_prompts();
                 self.replaced(&format!(
-                    "✓ Resumed session · {}\n{}",
+                    "✓ {done} · {}\n{}",
                     model_line(&self.agent),
                     saved_line(&self.agent),
                 ));
@@ -95,14 +103,20 @@ impl Interactive {
     /// Chooses a session on the full screen, as Scramjet's session selector does: forks under
     /// the sessions they came from, a query matching them by their prompts and replies, Ctrl+S
     /// sorting them another way, Ctrl+N showing only the named ones, Ctrl+P their paths, Ctrl+R
-    /// renaming the selected one and Ctrl+D deleting it.
-    fn choose_session(&mut self) -> Option<std::path::PathBuf> {
+    /// renaming the selected one and Ctrl+D deleting it, and Tab showing every project's
+    /// sessions, each with its folder, or this one's again.
+    fn choose_session(&mut self) -> Option<SessionInfo> {
         let mut spot = None;
         let (mut sort, mut named_only, mut paths) = (Sort::Threaded, false, false);
+        let mut all = false;
         // The session selected when a key changed how the list shows, to select again.
         let mut kept: Option<std::path::PathBuf> = None;
         loop {
-            let sessions = match self.agent.sessions() {
+            let listed = match all {
+                true => self.agent.all_sessions(),
+                false => self.agent.sessions(),
+            };
+            let mut sessions = match listed {
                 Ok(sessions) => {
                     let sessions =
                         (sessions.into_iter()).filter(|session| !named_only || named(session));
@@ -120,7 +134,11 @@ impl Interactive {
                 }
             };
             let screen = self.screen.as_ref()?;
-            if sessions.is_empty() && !named_only {
+            let none_anywhere = || match all {
+                true => true,
+                false => (self.agent.all_sessions()).map_or(true, |all| all.is_empty()),
+            };
+            if sessions.is_empty() && !named_only && none_anywhere() {
                 screen.dismiss();
                 self.say("No sessions to resume");
                 return None;
@@ -136,13 +154,18 @@ impl Interactive {
                     true => Some(style::SESSION_CURRENT),
                     false => named(session).then_some(style::SESSION_NAMED),
                 };
-                session_line(session, width, style, paths)
+                session_line(session, width, style, paths, all)
             };
+            let scope = if all { "all folders, " } else { "" };
             let title = match named_only {
-                true => format!("Resume session (named, {})", sort.label()),
-                false => format!("Resume session ({})", sort.label()),
+                true => format!("Resume session ({scope}named, {})", sort.label()),
+                false => format!("Resume session ({scope}{})", sort.label()),
             };
             let none = match keymap::key(Binding::SessionToggleNamedFilter) {
+                _ if sessions.is_empty() && !named_only => match keymap::key(Binding::Tab) {
+                    Some(key) => format!("No sessions in this folder ({key} shows all)"),
+                    None => "No sessions in this folder".to_owned(),
+                },
                 _ if !named_only => "No matching sessions".to_owned(),
                 Some(key) => format!("No named sessions ({key} shows all)"),
                 None => "No named sessions".to_owned(),
@@ -156,7 +179,10 @@ impl Interactive {
                 &none,
                 row,
             );
-            let mut picker = picker.noting(resume_keys(), Vec::new()).acting().held();
+            let mut picker = (picker.noting(resume_keys(all), Vec::new()))
+                .acting()
+                .held()
+                .tabbing();
             match sort {
                 Sort::Threaded => {
                     let tree = sessions.iter().map(|(_, tree)| tree.clone()).collect();
@@ -177,7 +203,7 @@ impl Interactive {
             let (act, index, at) = match screen.pick_or_act(picker) {
                 select::Picked::Row(chosen) => {
                     screen.dismiss();
-                    return chosen.map(|index| sessions[index].0.path.clone());
+                    return chosen.map(|index| sessions.swap_remove(index).0);
                 }
                 select::Picked::Act(act, index, at) => (act, index, at),
                 select::Picked::Toggle(toggle, at) => {
@@ -190,8 +216,14 @@ impl Interactive {
                     spot = Some((at, None));
                     continue;
                 }
-                // Not keys of this list (`Picker::tabbing`, `Picker::tree`, `Picker::placing`).
-                select::Picked::Tab(_) | select::Picked::Label(_) | select::Picked::Placed(..) => {
+                select::Picked::Tab(at) => {
+                    kept = (at.shown.get(at.position)).map(|&row| sessions[row].0.path.clone());
+                    all = !all;
+                    spot = Some((at, None));
+                    continue;
+                }
+                // Not keys of this list (`Picker::tree`, `Picker::placing`).
+                select::Picked::Label(_) | select::Picked::Placed(..) => {
                     screen.dismiss();
                     return None;
                 }
@@ -505,14 +537,24 @@ fn named(session: &SessionInfo) -> bool {
     (session.name.as_deref()).is_some_and(|name| !name.trim().is_empty())
 }
 
+/// The folder of the project a session belongs to, `~` for the home directory's.
+fn folder(session: &SessionInfo) -> String {
+    match &session.root {
+        Some(root) => shortened(&root.display().to_string()),
+        None => "an unknown folder".to_owned(),
+    }
+}
+
 /// A `/resume` line: the session's name or first prompt, in `style` when given, cut to `width`
-/// with its item count and age kept; with `path`, the session file's path after them, cut at its
-/// start where the name or prompt would get fewer than 10 columns, as in Scramjet.
+/// with its item count and age kept; with `folder`, its project's folder after them, and with
+/// `path`, the session file's path after those, cut at its start where the name or prompt would
+/// get fewer than 10 columns, as in Scramjet.
 fn session_line(
     session: &SessionInfo,
     width: usize,
     style: Option<style::Style>,
     path: bool,
+    folder: bool,
 ) -> String {
     let age = std::time::SystemTime::now()
         .duration_since(session.modified)
@@ -522,6 +564,9 @@ fn session_line(
         count => format!("{count} items"),
     };
     let mut suffix = format!(" ({items}, {})", age_label(age));
+    if folder && let Some(root) = &session.root {
+        suffix = format!("{suffix} {}", shortened(&root.display().to_string()));
+    }
     let label = session
         .name
         .as_deref()
@@ -670,13 +715,14 @@ mod tests {
             modified: std::time::SystemTime::now() - Duration::from_secs(7200),
             parent: None,
             continues: None,
+            root: None,
         };
         assert_eq!(
-            session_line(&session, 30, None, false),
+            session_line(&session, 30, None, false, false),
             "Fix the parser… (12 items, 2h)"
         );
         assert_eq!(
-            session_line(&session, 80, None, false),
+            session_line(&session, 80, None, false, false),
             "Fix the parser then run the tests (12 items, 2h)"
         );
         let named = SessionInfo {
@@ -688,8 +734,9 @@ mod tests {
             modified: session.modified,
             parent: None,
             continues: None,
+            root: None,
         };
-        let line = session_line(&named, 80, Some(style::SESSION_NAMED), false);
+        let line = session_line(&named, 80, Some(style::SESSION_NAMED), false, false);
         assert_eq!(
             line,
             format!(
@@ -704,7 +751,7 @@ mod tests {
             ..session
         };
         assert_eq!(
-            session_line(&empty, 80, None, false),
+            session_line(&empty, 80, None, false, false),
             "(no messages) (1 item, 2h)"
         );
         // The path after them, its start cut where the prompt would get fewer than 10 columns.
@@ -717,14 +764,28 @@ mod tests {
             modified: named.modified,
             parent: None,
             continues: None,
+            root: None,
         };
         assert_eq!(
-            session_line(&filed, 100, None, true),
+            session_line(&filed, 100, None, true, false),
             "Fix the parser then run the tests (12 items, 2h) /nonexistent/sessions/project/1793-1.jsonl"
         );
         assert_eq!(
-            session_line(&filed, 50, None, true),
+            session_line(&filed, 50, None, true, false),
             "Fix the p… (12 items, 2h) …ns/project/1793-1.jsonl"
+        );
+        // Every folder's list names each session's project before the path.
+        let elsewhere = SessionInfo {
+            root: Some(PathBuf::from("/work/other")),
+            ..filed
+        };
+        assert_eq!(
+            session_line(&elsewhere, 100, None, false, true),
+            "Fix the parser then run the tests (12 items, 2h) /work/other"
+        );
+        assert_eq!(
+            session_line(&elsewhere, 60, None, true, true),
+            "Fix the p… (12 items, 2h) /work/other …/project/1793-1.jsonl"
         );
     }
 
@@ -752,6 +813,7 @@ mod tests {
             modified: std::time::SystemTime::now(),
             parent: parent.map(path),
             continues: None,
+            root: None,
         });
         let rows: Vec<String> = (threaded(sessions.into()).into_iter())
             .map(|(session, tree)| format!("{tree}{}", session.name.unwrap()))
@@ -786,6 +848,7 @@ mod tests {
             modified: std::time::SystemTime::now(),
             parent: parent.map(path),
             continues: None,
+            root: None,
         });
         let rows: Vec<String> = (threaded(deep.into()).into_iter())
             .map(|(session, tree)| format!("{tree}{}", session.name.unwrap()))
@@ -805,6 +868,7 @@ mod tests {
             modified: now - Duration::from_secs(age),
             parent: parent.map(|parent| PathBuf::from(format!("/nonexistent/{parent}.jsonl"))),
             continues: None,
+            root: None,
         };
         // The fork, the newest, is threaded under its parent but found before it.
         let sessions = threaded(vec![

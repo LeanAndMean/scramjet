@@ -1065,6 +1065,76 @@ fn a_fork_from_a_session_file_holds_all_of_it_in_a_new_session_of_the_project() 
 }
 
 #[test]
+fn every_projects_sessions_are_listed_and_another_projects_is_forked_here() {
+    let scratch = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-all-{}", std::process::id())),
+    );
+    let (here, other) = (scratch.0.join("here"), scratch.0.join("other"));
+    std::fs::create_dir_all(&here).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let now = std::time::SystemTime::now();
+    let ago = |minutes: u64| now - Duration::from_secs(60 * minutes);
+    let save = |path: &Path, root: &str, prompt: &str, modified| {
+        let header = json!({"type":"session","version":1,"root":root});
+        write_session(
+            path,
+            &[header, json!({"role":"user","content":prompt})],
+            modified,
+        );
+    };
+    save(&here.join("1000-1.jsonl"), "/work/here", "mine", ago(30));
+    save(
+        &other.join("1000-2.jsonl"),
+        "/work/other",
+        "theirs",
+        ago(20),
+    );
+    save(&other.join("1000-3.jsonl"), "/work/other", "older", ago(40));
+    // Not a project's directory, and a file beside them.
+    std::fs::write(scratch.0.join("1000-4.jsonl"), "").unwrap();
+    let current = here.join("1001-1.jsonl");
+    std::fs::write(&current, "{\"type\":\"session\",\"version\":1}\n").unwrap();
+    let endpoint = "127.0.0.1:9".parse().unwrap();
+    let mut agent =
+        Agent::start(config(endpoint, &scratch.0), SessionChoice::Open(current)).unwrap();
+
+    let prompts = |sessions: Vec<SessionInfo>| -> Vec<(String, Option<PathBuf>)> {
+        (sessions.into_iter())
+            .map(|session| (session.first_prompt.unwrap(), session.root))
+            .collect()
+    };
+    let root = |root: &str| Some(PathBuf::from(root));
+    assert_eq!(
+        prompts(agent.sessions().unwrap()),
+        [("mine".to_owned(), root("/work/here"))]
+    );
+    assert_eq!(
+        prompts(agent.all_sessions().unwrap()),
+        [
+            ("theirs".to_owned(), root("/work/other")),
+            ("mine".to_owned(), root("/work/here")),
+            ("older".to_owned(), root("/work/other")),
+        ]
+    );
+    assert!(agent.session_here(&here.join("1000-1.jsonl")));
+    let theirs = other.join("1000-2.jsonl");
+    assert!(!agent.session_here(&theirs));
+
+    // Theirs continues in a new session of this project, and stays as it was.
+    let before = std::fs::read(&theirs).unwrap();
+    agent.fork_session_file(&theirs).unwrap();
+    assert_eq!(agent.session_path().parent(), Some(here.as_path()));
+    assert_eq!(std::fs::read(&theirs).unwrap(), before);
+    let forked = agent.sessions().unwrap();
+    let fork = (forked.iter())
+        .find(|session| agent.is_session(&session.path))
+        .unwrap();
+    assert_eq!(fork.first_prompt.as_deref(), Some("theirs"));
+    assert_eq!(fork.parent.as_deref(), Some(theirs.as_path()));
+    assert_eq!(fork.root.as_deref(), Some(scratch.0.as_path()));
+}
+
+#[test]
 fn a_session_name_and_stats_stay_out_of_the_conversation() {
     let (endpoint, server) = serve(vec![
         stream(&fixture::call_events("{}", fixture::known_usage())),

@@ -1009,8 +1009,13 @@ def remapped_keys(read, until, send, output):
     on_screen('Keyboard shortcuts', gone=True)
     # The hints name the keys in use.
     send(b'/resume\r')
-    on_screen('Resume session (threaded)  Ctrl+S sort \u00b7 Ctrl+N named \u00b7 Ctrl+P path \u00b7 '
-              'Ctrl+R rename \u00b7 F4 delete')
+    on_screen('Resume session (threaded)  Tab all folders \u00b7 Ctrl+S sort \u00b7 Ctrl+N named \u00b7 '
+              'Ctrl+P path \u00b7 Ctrl+R ren')
+    # The hint is cut before the delete key at this width; F4 asks.
+    send(b'\x1bOS')
+    on_screen('Resume session (threaded)  Delete session? F6 confirm \u00b7 Esc cancel')
+    send(b'\x1b')
+    on_screen('Delete session?', gone=True)
     send(b'\x1b')
     on_screen('Resume session', gone=True)
     # And so does the prose: the command list's, and Installed's notes.
@@ -2661,7 +2666,8 @@ def manage_sessions(read, until, send, output):
     send(b'mango second\r')
     on_screen('Mango reply.')
     send(b'/resume\r')
-    on_screen('Resume session (threaded)  Ctrl+S sort \u00b7 Ctrl+N named \u00b7 Ctrl+P path \u00b7 Ctrl+R rename')
+    on_screen('Resume session (threaded)  Tab all folders \u00b7 Ctrl+S sort \u00b7 Ctrl+N named \u00b7 '
+              'Ctrl+P path \u00b7 Ctrl+R ren')
     send(b'kiwi')
     on_screen('\u203a kiwi first (2 items, now)')
     # Ctrl+R renames the selected session; the list comes back with its query.

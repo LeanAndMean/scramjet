@@ -66,6 +66,8 @@ pub struct SessionInfo {
     /// The session whose next step started it, as its header records it: the one before it in
     /// a chain.
     pub continues: Option<PathBuf>,
+    /// The project it belongs to, as its header names it.
+    pub root: Option<PathBuf>,
 }
 
 /// The conversation on a session's current branch, as `/export` shows it.
@@ -693,7 +695,12 @@ pub fn read_earlier(path: &Path) -> io::Result<Earlier> {
 /// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->`.
 pub fn directory(root: &Path) -> io::Result<PathBuf> {
     let slug = root.to_string_lossy().trim_matches('/').replace('/', "-");
-    Ok(state_directory()?.join("sessions").join(slug))
+    Ok(projects_directory()?.join(slug))
+}
+
+/// `$XDG_STATE_HOME/scramjet-rs/sessions`, holding each project's sessions' directory.
+pub fn projects_directory() -> io::Result<PathBuf> {
+    Ok(state_directory()?.join("sessions"))
 }
 
 /// The directory of the sessions of a run that saves none (`--no-session`): private, in the
@@ -815,6 +822,7 @@ impl Session {
                 modified,
                 parent: entries.parent.clone().filter(|_| !entries.continues()),
                 continues: entries.parent.clone().filter(|_| entries.continues()),
+                root: entries.header["root"].as_str().map(PathBuf::from),
             });
         }
         sessions.sort_by(|a, b| {
