@@ -865,7 +865,7 @@ pub(super) fn available() -> Result<(), String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::super::tools::run_sandboxed;
     use std::{

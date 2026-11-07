@@ -2101,6 +2101,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn saving_through_a_symbolic_link_writes_its_target() {
         let scratch = Scratch::new("link");

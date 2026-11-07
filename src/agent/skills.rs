@@ -361,7 +361,9 @@ fn escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ProblemFile, tests::ScratchDir};
+    #[cfg(unix)]
+    use super::super::ProblemFile;
+    use super::super::tests::ScratchDir;
     use super::*;
 
     fn scratch(name: &str) -> ScratchDir {
@@ -436,6 +438,7 @@ mod tests {
         assert_eq!(found.last().unwrap().0, user);
     }
 
+    #[cfg(unix)]
     #[test]
     fn skills_are_found_as_pi_finds_them_and_the_first_of_a_name_wins() {
         let scratch = scratch("find");
@@ -675,6 +678,7 @@ hyphens only)",
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_link_back_up_the_tree_is_followed_once() {
         let scratch = scratch("cycle");

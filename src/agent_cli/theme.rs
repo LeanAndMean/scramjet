@@ -760,6 +760,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn themes_are_found_in_their_directories_the_first_of_a_name_kept() {
         let scratch = Scratch::new("found");

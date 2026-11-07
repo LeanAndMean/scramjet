@@ -766,28 +766,34 @@ fn a_session_whose_file_could_not_be_created_creates_it_once_there_is_room() {
         .unwrap();
     assert!(!session.holding());
     assert!(session.is_file(&path));
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(directory.0.join("later"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(mode & 0o777, 0o700);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(directory.0.join("later"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
     let (reopened, conversation, _) = Session::open(&path).unwrap();
     assert_eq!(conversation, [json!({"role":"user","content":"first"})]);
     assert_eq!(reopened.name(), Some("kept"));
 
     // A name another user could have made in the shared temporary directory is not written into.
-    let elsewhere = directory.0.join("elsewhere");
-    std::fs::create_dir(&elsewhere).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, directory.0.join("planted")).unwrap();
-    let mut session = Session::create(&directory.0, Path::new("/project"), None).unwrap();
-    session.not_created_at(&directory.0.join("planted/1-1.jsonl"));
-    let error = (session.append(&json!({"role":"user","content":"x"}))).unwrap_err();
-    assert!(
-        error.to_string().contains("not a directory of this user's"),
-        "{error}"
-    );
-    assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    #[cfg(unix)]
+    {
+        let elsewhere = directory.0.join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, directory.0.join("planted")).unwrap();
+        let mut session = Session::create(&directory.0, Path::new("/project"), None).unwrap();
+        session.not_created_at(&directory.0.join("planted/1-1.jsonl"));
+        let error = (session.append(&json!({"role":"user","content":"x"}))).unwrap_err();
+        assert!(
+            error.to_string().contains("not a directory of this user's"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_dir(&elsewhere).unwrap().count(), 0);
+    }
 }
 
 #[test]
@@ -1385,20 +1391,23 @@ fn sessions_are_renamed_and_deleted_and_unused_new_ones_are_not_left_behind() {
         Removal::Deleted
     );
     // A removal that fails says what the trash said.
-    let locked = ScratchDir::new(scratch.0.join("locked"));
-    let kept = locked.0.join("kept.jsonl");
-    write_session(&kept, &session, earlier);
-    let mode = |mode| {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&locked.0, std::fs::Permissions::from_mode(mode)).unwrap();
-    };
-    mode(0o555);
-    let error = Session::delete_with(&kept, &failing)
-        .unwrap_err()
-        .to_string();
-    mode(0o755);
-    assert!(error.ends_with("(trash: no trash here)"), "{error}");
-    assert!(kept.exists());
+    #[cfg(unix)]
+    {
+        let locked = ScratchDir::new(scratch.0.join("locked"));
+        let kept = locked.0.join("kept.jsonl");
+        write_session(&kept, &session, earlier);
+        let mode = |mode| {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&locked.0, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        mode(0o555);
+        let error = Session::delete_with(&kept, &failing)
+            .unwrap_err()
+            .to_string();
+        mode(0o755);
+        assert!(error.ends_with("(trash: no trash here)"), "{error}");
+        assert!(kept.exists());
+    }
 
     // A session started here goes when the agent moves on before it holds a conversation, as
     // Scramjet would not have written it; model and effort changes do not count.
@@ -1439,9 +1448,12 @@ fn a_run_that_saves_no_session_keeps_its_sessions_apart_until_it_ends() {
         .into_owned();
     assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
     assert!(name.starts_with("scramjet-rs-unsaved-"), "{name}");
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(&directory).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o700);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&directory).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
     assert!(saved.session_saved() && !agent.session_saved());
     // As Scramjet's instructions name no journal for a session in memory.
     assert!(saved.instructions().contains("\nCurrent session journal: "));
@@ -2250,6 +2262,8 @@ fn an_effort_the_model_lacks_becomes_the_nearest_level_it_takes() {
     assert_eq!(info(&[]).fit("minimal"), "minimal");
 }
 
+// The broken link it reports needs a symlink, which Windows makes only with a privilege.
+#[cfg(unix)]
 #[test]
 fn installed_says_where_each_comes_from_and_what_is_wrong() {
     let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "installed");
@@ -2624,9 +2638,12 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     session.append(&say("third")).unwrap();
     let copy = session.kept_path().unwrap().to_owned();
     assert!(copy.starts_with(&copies));
-    use std::os::unix::fs::PermissionsExt;
-    let mode = std::fs::metadata(&copies).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o700);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&copies).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
     // Locked while its run lives: nothing writes it from under the session.
     let written = session::write_kept();
     assert!(written.sessions.is_empty() && written.problems.is_empty());

@@ -527,7 +527,6 @@ mod tests {
 
     #[test]
     fn a_pasted_image_is_saved_to_a_new_file_only_the_user_reads() {
-        use std::os::unix::fs::PermissionsExt;
         let directory =
             env::temp_dir().join(format!("scramjet-rs-clipboard-test-{}", process::id()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -541,8 +540,12 @@ mod tests {
         );
         assert!(first.starts_with(&format!("{directory}/scramjet-rs-clipboard-")));
         assert!(first.ends_with(".png") && second.ends_with(".jpg"));
-        let mode = std::fs::metadata(&first).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&first).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
         std::fs::remove_dir_all(&directory).unwrap();
         assert!(
             save(b"three", "png", &directory)

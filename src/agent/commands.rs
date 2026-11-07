@@ -901,6 +901,7 @@ mod tests {
         scratch.file("repo/.hidden/commands/hidden:x.md", "");
         scratch.file("repo/node_modules/dep/set.yaml", "");
         scratch.file("repo/node_modules/dep/commands/dep:x.md", "");
+        #[cfg(unix)]
         std::os::unix::fs::symlink(repo.join("packages/kit"), repo.join("link")).unwrap();
         assert_eq!(
             sets_in(&repo),

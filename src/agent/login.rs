@@ -443,6 +443,7 @@ mod tests {
     use super::*;
     use crate::agent::tests::ScratchDir;
     use serde_json::json;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     fn scratch(name: &str) -> ScratchDir {
@@ -463,9 +464,12 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&path), 0o600);
-        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        #[cfg(unix)]
+        {
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&path), 0o600);
+            assert_eq!(mode(path.parent().unwrap()), 0o700);
+        }
         assert_eq!(saved(&path).unwrap().len(), 2);
         let removed =
             update::<_, String>(&path, false, |saved| Ok(saved.remove("other").is_some()));
@@ -657,12 +661,17 @@ mod tests {
         let scratch = scratch("login-made");
         let path = scratch.0.join("config/auth.json");
         make(&path);
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}\n");
-        assert_eq!((mode(&path), mode(path.parent().unwrap())), (0o600, 0o700));
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        #[cfg(unix)]
+        {
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!((mode(&path), mode(path.parent().unwrap())), (0o600, 0o700));
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            save(&path, "github-copilot", json!({"type": "oauth"})).unwrap();
+            assert_eq!(mode(&path), 0o600);
+        }
+        #[cfg(not(unix))]
         save(&path, "github-copilot", json!({"type": "oauth"})).unwrap();
-        assert_eq!(mode(&path), 0o600);
         make(&path);
         assert_eq!(logged_in(&path).unwrap(), ["github-copilot"]);
         // Empty, as a sandbox shows it, it holds no logins.

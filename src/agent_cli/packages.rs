@@ -352,10 +352,16 @@ mod tests {
 
         let outside = made("outside/.git");
         made("git/host/user");
-        let link = root.join("host/user/link");
-        std::os::unix::fs::symlink(outside.parent().unwrap(), &link).unwrap();
         let plain = made("git/host/user/plain");
-        for directory in [&link, &plain, &root, &scratch.join("outside")] {
+        #[cfg_attr(not(unix), allow(unused_mut))]
+        let mut refused = vec![plain.clone(), root.clone(), scratch.join("outside")];
+        #[cfg(unix)]
+        {
+            let link = root.join("host/user/link");
+            std::os::unix::fs::symlink(outside.parent().unwrap(), &link).unwrap();
+            refused.push(link);
+        }
+        for directory in &refused {
             assert_eq!(
                 delete(directory, &root),
                 Err(format!(

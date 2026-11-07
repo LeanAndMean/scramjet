@@ -2057,6 +2057,7 @@ to see full lines]",
         assert!(!root.join("x").exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn tools_with_hidden_credentials_keep_out_of_their_stores() {
         let home =
@@ -2117,6 +2118,7 @@ to see full lines]",
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_symlink_swapped_in_alongside_never_leads_a_tool_into_a_store() {
         use super::super::sandbox::{Sandbox, SandboxMode};
@@ -2172,6 +2174,7 @@ to see full lines]",
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_write_through_a_swapped_in_symlink_makes_nothing_in_a_store() {
         let home = std::env::temp_dir().join(format!("scramjet-put-dirs-{}", std::process::id()));
@@ -2231,6 +2234,7 @@ to see full lines]",
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn subagent_tools_do_not_show_credential_stores() {
         let home =

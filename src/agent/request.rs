@@ -1312,7 +1312,7 @@ response is incomplete; retry the request."});
         // Escape stops the wait while another process holds the login to renew it.
         login::save(&auth, "openai-codex", expired).unwrap();
         let lock = std::fs::File::open(scratch.0.join("auth.json.lock")).unwrap();
-        rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive).unwrap();
+        lock.lock().unwrap();
         let cancel = AtomicBool::new(false);
         let started = Instant::now();
         let failed = std::thread::scope(|scope| {

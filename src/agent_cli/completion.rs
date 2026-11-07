@@ -782,6 +782,7 @@ mod tests {
         for file in ["alpine.txt", "also.txt", "beta", "Alpha-dir/inner.rs"] {
             fs::write(root.join(file), "").unwrap();
         }
+        #[cfg(unix)]
         std::os::unix::fs::symlink(root.join("Alpha-dir"), root.join("link")).unwrap();
 
         // Directories first, then by name ignoring case.
@@ -805,9 +806,12 @@ mod tests {
                     .collect::<Vec<_>>()
             })
         };
-        assert_eq!(list("li").unwrap(), ["link/"]);
         // As Scramjet completes the cursor's line, a word can start one.
-        assert_eq!(list("see\nli").unwrap(), ["link/"]);
+        #[cfg(unix)]
+        {
+            assert_eq!(list("li").unwrap(), ["link/"]);
+            assert_eq!(list("see\nli").unwrap(), ["link/"]);
+        }
         assert_eq!(list("x=./Alpha-dir/").unwrap(), ["./Alpha-dir/inner.rs"]);
         assert_eq!(list("'Alpha-dir/I").unwrap(), ["Alpha-dir/inner.rs"]);
         let absolute = format!("{}/b", root.display());

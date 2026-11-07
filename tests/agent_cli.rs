@@ -512,40 +512,43 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
     assert!(!scratch.0.join("state/scramjet-rs/sessions").exists());
 
     // Accepts connections into its backlog and never answers, so the request waits.
-    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let hanging = silent.local_addr().unwrap().to_string();
-    for signal in [libc::SIGTERM, libc::SIGHUP] {
-        let mut child = command(&hanging)
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        let started = std::time::Instant::now();
-        let directory = loop {
-            let found = std::fs::read_dir(&temporary).unwrap().flatten().next();
-            let files = found
-                .as_ref()
-                .and_then(|entry| std::fs::read_dir(entry.path()).ok());
-            let texts = (files.into_iter().flatten().flatten())
-                .filter_map(|file| std::fs::read_to_string(file.path()).ok());
-            if texts
-                .into_iter()
-                .any(|text| text.contains("\"content\":\"hi\""))
-            {
-                break found.unwrap().path();
-            }
-            assert!(
-                started.elapsed().as_secs() < 20,
-                "no session holds the prompt"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-        // SAFETY: a plain kill(2) of the child.
-        assert_eq!(unsafe { libc::kill(child.id() as i32, signal) }, 0);
-        // As a shell reports a process the signal killed, and as Scramjet's print mode exits.
-        assert_eq!(child.wait().unwrap().code(), Some(128 + signal));
-        assert!(!directory.exists(), "{}", directory.display());
+    #[cfg(unix)]
+    {
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let hanging = silent.local_addr().unwrap().to_string();
+        for signal in [libc::SIGTERM, libc::SIGHUP] {
+            let mut child = command(&hanging)
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let started = std::time::Instant::now();
+            let directory = loop {
+                let found = std::fs::read_dir(&temporary).unwrap().flatten().next();
+                let files = found
+                    .as_ref()
+                    .and_then(|entry| std::fs::read_dir(entry.path()).ok());
+                let texts = (files.into_iter().flatten().flatten())
+                    .filter_map(|file| std::fs::read_to_string(file.path()).ok());
+                if texts
+                    .into_iter()
+                    .any(|text| text.contains("\"content\":\"hi\""))
+                {
+                    break found.unwrap().path();
+                }
+                assert!(
+                    started.elapsed().as_secs() < 20,
+                    "no session holds the prompt"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            };
+            // SAFETY: a plain kill(2) of the child.
+            assert_eq!(unsafe { libc::kill(child.id() as i32, signal) }, 0);
+            // As a shell reports a process the signal killed, and as Scramjet's print mode exits.
+            assert_eq!(child.wait().unwrap().code(), Some(128 + signal));
+            assert!(!directory.exists(), "{}", directory.display());
+        }
+        drop(silent);
     }
-    drop(silent);
 }
 
 #[cfg(target_os = "linux")]

@@ -3,8 +3,7 @@
 # (rustup target add x86_64-pc-windows-msvc; cargo fetch --target x86_64-pc-windows-msvc once).
 # Without MSVC no C can be compiled for it, so the C that dependencies build (ring, oniguruma)
 # goes to stand-ins for cl.exe and lib.exe that only make empty outputs: their Rust is checked,
-# their C is not, and nothing is linked. Arguments choose what to check, the library and the
-# binary by default: the tests do not build for Windows yet.
+# their C is not, and nothing is linked. Arguments choose what to check, every target by default.
 set -e
 cd "$(dirname "$0")/.."
 # A fixed path: cc-rs rebuilds when CC_* changes.
@@ -30,5 +29,5 @@ exit 0
 EOF
 chmod +x "$stub/cl" "$stub/lib"
 export CC_x86_64_pc_windows_msvc="$stub/cl" AR_x86_64_pc_windows_msvc="$stub/lib"
-[ $# -gt 0 ] || set -- --lib --bins
+[ $# -gt 0 ] || set -- --all-targets
 cargo clippy --offline --locked --target x86_64-pc-windows-msvc "$@" -- -D warnings

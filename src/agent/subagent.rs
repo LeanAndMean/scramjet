@@ -1326,13 +1326,16 @@ fn run_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use crate::agent::{ProblemFile, tests::ScratchDir};
 
+    #[cfg(unix)]
     fn write(path: &Path, content: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, content).unwrap();
     }
 
+    #[cfg(unix)]
     fn agent_file(name: &str, extra: &str) -> String {
         format!("---\nname: {name}\ndescription: {name} agent\n{extra}---\n\nBe {name}.\n")
     }
@@ -1391,6 +1394,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn discovery_follows_the_scope_and_command_sets_replace_loose_agents() {
         let base = std::env::temp_dir().join(format!("scramjet-subagents-{}", std::process::id()));
