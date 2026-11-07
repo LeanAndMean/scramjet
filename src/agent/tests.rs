@@ -469,6 +469,7 @@ pub(super) fn config(endpoint: SocketAddr, root: &Path) -> AgentConfig {
         skill_options: Default::default(),
         prompt: Default::default(),
         mcp_servers: Vec::new(),
+        mcp_disabled: Vec::new(),
         sandbox: None,
     }
 }
@@ -1127,6 +1128,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         skill_options: Default::default(),
         prompt: Default::default(),
         mcp_servers: Vec::new(),
+        mcp_disabled: Vec::new(),
         sandbox: None,
     };
     let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();

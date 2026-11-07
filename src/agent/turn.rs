@@ -824,6 +824,7 @@ mod tests {
             skill_options: Default::default(),
             prompt: Default::default(),
             mcp_servers: Vec::new(),
+            mcp_disabled: Vec::new(),
             sandbox: None,
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
@@ -1045,6 +1046,7 @@ scramjet-rs\n",
                 skill_options: Default::default(),
                 prompt: Default::default(),
                 mcp_servers: Vec::new(),
+                mcp_disabled: Vec::new(),
                 sandbox: None,
             };
             let path = agent.session_path().to_owned();

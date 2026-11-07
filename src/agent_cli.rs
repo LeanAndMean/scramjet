@@ -331,6 +331,7 @@ fn start(
         skill_options,
         prompt: options.prompt,
         mcp_servers: settings.mcp_servers.clone(),
+        mcp_disabled: settings.disabled_mcp_servers.clone(),
         sandbox,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;

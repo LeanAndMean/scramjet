@@ -204,6 +204,8 @@ pub struct AgentConfig {
     pub prompt: SystemPrompt,
     /// The MCP servers the settings list (`mcpServers`).
     pub mcp_servers: Vec<McpServer>,
+    /// The names of those not started (`disabledMcpServers`, `/mcp disable`).
+    pub mcp_disabled: Vec<String>,
     /// How the coding tools and the MCP servers that run as programs are confined; `None`
     /// leaves them as `Agent::set_hide_credentials` says.
     pub sandbox: Option<Sandbox>,
@@ -730,11 +732,13 @@ impl Agent {
         command_sets: Vec<PathBuf>,
         skills: Vec<PathBuf>,
         mcp_servers: Vec<McpServer>,
+        mcp_disabled: Vec<String>,
     ) {
         self.config.tools = tools;
         self.config.command_sets = command_sets;
         self.config.skills = skills;
         self.config.mcp_servers = mcp_servers;
+        self.config.mcp_disabled = mcp_disabled;
         self.autonomy_diagnostics.clear();
         self.load();
         self.start_mcp();
@@ -744,7 +748,7 @@ impl Agent {
     /// configured keep running, the others, also those that ended, start again.
     fn start_mcp(&mut self) {
         let offered = self.offered();
-        let (wanted, root) = (&self.config.mcp_servers, &self.config.root);
+        let (wanted, root) = (&self.enabled_mcp(), &self.config.root);
         if wanted.is_empty() || !mcp::TOOLS.iter().any(|tool| offered.contains(tool)) {
             self.mcp = None;
             return;
@@ -758,7 +762,35 @@ impl Agent {
         }
     }
 
-    /// The names of the MCP servers the settings list.
+    /// The MCP servers the settings list that are not disabled.
+    fn enabled_mcp(&self) -> Vec<McpServer> {
+        (self.config.mcp_servers.iter())
+            .filter(|server| !self.config.mcp_disabled.contains(&server.name))
+            .cloned()
+            .collect()
+    }
+
+    /// The MCP servers the settings list that are disabled.
+    pub fn disabled_mcp(&self) -> Vec<McpServer> {
+        (self.config.mcp_servers.iter())
+            .filter(|server| self.config.mcp_disabled.contains(&server.name))
+            .cloned()
+            .collect()
+    }
+
+    pub fn mcp_disabled(&self) -> &[String] {
+        &self.config.mcp_disabled
+    }
+
+    /// `/mcp enable` and `disable`: the servers named in `names` stop, the others start; the
+    /// model's tools and instructions follow from the next request.
+    pub fn set_mcp_disabled(&mut self, names: Vec<String>) {
+        self.config.mcp_disabled = names;
+        self.instruct();
+        self.start_mcp();
+    }
+
+    /// The names of the MCP servers the settings list, disabled ones too.
     pub fn mcp_names(&self) -> Vec<String> {
         (self.config.mcp_servers.iter())
             .map(|server| server.name.clone())
@@ -850,7 +882,7 @@ impl Agent {
         let directory = self.agent_directory.as_deref();
         let loaded = instructions::load(&config.prompt, &config.root, directory);
         let agents = subagent::registered(&self.sets, &mut Vec::new());
-        let mcp = !config.mcp_servers.is_empty();
+        let mcp = !self.enabled_mcp().is_empty();
         self.instructions = instructions::agent(
             &config.root,
             &tools::offered(&config.tools, config.only_tools.as_deref(), mcp),
@@ -1158,7 +1190,7 @@ impl Agent {
     /// The tools the model has, coding tools first.
     fn offered(&self) -> Vec<&'static str> {
         let config = &self.config;
-        let mcp = !config.mcp_servers.is_empty();
+        let mcp = !self.enabled_mcp().is_empty();
         tools::offered(&config.tools, config.only_tools.as_deref(), mcp)
     }
 

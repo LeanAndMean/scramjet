@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.65.0 — Turning MCP servers off and on
+
+### Added
+
+- `/mcp disable [SERVER|all]` stops MCP servers and `/mcp enable [SERVER|all]` starts them again, as in Claude Code; the choice is kept in the settings' `disabledMcpServers`, so a disabled server does not start next time. `/mcp` lists disabled servers, and Tab completes the server names.
+
 ## 0.64.0 — Earlier sessions without a terminal
 
 ### Added

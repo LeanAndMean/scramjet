@@ -714,6 +714,7 @@ response is incomplete; retry the request."});
             skill_options: Default::default(),
             prompt: Default::default(),
             mcp_servers: Vec::new(),
+            mcp_disabled: Vec::new(),
             sandbox: None,
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
@@ -1537,6 +1538,7 @@ reached the output token limit (max_output_tokens)"),
             skill_options: Default::default(),
             prompt: Default::default(),
             mcp_servers: Vec::new(),
+            mcp_disabled: Vec::new(),
             sandbox: None,
         };
         let agent = Agent::start(config, SessionChoice::Open(path)).unwrap();

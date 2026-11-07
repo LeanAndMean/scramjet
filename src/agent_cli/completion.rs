@@ -50,7 +50,7 @@ const SLASH_COMMANDS: [(&str, &str); 23] = [
     ),
     (
         "mcp",
-        "Show the MCP servers and their tools: /mcp reconnect [SERVER|all]",
+        "Show the MCP servers and their tools: /mcp [reconnect|enable|disable [SERVER|all]]",
     ),
     ("exit", "Quit scramjet-rs"),
 ];
@@ -91,7 +91,7 @@ fn scoped_models() -> Option<String> {
 const COMPLETION_ROWS: usize = 5;
 
 /// What the loaded settings add to the completions: the commands and skills the `/` list shows
-/// after the built-in ones (names and descriptions), and the MCP servers `/mcp reconnect` names.
+/// after the built-in ones (names and descriptions), and the MCP servers `/mcp reconnect`, `enable` and `disable` name.
 #[derive(Default)]
 pub(super) struct Completions {
     pub commands: Vec<(String, String)>,
@@ -198,7 +198,8 @@ impl Completion {
     /// The argument of a built-in command that Scramjet completes: after `/model `, the
     /// providers' `models` (references, `provider/id`) whose id and provider match it fuzzily,
     /// each shown by its id with its provider; after `/autopilot `, the words starting with it;
-    /// after `/mcp reconnect `, `all` and the `mcp_servers` starting with it.
+    /// after `/mcp reconnect `, `enable ` or `disable `, `all` and the `mcp_servers` starting
+    /// with it.
     pub(super) fn argument(
         before: &str,
         models: &[String],
@@ -214,8 +215,12 @@ impl Completion {
             description: String::new(),
         };
         let items = match name {
-            "mcp" if typed.starts_with("reconnect ") => {
-                typed = typed["reconnect ".len()..].trim_start();
+            "mcp" if typed.contains(' ') => {
+                let (action, rest) = typed.split_once(' ').unwrap_or_default();
+                if !["reconnect", "enable", "disable"].contains(&action) {
+                    return None;
+                }
+                typed = rest.trim_start();
                 if typed.contains(char::is_whitespace) {
                     return None;
                 }
@@ -226,7 +231,7 @@ impl Completion {
             }
             "autopilot" | "mcp" => (match name {
                 "autopilot" => &["on", "off", "status"][..],
-                _ => &["reconnect"][..],
+                _ => &["reconnect", "enable", "disable"][..],
             })
             .iter()
             .filter(|word| word.starts_with(typed))
@@ -656,7 +661,11 @@ mod tests {
         assert!(words("/autopilot O").is_none());
         assert!(words("/autopilot on x").is_none());
         assert_eq!(words("/mcp r").unwrap(), "reconnect");
+        assert_eq!(words("/mcp ").unwrap(), "reconnect enable disable");
         assert_eq!(words("/mcp reconnect ").unwrap(), "all tavily test");
+        assert_eq!(words("/mcp disable t").unwrap(), "tavily test");
+        assert_eq!(words("/mcp enable ").unwrap(), "all tavily test");
+        assert!(words("/mcp x ").is_none());
         assert_eq!(words("/mcp reconnect  t").unwrap(), "tavily test");
         assert!(words("/mcp reconnect x").is_none());
         assert!(words("/mcp reconnect test x").is_none());

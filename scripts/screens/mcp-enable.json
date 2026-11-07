@@ -1,0 +1,44 @@
+{
+  "size": "100x40",
+  "settings": {
+    "theme": "scramjet-dark",
+    "mcpServers": {
+      "time": {"command": "uvx", "args": ["mcp-server-time", "--local-timezone", "UTC"]},
+      "clock": {"command": "uvx", "args": ["mcp-server-time", "--local-timezone", "UTC"]}
+    },
+    "disabledMcpServers": ["clock"]
+  },
+  "files": {
+    "README.md": "# Clock\n"
+  },
+  "prompt": "What time is it?",
+  "replies": [
+    [{"text": "Enable the clock first."}],
+    [{"call": "mcp_call", "arguments": {"server": "clock", "tool": "get_current_time", "arguments": {"timezone": "Asia/Tokyo"}}}],
+    [{"text": "The clock answered."}]
+  ],
+  "steps": [
+    {"until": "Enable the clock first."},
+    {"type": "/mcp\r"},
+    {"until": "disabled"},
+    {"sleep": 0.3},
+    {"shot": "listed"},
+    {"type": "/mcp reconnect clock\r"},
+    {"until": "is disabled;"},
+    {"type": "/mcp enable cl\t"},
+    {"sleep": 0.3},
+    {"type": "\r"},
+    {"until": "Enabled MCP server clock"},
+    {"type": "!!cat \"$XDG_CONFIG_HOME/scramjet-rs/settings.json\"\r"},
+    {"until": "theme"},
+    {"sleep": 0.3},
+    {"shot": "enabled"},
+    {"type": "Try the clock\r"},
+    {"until": "The clock answered."},
+    {"type": "/mcp disable\r"},
+    {"until": "Disabled MCP servers"},
+    {"type": "/mcp\r"},
+    {"sleep": 0.5},
+    {"shot": "disabled"}
+  ]
+}

@@ -71,8 +71,7 @@ const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
-const RECONNECT_BUSY: &str =
-    "Wait for the current response to finish before reconnecting MCP servers.";
+const MCP_BUSY: &str = "Wait for the current response to finish before changing MCP servers.";
 const MODEL_NEXT: &str = "The model changes before the next request";
 const NOTHING_QUEUED: &str = "No queued messages to restore";
 
@@ -879,9 +878,14 @@ impl App {
                 self.draft = self.editor.draft(String::new());
                 return self.draft.set_note(Note::Info(RELOAD_BUSY.to_owned()));
             }
-            Some(Builtin::Mcp(argument)) if slash::reconnecting(argument).is_some() => {
+            Some(Builtin::Mcp(argument))
+                if !matches!(
+                    slash::mcp_command(argument),
+                    Some(slash::McpCommand::List) | None
+                ) =>
+            {
                 self.draft = self.editor.draft(String::new());
-                return self.draft.set_note(Note::Info(RECONNECT_BUSY.to_owned()));
+                return self.draft.set_note(Note::Info(MCP_BUSY.to_owned()));
             }
             Some(builtin) if builtin.interrupts() => self.cancel.store(true, Ordering::Relaxed),
             _ => {}

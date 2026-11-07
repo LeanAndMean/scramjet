@@ -322,6 +322,8 @@ pub(super) struct Settings {
     pub(super) enabled_models: Vec<String>,
     /// `mcpServers`: the MCP servers, by name.
     pub(super) mcp_servers: Vec<McpServer>,
+    /// `disabledMcpServers`: the names of those not started, as Claude Code's (`/mcp disable`).
+    pub(super) disabled_mcp_servers: Vec<String>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -406,6 +408,7 @@ impl Settings {
             themes: Vec::new(),
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
+            disabled_mcp_servers: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -620,6 +623,12 @@ impl Settings {
             }
             Some(_) => self.warnings.push(format!(
                 "{path}: mcpServers must be an object of servers by name; ignored"
+            )),
+        }
+        match paths(object, "disabledMcpServers") {
+            Ok(names) => self.disabled_mcp_servers = names,
+            Err(()) => self.warnings.push(format!(
+                "{path}: disabledMcpServers must be a list of server names; ignored"
             )),
         }
     }
@@ -957,6 +966,16 @@ impl Settings {
         self.update(|object| match models.is_empty() {
             true => drop(object.remove("enabledModels")),
             false => drop(object.insert("enabledModels".into(), json!(models))),
+        })
+    }
+
+    /// `/mcp enable` and `disable`'s choice: the MCP servers not started; none leaves
+    /// `disabledMcpServers` out.
+    pub(super) fn set_disabled_mcp_servers(&mut self, names: Vec<String>) -> io::Result<()> {
+        self.disabled_mcp_servers = names.clone();
+        self.update(|object| match names.is_empty() {
+            true => drop(object.remove("disabledMcpServers")),
+            false => drop(object.insert("disabledMcpServers".into(), json!(names))),
         })
     }
 
@@ -1680,6 +1699,33 @@ mod tests {
             (saved(), settings.enabled_models.len()),
             (json!({"theme": "x"}), 0)
         );
+    }
+
+    #[test]
+    fn disabled_mcp_servers_are_names_saved_and_left_out_when_none() {
+        let scratch = Scratch::new("disabled-mcp");
+        let mut settings = settings_with(&scratch, r#"{"disabledMcpServers": "a"}"#);
+        let path = scratch.0.join("settings.json");
+        assert!(settings.disabled_mcp_servers.is_empty());
+        assert_eq!(
+            settings.warnings,
+            [format!(
+                "{}: disabledMcpServers must be a list of server names; ignored",
+                shown(&path)
+            )]
+        );
+        std::fs::write(&path, r#"{"disabledMcpServers": ["a"], "theme": "x"}"#).unwrap();
+        settings.reload();
+        assert_eq!(settings.disabled_mcp_servers, ["a"]);
+        let saved = || -> Value { serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap() };
+        let names = vec!["a".to_owned(), "b".to_owned()];
+        settings.set_disabled_mcp_servers(names).unwrap();
+        assert_eq!(
+            saved(),
+            json!({"theme": "x", "disabledMcpServers": ["a", "b"]})
+        );
+        settings.set_disabled_mcp_servers(Vec::new()).unwrap();
+        assert_eq!(saved(), json!({"theme": "x"}));
     }
 
     #[test]

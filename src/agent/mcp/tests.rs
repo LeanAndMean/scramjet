@@ -597,6 +597,41 @@ fn without_servers_the_model_has_no_mcp_tools_and_none_start() {
     assert!(agent.mcp_servers().is_empty());
 }
 
+#[test]
+fn disabled_servers_do_not_start_until_enabled_and_their_tools_follow() {
+    let (endpoint, _server) = serve(Vec::new());
+    let (mut agent, scratch) = agent(endpoint, "mcp-disabled");
+    let log = scratch.0.join("a.log");
+    let a = test_server("a", &[("MCP_TEST_LOG", log.display().to_string())]);
+    agent.config.mcp_servers = vec![a];
+    agent.set_mcp_disabled(vec!["a".to_owned()]);
+    let names = |agent: &Agent| {
+        let definitions = agent.tool_definitions();
+        (definitions.as_array().unwrap().iter())
+            .map(|tool| tool["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert!(agent.mcp.is_none());
+    assert!(
+        !names(&agent).iter().any(|name| name == SEARCH),
+        "{:?}",
+        names(&agent)
+    );
+    assert_eq!(agent.mcp_names(), ["a"]);
+    assert_eq!(agent.disabled_mcp()[0].name, "a");
+    assert!(pids(&log).is_empty());
+    agent.set_mcp_disabled(Vec::new());
+    agent.mcp.as_ref().unwrap().settle(&AtomicBool::new(false));
+    assert!(matches!(agent.mcp_servers()[0].1, State::Ready { .. }));
+    assert!(names(&agent).iter().any(|name| name == SEARCH));
+    let first = pids(&log);
+    assert_eq!(first.len(), 1);
+    agent.set_mcp_disabled(vec!["a".to_owned()]);
+    assert!(agent.mcp.is_none());
+    until(|| !alive(first[0]));
+    assert!(!alive(first[0]));
+}
+
 /// The process ids `log` holds, in the order the servers started.
 fn pids(log: &Path) -> Vec<u32> {
     (std::fs::read_to_string(log).unwrap_or_default().lines())
@@ -663,7 +698,7 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
             config.command_sets.clone(),
             config.skills.clone(),
         );
-        agent.reload(tools, sets, skills, servers);
+        agent.reload(tools, sets, skills, servers, Vec::new());
     };
     reload(&mut agent, vec![a.clone(), b.clone()]);
     settle(&agent);

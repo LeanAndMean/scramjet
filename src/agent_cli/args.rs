@@ -170,9 +170,11 @@ skills and context files again, and starts the MCP servers whose entries changed
 /skill:NAME ARGS sends a skill's instructions with ARGS.
 /autopilot on|off|status: when on, a finished command's recommended next step runs after 3s.
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
-available.
+available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disable [SERVER|all]
+starts or stops them, saved in disabledMcpServers.
 Typed while a turn runs, /status, /usage, /hotkeys, /keybindings, /rename, /model, /scoped-models,
-/copy, /export, /settings, /autopilot and /mcp run before its next request, /reload is refused,
+/copy, /export, /settings, /autopilot and /mcp run before its next request, /reload and /mcp's
+changes are refused,
 and the other commands stop the turn and run once it has.
 Scramjet's names of the commands named otherwise here are accepted too (/new, /quit, /name,
 /session, /clone), and so are Claude Code's /reset, /config, /continue and /help, and

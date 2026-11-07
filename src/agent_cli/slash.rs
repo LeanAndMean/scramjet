@@ -39,7 +39,7 @@ pub(super) enum Builtin<'a> {
     Logout,
     Compact(&'a str),
     Autopilot(&'a str),
-    /// With its argument: `reconnect`, with a server's name or `all`.
+    /// With its argument: `reconnect`, `enable` or `disable`, with a server's name or `all`.
     Mcp(&'a str),
     Reload,
     Exit,
@@ -284,8 +284,6 @@ impl Interactive {
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
-    /// `/mcp`, as Codex's: the MCP servers, how each is, and its tools; `/mcp reconnect`, as
-    /// Claude Code's, starts one again, or all.
     /// `/usage`: what the saved sessions spent, read from their files.
     fn usage(&mut self) {
         let sessions = match scramjet_rs::agent::state_directory() {
@@ -300,16 +298,20 @@ impl Interactive {
         self.say(report.trim_end());
     }
 
+    /// `/mcp`, as Codex's: the MCP servers, how each is, and its tools; `/mcp reconnect`, as
+    /// Claude Code's, starts one again, or all, and `/mcp enable` and `disable` too.
     fn mcp(&mut self, argument: &str) {
-        match reconnecting(argument) {
-            Some(Ok(name)) => return self.reconnect(name),
-            Some(Err(())) | None if !argument.is_empty() => {
-                return self.say("Usage: /mcp [reconnect [SERVER|all]]");
-            }
-            _ => {}
+        match mcp_command(argument) {
+            None => return self.say("Usage: /mcp [reconnect|enable|disable [SERVER|all]]"),
+            Some(McpCommand::Reconnect(name)) => return self.reconnect(name),
+            Some(McpCommand::Enable(name)) => return self.enable_mcp(name, true),
+            Some(McpCommand::Disable(name)) => return self.enable_mcp(name, false),
+            Some(McpCommand::List) => {}
         }
         let servers = self.agent.mcp_servers();
-        if servers.is_empty() {
+        let disabled = self.agent.disabled_mcp();
+        let enabled = self.agent.mcp_names().len() - disabled.len();
+        if servers.is_empty() && (disabled.is_empty() || enabled > 0) {
             let settings = (self.settings.path()).map_or("the settings".into(), |path| {
                 scramjet_rs::agent::shortened(&path.to_string_lossy())
             });
@@ -369,10 +371,72 @@ impl Interactive {
                 McpState::Starting => {}
             }
         }
+        for server in disabled {
+            info += &format!("\n{} {}\n", visible(&server.name), ui.dim("· disabled"));
+            let (label, address) = server.address();
+            info += &row(label, &address);
+        }
         self.say(info.trim_end());
     }
 
+    /// `/mcp enable` and `disable`: starts or stops the server named `name`, or all with `None`,
+    /// and saves which are disabled in the settings, as Claude Code keeps them.
+    fn enable_mcp(&mut self, name: Option<&str>, enable: bool) {
+        let names = self.agent.mcp_names();
+        if names.is_empty() {
+            return self.say_styled(style::MUTED, "No MCP servers: see /mcp");
+        }
+        if let Some(name) = name
+            && !names.iter().any(|listed| listed == name)
+        {
+            return self.say(&format!("Error: no MCP server named {}", visible(name)));
+        }
+        let mut disabled = self.agent.mcp_disabled().to_vec();
+        let changed: Vec<String> = (names.into_iter())
+            .filter(|listed| name.is_none_or(|name| listed == name))
+            .filter(|listed| disabled.contains(listed) == enable)
+            .collect();
+        let (done, state) = match enable {
+            true => ("Enabled", "enabled"),
+            false => ("Disabled", "disabled"),
+        };
+        if changed.is_empty() {
+            let which = match name {
+                Some(name) => format!("MCP server {} is", visible(name)),
+                None => "All MCP servers are".to_owned(),
+            };
+            return self.say_styled(style::MUTED, &format!("{which} already {state}"));
+        }
+        match enable {
+            true => disabled.retain(|listed| !changed.contains(listed)),
+            false => disabled.extend(changed.iter().cloned()),
+        }
+        if let Err(error) = self.settings.set_disabled_mcp_servers(disabled.clone()) {
+            self.say(&format!("Error: settings not saved: {error}"));
+        }
+        self.agent.set_mcp_disabled(disabled);
+        let servers = match changed.len() {
+            1 => "MCP server",
+            _ => "MCP servers",
+        };
+        let changed: Vec<String> = changed.iter().map(|listed| visible(listed)).collect();
+        let said = format!("{done} {servers} {}", changed.join(", "));
+        self.say_styled(style::MUTED, &said);
+    }
+
     fn reconnect(&mut self, name: Option<&str>) {
+        if let Some(name) = name
+            && self
+                .agent
+                .mcp_disabled()
+                .iter()
+                .any(|listed| listed == name)
+        {
+            let name = visible(name);
+            return self.say(&format!(
+                "Error: MCP server {name} is disabled; /mcp enable {name} starts it"
+            ));
+        }
         let result = self.during_turn(|agent, ui, cancel| agent.reconnect_mcp(name, ui, cancel));
         let states = match result {
             Ok(states) => states,
@@ -416,6 +480,7 @@ impl Interactive {
             settings.command_sets.clone(),
             settings.skills.clone(),
             settings.mcp_servers.clone(),
+            settings.disabled_mcp_servers.clone(),
         );
         self.agent.set_providers(Providers::read(
             settings.models_files(),
@@ -469,17 +534,31 @@ impl Interactive {
     }
 }
 
-/// The server `/mcp ARGUMENT` reconnects to (`None` for all) if it is `reconnect`, or `Err` for
-/// `reconnect` with more than a name.
-pub(super) fn reconnecting(argument: &str) -> Option<Result<Option<&str>, ()>> {
-    let rest = argument.strip_prefix("reconnect")?;
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    Some(match rest.split_whitespace().collect::<Vec<_>>()[..] {
-        [] | ["all"] => Ok(None),
-        [name] => Ok(Some(name)),
-        _ => Err(()),
+/// What `/mcp ARGUMENT` asks for, as Claude Code's `/mcp`; `None` for what it does not take.
+#[derive(Debug, PartialEq)]
+pub(super) enum McpCommand<'a> {
+    List,
+    /// With the server's name, or `None` for all.
+    Reconnect(Option<&'a str>),
+    Enable(Option<&'a str>),
+    Disable(Option<&'a str>),
+}
+
+pub(super) fn mcp_command(argument: &str) -> Option<McpCommand<'_>> {
+    let mut words = argument.split_whitespace();
+    let Some(action) = words.next() else {
+        return Some(McpCommand::List);
+    };
+    let target = match (words.next(), words.next()) {
+        (None, _) | (Some("all"), None) => None,
+        (Some(name), None) => Some(name),
+        _ => return None,
+    };
+    Some(match action {
+        "reconnect" => McpCommand::Reconnect(target),
+        "enable" => McpCommand::Enable(target),
+        "disable" => McpCommand::Disable(target),
+        _ => return None,
     })
 }
 
@@ -669,13 +748,21 @@ mod tests {
     }
 
     #[test]
-    fn mcp_reconnect_takes_a_server_or_all() {
+    fn mcp_reconnect_enable_and_disable_take_a_server_or_all() {
+        use McpCommand::*;
         assert_eq!(Builtin::parse("/mcp"), Some(Builtin::Mcp("")));
-        assert_eq!(reconnecting(""), None);
-        assert_eq!(reconnecting("reconnect"), Some(Ok(None)));
-        assert_eq!(reconnecting("reconnect all"), Some(Ok(None)));
-        assert_eq!(reconnecting("reconnect  time "), Some(Ok(Some("time"))));
-        assert_eq!(reconnecting("reconnect a b"), Some(Err(())));
-        assert_eq!(reconnecting("reconnected"), None);
+        assert_eq!(mcp_command(""), Some(List));
+        assert_eq!(mcp_command("reconnect"), Some(Reconnect(None)));
+        assert_eq!(mcp_command("reconnect all"), Some(Reconnect(None)));
+        assert_eq!(
+            mcp_command("reconnect  time "),
+            Some(Reconnect(Some("time")))
+        );
+        assert_eq!(mcp_command("enable"), Some(Enable(None)));
+        assert_eq!(mcp_command("disable time"), Some(Disable(Some("time"))));
+        assert_eq!(mcp_command("disable all"), Some(Disable(None)));
+        assert_eq!(mcp_command("reconnect a b"), None);
+        assert_eq!(mcp_command("reconnected"), None);
+        assert_eq!(mcp_command("time"), None);
     }
 }
