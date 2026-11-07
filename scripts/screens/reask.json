@@ -1,0 +1,121 @@
+{
+  "size": "100x40",
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Paint the shed",
+  "replies": [
+    [
+      {
+        "text": "Which color, while I count the coats?"
+      },
+      {
+        "call": "get_scramjet_user_input",
+        "arguments": {
+          "type": "select",
+          "message": "Which color?",
+          "options": [
+            {
+              "value": "red",
+              "label": "Red"
+            },
+            {
+              "value": "blue",
+              "label": "Blue"
+            }
+          ]
+        }
+      },
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo coat >> coats.log; wc -l < coats.log"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Red it is."
+      }
+    ],
+    [
+      {
+        "text": "Blue it is."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "Which color?"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Red it is"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "answered"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.1
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "tree"
+    },
+    {
+      "type": "\u001b[A\u001b[A"
+    },
+    {
+      "sleep": 0.2
+    },
+    {
+      "shot": "tree-question"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Summarize branch?"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Choose an option"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "asked-again"
+    },
+    {
+      "type": "\u001b[B\r"
+    },
+    {
+      "until": "Blue it is"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "answered-again"
+    }
+  ]
+}

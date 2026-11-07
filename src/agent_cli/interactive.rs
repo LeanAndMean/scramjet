@@ -341,12 +341,27 @@ impl Interactive {
                 },
             );
         }
+        self.run_turn(Some(prompt), start)
+    }
+
+    /// Asks again the question going back in the session reached, and goes on with its turn
+    /// (`Navigated::Moved`); the next step it ends with runs next.
+    pub(super) fn ask_again(&mut self) {
+        self.chosen = self.run_turn(None, Start::Typed);
+    }
+
+    /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was
+    /// left in (`Agent::resume_turn`), as `send` says.
+    fn run_turn(&mut self, prompt: Option<&str>, start: Start) -> Option<(String, Start)> {
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);
         let model = self.agent.model().to_owned();
         let result = match self.screen.is_some() {
             true => self.turn_on_screen(prompt),
-            false => self.during_turn(|agent, ui, cancel| agent.turn(prompt, ui, cancel)),
+            false => self.during_turn(|agent, ui, cancel| match prompt {
+                Some(prompt) => agent.turn(prompt, ui, cancel),
+                None => agent.resume_turn(ui, cancel),
+            }),
         };
         // The agent's `switch_scramjet_model`, remembered as the user's choices are.
         if self.agent.model() != model {
@@ -374,13 +389,16 @@ impl Interactive {
         }
     }
 
-    /// Runs `prompt` as a model turn on the full screen, as `on_screen` does. Where the turn
+    /// Runs `prompt` as a model turn on the full screen, as `on_screen` does (`run_turn`). Where the turn
     /// pauses, the built-in commands typed meanwhile that do not stop it run, and it goes on;
     /// Escape or Ctrl-C meanwhile stop it.
-    fn turn_on_screen(&mut self, prompt: &str) -> Result<(), AgentError> {
+    fn turn_on_screen(&mut self, prompt: Option<&str>) -> Result<(), AgentError> {
         self.cancel.store(false, Ordering::Relaxed);
         let effort = self.agent.effort().map(str::to_owned);
-        let mut result = self.on_screen(|agent, ui, cancel| agent.turn(prompt, ui, cancel));
+        let mut result = self.on_screen(|agent, ui, cancel| match prompt {
+            Some(prompt) => agent.turn(prompt, ui, cancel),
+            None => agent.resume_turn(ui, cancel),
+        });
         while let Err(AgentError::Paused) = result {
             self.typed_during_turn(true);
             result = self.on_screen(Agent::resume_turn);

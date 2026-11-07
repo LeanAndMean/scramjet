@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.82.0 — Going back asks a question again
+
+### Changed
+
+- Going back with `/tree` (or Escape twice) to the answer of a question the agent asked (choose an option, or yes/no) asks it again, and the turn goes on with your new answer, branching from there. Other tool calls the agent made in the same reply keep their results and are not run again.
+
 ## 0.81.0 — Going back reopens a next-step list
 
 ### Changed

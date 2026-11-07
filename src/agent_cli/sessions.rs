@@ -423,8 +423,16 @@ impl Interactive {
             };
             match result {
                 Ok(Navigated::AlreadyThere) => self.say("Already at this point"),
-                Ok(Navigated::Moved { prompt, offer }) => {
+                Ok(Navigated::Moved {
+                    prompt,
+                    offer,
+                    question,
+                }) => {
                     self.replaced("✓ Navigated to selected point");
+                    if question {
+                        self.ask_again();
+                        return;
+                    }
                     match offer {
                         Some(offer) => self.reopen(offer, prompt),
                         None => {

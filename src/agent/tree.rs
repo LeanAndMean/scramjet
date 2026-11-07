@@ -1,8 +1,12 @@
 //! The session as a tree: the entries `/tree` lists, and continuing the conversation from
 //! one of them.
+use super::calls::{self, Calls};
 use super::status::{self, Reopened};
 use super::tools::Call;
-use super::{Agent, AgentError, AgentUi, Label, Purpose, TYPED, compaction, message_text, session};
+use super::{
+    Agent, AgentError, AgentUi, Label, Purpose, TYPED, compaction, message_text, question, session,
+    suggest,
+};
 use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 
@@ -58,6 +62,19 @@ struct Destination {
     left: Vec<Value>,
     /// The next-step list offered there.
     offer: Option<Reopened>,
+    /// A question to ask again there.
+    question: Option<Asked>,
+}
+
+/// A select or confirm question gone back to, with the calls after it in its reply.
+struct Asked {
+    /// The question's call and those after it.
+    calls: Vec<Value>,
+    /// Whether every call before it ended the turn.
+    ends: bool,
+    /// The results the calls after it had, by call id, but those of the harness's report and
+    /// suggestion, which run again for the turn's end to see them, and of calls that never ran.
+    kept: std::collections::HashMap<String, Value>,
 }
 
 /// Where `Agent::navigate` left the conversation.
@@ -66,10 +83,12 @@ pub enum Navigated {
     /// The conversation already ended at that entry.
     AlreadyThere,
     /// It now ends there; `prompt`, if the entry was one, is to be edited and sent again, and
-    /// `offer` is the next-step list offered there, to be offered again.
+    /// `offer` is the next-step list offered there, to be offered again. With `question`, the
+    /// question gone back to is asked again by `Agent::resume_turn`, which goes on with the turn.
     Moved {
         prompt: Option<String>,
         offer: Option<Reopened>,
+        question: bool,
     },
 }
 
@@ -213,7 +232,7 @@ impl Agent {
             return Ok(Navigated::AlreadyThere);
         };
         let branch = compaction::Branch::of(&destination.left);
-        let summary = match summary {
+        let mut summary = match summary {
             Some(focus) if !branch.is_empty() => {
                 Some(self.summarize_branch(&branch, focus, ui, cancel)?)
             }
@@ -223,18 +242,41 @@ impl Agent {
         self.usage.context_tokens = self.session.context_tokens();
         self.autopilot = self.session.autopilot().unwrap_or(self.autopilot);
         self.restore_command();
+        let question = destination.question.is_some();
+        self.calls = destination.question.map(|asked| {
+            let again = calls::Again {
+                kept: asked.kept,
+                summary: summary.take(),
+            };
+            Calls::again(asked.calls, asked.ends, again)
+        });
+        if question {
+            self.suggestion = suggest::Pending::Nothing;
+            self.delegated.clear();
+        }
         self.answer_interrupted_calls()?;
         if let Some((summary, files)) = summary {
-            self.session
-                .append(&json!({"type":"branch_summary", "summary":summary,
-                "read_files":files.read, "modified_files":files.modified}))?;
-            self.conversation
-                .push(compaction::branch_summary_message(&summary));
+            self.add_branch_summary(&summary, &files)?;
         }
         Ok(Navigated::Moved {
             prompt: destination.prompt,
             offer: destination.offer,
+            question,
         })
+    }
+
+    /// Adds the summary of a branch left behind.
+    pub(super) fn add_branch_summary(
+        &mut self,
+        summary: &str,
+        files: &compaction::FileLists,
+    ) -> Result<(), AgentError> {
+        self.session
+            .append(&json!({"type":"branch_summary", "summary":summary,
+            "read_files":files.read, "modified_files":files.modified}))?;
+        self.conversation
+            .push(compaction::branch_summary_message(summary));
+        Ok(())
     }
 
     /// Where continuing from the entry on `line` ends the conversation; `None` if it already
@@ -255,6 +297,15 @@ impl Agent {
             output.value["type"] == "function_call_output"
                 && at(output.parent).is_some_and(|call| record(&call.value))
         };
+        if let Some(asked) = asked_at(&entries, entry) {
+            return Ok(Some(Destination {
+                leaf: entry.parent,
+                prompt: None,
+                left: self.session.left_behind(entry.parent)?,
+                offer: None,
+                question: Some(asked),
+            }));
+        }
         if self.session.leaf() == Some(line) && !record_output(entry) {
             return Ok(None);
         }
@@ -303,6 +354,7 @@ impl Agent {
             prompt,
             left: self.session.left_behind(kept)?,
             offer,
+            question: None,
         }))
     }
 
@@ -337,6 +389,74 @@ impl Agent {
         };
         Ok((summary, files))
     }
+}
+
+/// The question to ask again where `entry` is its result: a select or confirm question, with
+/// the calls of its reply after it; `None` for any other entry.
+fn asked_at(entries: &[session::Entry], entry: &session::Entry) -> Option<Asked> {
+    if entry.value["type"] != "function_call_output" {
+        return None;
+    }
+    let id = entry.value["call_id"].as_str()?;
+    let at = |line: Option<usize>| line.and_then(|line| entries.iter().find(|e| e.line == line));
+    // A reply's calls come one after another, then their results in the same order.
+    let mut above = entry.parent;
+    let mut earlier = Vec::new();
+    while let Some(output) = at(above).filter(|e| e.value["type"] == "function_call_output") {
+        earlier.push(&output.value);
+        above = output.parent;
+    }
+    let mut reply = Vec::new();
+    while let Some(call) = at(above).filter(|e| e.value["type"] == "function_call") {
+        reply.push(&call.value);
+        above = call.parent;
+    }
+    reply.reverse();
+    let position = reply.iter().position(|call| call["call_id"] == id)?;
+    let call = Call::parse(reply[position]).ok()?;
+    let kind = question::Question::parse(&call.arguments).ok()?.kind;
+    if call.name != question::NAME || kind == question::Kind::Freetext {
+        return None;
+    }
+    let ends = earlier.iter().all(|output| {
+        let id = &output["call_id"];
+        (reply.iter()).any(|call| call["call_id"] == *id && calls::ended(call, output))
+    });
+    let mut kept = std::collections::HashMap::new();
+    let mut answered = std::collections::HashSet::from([id]);
+    let mut next = Some(entry.line);
+    while let Some(output) =
+        (entries.iter()).find(|e| e.parent == next && e.value["type"] == "function_call_output")
+    {
+        next = Some(output.line);
+        let id = output.value["call_id"].as_str().unwrap_or_default();
+        let call = reply.iter().find(|call| call["call_id"] == id);
+        let runs_again = call.is_none_or(|call| {
+            [status::NAME, suggest::NAME].contains(&call["name"].as_str().unwrap_or_default())
+        });
+        if !runs_again && output.value["output"] != calls::NOT_RUN {
+            kept.insert(id.to_owned(), output.value.clone());
+        }
+        answered.insert(id);
+    }
+    // A call after it whose result was never saved may or may not have taken effect.
+    for call in &reply[position + 1..] {
+        let id = call["call_id"].as_str().unwrap_or_default();
+        let name = call["name"].as_str().unwrap_or_default();
+        if !answered.contains(id) && ![status::NAME, suggest::NAME].contains(&name) {
+            let output = json!({"type":"function_call_output","call_id":id,
+                "output":super::INTERRUPTED,super::FAILED:true});
+            kept.insert(id.to_owned(), output);
+        }
+    }
+    Some(Asked {
+        calls: reply[position..]
+            .iter()
+            .map(|call| (*call).clone())
+            .collect(),
+        ends,
+        kept,
+    })
 }
 
 #[cfg(test)]
@@ -395,7 +515,8 @@ mod tests {
             agent.navigate(chosen, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: Some("/rs:loop".into()),
-                offer: offered.clone()
+                offer: offered.clone(),
+                question: false,
             }
         );
         assert_eq!(agent.conversation().len(), 2);
@@ -404,7 +525,8 @@ mod tests {
             agent.navigate(record, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: None,
-                offer: offered.clone()
+                offer: offered.clone(),
+                question: false,
             }
         );
         // A choice made there branches from there.
@@ -427,7 +549,8 @@ mod tests {
             agent.navigate(reply, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: None,
-                offer: offered.clone()
+                offer: offered.clone(),
+                question: false,
             }
         );
         agent
@@ -441,6 +564,107 @@ mod tests {
         };
         assert_eq!(offer, offered);
         assert_eq!(agent.conversation().len(), 2);
+    }
+
+    #[test]
+    fn going_back_to_a_question_asks_it_again_and_keeps_the_other_calls_results() {
+        let question = json!({"type":"select","message":"Which?",
+            "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]});
+        let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[
+                (question::NAME, question.clone()),
+                ("bash", json!({"command":"echo ran >> log"})),
+            ]),
+            text("Chose a."),
+            text("Chose b."),
+            text("## Goal\nsummary"),
+            text("Cancelled."),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "tree-question");
+        let cancel = AtomicBool::new(false);
+        let mut ui = Recorder {
+            choices: vec![Some(0)],
+            ..Recorder::default()
+        };
+        agent.turn("ask", &mut ui, &cancel).unwrap();
+        let asked = |agent: &Agent| {
+            let tree = agent.tree().unwrap();
+            let answers = (tree.entries.iter()).filter(
+                |entry| matches!(&entry.item, TreeItem::Tool(name, _) if name == question::NAME),
+            );
+            answers.map(|entry| entry.line).collect::<Vec<_>>()
+        };
+        let first = asked(&agent)[0];
+        let moved = agent.navigate(first, None, &mut ui, &cancel).unwrap();
+        let again = Navigated::Moved {
+            prompt: None,
+            offer: None,
+            question: true,
+        };
+        assert_eq!(moved, again);
+        // Neither call has a result until the question is answered again.
+        let last = agent.conversation().last().unwrap();
+        assert_eq!(
+            (last["type"].as_str(), last["name"].as_str()),
+            (Some("function_call"), Some("bash"))
+        );
+        let mut ui = Recorder {
+            choices: vec![Some(1)],
+            ..Recorder::default()
+        };
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        assert!(
+            ui.shown
+                .contains(&"choose Choose an option [\"A\", \"B\"] None".to_owned())
+        );
+        assert!(
+            ui.shown
+                .iter()
+                .any(|shown| shown.starts_with("result bash"))
+        );
+        // The bash call ran once, with the first answer.
+        let log = std::fs::read_to_string(agent.root().join("log")).unwrap();
+        assert_eq!(log, "ran\n");
+
+        // With a summary of the branch left, it comes after the results.
+        let second = *asked(&agent).last().unwrap();
+        assert_ne!(second, first);
+        let moved = agent.navigate(second, Some(""), &mut ui, &cancel).unwrap();
+        assert_eq!(moved, again);
+        let mut ui = Recorder::default();
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(agent.root().join("log")).unwrap(),
+            "ran\n"
+        );
+
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 5);
+        let answers = |body: &Value| {
+            outputs(body)
+                .into_iter()
+                .map(|(_, text)| text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(answers(&bodies[1])[0], r#"{"selected":"a"}"#);
+        assert_eq!(
+            answers(&bodies[2]),
+            answers(&bodies[1])
+                .iter()
+                .enumerate()
+                .map(|(at, text)| match at {
+                    0 => r#"{"selected":"b"}"#.to_owned(),
+                    _ => text.clone(),
+                })
+                .collect::<Vec<_>>()
+        );
+        let input = bodies[4]["input"].as_array().unwrap();
+        assert_eq!(answers(&bodies[4])[0], r#"{"cancelled":true}"#);
+        assert_eq!(answers(&bodies[4])[1], answers(&bodies[1])[1]);
+        let summary = input.last().unwrap()["content"].as_str().unwrap();
+        assert!(summary.contains("## Goal\nsummary"), "{summary}");
+        assert_eq!(input[input.len() - 2]["type"], "function_call_output");
     }
 
     #[test]
@@ -497,7 +721,8 @@ mod tests {
             agent.navigate(3, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: Some("two".into()),
-                offer: None
+                offer: None,
+                question: false,
             }
         );
         assert_eq!(agent.conversation().len(), 2);
@@ -530,7 +755,8 @@ mod tests {
             agent.navigate(4, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: None,
-                offer: None
+                offer: None,
+                question: false,
             }
         );
         agent.turn("three", &mut ui, &cancel).unwrap();
@@ -540,7 +766,8 @@ mod tests {
             agent.navigate(1, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: Some("one".into()),
-                offer: None
+                offer: None,
+                question: false,
             }
         );
         assert!(agent.conversation().is_empty());
@@ -764,7 +991,8 @@ mod tests {
             agent.navigate(6, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: None,
-                offer: None
+                offer: None,
+                question: false,
             }
         );
         assert_eq!(agent.conversation().len(), 6);
@@ -840,7 +1068,8 @@ mod tests {
             agent.navigate(4, Some("focus"), &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: Some("explore".into()),
-                offer: None
+                offer: None,
+                question: false,
             }
         );
         assert_eq!(ui.waits.last(), Some(&Purpose::BranchSummary));
@@ -869,7 +1098,8 @@ Summary of that exploration:\n\n## Goal\nlook\n\n<read-files>\nold.rs\nx.rs\n</r
             agent.navigate(3, None, &mut ui, &cancel).unwrap(),
             Navigated::Moved {
                 prompt: None,
-                offer: None
+                offer: None,
+                question: false,
             }
         );
         assert!(!agent.leaves_branch(14).unwrap());

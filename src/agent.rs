@@ -115,6 +115,8 @@ pub(super) const TYPED: &str = "_scramjet_typed";
 /// Stored, as `true`, with a tool result or `!` command that failed, so a resumed conversation
 /// shows it as it ran. Never sent, as no `_scramjet_` field is.
 const FAILED: &str = "_scramjet_failed";
+/// The result of a call the session left without one.
+const INTERRUPTED: &str = "Error: the previous session ended before this tool call reported a result. It may or may not have taken effect, and it was not re-run.";
 
 /// A session before the current one in its chain (`Agent::earlier_sessions`).
 pub struct EarlierSession {
@@ -1719,9 +1721,21 @@ impl Agent {
         show_items(&earlier.read.items, Some(&self.config.root), ui);
     }
 
-    /// Shows the conversation as a resumed session has it, as its turns showed when they ran.
+    /// Shows the conversation as a resumed session has it, as its turns showed when they ran;
+    /// calls left to run again (a question gone back to) show as they run.
     pub fn show_conversation(&self, ui: &mut dyn AgentUi) {
-        show_items(&self.conversation, Some(&self.config.root), ui);
+        let root = Some(self.config.root.as_path());
+        let Some(calls) = &self.calls else {
+            return show_items(&self.conversation, root, ui);
+        };
+        let pending = |item: &&Value| {
+            item["type"] == "function_call" && calls.has(item["call_id"].as_str().unwrap_or(""))
+        };
+        let shown: Vec<Value> = (self.conversation.iter())
+            .filter(|item| !pending(item))
+            .cloned()
+            .collect();
+        show_items(&shown, root, ui);
     }
 
     /// Reads the providers again for what the current model takes, its limits and where its
@@ -1797,12 +1811,13 @@ impl Agent {
             .filter(|item| item["type"] == "function_call")
             .filter_map(|item| item["call_id"].as_str())
             .filter(|id| !answered.contains(*id))
+            // A question gone back to, and the calls after it, are answered as they run again.
+            .filter(|id| !self.calls.as_ref().is_some_and(|calls| calls.has(id)))
             .map(str::to_owned)
             .collect();
         for call_id in missing {
             self.add(json!({"type":"function_call_output","call_id":call_id,
-                "output":"Error: the previous session ended before this tool call reported a result. It may or may not have taken effect, and it was not re-run.",
-                FAILED:true}))?;
+                "output":INTERRUPTED,FAILED:true}))?;
         }
         Ok(())
     }

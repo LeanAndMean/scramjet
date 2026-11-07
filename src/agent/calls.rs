@@ -24,13 +24,44 @@ pub(super) enum Called {
     Running(Batch),
 }
 
+/// What `not_run` answers a call with.
+pub(super) const NOT_RUN: &str =
+    "Error: the turn was stopped before this tool call ran; it did not run.";
+
 /// A reply's calls as the turn runs them, kept while it pauses (`AgentUi::pause`).
 pub(super) struct Calls {
     items: Vec<Value>,
     run: Run,
+    again: Again,
+}
+
+/// What going back to a question asked among a reply's calls keeps of them (`Agent::navigate`).
+#[derive(Default)]
+pub(super) struct Again {
+    /// The results the calls after the question had, added again rather than run again, by
+    /// call id.
+    pub kept: std::collections::HashMap<String, Value>,
+    /// The summary of the branch left there, added after the calls' results.
+    pub summary: Option<(String, super::compaction::FileLists)>,
 }
 
 impl Calls {
+    /// The calls from `items` on to run again one after another, `ends` saying whether every
+    /// call before them ended the turn.
+    pub(super) fn again(items: Vec<Value>, ends: bool, again: Again) -> Self {
+        let run = Run::OneByOne {
+            next: 0,
+            ends,
+            running: None,
+        };
+        Self { items, run, again }
+    }
+
+    /// Whether the call `id` is among them.
+    pub(super) fn has(&self, id: &str) -> bool {
+        (self.items.iter()).any(|item| item["call_id"].as_str() == Some(id))
+    }
+
     /// Those of the calls running now.
     pub(super) fn running(&mut self) -> Option<&mut Batch> {
         match &mut self.run {
@@ -128,7 +159,11 @@ impl Agent {
                 running: None,
             },
         };
-        Calls { items: calls, run }
+        Calls {
+            items: calls,
+            run,
+            again: Again::default(),
+        }
     }
 
     /// Runs `calls` on to their end, adding their results; returns whether the turn ends after
@@ -141,14 +176,18 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<bool, AgentError> {
-        let Calls { items, run } = calls;
+        let Calls {
+            items,
+            run,
+            mut again,
+        } = calls;
         match run {
             Run::Together(mut batch) => {
                 let ran = match batch.wait(ui, cancel) {
                     Waited::Ended(ran) => ran,
                     Waited::Paused => {
                         let run = Run::Together(batch);
-                        self.calls = Some(Calls { items, run });
+                        self.calls = Some(Calls { items, run, again });
                         return Err(AgentError::Paused);
                     }
                 };
@@ -167,6 +206,14 @@ impl Agent {
                 mut running,
             } => {
                 while let Some(item) = items.get(next) {
+                    let id = item["call_id"].as_str().unwrap_or_default();
+                    if let Some(output) = again.kept.remove(id) {
+                        super::show_items(&[item.clone(), output.clone()], Some(self.root()), ui);
+                        ends &= ended(item, &output);
+                        self.add(output)?;
+                        next += 1;
+                        continue;
+                    }
                     let called = match running.take() {
                         Some(batch) => Called::Running(batch),
                         None => self.call(item, ui, cancel),
@@ -186,7 +233,7 @@ impl Agent {
                                     ends,
                                     running,
                                 };
-                                self.calls = Some(Calls { items, run });
+                                self.calls = Some(Calls { items, run, again });
                                 return Err(AgentError::Paused);
                             }
                         },
@@ -199,8 +246,14 @@ impl Agent {
                         for item in &items[next..] {
                             self.not_run(item, ui)?;
                         }
+                        if let Some((summary, files)) = again.summary {
+                            self.add_branch_summary(&summary, &files)?;
+                        }
                         return Err(AgentError::Cancelled);
                     }
+                }
+                if let Some((summary, files)) = again.summary {
+                    self.add_branch_summary(&summary, &files)?;
                 }
                 Ok(ends)
             }
@@ -245,11 +298,10 @@ impl Agent {
         let summary = call.as_ref().map(Call::summary).unwrap_or_default();
         let compact = call.and_then(|call| call.compact(&self.config.root));
         ui.tool_call(name, &summary, compact.as_ref());
-        let output = "Error: the turn was stopped before this tool call ran; it did not run.";
-        ui.tool_result(name, output, None, true);
+        ui.tool_result(name, NOT_RUN, None, true);
         self.add(
             json!({"type":"function_call_output","call_id":item["call_id"],
-            "output":output,FAILED:true}),
+            "output":NOT_RUN,FAILED:true}),
         )
     }
 
@@ -519,6 +571,21 @@ impl Tools<'_> {
             output.failed,
         );
         (output, usage)
+    }
+}
+
+/// Whether the call `item`, answered with the session's `output`, ended the turn as it ran: a
+/// question cancelled or left to the prompt, or a report.
+pub(super) fn ended(item: &Value, output: &Value) -> bool {
+    match item["name"].as_str() {
+        Some(question::NAME) => {
+            let answer: Value = (output["output"].as_str())
+                .and_then(|text| serde_json::from_str(text).ok())
+                .unwrap_or_default();
+            answer["cancelled"] == true || answer.get("parked").is_some()
+        }
+        Some(status::NAME) => true,
+        _ => false,
     }
 }
 
