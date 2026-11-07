@@ -36,11 +36,30 @@ fn editor_command() -> Option<String> {
 }
 
 /// Runs the editor `command`, its words split at spaces as Scramjet splits them, on `file`.
+#[cfg(not(windows))]
 fn run_on(command: &str, file: &Path) -> Result<std::process::ExitStatus, String> {
     let mut parts = command.split(' ').filter(|part| !part.is_empty());
     let program = parts.next().ok_or_else(|| NO_EDITOR.to_owned())?;
     (Command::new(program).args(parts).arg(file).status())
         .map_err(|error| format!("cannot start {program}: {error}"))
+}
+
+/// Runs the editor `command` on `file` through `cmd.exe`, as Scramjet's `shell: true` does there,
+/// so that `code --wait` finds `code.cmd`; the file is quoted, as a profile's path may hold spaces.
+#[cfg(windows)]
+fn run_on(command: &str, file: &Path) -> Result<std::process::ExitStatus, String> {
+    use std::os::windows::process::CommandExt;
+    let shell = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
+    (Command::new(shell)
+        .raw_arg(windows_line(command, file))
+        .status())
+    .map_err(|error| format!("cannot start {command}: {error}"))
+}
+
+/// `cmd.exe`'s arguments for `command` on `file`: `/s` strips the outer quotes, keeping the rest.
+#[cfg(any(windows, test))]
+fn windows_line(command: &str, file: &Path) -> String {
+    format!("/d /s /c \"{} \"{}\"\"", command.trim(), file.display())
 }
 
 /// Runs the editor on a temporary file holding `text`. `Ok(None)` when it exits with another
@@ -86,5 +105,17 @@ fn create_prompt_file() -> io::Result<(PathBuf, File)> {
             }
             Err(error) => return Err(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cmd_gets_the_editor_and_its_file_quoted_within_one_quoted_line() {
+        let file = std::path::Path::new(r"C:\Users\A B\Temp\p.md");
+        assert_eq!(
+            super::windows_line(" code --wait ", file),
+            r#"/d /s /c "code --wait "C:\Users\A B\Temp\p.md"""#
+        );
     }
 }

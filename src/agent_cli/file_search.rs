@@ -86,8 +86,9 @@ impl Search {
     /// `getFuzzyFileSuggestions` runs it. `None` without `fd`.
     pub(super) fn start(root: &Path, mention: Mention) -> Option<Self> {
         let program = scramjet_rs::agent::search_program("find")?;
-        let scoped = mention.query.rfind('/').and_then(|slash| {
-            let (shown, query) = mention.query.split_at(slash + 1);
+        let typed = mention.query.replace('\\', "/");
+        let scoped = typed.rfind('/').and_then(|slash| {
+            let (shown, query) = typed.split_at(slash + 1);
             let base = match shown.strip_prefix("~/") {
                 Some(rest) => std::env::home_dir()?.join(rest),
                 None => root.join(shown),
@@ -97,7 +98,7 @@ impl Search {
         });
         let (base, query, directory) = match scoped {
             Some((base, query, shown)) => (base, query, Some(shown)),
-            None => (root.to_path_buf(), mention.query.clone(), None),
+            None => (root.to_path_buf(), typed.clone(), None),
         };
         let mut command = Command::new(program);
         command
@@ -199,8 +200,9 @@ fn pattern(query: &str) -> String {
 
 /// The best of `fd`'s `output` for `query`, as Scramjet ranks them: by `score`, at most 20, each
 /// shown under `directory` when the query named one, and quoted when it has a space or the
-/// mention opened a quote.
+/// mention opened a quote. Windows' `\` are shown as `/`, as Scramjet shows them.
 fn offered(output: &str, query: &str, directory: Option<&str>, quoted: bool) -> Vec<Suggestion> {
+    let output = output.replace('\\', "/");
     let mut found: Vec<(u32, &str, bool)> = output
         .lines()
         .filter(|line| !line.is_empty())
@@ -336,6 +338,11 @@ mod tests {
         let found = offered("b.rs\nsub/\n", "", Some("~/a/"), true);
         let values: Vec<_> = found.iter().map(|item| item.value.as_str()).collect();
         assert_eq!(values, ["@\"~/a/b.rs\"", "@\"~/a/sub/\""]);
+        // Windows' separators, shown as `/`, and `.git` left out there too.
+        let found = offered("src\\a.rs\nsrc\\sub\\\n.git\\HEAD\n", "", None, false);
+        let values: Vec<_> = found.iter().map(|item| item.value.as_str()).collect();
+        assert_eq!(values, ["@src/a.rs", "@src/sub/"]);
+        assert_eq!(found[1].label, "sub/");
         let many: String = (0..30).map(|n| format!("f{n}\n")).collect();
         assert_eq!(offered(&many, "", None, false).len(), 20);
     }

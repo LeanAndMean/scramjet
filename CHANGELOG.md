@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.87.2 — The external editor and `@` paths on Windows
+
+### Fixed
+
+- On Windows, Ctrl+G and `/settings`' editor run `$VISUAL` or `$EDITOR` through `cmd.exe`, as Scramjet does, so that an editor installed as a `.cmd` (`code --wait`) starts, and the file's path is quoted, as a profile's path may hold spaces.
+- `@` completion takes `\` in what is typed as `/`, and shows `fd`'s Windows paths with `/`, as Scramjet does.
+
 ## 0.87.1 — Settings, sessions and state found on Windows
 
 ### Fixed
