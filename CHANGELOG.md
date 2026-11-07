@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.83.1 — The macOS code compiles
+
+### Fixed
+
+- The sandbox's check of stores no longer fails to compile on macOS, where a file's device number has another type. `scripts/check-macos.sh` type-checks and lints both macOS targets on Linux; no macOS binary is built or run yet.
+
 ## 0.83.0 — Chains of sessions in /resume
 
 ### Added

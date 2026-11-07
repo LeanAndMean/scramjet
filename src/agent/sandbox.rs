@@ -430,7 +430,9 @@ impl Hidden {
         use rustix::fs::{AtFlags, FileType, Mode, OFlags};
         use std::os::fd::AsRawFd;
         let up = LOOKUP | OFlags::DIRECTORY | OFlags::CLOEXEC;
-        let key = |stat: &rustix::fs::Stat| (stat.st_dev, stat.st_ino);
+        // As std's `MetadataExt::dev`: macOS's `st_dev` is an `i32`.
+        #[allow(clippy::unnecessary_cast)]
+        let key = |stat: &rustix::fs::Stat| (stat.st_dev as u64, stat.st_ino as u64);
         let stat = rustix::fs::fstat(file)?;
         if self.identities.contains(&key(&stat)) {
             return Ok(true);
@@ -955,14 +957,11 @@ touch vendor/lib/.git/hooks/post-checkout && rm -rf build && mv vendor v2 && ech
         assert!(!home.join("elsewhere/a.rs").exists());
         std::fs::remove_file(root.join("src/a.rs")).unwrap();
 
-        rustix::fs::mknodat(
-            rustix::fs::CWD,
-            root.join("src/a.rs"),
-            rustix::fs::FileType::Fifo,
-            rustix::fs::Mode::from_raw_mode(0o600),
-            0,
-        )
-        .unwrap();
+        let fifo = std::process::Command::new("mkfifo")
+            .arg(root.join("src/a.rs"))
+            .status()
+            .unwrap();
+        assert!(fifo.success());
         assert!(super::write_beneath(&real_root, &real, b"x").is_err());
     }
 
