@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.75.0 — When a quota runs out at the current pace
+
+### Added
+
+- `/usage` says when a quota window runs out if it goes on being used at the pace it has been since it started (`runs out 03:18 at this pace`), for windows that would run out before they reset: ChatGPT's, and GitHub Copilot's weekly limit and monthly premium requests.
+
 ## 0.74.2 — Nested repositories kept read-only behind a changed permission
 
 ### Fixed

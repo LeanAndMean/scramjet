@@ -266,6 +266,47 @@ fn clock(at: u64, now: u64) -> String {
     }
 }
 
+/// When `window` started, in milliseconds since 1970: its length before it resets, a week for
+/// Copilot's weekly limit and a calendar month for its monthly requests (reset on a month's
+/// first day); none when its length is not known.
+fn window_start(window: &Window) -> Option<i64> {
+    const DAY: i64 = 86_400_000;
+    let resets = window.resets_at?.checked_mul(1000)?;
+    match (window.window_minutes, window.name.as_deref()) {
+        (Some(minutes), _) if minutes > 0 => Some(resets - minutes * 60_000),
+        (None, Some("Weekly")) => Some(resets - 7 * DAY),
+        (None, Some("Premium" | "Chat")) => {
+            let (day, time) = (resets.div_euclid(DAY), resets.rem_euclid(DAY));
+            let (year, month, date) = civil_date(day);
+            let (year, month) = if month == 1 {
+                (year - 1, 12)
+            } else {
+                (year, month - 1)
+            };
+            let length = civil_days(year + i32::from(month == 12), month % 12 + 1, 1)
+                - civil_days(year, month, 1);
+            Some(civil_days(year, month, date.min(length as i32)) * DAY + time)
+        }
+        _ => None,
+    }
+}
+
+/// When `window` runs out if it goes on being used at the pace it was used from its start up to
+/// `observed_at`; none when it starts again first, too little of it has passed to tell a pace,
+/// or its start is not known.
+fn runs_out(window: &Window, observed_at: u64) -> Option<u64> {
+    let used = window.used_percent;
+    let start = window_start(window)?;
+    let resets = window.resets_at? * 1000;
+    let (observed, length) = (observed_at as i64, resets - start);
+    let elapsed = observed - start;
+    if !(used > 0.0 && used < 100.0) || observed >= resets || elapsed < length / 20 {
+        return None;
+    }
+    let out = start + (elapsed as f64 * 100.0 / used) as i64;
+    (out < resets).then(|| out.max(0) as u64)
+}
+
 /// What a window of `minutes` is called: Codex's five-hour and weekly ones are `5h` and `Weekly`.
 fn window_label(minutes: Option<i64>) -> String {
     const DAY: i64 = 24 * 60;
@@ -339,8 +380,15 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
                 None => String::new(),
             };
             let over = over.map_or(String::new(), |over| format!(", {over} over"));
+            let out = match runs_out(window, quota.observed_at) {
+                Some(out) if out > now => {
+                    let text = format!("runs out {} at this pace", clock(out, now));
+                    format!(", {}", ui.styled(style::WARNING, &text))
+                }
+                _ => String::new(),
+            };
             text += &format!(
-                "{}{bar} {used:>3.0}% used{count}{over}{resets}\n",
+                "{}{bar} {used:>3.0}% used{count}{over}{out}{resets}\n",
                 ui.dim(&format!("{label:<width$}")),
             );
         }
@@ -1062,6 +1110,86 @@ mod tests {
             balance: Some("0".into()),
         };
         assert_eq!(credits_text(&hidden), "Available");
+    }
+
+    #[test]
+    fn a_window_used_faster_than_it_lasts_says_when_it_runs_out() {
+        let (now, mut history, ui) = (NOW, history(), ui());
+        let seconds = |ms: u64| Some((ms / 1000) as i64);
+        // Three hours of five gone, 80% used: at that pace 100% after 3h45m.
+        let fast = Window {
+            used_percent: 80.0,
+            window_minutes: Some(300),
+            resets_at: seconds(now + 2 * 3_600_000),
+            ..Window::default()
+        };
+        let out = now + 45 * 60_000;
+        assert_eq!(runs_out(&fast, now), Some(out));
+        let slow = Window {
+            used_percent: 50.0,
+            ..fast.clone()
+        };
+        assert_eq!(runs_out(&slow, now), None);
+        let early = Window {
+            resets_at: seconds(now + 299 * 60_000),
+            ..fast.clone()
+        };
+        assert_eq!(runs_out(&early, now), None, "a minute is too little");
+        let unknown = Window {
+            window_minutes: None,
+            ..fast.clone()
+        };
+        assert_eq!(runs_out(&unknown, now), None);
+        let full = Window {
+            used_percent: 100.0,
+            ..fast.clone()
+        };
+        assert_eq!(runs_out(&full, now), None);
+        // Copilot's monthly requests start on the first day of the month before their reset.
+        let monthly = |reset: (i32, i32, i32)| Window {
+            name: Some("Premium".into()),
+            resets_at: Some(civil_days(reset.0, reset.1, reset.2) * 86_400),
+            ..Window::default()
+        };
+        let start = |reset| window_start(&monthly(reset)).map(|ms| civil_date(ms / 86_400_000));
+        assert_eq!(start((2026, 12, 1)), Some((2026, 11, 1)));
+        assert_eq!(start((2027, 1, 1)), Some((2026, 12, 1)));
+        assert_eq!(start((2026, 3, 31)), Some((2026, 2, 28)));
+        let weekly = Window {
+            name: Some("Weekly".into()),
+            resets_at: Some(700_000),
+            ..Window::default()
+        };
+        assert_eq!(window_start(&weekly), Some((700_000 - 7 * 86_400) * 1000));
+        // The row says it, unless that time has passed since the response that reported it.
+        let quota = |observed_at| Quota {
+            observed_at,
+            windows: vec![fast.clone()],
+            credits: None,
+        };
+        let current = Path::new("/s/p/2.jsonl");
+        let row = |history: &History| {
+            let text = report(
+                history,
+                Path::new("/s"),
+                current,
+                "b/new",
+                now,
+                Some("a"),
+                &ui,
+            );
+            let text = super::super::text::plain(&text);
+            text.lines().nth(3).unwrap_or_default().to_owned()
+        };
+        history.quotas = vec![("a".into(), quota(now))];
+        let expected = format!(
+            "80% used, runs out {} at this pace, resets {}",
+            clock(out, now),
+            clock(now + 2 * 3_600_000, now)
+        );
+        assert!(row(&history).ends_with(&expected), "{}", row(&history));
+        history.quotas = vec![("a".into(), quota(now - 50 * 60_000))];
+        assert!(!row(&history).contains("runs out"), "{}", row(&history));
     }
 
     #[test]
