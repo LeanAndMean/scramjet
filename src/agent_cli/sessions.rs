@@ -350,14 +350,17 @@ impl Interactive {
             return;
         };
         match self.agent.fork(index) {
-            Ok(Some(prompt)) => {
+            Ok(Some((prompt, offer))) => {
                 self.agent.load_model_info();
                 self.replaced(&format!(
                     "✓ Forked to new session · {}\n{}",
                     model_line(&self.agent),
                     saved_line(&self.agent),
                 ));
-                self.set_text(prompt);
+                match offer {
+                    Some(offer) => self.reopen(offer, Some(prompt)),
+                    None => self.set_text(prompt),
+                }
             }
             Ok(None) => self.say(&format!(
                 "Error: no message numbered {} (/fork lists them)",

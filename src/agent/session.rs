@@ -1071,15 +1071,21 @@ impl Session {
 
     /// Starts a session for the project `root` next to this one with the entries on the path to
     /// its prompt `index` (0-based, as `fork_prompts` lists them), that prompt left out, as
-    /// Scramjet's `/fork` copies a session's path. Returns it opened and that prompt; `None`: no
-    /// such prompt.
-    pub fn fork(&self, root: &Path, index: usize) -> io::Result<Option<(Opened, String)>> {
+    /// Scramjet's `/fork` copies a session's path, or on the path to the entry `leaf` gives for
+    /// the one before it. Returns it opened and that prompt; `None`: no such prompt.
+    pub fn fork(
+        &self,
+        root: &Path,
+        index: usize,
+        leaf: impl FnOnce(&[Entry], Option<usize>) -> Option<usize>,
+    ) -> io::Result<Option<(Opened, String)>> {
         let entries = self.read()?;
         let Some(fork) = entries.fork_points().nth(index) else {
             return Ok(None);
         };
         let prompt = prompt_text(&fork.value).to_owned();
-        let opened = self.branch_file(&entries, fork.parent, root, None)?;
+        let leaf = leaf(&entries.entries, fork.parent);
+        let opened = self.branch_file(&entries, leaf, root, None)?;
         Ok(Some((opened, prompt)))
     }
 

@@ -1136,7 +1136,7 @@ scramjet-rs\n",
         );
 
         // A fork before the reply waits for it again.
-        assert_eq!(agent.fork(1).unwrap().as_deref(), Some("blue"));
+        assert_eq!(agent.fork(1).unwrap(), Some(("blue".into(), None)));
         assert_eq!(agent.lifecycle.active(), Some("rs:work"));
     }
 

@@ -541,11 +541,23 @@ impl Interactive {
         self.take_step(step, start, routed)
     }
 
-    /// Offers again on the full screen the next-step list going back in the session reached;
-    /// the step chosen runs next, and `prompt`, the prompt gone back to, goes into the editor if
-    /// none is.
+    /// Offers again on the full screen the next-step list going back in the session reached, and
+    /// names its steps in line mode, which has no list to choose from; the step chosen runs
+    /// next, and `prompt`, the prompt gone back to, goes into the editor if none is.
     pub(super) fn reopen(&mut self, offer: Reopened, prompt: Option<String>) {
-        if self.screen.is_some() {
+        if self.screen.is_none() {
+            let steps: Vec<_> = (offer.steps.iter().enumerate())
+                .map(|(at, step)| {
+                    let recommended = if offer.recommended == Some(at) {
+                        " (recommended)"
+                    } else {
+                        ""
+                    };
+                    format!("{}{}{recommended}", step.label(), step.fresh_mark())
+                })
+                .collect();
+            self.say(&format!("Next steps offered here: {}", steps.join(", ")));
+        } else {
             let title = match offer.command {
                 Some(_) => "Select next step",
                 None => "Agent suggests a next step",

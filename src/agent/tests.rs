@@ -1658,7 +1658,7 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
     assert_eq!(agent.fork(3).unwrap(), None);
     assert_eq!(agent.session_path(), original);
 
-    assert_eq!(agent.fork(1).unwrap().as_deref(), Some("two"));
+    assert_eq!(agent.fork(1).unwrap(), Some(("two".into(), None)));
     let forked = agent.session_path().to_owned();
     assert_ne!(forked, original);
     assert_eq!(forked.parent(), original.parent());
@@ -1694,7 +1694,7 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
 
     // A compaction before the prompt is copied, and later model changes are not.
     agent.resume_session(&original).unwrap();
-    assert_eq!(agent.fork(2).unwrap().as_deref(), Some("three"));
+    assert_eq!(agent.fork(2).unwrap(), Some(("three".into(), None)));
     assert_eq!(agent.model(), "test/b");
     let conversation = agent.conversation();
     assert_eq!(conversation.len(), 4);
@@ -1705,7 +1705,7 @@ fn a_fork_continues_from_before_a_prompt_in_a_new_session() {
     // Before the first prompt the conversation is empty, and the current model stays.
     agent.resume_session(&original).unwrap();
     agent.set_model("c").unwrap();
-    assert_eq!(agent.fork(0).unwrap().as_deref(), Some("one"));
+    assert_eq!(agent.fork(0).unwrap(), Some(("one".into(), None)));
     assert!(agent.conversation().is_empty());
     assert_eq!(agent.model(), "test/c");
     let empty = agent.session_path().to_owned();

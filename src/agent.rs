@@ -1164,11 +1164,19 @@ impl Agent {
     /// Continues in a new session saved next to the current one, with the conversation before
     /// the current session's prompt `index` (0-based, as `fork_prompts` lists them) and the model
     /// it used then, as Scramjet's `/fork` does; the current session stays as it is. Returns the
-    /// prompt, for editing before it is sent again; `None`: no such prompt. On failure nothing
-    /// changes. Approvals given with `a` still apply.
-    pub fn fork(&mut self, index: usize) -> Result<Option<String>, AgentError> {
+    /// prompt, for editing before it is sent again, and the next-step list offered before it,
+    /// to be offered again: a prompt sent by a choice from a list is forked before the list's
+    /// record. `None`: no such prompt. On failure nothing changes. Approvals given with `a`
+    /// still apply.
+    pub fn fork(&mut self, index: usize) -> Result<Option<(String, Option<Reopened>)>, AgentError> {
+        let mut offer = None;
+        let before = |entries: &[session::Entry], leaf| {
+            let (leaf, offered) = tree::before_offer(entries, leaf);
+            offer = offered;
+            leaf
+        };
         let Some(((mut session, conversation, prompts), prompt)) =
-            self.session.fork(&self.config.root, index)?
+            self.session.fork(&self.config.root, index, before)?
         else {
             return Ok(None);
         };
@@ -1178,7 +1186,7 @@ impl Agent {
             session.record_model(&self.config.model)?;
         }
         self.switch_session((session, conversation, prompts))?;
-        Ok(Some(prompt))
+        Ok(Some((prompt, offer)))
     }
 
     /// Continues in a new session saved next to the current one with the conversation up to

@@ -1,0 +1,130 @@
+{
+  "size": "100x40",
+  "files": {
+    "README.md": "Project\n",
+    ".scramjet/flow/commands/flow:step.md": "---\nnext:\n  mode: closed\n  candidates:\n    - name: flow:step\n---\nStep $1.\n"
+  },
+  "prompt": "/flow:step one",
+  "replies": [
+    [
+      {
+        "text": "The first step is done."
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Ran the first step.",
+          "next_steps": [
+            {
+              "message": "/flow:step two",
+              "fresh_session": false,
+              "reason": "Do the second."
+            },
+            {
+              "message": "/flow:step three",
+              "fresh_session": false,
+              "reason": "Skip to the third."
+            }
+          ],
+          "recommended_next_step": 0
+        }
+      }
+    ],
+    [
+      {
+        "text": "The second step is done."
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Ran the second step."
+        }
+      }
+    ],
+    [
+      {
+        "text": "The third step is done."
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Ran the third step."
+        }
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "Select next step"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "second step is done"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "/fork"
+    },
+    {
+      "sleep": 0.2
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Fork from message"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "fork-list"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Select next step"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "reopened"
+    },
+    {
+      "type": "\u001b[B\r"
+    },
+    {
+      "until": "third step is done"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "branched"
+    },
+    {
+      "type": "/resume"
+    },
+    {
+      "sleep": 0.2
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "sleep": 0.8
+    },
+    {
+      "shot": "resume"
+    }
+  ]
+}

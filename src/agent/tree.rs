@@ -292,11 +292,7 @@ impl Agent {
                 "no such entry in the session",
             )));
         };
-        let record = |value: &Value| value["name"] == status::RECORD;
-        let record_output = |output: &session::Entry| {
-            output.value["type"] == "function_call_output"
-                && at(output.parent).is_some_and(|call| record(&call.value))
-        };
+        let record_output = |output: &session::Entry| is_record_output(&entries, output);
         if let Some(asked) = asked_at(&entries, entry) {
             return Ok(Some(Destination {
                 leaf: entry.parent,
@@ -338,14 +334,7 @@ impl Agent {
         }
         // As in Scramjet, a prompt chosen to be sent again is not part of the branch left.
         let kept = if prompt.is_some() { Some(line) } else { leaf };
-        if let Some(output) = at(leaf).filter(|output| record_output(output)) {
-            leaf = at(output.parent).and_then(|call| call.parent);
-        }
-        let offer = (entries.iter().rev())
-            .filter(|next| next.parent == leaf && next.value["type"] == "function_call")
-            .find(|next| record(&next.value))
-            .and_then(|call| serde_json::from_str(call.value["arguments"].as_str()?).ok())
-            .and_then(|arguments| Reopened::of(&arguments));
+        let (leaf, offer) = before_offer(&entries, leaf);
         if leaf == self.session.leaf() && offer.is_none() {
             return Ok(None);
         }
@@ -389,6 +378,32 @@ impl Agent {
         };
         Ok((summary, files))
     }
+}
+
+/// Whether `entry` is the result of a next-step list's record.
+fn is_record_output(entries: &[session::Entry], entry: &session::Entry) -> bool {
+    entry.value["type"] == "function_call_output"
+        && (entries.iter())
+            .any(|call| Some(call.line) == entry.parent && call.value["name"] == status::RECORD)
+}
+
+/// Where a conversation ending at `leaf` ends instead for the next-step list offered there to
+/// be offered again: before the list's record when `leaf` is its result. Returns that leaf and
+/// the list, if one was offered there.
+pub(super) fn before_offer(
+    entries: &[session::Entry],
+    mut leaf: Option<usize>,
+) -> (Option<usize>, Option<Reopened>) {
+    let at = |line: Option<usize>| line.and_then(|line| entries.iter().find(|e| e.line == line));
+    if let Some(output) = at(leaf).filter(|output| is_record_output(entries, output)) {
+        leaf = at(output.parent).and_then(|call| call.parent);
+    }
+    let offer = (entries.iter().rev())
+        .filter(|next| next.parent == leaf && next.value["type"] == "function_call")
+        .find(|next| next.value["name"] == status::RECORD)
+        .and_then(|call| serde_json::from_str(call.value["arguments"].as_str()?).ok())
+        .and_then(|arguments| Reopened::of(&arguments));
+    (leaf, offer)
 }
 
 /// The question to ask again where `entry` is its result: a select or confirm question, with
@@ -564,6 +579,51 @@ mod tests {
         };
         assert_eq!(offer, offered);
         assert_eq!(agent.conversation().len(), 2);
+    }
+
+    #[test]
+    fn forking_before_a_prompt_a_next_step_sent_leaves_the_record_out_and_offers_its_list() {
+        let replies = ["Done.", "Looped."];
+        let (endpoint, _server) = serve(
+            replies
+                .iter()
+                .map(|text| stream(&fixture::text_events(text, fixture::known_usage())))
+                .collect(),
+        );
+        let (mut agent, _scratch) = agent(endpoint, "fork-reopen");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("work", &mut ui, &cancel).unwrap();
+        let steps = vec![status::Step {
+            index: 0,
+            message: "/rs:loop".into(),
+            reason: "Because.".into(),
+            fresh_session: false,
+            command: Some("/rs:loop".into()),
+        }];
+        let source = status::Source::Completion("rs:work");
+        agent
+            .record_next_step(source, &steps, Some(0), Some(0))
+            .unwrap();
+        agent.turn("/rs:loop", &mut ui, &cancel).unwrap();
+        let original = agent.session.path().to_owned();
+
+        let offer = Some(Reopened {
+            command: Some("rs:work".into()),
+            steps,
+            recommended: Some(0),
+        });
+        assert_eq!(agent.fork(1).unwrap(), Some(("/rs:loop".into(), offer)));
+        assert_ne!(agent.session.path(), original);
+        let conversation = agent.conversation();
+        assert_eq!(conversation.len(), 2);
+        assert!(
+            conversation
+                .iter()
+                .all(|item| item["name"] != status::RECORD)
+        );
+        // Forking before the first prompt offers nothing.
+        assert_eq!(agent.fork(0).unwrap(), Some(("work".into(), None)));
     }
 
     #[test]
@@ -864,7 +924,7 @@ mod tests {
             .lines()
             .map(str::to_owned)
             .collect();
-        assert_eq!(agent.fork(3).unwrap().as_deref(), Some("three"));
+        assert_eq!(agent.fork(3).unwrap(), Some(("three".into(), None)));
         let forked: Vec<String> = std::fs::read_to_string(agent.session_path())
             .unwrap()
             .lines()
@@ -979,7 +1039,7 @@ mod tests {
         );
         // A fork before a prompt keeps those before it.
         agent.resume_session(&original).unwrap();
-        assert_eq!(agent.fork(2).unwrap().as_deref(), Some("two again"));
+        assert_eq!(agent.fork(2).unwrap(), Some(("two again".into(), None)));
         assert_eq!(labels(&agent), [(3, "first answer".to_owned())]);
     }
 

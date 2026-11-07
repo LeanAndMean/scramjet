@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.84.0 — /fork offers a next-step list again
+
+### Changed
+
+- `/fork` before a prompt a next-step choice sent leaves the choice out of the new session and offers the list again there, as `/tree` does; the prompt goes into the editor if the list is dismissed.
+- Without the full screen, `/tree` and `/fork` back to where a next-step list was offered name its steps (`Next steps offered here: …`), as there is no list to choose from.
+
 ## 0.83.1 — The macOS code compiles
 
 ### Fixed
