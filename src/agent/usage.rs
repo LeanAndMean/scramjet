@@ -10,6 +10,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// Days since 1970-01-01 of a date (Howard Hinnant's `days_from_civil`).
+pub fn civil_days(year: i32, month: i32, day: i32) -> i64 {
+    let year = i64::from(year) - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let of_era = year - era * 400;
+    let month = i64::from(month);
+    let of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let of_era = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+    era * 146_097 + of_era - 719_468
+}
+
 /// One response, the main agent's or a subagent's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Response {

@@ -1,0 +1,20 @@
+{
+  "size": "100x40",
+  "settings": {"theme": "scramjet-dark"},
+  "headers": {
+    "x-quota-snapshot-premium_interactions": "ent=300&ov=0.0&ovPerm=true&rem=55.5&rst=2026-12-01T00%3A00%3A00Z",
+    "x-usage-ratelimit-session": "ent=0&rem=88&rst=2026-11-07T23%3A00%3A00Z",
+    "x-usage-ratelimit-weekly": "ent=0&rem=61&rst=2026-11-10T00%3A00%3A00Z"
+  },
+  "prompt": "Say hello.",
+  "replies": [
+    [{"text": "Hello."}]
+  ],
+  "steps": [
+    {"until": "Hello."},
+    {"type": "/usage\r"},
+    {"until": "session files"},
+    {"sleep": 0.5},
+    {"shot": "usage-copilot"}
+  ]
+}

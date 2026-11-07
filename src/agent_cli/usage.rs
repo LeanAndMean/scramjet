@@ -10,7 +10,7 @@ use super::style;
 use super::terminal::{self, Terminal};
 use super::tree::local;
 use scramjet_rs::agent::quota::{Quota, Window};
-use scramjet_rs::agent::usage::{History, Response};
+use scramjet_rs::agent::usage::{History, Response, civil_days};
 use std::path::Path;
 
 const DAY: u64 = 24 * 60 * 60 * 1000;
@@ -99,17 +99,6 @@ fn date(at: u64, now: u64) -> String {
         }
         _ => "?".to_owned(),
     }
-}
-
-/// Days since 1970-01-01 of a date (Howard Hinnant's `days_from_civil`).
-fn civil_days(year: i32, month: i32, day: i32) -> i64 {
-    let year = i64::from(year) - i64::from(month <= 2);
-    let era = year.div_euclid(400);
-    let of_era = year - era * 400;
-    let month = i64::from(month);
-    let of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
-    let of_era = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
-    era * 146_097 + of_era - 719_468
 }
 
 /// The date `days` after 1970-01-01 (Howard Hinnant's `civil_from_days`).
@@ -310,12 +299,14 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
 ",
             ui.styled(style::INFO_HEADING, &title)
         );
-        let windows = [&quota.primary, &quota.secondary];
         for Window {
+            name,
             used_percent,
             window_minutes,
             resets_at,
-        } in windows.into_iter().flatten()
+            allowed,
+            over,
+        } in &quota.windows
         {
             let used = used_percent.clamp(0.0, 100.0);
             let filled = ((used / 100.0 * BAR as f64).round() as usize).min(BAR);
@@ -327,9 +318,20 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
                 Some(at) => format!(", resets {}", clock(at, now)),
                 None => String::new(),
             };
+            let count = match allowed {
+                Some(allowed) => {
+                    let made = (*allowed as f64 * used / 100.0).round();
+                    format!(" ({made} of {allowed})")
+                }
+                None => String::new(),
+            };
+            let over = over.map_or(String::new(), |over| format!(", {over} over"));
+            let label = name
+                .clone()
+                .unwrap_or_else(|| window_label(*window_minutes));
             text += &format!(
-                "{}{bar} {used:>3.0}% used{resets}\n",
-                ui.dim(&format!("{:<14}", window_label(*window_minutes) + " limit")),
+                "{}{bar} {used:>3.0}% used{count}{over}{resets}\n",
+                ui.dim(&format!("{:<14}", label + " limit")),
             );
         }
         text.push('\n');
@@ -908,28 +910,34 @@ mod tests {
     #[test]
     fn a_providers_quota_shows_first_with_a_bar_for_each_window() {
         let (now, mut history, ui) = (NOW, history(), ui());
-        let window = |used, minutes, resets_at| {
-            Some(Window {
-                used_percent: used,
-                window_minutes: Some(minutes),
-                resets_at,
-            })
+        let window = |used, minutes, resets_at| Window {
+            used_percent: used,
+            window_minutes: Some(minutes),
+            resets_at,
+            ..Window::default()
         };
         let in_two_hours = (now / 1000 + 2 * 3600) as i64;
-        let quota = |primary, secondary| Quota {
+        let quota = |windows| Quota {
             observed_at: now - 60_000,
-            primary,
-            secondary,
+            windows,
+        };
+        let premium = Window {
+            name: Some("Premium".into()),
+            used_percent: 104.0,
+            allowed: Some(300),
+            over: Some(12.0),
+            ..Window::default()
         };
         history.quotas = vec![
             (
                 "a".into(),
-                quota(
+                quota(vec![
                     window(41.0, 300, Some(in_two_hours)),
                     window(7.5, 10080, Some((now / 1000 - 60) as i64)),
-                ),
+                ]),
             ),
-            ("b".into(), quota(None, window(100.0, 43200, None))),
+            ("b".into(), quota(vec![window(100.0, 43200, None)])),
+            ("c".into(), quota(vec![premium])),
         ];
         let current = Path::new("/s/p/2.jsonl");
         let text = |only| {
@@ -971,6 +979,12 @@ mod tests {
         let a = all.find("Quota of a, as of");
         assert!(b.is_some_and(|b| a.is_some_and(|a| b < a)), "{all}");
         assert!(!text(Some("unknown")).contains("Quota"));
+        let c = text(Some("c"));
+        let premium = format!(
+            "Premium limit {} 100% used (300 of 300), 12 over\n",
+            "█".repeat(20)
+        );
+        assert!(c.contains(&premium), "{c}");
     }
 
     #[test]

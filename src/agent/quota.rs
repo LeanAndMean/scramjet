@@ -1,7 +1,9 @@
-//! What is left of a subscription's quota, as ChatGPT's (Codex) responses report it in their
-//! `x-codex-primary-*` and `x-codex-secondary-*` headers (as Codex reads them,
-//! `codex-rs/codex-api/src/rate_limits.rs`), kept for each provider's latest response across
-//! sessions in `$XDG_STATE_HOME/scramjet-rs/quota.json`, for `/usage`.
+//! What is left of a subscription's quota, as its responses' headers report it, kept for each
+//! provider's latest response across sessions in `$XDG_STATE_HOME/scramjet-rs/quota.json`, for
+//! `/usage`. ChatGPT's (Codex) backend sends `x-codex-primary-*` and `x-codex-secondary-*`, read
+//! as Codex reads them (`codex-rs/codex-api/src/rate_limits.rs`); GitHub Copilot's sends
+//! `x-quota-snapshot-*` and `x-usage-ratelimit-*`, read as VS Code's Copilot extension (0.66.0)
+//! reads them.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -12,32 +14,53 @@ use std::{
 };
 
 /// One limit's window: the share of it used, how long it is and when it starts again.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Window {
+    /// What the limit is called where its length does not say (Copilot's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub used_percent: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_minutes: Option<i64>,
     /// In seconds since 1970.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<i64>,
+    /// The requests it allows (Copilot's premium requests).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed: Option<u64>,
+    /// The requests made past them, billed apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub over: Option<f64>,
 }
 
-/// A provider's quota as one response reported it: ChatGPT's shorter window (five hours) is
-/// its primary, its weekly one its secondary.
+/// A provider's quota as one response reported it, its shorter windows first.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Quota {
     /// When the response came, in milliseconds since 1970.
     pub observed_at: u64,
-    pub primary: Option<Window>,
-    pub secondary: Option<Window>,
+    pub windows: Vec<Window>,
 }
 
-/// The quota a ChatGPT response's headers report, `header` giving a header's value by its
-/// lower-case name; none without either window.
-pub(super) fn from_codex_headers<'a>(
+/// The quota a response's headers report, `header` giving a header's value by its lower-case
+/// name; none when they report none.
+pub(super) fn from_headers<'a>(
     header: impl Fn(&str) -> Option<&'a str>,
     observed_at: u64,
 ) -> Option<Quota> {
+    let mut windows = codex_windows(&header);
+    if windows.is_empty() {
+        windows = copilot_windows(&header);
+    }
+    (!windows.is_empty()).then_some(Quota {
+        observed_at,
+        windows,
+    })
+}
+
+/// ChatGPT's shorter window (five hours) and its weekly one.
+fn codex_windows<'a>(header: impl Fn(&str) -> Option<&'a str>) -> Vec<Window> {
     let window = |which: &str| {
         let value = |part: &str| header(&format!("x-codex-{which}-{part}")).map(str::trim);
         let used_percent =
@@ -51,14 +74,142 @@ pub(super) fn from_codex_headers<'a>(
             used_percent,
             window_minutes,
             resets_at,
+            ..Window::default()
         })
     };
-    let (primary, secondary) = (window("primary"), window("secondary"));
-    (primary.is_some() || secondary.is_some()).then_some(Quota {
-        observed_at,
-        primary,
-        secondary,
+    [window("primary"), window("secondary")]
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Copilot's session and weekly rate limits, then its monthly premium requests (a free plan's
+/// chat requests where it has none).
+fn copilot_windows<'a>(header: impl Fn(&str) -> Option<&'a str>) -> Vec<Window> {
+    let window = |name: &str, header_name: &str| copilot_window(name, header(header_name)?);
+    let premium = (window("Premium", "x-quota-snapshot-premium_models"))
+        .or_else(|| window("Premium", "x-quota-snapshot-premium_interactions"));
+    let premium = match premium {
+        Some(premium) if premium.allowed.is_some() => Some(premium),
+        premium => window("Chat", "x-quota-snapshot-chat").or(premium),
+    };
+    [
+        window("Session", "x-usage-ratelimit-session"),
+        window("Weekly", "x-usage-ratelimit-weekly"),
+        premium,
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// One of Copilot's quota headers, a query string: `ent` the requests allowed (`-1` for no
+/// limit), `rem` the share left in percent, `ov` the requests past them and `rst` when it starts
+/// again. None for no limit.
+fn copilot_window(name: &str, value: &str) -> Option<Window> {
+    let fields: Vec<(String, String)> = (value.trim().split('&'))
+        .filter_map(|field| {
+            let (key, value) = field.split_once('=').unwrap_or((field, ""));
+            Some((decoded(key)?, decoded(value)?))
+        })
+        .collect();
+    let field = |key: &str| (fields.iter()).find_map(|(k, v)| (k == key).then_some(v.as_str()));
+    let allowed: i64 = field("ent").map_or(Some(0), |text| text.parse().ok())?;
+    if allowed == -1 {
+        return None;
+    }
+    let left = (field("rem")?.parse::<f64>().ok()).filter(|left| left.is_finite())?;
+    let over = (field("ov").and_then(|text| text.parse::<f64>().ok()))
+        .filter(|over| over.is_finite() && *over > 0.0);
+    Some(Window {
+        name: Some(name.to_owned()),
+        used_percent: 100.0 - left,
+        resets_at: field("rst").and_then(utc_seconds),
+        allowed: u64::try_from(allowed).ok().filter(|allowed| *allowed > 0),
+        over,
+        ..Window::default()
     })
+}
+
+/// A query string's part, with its `%XX` escapes and `+` for a space; none if not UTF-8.
+fn decoded(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut rest = text.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        let hex = after
+            .get(..2)
+            .and_then(|hex| u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok());
+        match (byte, hex) {
+            (b'%', Some(value)) => {
+                bytes.push(value);
+                rest = &after[2..];
+                continue;
+            }
+            (b'+', _) => bytes.push(b' '),
+            _ => bytes.push(byte),
+        }
+        rest = after;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Seconds since 1970 of an ISO 8601 date (`2026-12-01`, taken as UTC) or time
+/// (`2026-12-01T00:00:00Z`, with fractions and an offset).
+fn utc_seconds(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let number = |range: std::ops::Range<usize>| -> Option<i64> {
+        let part = text.get(range)?;
+        part.bytes()
+            .all(|b| b.is_ascii_digit())
+            .then(|| part.parse().ok())?
+    };
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let dashes = text.get(4..5) == Some("-") && text.get(7..8) == Some("-");
+    if !dashes || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let days = super::usage::civil_days(year as i32, month as i32, day as i32);
+    let mut rest = &text[10..];
+    let mut seconds = 0;
+    if let Some(time) = rest.strip_prefix(['T', 't', ' ']) {
+        let field = |range: std::ops::Range<usize>| -> Option<i64> {
+            let part = time.get(range)?;
+            part.bytes()
+                .all(|b| b.is_ascii_digit())
+                .then(|| part.parse().ok())?
+        };
+        let (hour, minute) = (field(0..2)?, field(3..5)?);
+        if time.get(2..3) != Some(":") || hour > 23 || minute > 59 {
+            return None;
+        }
+        let (second, mut after) = match time.get(5..6) {
+            Some(":") => (field(6..8)?, &time[8..]),
+            _ => (0, &time[5..]),
+        };
+        if let Some(fraction) = after.strip_prefix('.') {
+            after = fraction.trim_start_matches(|c: char| c.is_ascii_digit());
+        }
+        seconds = hour * 3600 + minute * 60 + second;
+        rest = after;
+    }
+    let offset = match rest {
+        "" | "Z" | "z" => 0,
+        _ => {
+            let sign = match rest.get(..1)? {
+                "+" => 1,
+                "-" => -1,
+                _ => return None,
+            };
+            let digits = rest[1..].replace(':', "");
+            if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            let (hours, minutes): (i64, i64) =
+                (digits[..2].parse().ok()?, digits[2..].parse().ok()?);
+            sign * (hours * 3600 + minutes * 60)
+        }
+    };
+    Some(days * 86_400 + seconds - offset)
 }
 
 /// Where the quotas are kept; nowhere in unit tests, which must leave the user's alone.
@@ -145,7 +296,7 @@ mod tests {
 
     #[test]
     fn chatgpts_headers_give_both_windows() {
-        let quota = from_codex_headers(
+        let quota = from_headers(
             headers(&[
                 ("x-codex-primary-used-percent", "12.5"),
                 ("x-codex-primary-window-minutes", "300"),
@@ -157,7 +308,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(quota.observed_at, 7);
-        let primary = quota.primary.unwrap();
+        let [primary, secondary] = &quota.windows[..] else {
+            panic!("{quota:?}")
+        };
         assert_eq!(
             (
                 primary.used_percent,
@@ -166,7 +319,6 @@ mod tests {
             ),
             (12.5, Some(300), Some(1704069000))
         );
-        let secondary = quota.secondary.unwrap();
         assert_eq!(
             (
                 secondary.used_percent,
@@ -179,38 +331,48 @@ mod tests {
 
     #[test]
     fn no_or_empty_windows_are_no_quota() {
-        assert_eq!(from_codex_headers(headers(&[]), 1), None);
+        assert_eq!(from_headers(headers(&[]), 1), None);
         let empty = headers(&[
             ("x-codex-primary-used-percent", "0"),
             ("x-codex-primary-window-minutes", "0"),
             ("x-codex-secondary-used-percent", "NaN"),
         ]);
-        assert_eq!(from_codex_headers(empty, 1), None);
+        assert_eq!(from_headers(empty, 1), None);
         let unused = headers(&[
             ("x-codex-primary-used-percent", "0"),
             ("x-codex-primary-window-minutes", "300"),
         ]);
-        let quota = from_codex_headers(unused, 1).unwrap();
-        assert_eq!(quota.primary.unwrap().used_percent, 0.0);
-        assert_eq!(quota.secondary, None);
+        let quota = from_headers(unused, 1).unwrap();
+        assert_eq!(quota.windows.len(), 1);
+        assert_eq!(quota.windows[0].used_percent, 0.0);
     }
 
     #[test]
-    fn chatgpts_replies_carry_the_quota_their_headers_report_and_others_none() {
+    fn replies_carry_the_quota_chatgpts_or_copilots_headers_report() {
         use super::super::client::{Protocol, Sent, respond};
         use super::super::providers::Route;
         use crate::provider_fixture as fixture;
         let body = fixture::wire(&fixture::text_events("Hi", fixture::known_usage()), false);
-        let mut response = format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
-             x-codex-primary-used-percent: 41\r\nx-codex-primary-window-minutes: 300\r\n\
+        let response = |headers: &str| {
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n{headers}\
+                 content-length: {}\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend(&body);
+            response
+        };
+        let codex = response(
+            "x-codex-primary-used-percent: 41\r\nx-codex-primary-window-minutes: 300\r\n\
              x-codex-primary-reset-at: 1794030000\r\nx-codex-secondary-used-percent: 7.5\r\n\
-             x-codex-secondary-window-minutes: 10080\r\ncontent-length: {}\r\n\r\n",
-            body.len()
-        )
-        .into_bytes();
-        response.extend(body);
-        let (endpoint, server) = super::super::tests::serve(vec![response.clone(), response]);
+             x-codex-secondary-window-minutes: 10080\r\n",
+        );
+        let copilot = response(
+            "x-quota-snapshot-premium_interactions: ent=300&ov=0.0&ovPerm=false&rem=80&\
+             rst=2026-12-01T00%3A00%3A00Z\r\n",
+        );
+        let (endpoint, server) = super::super::tests::serve(vec![codex, copilot, response("")]);
         let route = Route {
             provider: "openai-codex".into(),
             tls: false,
@@ -241,18 +403,111 @@ mod tests {
         };
         let quota = reply(Protocol::Codex).quota.unwrap();
         assert_eq!(
-            quota.primary,
-            Some(Window {
-                used_percent: 41.0,
-                window_minutes: Some(300),
-                resets_at: Some(1794030000),
-            })
+            quota.windows,
+            [
+                Window {
+                    used_percent: 41.0,
+                    window_minutes: Some(300),
+                    resets_at: Some(1794030000),
+                    ..Window::default()
+                },
+                Window {
+                    used_percent: 7.5,
+                    window_minutes: Some(10080),
+                    ..Window::default()
+                },
+            ]
         );
-        assert_eq!(quota.secondary.unwrap().used_percent, 7.5);
         assert!(quota.observed_at > 1_700_000_000_000);
-        // Only ChatGPT's backend is read for them.
+        let quota = reply(Protocol::Responses).quota.unwrap();
+        assert_eq!(
+            quota.windows,
+            [Window {
+                name: Some("Premium".into()),
+                used_percent: 20.0,
+                resets_at: Some(1796083200),
+                allowed: Some(300),
+                ..Window::default()
+            }]
+        );
         assert_eq!(reply(Protocol::Responses).quota, None);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn copilots_headers_give_its_rate_limits_then_its_premium_requests() {
+        let quota = from_headers(
+            headers(&[
+                (
+                    "x-quota-snapshot-premium_models",
+                    "ent=300&ov=12.0&ovPerm=true&rem=-4&rst=2026-12-01",
+                ),
+                ("x-quota-snapshot-premium_interactions", "ent=1&rem=1"),
+                (
+                    "x-usage-ratelimit-session",
+                    "rem=62.5&rst=2026-11-07T18%3A30%3A00.250%2B01%3A00",
+                ),
+                ("x-usage-ratelimit-weekly", "ent=-1&rem=100"),
+            ]),
+            9,
+        )
+        .unwrap();
+        assert_eq!(quota.observed_at, 9);
+        assert_eq!(
+            quota.windows,
+            [
+                Window {
+                    name: Some("Session".into()),
+                    used_percent: 37.5,
+                    resets_at: Some(1794076200 - 3600),
+                    ..Window::default()
+                },
+                Window {
+                    name: Some("Premium".into()),
+                    used_percent: 104.0,
+                    resets_at: Some(1796083200),
+                    allowed: Some(300),
+                    over: Some(12.0),
+                    ..Window::default()
+                },
+            ]
+        );
+        // A free plan's chat requests where it has no premium ones; no limit is no window.
+        let free = from_headers(
+            headers(&[
+                ("x-quota-snapshot-premium_interactions", "ent=0&rem=0"),
+                ("x-quota-snapshot-chat", "ent=50&rem=90"),
+            ]),
+            1,
+        )
+        .unwrap();
+        assert_eq!(free.windows[0].name.as_deref(), Some("Chat"));
+        assert_eq!(free.windows[0].allowed, Some(50));
+        let unlimited = headers(&[("x-quota-snapshot-premium_models", "ent=-1&rem=100")]);
+        assert_eq!(from_headers(unlimited, 1), None);
+        assert_eq!(
+            from_headers(headers(&[("x-usage-ratelimit-weekly", "ent=5")]), 1),
+            None
+        );
+    }
+
+    #[test]
+    fn iso_dates_and_times_read_as_utc_seconds() {
+        assert_eq!(utc_seconds("1970-01-01"), Some(0));
+        assert_eq!(utc_seconds("2026-12-01T00:00:00Z"), Some(1796083200));
+        assert_eq!(utc_seconds("2026-12-01 00:00"), Some(1796083200));
+        assert_eq!(utc_seconds("2026-12-01T01:00:00.5+01:00"), Some(1796083200));
+        assert_eq!(utc_seconds("2026-11-30T19:00:00-0500"), Some(1796083200));
+        for wrong in [
+            "",
+            "1796083200",
+            "2026-13-01",
+            "2026-12-01T25:00",
+            "2026-12-01X",
+        ] {
+            assert_eq!(utc_seconds(wrong), None, "{wrong}");
+        }
+        assert_eq!(decoded("a%3Ab+c%zz"), Some("a:b c%zz".into()));
     }
 
     #[test]
@@ -262,12 +517,11 @@ mod tests {
         let path = scratch.0.join("state/quota.json");
         let quota = |at, used| Quota {
             observed_at: at,
-            primary: Some(Window {
+            windows: vec![Window {
                 used_percent: used,
                 window_minutes: Some(300),
-                resets_at: None,
-            }),
-            secondary: None,
+                ..Window::default()
+            }],
         };
         record(&path, "openai-codex", &quota(2, 20.0)).unwrap();
         record(&path, "other", &quota(1, 5.0)).unwrap();

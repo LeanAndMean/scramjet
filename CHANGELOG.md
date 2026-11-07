@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.71.0 — GitHub Copilot's quota in /usage
+
+### Added
+
+- `/usage` shows GitHub Copilot's quota as its latest response reported it: the monthly premium requests (how many of the plan's are used, and any made past them), and the session and weekly rate limits when Copilot sends them, each with a bar and when it starts again. The headers are read as VS Code's Copilot extension reads them, on any provider whose responses carry them.
+
 ## 0.70.0 — ChatGPT's quota in /usage
 
 ### Added
