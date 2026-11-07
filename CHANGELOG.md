@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.70.0 — ChatGPT's quota in /usage
+
+### Added
+
+- `/usage` shows how much of ChatGPT's (Codex) five-hour and weekly limits is used, with a bar each and when each starts again, as the latest response reported it (its `x-codex-*` headers, read as Codex reads them). It heads that provider's tab and the All report, and is kept across sessions in the state directory's `quota.json`.
+
 ## 0.69.0 — Weekly usage, split by provider or model
 
 ### Added

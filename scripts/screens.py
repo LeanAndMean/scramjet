@@ -23,6 +23,8 @@ A scenario (scripts/screens/*.json) holds:
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
     "model":    the scripted server's model (default gpt-6-luna);
     "window":   its context window, unknown unless given;
+    "provider": more of its provider's fields, such as "api" and "apiKey";
+    "headers":  more headers its responses carry, by name;
     "providers": more models.json providers, listed after the scripted server's ("screens");
     "models":   more of models.json's fields, such as "logins", `{root}` in a text being the
                 repository; programs scramjet-rs runs find the scripted server's base URL in
@@ -135,8 +137,10 @@ def receive(connection):
     return head + b'\r\n\r\n' + body
 
 
-def serve(replies):
-    """Answers each request with the next reply, then with `No more replies.`; the address."""
+def serve(replies, headers=None):
+    """Answers each request with the next reply, then with `No more replies.`, each with `headers`
+    besides its own; the address."""
+    extra = b''.join(b'%s: %s\r\n' % (name.encode(), str(text).encode()) for name, text in (headers or {}).items())
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -150,7 +154,7 @@ def serve(replies):
             pieces = next(pending, None) or stream(*items([{'text': 'No more replies.'}], len(streams)))
             body = b''.join(piece for _, piece in pieces)
             connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: %d\r\n'
-                               b'connection: close\r\n\r\n' % len(body))
+                               b'connection: close\r\n%s\r\n' % (len(body), extra))
             for wait, piece in pieces:
                 time.sleep(wait)
                 connection.sendall(piece)
@@ -367,12 +371,13 @@ def main():
 
         # The scripted server is the first provider, offering the scenario's model.
         model = scenario.get('model', 'gpt-6-luna')
-        base = 'http://%s/v1' % serve(scenario.get('replies', []))
+        base = 'http://%s/v1' % serve(scenario.get('replies', []), scenario.get('headers'))
         env['SCREENS_BASE_URL'] = base
         provider = {'baseUrl': base, 'api': 'openai-responses',
                     'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}
         if 'window' in scenario:
             provider['models'][0]['contextWindow'] = scenario['window']
+        provider.update(scenario.get('provider', {}))
         document = dict(rooted(scenario.get('models', {})),
                         providers=dict({'screens': provider}, **scenario.get('providers', {})))
         with open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w') as file:

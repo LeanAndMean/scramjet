@@ -105,6 +105,7 @@ impl Agent {
     /// Counts a response's usage, and its output rate when it is a step of the turn.
     fn count(&mut self, model: &str, reply: &client::Reply, purpose: Purpose) {
         self.usage.count(reply);
+        super::quota::kept_from(model, reply);
         if purpose == Purpose::Reply
             && let Some(path) = &self.rates
         {

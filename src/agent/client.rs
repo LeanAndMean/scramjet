@@ -102,6 +102,8 @@ pub(super) struct Reply {
     pub incomplete: Option<String>,
     /// The value of the response header its model's prices are chosen by, in lower case.
     pub priced_by: Option<String>,
+    /// What its response's headers said of the account's quota (ChatGPT's).
+    pub quota: Option<super::quota::Quota>,
     /// What it cost in dollars, when its model's prices say (`request::send`).
     pub cost: Option<f64>,
     /// From its request to its end, retries aside (`request::send`).
@@ -374,6 +376,12 @@ async fn exchange(
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
+    let quota = (protocol == Protocol::Codex)
+        .then(|| {
+            let header = |name: &str| response.headers().get(name)?.to_str().ok();
+            super::quota::from_codex_headers(header, super::login::now_ms() as u64)
+        })
+        .flatten();
     let mut body = response.into_body();
     let result = if status != 200 {
         let mut text = Vec::new();
@@ -426,6 +434,7 @@ async fn exchange(
     driver.abort();
     result.map(|reply| Reply {
         priced_by,
+        quota,
         headers_at,
         first_output_at,
         ..reply

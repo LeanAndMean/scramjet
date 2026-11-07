@@ -49,6 +49,8 @@ pub struct History {
     pub summaries: Vec<Summary>,
     /// The files that could not be read, with why.
     pub unreadable: Vec<(PathBuf, String)>,
+    /// Each provider's latest quota, as its responses reported it (`quota::read`).
+    pub quotas: Vec<(String, super::quota::Quota)>,
 }
 
 impl History {
@@ -78,7 +80,10 @@ impl History {
         }
         // Named by the millisecond they were made in, so an original comes before its copies.
         files.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
-        let mut history = Self::default();
+        let mut history = Self {
+            quotas: super::quota::read(),
+            ..Self::default()
+        };
         let mut seen = HashSet::new();
         for path in files {
             match std::fs::read(&path) {

@@ -1,0 +1,31 @@
+{
+  "size": "100x40",
+  "settings": {"theme": "scramjet-dark"},
+  "provider": {
+    "api": "openai-codex-responses",
+    "apiKey": "eyJhbGciOiJSUzI1NiJ9.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOiB7ImNoYXRncHRfYWNjb3VudF9pZCI6ICJhY2Mtc2NyZWVucyJ9LCAiZXhwIjogNDEwMjQ0NDgwMH0.c2ln"
+  },
+  "headers": {
+    "x-codex-primary-used-percent": "41",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-at": "1794040000",
+    "x-codex-secondary-used-percent": "12.5",
+    "x-codex-secondary-window-minutes": "10080",
+    "x-codex-secondary-reset-at": "1794400000"
+  },
+  "prompt": "Say hello.",
+  "replies": [
+    [{"text": "Hello."}]
+  ],
+  "steps": [
+    {"until": "Hello."},
+    {"type": "/usage\r"},
+    {"until": "session files"},
+    {"sleep": 0.5},
+    {"shot": "usage-quota"},
+    {"type": "\t"},
+    {"until": "Quota of screens"},
+    {"sleep": 0.3},
+    {"shot": "usage-quota-all"}
+  ]
+}

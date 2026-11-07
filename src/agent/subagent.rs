@@ -1265,6 +1265,7 @@ fn run_child(
         };
         run.turns += 1;
         run.usage.count(&reply);
+        super::quota::kept_from(&job.model, &reply);
         run.responses.push(json!({
             "usage": super::turn::saved_usage(&reply),
             "timing": reply.timing.as_ref().map(super::turn::saved_timing),
