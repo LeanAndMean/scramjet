@@ -203,23 +203,61 @@ pub fn removed(file: &std::fs::File) -> std::io::Result<bool> {
     }
 }
 
-/// The shell that runs commands: `bash` on Unix; on Windows Git Bash, as Scramjet finds it: in
-/// Git for Windows' places, then `bash.exe` on the `PATH`.
-pub fn bash() -> PathBuf {
-    if cfg!(windows) {
-        let installed = ["ProgramFiles", "ProgramFiles(x86)"]
-            .into_iter()
-            .filter_map(std::env::var_os)
-            .map(|programs| PathBuf::from(programs).join(r"Git\bin\bash.exe"));
-        let on_path = std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-            .map(|directory| directory.join("bash.exe"));
-        if let Some(found) = installed.chain(on_path).find(|path| path.is_file()) {
-            return found;
-        }
+/// The shell that runs commands: `bash` on Unix; on Windows Git Bash, as Claude Code finds it:
+/// in Git for Windows' places, then beside `git.exe` on the `PATH`; then another `bash.exe` on
+/// the `PATH` (MSYS2, Cygwin), as Scramjet takes one, but WSL's, which would run it in Linux.
+pub fn bash() -> Result<PathBuf, String> {
+    if !cfg!(windows) {
+        return Ok(PathBuf::from("bash"));
     }
-    PathBuf::from("bash")
+    let programs: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+    let path: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    let windows = std::env::var_os("SystemRoot").map(PathBuf::from);
+    windows_bash(&programs, &path, windows.as_deref()).ok_or_else(|| {
+        "no bash to run commands: install Git for Windows (https://git-scm.com/download/win), \
+         or put an MSYS2 or Cygwin bash.exe on the PATH (WSL's bash.exe is passed over: it \
+         would run them in Linux)"
+            .to_owned()
+    })
+}
+
+fn windows_bash(programs: &[PathBuf], path: &[PathBuf], windows: Option<&Path>) -> Option<PathBuf> {
+    let in_bin = |git: &Path| git.join("bin").join("bash.exe");
+    let installed = programs
+        .iter()
+        .map(|programs| in_bin(&programs.join("Git")));
+    let beside_git = path
+        .iter()
+        .filter(|directory| directory.join("git.exe").is_file())
+        .filter_map(|directory| directory.parent().map(in_bin));
+    let folded = |path: &Path| -> Vec<String> {
+        let parts = path.components();
+        parts
+            .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let windows = windows.map(folded);
+    let on_path = path
+        .iter()
+        .map(|directory| directory.join("bash.exe"))
+        .filter(|bash| {
+            let bash = folded(bash);
+            let launcher = windows
+                .as_ref()
+                .is_some_and(|windows| bash.starts_with(windows))
+                || bash.iter().any(|part| part == "windowsapps");
+            !launcher
+        });
+    installed
+        .chain(beside_git)
+        .chain(on_path)
+        .find(|bash| bash.is_file())
 }
 
 /// Starts `command` in a process group of its own, which `kill_group` and `end_group` reach.
@@ -330,6 +368,45 @@ mod tests {
         drop((first, second));
         std::fs::remove_dir_all(&directory).unwrap();
         assert!(refused && taken);
+    }
+
+    #[test]
+    fn windows_finds_git_bash_or_another_bash_but_never_wsls() {
+        let root = std::env::temp_dir().join(format!("scramjet-rs-bash-{}", std::process::id()));
+        let file = |parts: &[&str]| {
+            let path = parts
+                .iter()
+                .fold(root.clone(), |path, part| path.join(part));
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+            path
+        };
+        let at = |parts: &[&str]| {
+            parts
+                .iter()
+                .fold(root.clone(), |path, part| path.join(part))
+        };
+        let wsl = file(&["Windows", "System32", "bash.exe"]);
+        file(&["Users", "a", "WindowsApps", "bash.exe"]);
+        let msys = file(&["msys64", "usr", "bin", "bash.exe"]);
+        let path = [
+            at(&["Windows", "System32"]),
+            at(&["Users", "a", "WindowsApps"]),
+            at(&["msys64", "usr", "bin"]),
+            at(&["Tools", "Git", "cmd"]),
+        ];
+        let windows = at(&["WINDOWS"]);
+        let found = |programs: &[PathBuf]| windows_bash(programs, &path, Some(&windows));
+        assert_eq!(found(&[]), Some(msys.clone()));
+        file(&["Tools", "Git", "cmd", "git.exe"]);
+        assert_eq!(found(&[]), Some(msys));
+        let beside_git = file(&["Tools", "Git", "bin", "bash.exe"]);
+        assert_eq!(found(&[]), Some(beside_git));
+        let installed = file(&["Program Files", "Git", "bin", "bash.exe"]);
+        assert_eq!(found(&[at(&["Program Files"])]), Some(installed));
+        let only_wsl = [wsl.parent().unwrap().to_owned()];
+        assert_eq!(windows_bash(&[], &only_wsl, Some(&windows)), None);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -1409,7 +1409,7 @@ pub(super) fn run_command(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let mut process = Command::new(crate::os::bash());
+    let mut process = Command::new(crate::os::bash()?);
     process.arg("-c").arg(command).current_dir(root);
     run_process(process, "bash", timeout, cancel, progress)
 }

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.88.3 — Commands on Windows run in Git Bash, not WSL
+
+### Fixed
+
+- On Windows, shell commands no longer run in WSL's Linux when Git Bash is missing: WSL's `bash.exe` is passed over, Git Bash is also found beside `git.exe` on the `PATH` (as Claude Code finds it), and without a bash the command fails saying to install Git for Windows or put an MSYS2 or Cygwin `bash.exe` on the `PATH`.
+
 ## 0.88.2 — Logins and sessions on Windows
 
 ### Fixed

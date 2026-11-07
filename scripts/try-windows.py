@@ -12,8 +12,9 @@ Without --screen it runs `-p PROMPT` and prints the output and the project's fil
 full screen runs in a tmux pane (a Windows console through WSL interop), the prompt is typed and
 sent, the window resized to 80x24 and Ctrl+D pressed, printing the pane after each.
 
-A scenario holds "files", "settings", "args" (more command-line words), "prompt" and "replies",
-each reply as in scripts/screens.py.
+A scenario holds "files", "settings", "args" (more command-line words), "path" (WSL paths
+of directories put ahead of Windows' own PATH, relative ones from %TEMP%\\scramjet-rs-try),
+"prompt" and "replies", each reply as in scripts/screens.py.
 """
 import argparse, json, os, shutil, subprocess, sys, time
 
@@ -48,7 +49,13 @@ json.dump({'providers': {'screens': provider}}, open(os.path.join(work, 'config/
 json.dump(scenario.get('settings', {}), open(os.path.join(work, 'config/scramjet-rs/settings.json'), 'w'))
 env = dict(XDG_STATE_HOME=work + '/state', XDG_CONFIG_HOME=work + '/config', XDG_DATA_HOME=work + '/data',
            SCRAMJET_CODING_AGENT_DIR=work + '/agent')
-env['WSLENV'] = ':'.join(name + '/p' for name in env)
+if scenario.get('path'):
+    windows_path = subprocess.run(['cmd.exe', '/c', 'echo %PATH%'], capture_output=True, text=True, cwd='/mnt/c').stdout.strip()
+    ahead = [os.path.join(win, directory) for directory in scenario['path']]
+    unix = [subprocess.run(['wslpath', '-u', d], capture_output=True, text=True).stdout.strip()
+            for d in windows_path.split(';') if d]
+    env['PATH'] = ':'.join(ahead + [d for d in unix if d])
+env['WSLENV'] = ':'.join(name + ('/l' if name == 'PATH' else '/p') for name in env)
 args = [binary, '--model', 'screens/gpt-6-luna'] + scenario.get('args', [])
 project = os.path.join(work, 'proj')
 
