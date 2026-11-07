@@ -170,7 +170,8 @@ pub enum Removal {
 /// entry continues. Names and labels are lines of their own, not entries.
 pub struct Session {
     path: PathBuf,
-    file: File,
+    /// `None` until the file can be created, on a disk too full for it at the start.
+    file: Option<File>,
     /// The latest model change or response item producer on the path, as Scramjet restores it.
     model: Option<String>,
     /// The models that produced response items on the path, compacted ones included, in the
@@ -599,22 +600,36 @@ fn now_ms() -> u64 {
 }
 
 /// Creates a session file in `directory`, named for the millisecond it is created in and this
-/// process; returns it with that time.
-fn new_file(directory: &Path) -> io::Result<(PathBuf, File, u128)> {
-    std::fs::create_dir_all(directory)?;
+/// process; returns it with that time. On a disk too full to create it, the file is that error,
+/// to be created under that name once there is room.
+fn new_file(directory: &Path) -> io::Result<(PathBuf, io::Result<File>, u128)> {
     let mut created = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
+    let name = |created| directory.join(format!("{created}-{}.jsonl", std::process::id()));
+    match std::fs::create_dir_all(directory) {
+        Err(error) if full(&error) => return Ok((name(created), Err(error), created)),
+        made => made?,
+    }
     // A session created in the same millisecond (a quick `/new` or `/fork`) has that name.
     loop {
-        let path = directory.join(format!("{created}-{}.jsonl", std::process::id()));
+        let path = name(created);
         match OpenOptions::new().append(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, file, created)),
+            Ok(file) => return Ok((path, Ok(file), created)),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => created += 1,
+            Err(error) if full(&error) => return Ok((path, Err(error), created)),
             Err(error) => return Err(error),
         }
     }
+}
+
+/// Creates the session file `path` and its directory; one already there is an error.
+fn create_file(path: &Path) -> io::Result<File> {
+    if let Some(directory) = path.parent() {
+        std::fs::create_dir_all(directory)?;
+    }
+    OpenOptions::new().append(true).create_new(true).open(path)
 }
 
 /// The current branch of the session saved at `path`, where a resume would continue it.
@@ -798,7 +813,7 @@ impl Session {
         let after_header = bytes.iter().position(|&byte| byte == b'\n');
         let lines = after_header.map_or(&[][..], |end| &bytes[end + 1..]);
         let mut forked = Self::written(directory, root, source)?;
-        if let Err(error) = write_whole(&mut forked.file, lines) {
+        if let Err(error) = write_whole(forked.created(), lines) {
             let _ = std::fs::remove_file(&forked.path);
             return Err(error);
         }
@@ -837,7 +852,7 @@ impl Session {
         parent: Option<&Path>,
         next_step: bool,
     ) -> io::Result<Self> {
-        let (path, mut file, created) = new_file(directory)?;
+        let (path, file, created) = new_file(directory)?;
         let mut header = json!({"type":"session","version":1,"root":root,"created":created as u64});
         if let Some(parent) = parent {
             header["parentSession"] = json!(std::path::absolute(parent)?);
@@ -849,16 +864,27 @@ impl Session {
         header.push(b'\n');
         let mut held = Vec::new();
         let mut change = None;
-        if let Err(error) = write_whole(&mut file, &header) {
+        let (file, written) = match file {
+            Ok(mut file) => {
+                let written = write_whole(&mut file, &header);
+                (Some(file), written)
+            }
+            Err(error) => (None, Err(error)),
+        };
+        if let Err(error) = written {
             if !full(&error) {
                 let _ = std::fs::remove_file(&path);
                 return Err(error);
             }
-            let _ = file.set_len(0);
+            if let Some(file) = &file {
+                let _ = file.set_len(0);
+            }
             change = Some(Saving::Held(error.to_string()));
             held = std::mem::take(&mut header);
         }
-        let _ = file.lock_shared();
+        if let Some(file) = &file {
+            let _ = file.lock_shared();
+        }
         Ok(Self {
             path,
             file,
@@ -922,7 +948,7 @@ impl Session {
         Ok((
             Self {
                 path: path.to_owned(),
-                file,
+                file: Some(file),
                 model: context.model,
                 contributors: context.contributors,
                 name: entries.name.clone(),
@@ -992,7 +1018,7 @@ impl Session {
         let history = entries.history(&self.path, &source, leaf, name)?;
         let directory = self.path.parent().unwrap_or(Path::new("."));
         let mut branched = Self::written(directory, root, &self.path)?;
-        if let Err(error) = write_whole(&mut branched.file, &history) {
+        if let Err(error) = write_whole(branched.created(), &history) {
             let _ = std::fs::remove_file(&branched.path);
             return Err(error);
         }
@@ -1033,7 +1059,8 @@ impl Session {
             io::Error::new(error.kind(), format!("{}: {error}", source.display()))
         })?;
         read(source)?;
-        let (path, mut file, _) = new_file(directory)?;
+        let (path, file, _) = new_file(directory)?;
+        let mut file = file?;
         if let Err(error) = write_whole(&mut file, &bytes) {
             let _ = std::fs::remove_file(&path);
             return Err(error);
@@ -1123,7 +1150,10 @@ impl Session {
     /// Whether `path` is this session's file, however it is named.
     pub fn is_file(&self, path: &Path) -> bool {
         use std::os::unix::fs::MetadataExt;
-        match (self.file.metadata(), std::fs::metadata(path)) {
+        let Some(file) = &self.file else {
+            return false;
+        };
+        match (file.metadata(), std::fs::metadata(path)) {
             (Ok(own), Ok(other)) => own.dev() == other.dev() && own.ino() == other.ino(),
             _ => false,
         }
@@ -1170,9 +1200,9 @@ impl Session {
     pub fn name_file(path: &Path, name: &str) -> io::Result<()> {
         let mut session = Self::open(path)?.0;
         let _writing = session.writing()?;
-        let modified = session.file.metadata()?.modified()?;
+        let modified = session.created().metadata()?.modified()?;
         session.write_name(name)?;
-        session.file.set_modified(modified)
+        session.created().set_modified(modified)
     }
 
     /// Removes the session saved at `path`, as Scramjet's `/resume` deletes one: to the trash with
@@ -1216,7 +1246,11 @@ impl Session {
     /// Removes the file of a session this process created and left without a conversation, as
     /// Scramjet writes none before the first reply; one another process wrote to or has open stays.
     pub fn discard_if_unused(mut self) -> io::Result<()> {
-        if self.unused && self.file.try_lock().is_ok() && self.file.metadata()?.len() == self.size {
+        let Some(file) = &self.file else {
+            self.held.clear();
+            return Ok(());
+        };
+        if self.unused && file.try_lock().is_ok() && file.metadata()?.len() == self.size {
             self.held.clear();
             std::fs::remove_file(&self.path)?;
         }
@@ -1225,7 +1259,10 @@ impl Session {
 
     /// The session's file as written here: what is in it, then the lines it could not take yet.
     fn bytes(&self) -> io::Result<Vec<u8>> {
-        let mut bytes = std::fs::read(&self.path)?;
+        let mut bytes = match self.file {
+            Some(_) => std::fs::read(&self.path)?,
+            None => Vec::new(),
+        };
         bytes.extend_from_slice(&self.held);
         Ok(bytes)
     }
@@ -1241,7 +1278,20 @@ impl Session {
     /// Writes go to `file` in place of the session's file from now on, as `/dev/full` fills a disk.
     #[cfg(test)]
     pub(super) fn write_to(&mut self, file: File) {
-        self.file = file;
+        self.file = Some(file);
+    }
+
+    /// The session as one started on a disk too full to create its file, to be created at `path`.
+    #[cfg(test)]
+    pub(super) fn not_created_at(&mut self, path: &Path) {
+        self.held = self.bytes().unwrap();
+        std::fs::remove_file(&self.path).unwrap();
+        (self.path, self.file, self.size) = (path.to_owned(), None, 0);
+    }
+
+    /// The file of a session whose file exists: one opened, or one whose header was written.
+    fn created(&mut self) -> &mut File {
+        (self.file.as_mut()).expect("a session with its header written has its file")
     }
 
     /// Whether lines its file could not take are kept in memory.
@@ -1255,15 +1305,22 @@ impl Session {
     }
 
     /// Locks the session directory until dropped, so that no other process's line lands between
-    /// `catch_up` and the write after it. Without `flock`, writes go unserialized.
-    fn writing(&self) -> io::Result<File> {
+    /// `catch_up` and the write after it. Without `flock`, writes go unserialized, as they do
+    /// while a session without its file has no directory either.
+    fn writing(&self) -> io::Result<Option<File>> {
         let directory = match self.path.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent,
             _ => Path::new("."),
         };
-        let directory = File::open(directory)?;
+        let directory = match File::open(directory) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound && self.file.is_none() => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
         let _ = directory.lock();
-        Ok(directory)
+        Ok(Some(directory))
     }
 
     /// Writes `lines` at the file's end; callers count them once it returns. A write that fails
@@ -1279,8 +1336,19 @@ impl Session {
         }
         bytes.extend_from_slice(&before);
         bytes.extend_from_slice(lines);
-        if let Err(error) = write_whole(&mut self.file, &bytes) {
-            let _ = self.file.set_len(self.size);
+        let written = match self.file.as_mut() {
+            Some(file) => write_whole(file, &bytes),
+            None => create_file(&self.path).and_then(|mut file| {
+                let _ = file.lock_shared();
+                let written = write_whole(&mut file, &bytes);
+                self.file = Some(file);
+                written
+            }),
+        };
+        if let Err(error) = written {
+            if let Some(file) = &self.file {
+                let _ = file.set_len(self.size);
+            }
             if !full(&error) || bytes.len() > HELD_LIMIT {
                 self.held = before;
                 return Err(error);
@@ -1310,10 +1378,13 @@ impl Session {
     ///
     /// Lines held in memory were numbered without the other process's; they keep their numbers.
     fn catch_up(&mut self) -> io::Result<()> {
-        if self.held.is_empty() && self.file.metadata()?.len() != self.size {
+        let Some(file) = &self.file else {
+            return Ok(());
+        };
+        if self.held.is_empty() && file.metadata()?.len() != self.size {
             let entries = read(&self.path)?;
-            if self.file.metadata()?.len() > entries.size {
-                self.file.set_len(entries.size)?;
+            if file.metadata()?.len() > entries.size {
+                file.set_len(entries.size)?;
             }
             self.skipped = entries.skipped;
             self.unterminated = entries.unterminated;

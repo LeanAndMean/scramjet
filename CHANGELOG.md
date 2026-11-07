@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.57.1 — Starting on a disk with no room for a session file
+
+### Fixed
+
+- scramjet-rs also starts when the disk has no room to create the session file or its directory at all (a full ext4 disk, or one out of inodes), where it stopped with `session: No space left on device`: the session is kept in memory and its file is created once there is room.
+
 ## 0.57.0 — Sessions go on when the disk is full
 
 ### Changed

@@ -749,6 +749,28 @@ fn a_session_goes_on_past_unreadable_lines_and_a_cut_last_line() {
 }
 
 #[test]
+fn a_session_whose_file_could_not_be_created_creates_it_once_there_is_room() {
+    let directory = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-uncreated-{}", std::process::id())),
+    );
+    let mut session = Session::create(&directory.0, Path::new("/project"), None).unwrap();
+    let path = directory.0.join("later/1-1.jsonl");
+    session.not_created_at(&path);
+    assert!(session.holding());
+    assert!(!session.is_file(&path));
+    session.set_name("kept").unwrap();
+    assert_eq!(session.branch().unwrap().entries.len(), 0);
+    session
+        .append(&json!({"role":"user","content":"first"}))
+        .unwrap();
+    assert!(!session.holding());
+    assert!(session.is_file(&path));
+    let (reopened, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(conversation, [json!({"role":"user","content":"first"})]);
+    assert_eq!(reopened.name(), Some("kept"));
+}
+
+#[test]
 fn a_session_on_a_full_disk_keeps_its_lines_until_there_is_room() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-full-{}", std::process::id())),
