@@ -3304,6 +3304,13 @@ def next_steps(read, until, send, output):
     send(b'\x1b')
     rows = on_screen('Cancelled')
     assert '- /flow:step four \u2014 Again.' in rows, rows
+    # Above the new session's start, the session left shows in a block with its command and
+    # what it reported.
+    send(b'\x1b[5~' * 2)
+    text = '\n'.join(on_screen('[session] /flow:step one \u00b7 '))
+    block = text.index('[session] /flow:step one \u00b7 ')
+    assert block < text.index('Done.') < text.index('New session started'), text
+    assert '(Ctrl+O to show its' in text, text
     send(b'\x04')
 
 
@@ -3313,6 +3320,10 @@ def next_steps_resumed(read, until, send, output):
     text = '\n'.join(on_screen('Cancelled'))
     chosen, chained = text.index('\u2192 /flow:done \u2014 Finish.'), text.index(' \u203a /flow:done')
     assert chosen < chained < text.index('- /flow:step four \u2014 Again.'), text
+    # The session before it in the chain, above its conversation.
+    send(b'\x1b[5~' * 2)
+    text = '\n'.join(on_screen('[session] /flow:step one \u00b7 '))
+    assert text.index('[session] /flow:step one') < text.index(' \u203a /flow:step two'), text
     send(b'\x04')
 
 

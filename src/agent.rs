@@ -113,6 +113,30 @@ pub(super) const TYPED: &str = "_scramjet_typed";
 /// Stored, as `true`, with a tool result or `!` command that failed, so a resumed conversation
 /// shows it as it ran. Never sent, as no `_scramjet_` field is.
 const FAILED: &str = "_scramjet_failed";
+
+/// A session before the current one in its chain (`Agent::earlier_sessions`).
+pub struct EarlierSession {
+    read: session::Earlier,
+    /// What its command reported when it completed.
+    pub summary: Option<String>,
+}
+
+impl EarlierSession {
+    /// Its first prompt as typed, such as the command that ran in it.
+    pub fn first_prompt(&self) -> Option<&str> {
+        self.read.first_prompt.as_deref()
+    }
+
+    /// When it started, in milliseconds since 1970.
+    pub fn created(&self) -> Option<u64> {
+        self.read.created
+    }
+
+    /// When it was last written.
+    pub fn modified(&self) -> std::time::SystemTime {
+        self.read.modified
+    }
+}
 /// Stored with an edit's result: the diff shown for it.
 const DIFF: &str = "_scramjet_diff";
 /// Stored with a `subagent` call's result: its children (`Children`), as they ended.
@@ -1515,6 +1539,37 @@ impl Agent {
             .filter(|item| item["type"] == "message")
             .map(|item| message_text(item).trim().to_owned())
             .find(|text| !text.is_empty())
+    }
+
+    /// The sessions before this one in its chain, the first first, as they show above its
+    /// conversation; reading stops at one that cannot be read, with what went wrong.
+    pub fn earlier_sessions(&self) -> (Vec<EarlierSession>, Option<String>) {
+        let mut earlier = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut next = self.session.continues().map(Path::to_owned);
+        let mut problem = None;
+        while let Some(path) = next.take() {
+            if !seen.insert(path.clone()) {
+                break;
+            }
+            match session::read_earlier(&path) {
+                Ok(read) => {
+                    next = read.continues.clone();
+                    earlier.push(EarlierSession {
+                        summary: status::completed_summary(&read.items),
+                        read,
+                    });
+                }
+                Err(error) => problem = Some(format!("{}: {error}", path.display())),
+            }
+        }
+        earlier.reverse();
+        (earlier, problem)
+    }
+
+    /// Shows an earlier session's conversation as `show_conversation` shows this one's.
+    pub fn show_earlier(&self, earlier: &EarlierSession, ui: &mut dyn AgentUi) {
+        show_items(&earlier.read.items, Some(&self.config.root), ui);
     }
 
     /// Shows the conversation as a resumed session has it, as its turns showed when they ran.

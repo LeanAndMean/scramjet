@@ -2,17 +2,17 @@
 //! built-in commands (`slash.rs`), model turns and a completed command's next step.
 use super::banner::{self, Opening};
 use super::editor::Note;
-use super::record::Event;
+use super::record::{self, Event};
 use super::screen::{self, Handle};
 use super::select::Routed;
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
 use super::theme::{ThemeOptions, Themes, Watched};
-use super::{editor, footer, installed, keymap, scope, select, settings, style};
+use super::{editor, footer, installed, keymap, scope, select, settings, style, terminal, tree};
 use scramjet_rs::agent::{
-    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, Installed, Next, Problem,
-    Source, Step, Suggested,
+    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, EarlierSession, Installed,
+    Next, Problem, Source, Step, Suggested,
 };
 use std::{
     io::{BufRead, IsTerminal},
@@ -21,7 +21,7 @@ use std::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, UNIX_EPOCH},
 };
 
 /// How long `/autopilot on` waits before it chooses the recommended next step, as Scramjet.
@@ -774,6 +774,29 @@ impl Interactive {
     /// a blank line.
     pub(super) fn show_resumed(&mut self) {
         if let Some(screen) = &mut self.screen {
+            let (earlier, problem) = self.agent.earlier_sessions();
+            if let Some(problem) = problem {
+                screen.say(&format!(
+                    "Error: an earlier session of this chain not read: {problem}"
+                ));
+            }
+            for session in &earlier {
+                let shown = screen
+                    .link
+                    .record(|link| self.agent.show_earlier(session, link));
+                let events = match shown {
+                    Ok(events) => events,
+                    Err(error) => {
+                        screen.say(&format!("Error: {error}"));
+                        Vec::new()
+                    }
+                };
+                screen.event(Event::Earlier(Box::new(record::Earlier {
+                    heading: earlier_heading(session),
+                    summary: session.summary.clone(),
+                    events,
+                })));
+            }
             self.agent.show_conversation(&mut screen.link);
             return;
         }
@@ -784,6 +807,26 @@ impl Interactive {
             self.ui.clear();
         }
     }
+}
+
+/// What ran in an earlier session of the chain, and when: `/rs:loop · 11/6 14:02, 33m`.
+fn earlier_heading(session: &EarlierSession) -> String {
+    let prompt = session
+        .first_prompt()
+        .unwrap_or("A session without a prompt");
+    let mut heading = prompt.lines().next().unwrap_or_default().to_owned();
+    if heading.chars().count() > 60 {
+        heading = heading.chars().take(59).collect::<String>() + "…";
+    }
+    if let Some(created) = session.created() {
+        heading += &format!(" · {}", tree::clock(created));
+        let ended = (session.modified().duration_since(UNIX_EPOCH)).map(|ended| ended.as_millis());
+        if let Ok(ended) = ended {
+            let took = (ended as u64).saturating_sub(created) / 1000;
+            heading += &format!(",{}", terminal::elapsed(took.max(1)));
+        }
+    }
+    heading
 }
 
 /// Adds the `!` commands that ended while a turn ran to the conversation, shown as they ran.

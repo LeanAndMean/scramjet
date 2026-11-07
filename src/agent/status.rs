@@ -27,6 +27,15 @@ summary of the work; reporting ends the turn. If the user wants to stop before t
 response that ends without either gets a status check. Do not call this tool for ordinary user \
 tasks.";
 
+/// The summary of the latest `completed` report among `items`.
+pub(super) fn completed_summary(items: &[Value]) -> Option<String> {
+    (items.iter().rev())
+        .filter(|item| item["type"] == "function_call" && item["name"] == NAME)
+        .filter_map(|item| serde_json::from_str::<Value>(item["arguments"].as_str()?).ok())
+        .find(|arguments| arguments["status"] == "completed")
+        .and_then(|arguments| arguments["summary"].as_str().map(str::to_owned))
+}
+
 /// How many status checks in a row, without the user's input, before the command waits for them.
 const CHECK_LIMIT: u32 = 3;
 

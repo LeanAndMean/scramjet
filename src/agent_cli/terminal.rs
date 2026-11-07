@@ -10,7 +10,7 @@ use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
 use super::style::{self, Band, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, style_at, visible};
-use super::{children, diff, editor, job, markdown};
+use super::{children, diff, editor, job, markdown, record};
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     io::Errno,
@@ -1504,6 +1504,29 @@ impl Terminal {
         match self.boxed() {
             true => boxed(&text),
             false => text + "\n",
+        }
+    }
+    /// An earlier session of the chain: a block with what ran and its summary, then, once tool
+    /// results are shown whole, its conversation.
+    pub(super) fn earlier(&mut self, earlier: &record::Earlier) {
+        self.clear();
+        let mut heading = self.styled(style::SUMMARY, &earlier.heading);
+        match keymap::key(Binding::ToolsExpand) {
+            Some(key) if self.expandable && !earlier.events.is_empty() => {
+                heading += &self.dim(&format!(" ({key} to show its conversation)"));
+            }
+            _ => {}
+        }
+        let block = self.message_box("session", &heading, earlier.summary.as_deref());
+        self.err(&format!("{block}\n"));
+        if self.full {
+            let outcomes = record::outcomes(&earlier.events).into();
+            let outcomes = std::mem::replace(&mut self.outcomes, outcomes);
+            for event in &earlier.events {
+                record::replay(event, self);
+            }
+            self.clear();
+            self.outcomes = outcomes;
         }
     }
     /// The full screen shows messages in a box on the theme's `customMessageBg`, if it has one.

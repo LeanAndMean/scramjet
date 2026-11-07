@@ -85,6 +85,24 @@ impl Link {
             let _ = (&self.wake).write(&[0]);
         }
     }
+    /// The events `show` gives a link like this one, kept instead of shown.
+    pub(in crate::agent_cli) fn record(
+        &self,
+        show: impl FnOnce(&mut Self),
+    ) -> io::Result<Vec<Event>> {
+        let (to, from) = mpsc::channel();
+        let mut link = Self {
+            to,
+            ..self.try_clone()?
+        };
+        show(&mut link);
+        drop(link);
+        let events = from.into_iter().filter_map(|message| match message {
+            ToScreen::Event(event) | ToScreen::Call(_, event) => Some(event),
+            _ => None,
+        });
+        Ok(events.collect())
+    }
     pub(in crate::agent_cli) fn event(&self, event: Event) {
         self.send(match self.call {
             Some(index) => ToScreen::Call(index, event),

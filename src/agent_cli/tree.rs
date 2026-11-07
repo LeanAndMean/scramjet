@@ -445,7 +445,7 @@ fn layout(entries: &[TreeEntry], parents: &[Option<usize>], shown: &[usize]) -> 
 
 /// When a label was given, as Scramjet's tree says it: the time today, else the day too, and
 /// the year when it was another.
-fn clock(time: u64) -> String {
+pub(super) fn clock(time: u64) -> String {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     match (
         local(time),

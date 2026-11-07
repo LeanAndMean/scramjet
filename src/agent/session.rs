@@ -214,6 +214,9 @@ pub struct Session {
     held: Vec<u8>,
     /// The change in `held` not yet said.
     change: Option<Saving>,
+    /// The session whose next step started this one, as the header's `parentSession` with
+    /// `nextStep` records it.
+    continues: Option<PathBuf>,
 }
 
 fn invalid(path: &Path, reason: &str) -> io::Error {
@@ -665,6 +668,33 @@ pub fn read_branch(path: &Path) -> io::Result<Branch> {
     Ok(entries.branch(entries.tail))
 }
 
+/// A session read to be shown before a later one of its chain, without opening it.
+pub struct Earlier {
+    /// Its first prompt as typed, such as the command that ran in it.
+    pub first_prompt: Option<String>,
+    /// The conversation where a resume would continue it, after its latest compaction.
+    pub items: Vec<Value>,
+    /// When it started, in milliseconds since 1970, as its header says.
+    pub created: Option<u64>,
+    pub modified: SystemTime,
+    /// The session before it in the chain.
+    pub continues: Option<PathBuf>,
+}
+
+/// The session saved at `path`, read as an earlier one of a chain is shown.
+pub fn read_earlier(path: &Path) -> io::Result<Earlier> {
+    let entries = read(path)?;
+    let context = entries.context(path, entries.tail)?;
+    Ok(Earlier {
+        first_prompt: (entries.fork_points().next())
+            .map(|entry| prompt_text(&entry.value).to_owned()),
+        items: context.items,
+        created: entries.header["created"].as_u64(),
+        modified: std::fs::metadata(path)?.modified()?,
+        continues: entries.parent.clone().filter(|_| entries.continues()),
+    })
+}
+
 /// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->`.
 pub fn directory(root: &Path) -> io::Result<PathBuf> {
     let slug = root.to_string_lossy().trim_matches('/').replace('/', "-");
@@ -865,7 +895,11 @@ impl Session {
         parent: Option<&Path>,
         next_step: bool,
     ) -> io::Result<Self> {
-        Self::begin(directory, |created| {
+        let continues = match (parent, next_step) {
+            (Some(parent), true) => Some(std::path::absolute(parent)?),
+            _ => None,
+        };
+        let mut session = Self::begin(directory, |created| {
             let mut header =
                 json!({"type":"session","version":1,"root":root,"created":created as u64});
             if let Some(parent) = parent {
@@ -877,7 +911,9 @@ impl Session {
             let mut header = serde_json::to_vec(&header)?;
             header.push(b'\n');
             Ok(header)
-        })
+        })?;
+        session.continues = continues;
+        Ok(session)
     }
 
     /// Starts a session in `directory` whose first line is `header`, given the millisecond its
@@ -940,6 +976,7 @@ impl Session {
             unterminated: false,
             held,
             change,
+            continues: None,
         })
     }
 
@@ -1001,6 +1038,7 @@ impl Session {
                 unterminated: entries.unterminated,
                 held: Vec::new(),
                 change: None,
+                continues: entries.parent.clone().filter(|_| entries.continues()),
             },
             context.items,
             entries.prompts(),
@@ -1237,6 +1275,11 @@ impl Session {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The session whose next step started this one: the one before it in a chain.
+    pub fn continues(&self) -> Option<&Path> {
+        self.continues.as_deref()
     }
 
     /// Stable across resumes: the file name without its extension.

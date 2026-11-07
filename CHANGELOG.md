@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.58.0 — Earlier sessions of a chain stay on screen
+
+### Added
+
+- In the full screen, a session that a fresh-session next step started shows each session before it in the chain above its conversation: a `[session]` block with the command that ran, when and for how long, and what it reported when it completed. Ctrl+O opens each into its conversation. This holds while a chain runs, where the screen used to clear at each fresh-session step, and when one of its sessions is resumed. Earlier sessions never reach the model.
+
 ## 0.57.4 — Forks, clones and imports on a full disk
 
 ### Fixed

@@ -49,6 +49,16 @@ pub(super) enum Event {
     Styled(Style, String),
     /// The banner a session starts with.
     Banner(Box<Opening>),
+    /// A session before this one in its chain.
+    Earlier(Box<Earlier>),
+}
+
+/// A session before the current one in its chain, shown in a block above its conversation:
+/// what ran in it and how it ended, and its conversation once tool results are shown whole.
+pub(super) struct Earlier {
+    pub(super) heading: String,
+    pub(super) summary: Option<String>,
+    pub(super) events: Vec<Event>,
 }
 
 /// Shows `event` on `ui` as it showed when it happened.
@@ -101,6 +111,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
             ui.said(&text)
         }
         Event::Banner(opening) => ui.banner(opening),
+        Event::Earlier(earlier) => ui.earlier(earlier),
     }
 }
 

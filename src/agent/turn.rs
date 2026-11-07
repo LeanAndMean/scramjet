@@ -1276,8 +1276,45 @@ auto-dispatches it only when its message is a slash command."
         assert_eq!(second.continues.as_deref(), Some(first.as_path()));
         assert_eq!(second.parent, None);
 
+        // The chain's earlier sessions, the first first, each with what its command reported.
+        let report = json!({"status":"completed","summary":"Did the second."});
+        let call = json!({"type":"function_call","call_id":"c1","name":status::NAME,
+            "arguments":report.to_string()});
+        agent.add(call).unwrap();
+        agent
+            .record_next_step(source, &[step(true, Some("/rs:loop"))], Some(0))
+            .unwrap();
+        agent.new_session().unwrap();
+        let third = agent.session_path().to_owned();
+        let shown = |agent: &Agent| {
+            let (earlier, problem) = agent.earlier_sessions();
+            assert_eq!(problem, None);
+            (earlier.iter())
+                .map(|session| {
+                    (
+                        session.first_prompt().unwrap().to_owned(),
+                        session.summary.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let chain = vec![
+            ("first".to_owned(), None),
+            ("second".to_owned(), Some("Did the second.".to_owned())),
+        ];
+        assert_eq!(shown(&agent), chain);
+        // As a resume finds them, and up to a session that cannot be read.
+        agent.add(json!({"role":"user","content":"third"})).unwrap();
+        agent.new_session().unwrap();
+        agent.resume_session(&third).unwrap();
+        assert_eq!(shown(&agent), chain);
+        std::fs::remove_file(&first).unwrap();
+        let (earlier, problem) = agent.earlier_sessions();
+        assert_eq!(earlier.len(), 1);
+        assert!(problem.unwrap().starts_with(&first.display().to_string()));
+
         // `/clear` starts a session of its own, and a dismissed list leaves none behind.
-        let dir_len = || std::fs::read_dir(first.parent().unwrap()).unwrap().count();
+        let dir_len = || std::fs::read_dir(third.parent().unwrap()).unwrap().count();
         let before = dir_len();
         agent
             .record_next_step(source, &[step(true, Some("/rs:loop"))], None)
