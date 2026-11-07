@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.78.0 — Waiting for you at every hand-off
+
+### Changed
+
+- Whenever a turn ends, the status row says `Waiting for you` with the time since the agent stopped: after a reply, a freetext question, a next-step list and `/compact` or a `!` command, until you type or send something. It said so before only while a question or approval held a running turn.
+
 ## 0.77.0 — The quota in /status
 
 ### Added

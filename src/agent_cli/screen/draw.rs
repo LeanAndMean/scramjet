@@ -216,10 +216,8 @@ impl App {
     fn status(&self, width: usize) -> Vec<String> {
         // Escape goes back to the end, lets a selection go or closes completion first.
         let escape = self.top.is_none() && self.selection.is_none() && !self.draft.completing();
-        let activity = self
-            .activity
-            .as_ref()
-            .map(|activity| activity.shown(escape));
+        let handed = self.handed.as_ref().map(|(waiting, _)| waiting);
+        let activity = (self.activity.as_ref().or(handed)).map(|activity| activity.shown(escape));
         let below = self.last.saturating_sub(self.shown_top());
         // A list takes PgDn, and a dialog or the completion list Escape, but not from a selection.
         let page = !matches!(

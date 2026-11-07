@@ -695,14 +695,15 @@ SPINNING = '[\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f] '
 
 
 def ended(read, output, columns=60, rows=24):
-    """Waits until no turn runs: the status line over the prompt's rule does not say what runs
-    (`\u2839 Waiting for reply`, `\u2839 Running 1s`, `Waiting for you`, \u2026); returns the rows.
-    Wait for something the turn shows first, as before it starts none runs either."""
+    """Waits until no turn runs: the status line over the prompt's rule has no spinner
+    (`\u2839 Waiting for reply`, `\u2839 Running 1s`, \u2026); returns the rows. Wait for something the
+    turn shows first, as before it starts none runs either; a question of the agent's has no
+    spinner either."""
     end = time.monotonic() + 10
     while True:
         shown = Screen(output, columns, rows).rows()
         rules = [index for index, row in enumerate(shown) if re.fullmatch('\u2500{20,}', row)]
-        if rules and rules[-1] > 0 and not re.match(SPINNING + '|Waiting for you', shown[rules[-1] - 1]):
+        if rules and rules[-1] > 0 and not re.match(SPINNING, shown[rules[-1] - 1]):
             return shown
         assert time.monotonic() < end, shown
         read(.05)
@@ -988,7 +989,8 @@ def ctrl_t_hides_reasoning(read, until, send, output):
     assert 'thought' not in '\n'.join(rows), rows
     send(b'\x14')
     rows = on_screen('Second thought.')
-    assert 'Thinking blocks: visible' in rows, rows
+    # After the turn, the note follows the hand-off.
+    assert 'Waiting for you \u00b7 Thinking blocks: visible' in rows, rows
     send(b'\x14')
     on_screen('Thinking blocks: hidden')
     send(b'\x04')
@@ -1132,6 +1134,15 @@ def final_texts_replace_lost_deltas(read, until, send, output):
     on_screen('The start of the reply.')
     rows = ended(read, output)
     assert ' The start of the reply.' in rows, rows
+    # The turn is with the user until they type, the seconds counting.
+    status = lambda rows: rows[max(i for i, row in enumerate(rows) if re.fullmatch('\u2500{20,}', row)) - 1]
+    assert status(rows).startswith('Waiting for you'), rows
+    rows = on_screen('Waiting for you 1s')
+    send(b'x')
+    on_screen('> x')
+    read(.3)
+    assert not status(shown()).startswith('Waiting'), shown()
+    send(b'\x7f')
     send(b'two\r')
     on_screen('Only at the end.')
     send(b'three\r')
@@ -4058,10 +4069,11 @@ def fullscreen_turn(read, until, send, output):
     send(b'\x14')
     on_screen('Changing the file.')
     send(b'\x1b[5~')
-    rows = on_screen('more lines below')
+    # Shortened, beside the hand-off.
+    rows = on_screen('\u2193')
     assert ' \u203a go' in rows, rows
     send(b'\x1b')
-    on_screen('more lines below', gone=True)
+    on_screen('\u2193', gone=True)
     send(b'\x04')
 
 
@@ -4216,7 +4228,8 @@ def prompt_keys(read, until, send, output):
     assert rows[-1] == '> draft', rows
     # Ctrl+Home shows the conversation's start, Ctrl+End its end again.
     send(b'\x1b[1;5H')
-    rows = on_screen('more lines below')
+    # Shortened, beside the hand-off.
+    rows = on_screen('\u219342')
     assert rows[0] == 'scramjet-rs v' + VERSION and ' \u203a go' in rows, rows
     send(b'\x1b[1;5F')
     rows = on_screen('Row 40 of the reply.')
@@ -4271,6 +4284,9 @@ def fullscreen_mouse(read, until, send, output):
     send(b'go\r')
     on_screen('Row 40 of the reply.')
     ended(read, output)
+    # Typing ends the hand-off, so that the status line has its room.
+    send(b'x\x7f')
+    on_screen('Waiting for you', gone=True)
     # A notch of the wheel scrolls three lines, wherever the pointer is.
     send(b'\x1b[<64;5;23M')
     on_screen('3 more lines below')

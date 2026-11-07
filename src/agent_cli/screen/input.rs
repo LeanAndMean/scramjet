@@ -239,6 +239,7 @@ impl App {
             } else if self.ready {
                 self.ready = false;
                 self.top = None;
+                self.handed = None;
                 let _ = self.inputs.send(Input::Prompt(model));
             } else {
                 self.draft.set_note(Note::Info(BUSY.to_owned()));
@@ -256,12 +257,14 @@ impl App {
                 }
                 self.ready = false;
                 self.top = None;
+                self.handed = None;
                 let _ = self.inputs.send(Input::Prompt(text));
                 self.draft = self.editor.draft(String::new());
             }
             Action::Submit(_) => self.draft.set_note(Note::Info(BUSY.to_owned())),
             Action::Exit => self.exit(),
             Action::DoubleEscape if self.ready => {
+                self.handed = None;
                 let _ = self.inputs.send(Input::DoubleEscape);
                 self.ready = false;
             }

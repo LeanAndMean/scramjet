@@ -302,6 +302,9 @@ struct App {
     ready: bool,
     /// A turn runs, with what it does now.
     activity: Option<Activity>,
+    /// Since the last turn ended, until the user sends or types something: `Waiting for you`,
+    /// with the draft as it was then.
+    handed: Option<(Activity, String)>,
     dialog: Option<Open>,
     /// Keys typed while an answered held list waits for the session's next, which then takes
     /// them, or the prompt does.
@@ -368,6 +371,7 @@ impl App {
             efforts: EffortCycle::default(),
             ready: false,
             activity: None,
+            handed: None,
             dialog: None,
             held_keys: Vec::new(),
             theme: None,
@@ -461,6 +465,9 @@ impl App {
             }
             self.copied()?;
             self.pasted();
+            if (self.handed.as_ref()).is_some_and(|(_, draft)| draft != self.draft.text()) {
+                self.handed = None;
+            }
             self.footer.check_branch();
             self.check_theme();
             if self
@@ -588,6 +595,8 @@ impl App {
                     self.conversation_mut().turn_ended();
                     self.restore();
                 }
+                self.handed =
+                    (!running).then(|| (Activity::asking(), self.draft.text().to_owned()));
             }
             ToScreen::Ready => {
                 self.ready = true;
