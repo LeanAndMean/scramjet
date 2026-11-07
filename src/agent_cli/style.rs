@@ -122,6 +122,8 @@ styles! {
     MESSAGE_LABEL: [BOLD] CustomMessageLabel;
     /// A section heading in an information block such as `/session`'s.
     INFO_HEADING: [BOLD];
+    /// A day's bar in `/usage`.
+    USAGE_BAR: [] Accent;
     /// A provider failure that is retried.
     WARNING: [] Warning;
     /// What Scramjet notifies the user of about a command, such as a blocked report.

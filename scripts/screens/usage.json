@@ -1,0 +1,15 @@
+{
+  "size": "100x50",
+  "settings": {"theme": "scramjet-dark"},
+  "prompt": "Say hello.",
+  "replies": [
+    [{"text": "Hello."}]
+  ],
+  "steps": [
+    {"until": "Hello."},
+    {"type": "/usage\r"},
+    {"until": "session files"},
+    {"sleep": 0.5},
+    {"shot": "usage"}
+  ]
+}

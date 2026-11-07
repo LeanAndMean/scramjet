@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 22] = [
+const SLASH_COMMANDS: [(&str, &str); 23] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -23,6 +23,10 @@ const SLASH_COMMANDS: [(&str, &str); 22] = [
     ("copy", "Copy last agent message to clipboard"),
     ("rename", "Set session display name"),
     ("status", "Show session info and stats"),
+    (
+        "usage",
+        "Show cost, tokens and response times across sessions",
+    ),
     ("hotkeys", "Show all keyboard shortcuts, and change them"),
     ("keybindings", "Open your keyboard shortcuts file"),
     ("fork", "Create a new fork from a previous user message"),
@@ -53,15 +57,14 @@ const SLASH_COMMANDS: [(&str, &str); 22] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 13] = [
+const ALIASES: [(&str, &str); 12] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
     ("name", "rename"),
     ("session", "status"),
-    ("usage", "status"),
-    ("cost", "status"),
-    ("stats", "status"),
+    ("cost", "usage"),
+    ("stats", "usage"),
     ("config", "settings"),
     ("clone", "branch"),
     ("continue", "resume"),
@@ -462,6 +465,7 @@ mod tests {
                 "/copy",
                 "/rename",
                 "/status",
+                "/usage",
                 "/hotkeys",
                 "/keybindings",
                 "/fork",
@@ -486,7 +490,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /export         Export session (HTML default, or specify…",
                 "  /import         Import and resume a session from a JSONL…",
-                "  (1/22)",
+                "  (1/23)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -499,13 +503,13 @@ mod tests {
             [
                 "  /rename",
                 "  /status",
-                "→ /hotkeys",
+                "→ /usage",
+                "  /hotkeys",
                 "  /keybindings",
-                "  /fork",
-                "  (9/22)"
+                "  (9/23)"
             ]
         );
-        for _ in 0..14 {
+        for _ in 0..15 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -545,7 +549,7 @@ mod tests {
         assert_eq!(first("/reset"), "/clear");
         assert_eq!(first("/new"), "/clear");
         assert_eq!(first("/name"), "/rename");
-        assert_eq!(first("/stats"), "/status");
+        assert_eq!(first("/stats"), "/usage");
         assert_eq!(first("/quit"), "/exit");
         // Unlisted names are not in the list until typed in full.
         assert!(Completion::slash("/qui", &loaded).is_none());

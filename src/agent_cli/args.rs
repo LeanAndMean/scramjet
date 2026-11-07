@@ -154,6 +154,9 @@ deleted before; Ctrl+- undoes; Ctrl+] then a character jumps to it, Ctrl+Alt+] b
 Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 /rename NAME names the session, which /resume then lists by its name; /rename alone shows it.
 /status shows the session's file, the messages in its context, the tokens they used and the cost.
+/usage (or /cost, /stats) adds up what the saved sessions of every project spent: requests,
+tokens, cache hits and cost for this session, today and the last 7 and 30 days, each day of
+the last two weeks, and each model's, with its median time to first output and output rate.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
@@ -168,11 +171,11 @@ skills and context files again, and starts the MCP servers whose entries changed
 /autopilot on|off|status: when on, a finished command's recommended next step runs after 3s.
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
 available.
-Typed while a turn runs, /status, /hotkeys, /keybindings, /rename, /model, /scoped-models,
+Typed while a turn runs, /status, /usage, /hotkeys, /keybindings, /rename, /model, /scoped-models,
 /copy, /export, /settings, /autopilot and /mcp run before its next request, /reload is refused,
 and the other commands stop the turn and run once it has.
 Scramjet's names of the commands named otherwise here are accepted too (/new, /quit, /name,
-/session, /clone), and so are Claude Code's /reset, /config, /continue, /usage and /help, and
+/session, /clone), and so are Claude Code's /reset, /config, /continue and /help, and
 Codex's /keymap.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The

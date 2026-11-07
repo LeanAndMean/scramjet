@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.62.0 — Usage across sessions
+
+### Added
+
+- `/usage` (also `/cost` and `/stats`, as in Claude Code) adds up what the saved sessions of every project spent: requests, input and output tokens, the share read from the cache and the cost, for this session, today and the last 7 and 30 days; each day of the last two weeks with a bar for its cost; and each model of the last 30 days with its median time to first output and output rate. Costs a provider does not give (subscriptions) show as `$?`. `/status` no longer answers to those names.
+
 ## 0.61.0 — MCP servers reconnected
 
 ### Added

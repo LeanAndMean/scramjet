@@ -41,6 +41,7 @@ mod text;
 mod theme;
 mod theme_editor;
 mod tree;
+mod usage;
 
 use args::{Options, Start, USAGE};
 use rustix::termios::{self, QueueSelector};

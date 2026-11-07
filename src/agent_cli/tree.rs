@@ -471,7 +471,7 @@ fn clock_at(at: Local, now: Local) -> String {
     }
 }
 
-fn local(milliseconds: u64) -> Option<Local> {
+pub(super) fn local(milliseconds: u64) -> Option<Local> {
     let seconds = libc::time_t::try_from(milliseconds / 1000).ok()?;
     // SAFETY: `tm` is plain data, which `localtime_r` fills in from `seconds` without keeping
     // either pointer.

@@ -25,6 +25,7 @@ pub(super) enum Builtin<'a> {
     Clear(&'a str),
     Rename(&'a str),
     Status,
+    Usage,
     Hotkeys,
     Keybindings,
     Resume(&'a str),
@@ -60,6 +61,7 @@ impl<'a> Builtin<'a> {
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
+            "usage" if argument.is_empty() => Self::Usage,
             "hotkeys" if argument.is_empty() => Self::Hotkeys,
             "keybindings" if argument.is_empty() => Self::Keybindings,
             "resume" => Self::Resume(argument),
@@ -91,6 +93,7 @@ impl<'a> Builtin<'a> {
                 | Self::Copy
                 | Self::Rename(_)
                 | Self::Status
+                | Self::Usage
                 | Self::Hotkeys
                 | Self::Keybindings
                 | Self::Model(_)
@@ -123,6 +126,7 @@ impl Interactive {
             }
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.agent, &self.ui).trim_end()),
+            Some(Builtin::Usage) => self.usage(),
             Some(Builtin::Hotkeys) => self.hotkeys(),
             Some(Builtin::Keybindings) => self.keybindings(),
             Some(Builtin::Resume(wanted)) => {
@@ -282,6 +286,20 @@ impl Interactive {
 
     /// `/mcp`, as Codex's: the MCP servers, how each is, and its tools; `/mcp reconnect`, as
     /// Claude Code's, starts one again, or all.
+    /// `/usage`: what the saved sessions spent, read from their files.
+    fn usage(&mut self) {
+        let sessions = match scramjet_rs::agent::state_directory() {
+            Ok(state) => state.join("sessions"),
+            Err(error) => return self.say(&format!("Error: {error}")),
+        };
+        let current = self.agent.session_path();
+        let history = scramjet_rs::agent::usage::History::read(&sessions, current);
+        let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
+            .map_or(0, |since| since.as_millis() as u64);
+        let report = super::usage::report(&history, &sessions, current, now, &self.ui);
+        self.say(report.trim_end());
+    }
+
     fn mcp(&mut self, argument: &str) {
         match reconnecting(argument) {
             Some(Ok(name)) => return self.reconnect(name),
@@ -631,9 +649,8 @@ mod tests {
             ("/quit", Builtin::Exit),
             ("/name my work", Builtin::Rename("my work")),
             ("/session", Builtin::Status),
-            ("/usage", Builtin::Status),
-            ("/cost", Builtin::Status),
-            ("/stats", Builtin::Status),
+            ("/cost", Builtin::Usage),
+            ("/stats", Builtin::Usage),
             ("/config", Builtin::Settings),
             ("/clone", Builtin::Branch("")),
             ("/continue 2", Builtin::Resume("2")),

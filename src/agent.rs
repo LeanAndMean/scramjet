@@ -40,6 +40,7 @@ mod tree;
 mod turn;
 pub use turn::ShownPaused;
 mod ui;
+pub mod usage;
 
 pub use attached::Attached;
 pub use autonomy::{
