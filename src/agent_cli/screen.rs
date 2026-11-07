@@ -1067,9 +1067,6 @@ impl Drop for Screen {
     }
 }
 
-/// What gives the terminal back from the screen, when it is shown, for a process exiting without
-/// dropping it: the end of a frame being drawn, bracketed paste off, as `RawMode` turns it off,
-/// and the screen left. Read it holding stderr's lock, so that no frame follows it.
 /// `view`'s report as the conversation shows a note.
 fn usage_shown(view: &UsageView) -> Transcript {
     let mut shown = Transcript::default();
@@ -1077,6 +1074,9 @@ fn usage_shown(view: &UsageView) -> Transcript {
     shown
 }
 
+/// What gives the terminal back from the screen, when it is shown, for a process exiting without
+/// dropping it: the end of a frame being drawn, bracketed paste off, as `RawMode` turns it off,
+/// and the screen left. Read it holding stderr's lock, so that no frame follows it.
 pub(super) fn leave_on_exit() -> Option<String> {
     (SHOWN.load(Ordering::SeqCst)).then(|| format!("\x1b[?2026l\x1b[?2004l{LEAVE}"))
 }

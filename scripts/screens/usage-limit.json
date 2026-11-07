@@ -26,7 +26,7 @@
     {"type": "Again.\r"},
     {"until": "usage limit"},
     {"type": "/usage\r"},
-    {"until": "session files"},
+    {"until": "Costliest session"},
     {"sleep": 0.5},
     {"shot": "usage-limit"}
   ]

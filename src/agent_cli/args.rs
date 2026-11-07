@@ -156,12 +156,12 @@ Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 /rename NAME names the session, which /resume then lists by its name; /rename alone shows it.
 /status shows the session's file, the messages in its context, the tokens they used, the cost and
 the current provider's quota as its latest response reported it.
-/usage (or /cost, /stats) adds up what the saved sessions of every project spent: requests,
-tokens, cache hits and cost for this session, today and the last 7 and 30 days, each day of
-the last two weeks, and each provider's (the current one first) and model's, with each model's
-time to first output and output rate, median and slowest tenth, and the costliest sessions. On
-the full screen it opens in the conversation's place on the current provider's usage alone;
-Tab (or Left and Right) shows all of it or another provider's, Escape closes it.
+/usage (or /cost, /stats) shows what is left of each quota, with when it resets and whether it
+lasts at this pace, what the saved sessions of every project spent today, this week and in the
+last 30 days, the models most of it went to and the costliest session; /usage details adds up
+requests, tokens, cache hits, cost, days, weeks, providers, models and their speed. On the full
+screen it opens in the conversation's place on the current provider's; d shows its details,
+Tab (or Left and Right) all of it or another provider's, Escape closes it.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved

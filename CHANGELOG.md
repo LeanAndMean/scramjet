@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.80.0 — /usage at a glance
+
+### Changed
+
+- `/usage` opens on a short summary: each quota window as one bar with when it resets and whether it lasts at this pace, what was spent today, this week and in the last 30 days (with the change from the 30 before), the models most of it went to and the costliest session. Where nothing has a price, it counts tokens.
+- The tables, charts and speeds are a key away: `d` on the full screen, or `/usage details`. `/status` shows the quota in the same short rows.
+
 ## 0.79.0 — Nested repositories writable under --sandbox
 
 ### Changed

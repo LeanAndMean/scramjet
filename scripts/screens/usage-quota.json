@@ -27,11 +27,11 @@
   "steps": [
     {"until": "Hello."},
     {"type": "/usage\r"},
-    {"until": "Last 14 days"},
+    {"until": "Costliest session"},
     {"sleep": 0.5},
     {"shot": "usage-quota"},
     {"type": "\t"},
-    {"until": "Quota of screens"},
+    {"until": "Usage · All"},
     {"sleep": 0.3},
     {"shot": "usage-quota-all"},
     {"type": "\u001b"},

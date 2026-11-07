@@ -25,7 +25,8 @@ pub(super) enum Builtin<'a> {
     Clear(&'a str),
     Rename(&'a str),
     Status,
-    Usage,
+    /// With whether the details come first.
+    Usage(bool),
     Hotkeys,
     Keybindings,
     Resume(&'a str),
@@ -61,7 +62,9 @@ impl<'a> Builtin<'a> {
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
-            "usage" if argument.is_empty() => Self::Usage,
+            "usage" if argument.is_empty() || argument == "details" => {
+                Self::Usage(argument == "details")
+            }
             "hotkeys" if argument.is_empty() => Self::Hotkeys,
             "keybindings" if argument.is_empty() => Self::Keybindings,
             "resume" => Self::Resume(argument),
@@ -93,7 +96,7 @@ impl<'a> Builtin<'a> {
                 | Self::Copy
                 | Self::Rename(_)
                 | Self::Status
-                | Self::Usage
+                | Self::Usage(_)
                 | Self::Hotkeys
                 | Self::Keybindings
                 | Self::Model(_)
@@ -126,7 +129,7 @@ impl Interactive {
             }
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.agent, &self.ui).trim_end()),
-            Some(Builtin::Usage) => self.usage(),
+            Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Hotkeys) => self.hotkeys(),
             Some(Builtin::Keybindings) => self.keybindings(),
             Some(Builtin::Resume(wanted)) => {
@@ -284,9 +287,10 @@ impl Interactive {
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
-    /// `/usage`: what the saved sessions spent, read from their files; on the full screen, a
-    /// view of it, provider by provider.
-    fn usage(&mut self) {
+    /// `/usage`: what is left of the quotas and what the saved sessions spent, read from their
+    /// files, or with `details` the details behind it; on the full screen, a view of both,
+    /// provider by provider.
+    fn usage(&mut self, details: bool) {
         let sessions = match scramjet_rs::agent::state_directory() {
             Ok(state) => state.join("sessions"),
             Err(error) => return self.say(&format!("Error: {error}")),
@@ -297,11 +301,15 @@ impl Interactive {
             .map_or(0, |since| since.as_millis() as u64);
         let model = self.agent.model();
         if let Some(screen) = &self.screen {
-            let view =
-                super::usage::UsageView::new(&history, &sessions, current, model, now, &self.ui);
+            let view = super::usage::UsageView::new(
+                &history, &sessions, current, model, now, details, &self.ui,
+            );
             return screen.show_usage(view);
         }
-        let report = super::usage::report(&history, &sessions, current, model, now, None, &self.ui);
+        let report = match details {
+            true => super::usage::details(&history, &sessions, current, model, now, None, &self.ui),
+            false => super::usage::summary(&history, current, model, now, None, &self.ui),
+        };
         self.say(report.trim_end());
     }
 
@@ -742,8 +750,8 @@ mod tests {
             ("/quit", Builtin::Exit),
             ("/name my work", Builtin::Rename("my work")),
             ("/session", Builtin::Status),
-            ("/cost", Builtin::Usage),
-            ("/stats", Builtin::Usage),
+            ("/cost", Builtin::Usage(false)),
+            ("/stats", Builtin::Usage(false)),
             ("/config", Builtin::Settings),
             ("/clone", Builtin::Branch("")),
             ("/continue 2", Builtin::Resume("2")),

@@ -25,7 +25,7 @@ const SLASH_COMMANDS: [(&str, &str); 23] = [
     ("status", "Show session info and stats"),
     (
         "usage",
-        "Show cost, tokens and response times across sessions",
+        "Show quota left and what was spent, or its details (/usage details)",
     ),
     ("hotkeys", "Show all keyboard shortcuts, and change them"),
     ("keybindings", "Open your keyboard shortcuts file"),

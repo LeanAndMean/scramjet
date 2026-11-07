@@ -1,7 +1,7 @@
-//! `/usage` (also `/cost` and `/stats`): what is left of a subscription's quota, and what the
-//! saved sessions spent, from their files: this session, today and the last days, each day of the
-//! last two weeks and each week of the last twelve, each provider's and each model's requests,
-//! tokens and cost, and each model's speed.
+//! `/usage` (also `/cost` and `/stats`): a summary of what is left of each quota and what the
+//! saved sessions spent and on what, read from their files, with its details a key away: this
+//! session, today and the last days, each day of the last two weeks and each week of the last
+//! twelve, each provider's and each model's requests, tokens and cost, and each model's speed.
 
 use super::keymap::{self, Binding};
 use super::keys::Key;
@@ -20,11 +20,15 @@ const DAYS: i64 = 14;
 /// The weeks the weekly rows go back, this one among them.
 const WEEKS: i64 = 12;
 const BAR: usize = 20;
+/// A quota window's bar.
+const QUOTA_BAR: usize = 18;
 const MODEL_WIDTH: usize = 36;
 /// The sessions the costliest list shows.
 const SESSIONS: usize = 10;
 const PROJECT_WIDTH: usize = 16;
 const TITLE_WIDTH: usize = 40;
+/// The models the summary names.
+const TOP_MODELS: usize = 3;
 
 #[derive(Default)]
 struct Totals {
@@ -292,23 +296,35 @@ fn window_start(window: &Window) -> Option<i64> {
     }
 }
 
-/// When `window` runs out if it goes on being used at the pace it was used from its start up to
-/// `observed_at`; none when it starts again first, too little of it has passed to tell a pace,
-/// or its start is not known.
-fn runs_out(window: &Window, observed_at: u64) -> Option<u64> {
+/// How a window goes at the pace it was used from its start up to when it was seen.
+#[derive(Debug, PartialEq)]
+enum Pace {
+    Lasts,
+    /// When it runs out, in milliseconds since 1970.
+    RunsOut(u64),
+}
+
+/// How `window` goes if it goes on being used at the pace it was used from its start up to
+/// `observed_at`; none when it is used up, it reset since, too little of it has passed to tell
+/// a pace, or its start is not known.
+fn pace(window: &Window, observed_at: u64) -> Option<Pace> {
     let used = window.used_percent;
     let start = window_start(window)?;
     let resets = window.resets_at? * 1000;
     let (observed, length) = (observed_at as i64, resets - start);
     let elapsed = observed - start;
-    if !(used > 0.0 && used < 100.0) || observed >= resets || elapsed < length / 20 {
+    if !(0.0..100.0).contains(&used) || observed >= resets || elapsed < length / 20 {
         return None;
     }
-    let out = start + (elapsed as f64 * 100.0 / used) as i64;
-    (out < resets).then(|| out.max(0) as u64)
+    let out = start + (elapsed as f64 * 100.0 / used.max(f64::MIN_POSITIVE)).min(4e15) as i64;
+    Some(match out < resets {
+        true => Pace::RunsOut(out.max(0) as u64),
+        false => Pace::Lasts,
+    })
 }
 
-/// What a window of `minutes` is called: Codex's five-hour and weekly ones are `5h` and `Weekly`.
+/// What a window of `minutes` is called: Codex's five-hour and weekly ones are `5-hour` and
+/// `Weekly`.
 fn window_label(minutes: Option<i64>) -> String {
     const DAY: i64 = 24 * 60;
     match minutes {
@@ -316,14 +332,53 @@ fn window_label(minutes: Option<i64>) -> String {
         Some(m) if m == 7 * DAY => "Weekly".to_owned(),
         Some(m) if (28 * DAY..=31 * DAY).contains(&m) => "Monthly".to_owned(),
         Some(m) if m > 0 && m % DAY == 0 => format!("{}-day", m / DAY),
-        Some(m) if m > 0 && m % 60 == 0 => format!("{}h", m / 60),
-        Some(m) if m > 0 => format!("{m}m"),
+        Some(m) if m > 0 && m % 60 == 0 => format!("{}-hour", m / 60),
+        Some(m) if m > 0 => format!("{m}-minute"),
         _ => "Usage".to_owned(),
     }
 }
 
+/// What a window that lasts at its pace lasts: `the week` for a weekly one.
+fn span(label: &str) -> &'static str {
+    match label {
+        "Weekly" => "the week",
+        "Monthly" | "Premium" | "Chat" => "the month",
+        "Daily" => "the day",
+        _ => "until it resets",
+    }
+}
+
+/// When `at` comes, from `now`: `in 2h 10m` within a day, else its weekday and time within a
+/// week, else its date.
+fn until(at: u64, now: u64) -> String {
+    let minutes = at.saturating_sub(now).div_ceil(60_000);
+    if minutes < 60 {
+        return format!("in {minutes}m");
+    }
+    if minutes < 24 * 60 {
+        return match minutes % 60 {
+            0 => format!("in {}h", minutes / 60),
+            rest => format!("in {}h {rest}m", minutes / 60),
+        };
+    }
+    match (local(at), local_day(at)) {
+        (Some((.., hour, minute)), Some(day)) if at - now < 7 * DAY => {
+            format!(
+                "{} {hour:02}:{minute:02}",
+                WEEKDAYS[(day + 4).rem_euclid(7) as usize]
+            )
+        }
+        _ => date(at, now),
+    }
+}
+
+const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/// A quota seen longer ago than this says when it was seen.
+const STALE: u64 = 15 * 60 * 1000;
+
 /// The quota of `only`, or of every provider, the current one (`current`) first, each as its
-/// latest response reported it, with a bar for each window.
+/// latest response reported it: a bar for each window, each provider named when all are shown.
 fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &Terminal) -> String {
     let mut shown: Vec<&(String, Quota)> = (history.quotas.iter())
         .filter(|(provider, _)| only.is_none_or(|only| provider == only))
@@ -331,16 +386,18 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
     shown.sort_by_key(|(provider, _)| (provider != current, provider.clone()));
     let mut text = String::new();
     for (provider, quota) in shown {
-        let at = clock(quota.observed_at, now);
-        let title = match only {
-            Some(_) => format!("Quota, as of {at}"),
-            None => format!("Quota of {provider}, as of {at}"),
+        let seen = match now.saturating_sub(quota.observed_at) > STALE {
+            true => Some(format!("as of {}", clock(quota.observed_at, now))),
+            false => None,
         };
-        text += &format!(
-            "{}
-",
-            ui.styled(style::INFO_HEADING, &title)
-        );
+        match (only, seen) {
+            (None, seen) => {
+                let seen = seen.map_or(String::new(), |seen| ui.dim(&format!(" · {seen}")));
+                text += &format!("  {}{seen}\n", ui.styled(style::INFO_HEADING, provider));
+            }
+            (Some(_), Some(seen)) => text += &format!("  {}\n", ui.dim(&seen)),
+            (Some(_), None) => {}
+        }
         text += &quota_rows(quota, now, ui);
         text.push('\n');
     }
@@ -360,64 +417,61 @@ pub(super) fn status_quota(
     Some(format!("{}\n", ui.styled(style::INFO_HEADING, &title)) + &quota_rows(quota, now, ui))
 }
 
-/// A quota's rows, each window with its bar, then its credits.
+/// A quota's rows, each window with its bar, how much of it is used, when it resets and whether
+/// it lasts at its pace, then its credits.
 fn quota_rows(quota: &Quota, now: u64, ui: &Terminal) -> String {
     let mut text = String::new();
-    // As Codex's rows: a window's length, after the name of the limit it is of.
     let labels: Vec<String> = (quota.windows.iter())
-        .map(|window| {
-            let label =
-                (window.name.clone()).unwrap_or_else(|| window_label(window.window_minutes));
-            match &window.limit {
-                Some(limit) => format!("{limit} {label} limit"),
-                None => format!("{label} limit"),
-            }
-        })
+        .map(|window| (window.name.clone()).unwrap_or_else(|| window_label(window.window_minutes)))
         .collect();
     let width = (labels.iter())
-        .map(|label| label.chars().count() + 1)
-        .fold(14, usize::max);
+        .map(|label| label.chars().count())
+        .chain(quota.credits.as_ref().map(|_| "Credits".len()))
+        .fold(8, usize::max);
     for (window, label) in quota.windows.iter().zip(labels) {
-        let Window {
-            used_percent,
-            resets_at,
-            allowed,
-            over,
-            ..
-        } = window;
-        let used = used_percent.clamp(0.0, 100.0);
-        let filled = ((used / 100.0 * BAR as f64).round() as usize).min(BAR);
-        let bar =
-            ui.styled(style::USAGE_BAR, &"█".repeat(filled)) + &ui.dim(&"░".repeat(BAR - filled));
-        let resets = match resets_at.map(|at| at.max(0) as u64 * 1000) {
+        let used = window.used_percent.clamp(0.0, 100.0);
+        let filled = ((used / 100.0 * QUOTA_BAR as f64).round() as usize).min(QUOTA_BAR);
+        let bar = ui.styled(style::USAGE_BAR, &"█".repeat(filled))
+            + &ui.dim(&"░".repeat(QUOTA_BAR - filled));
+        let count = match (window.allowed, window.over) {
+            (Some(allowed), over) => {
+                let made = (allowed as f64 * used / 100.0).round();
+                let over = over.map_or(String::new(), |over| format!(", {over} over"));
+                format!(" ({made} of {allowed}{over})")
+            }
+            (None, Some(over)) => format!(" ({over} over)"),
+            (None, None) => String::new(),
+        };
+        // A model's own limit, after the plan's, is named by its model.
+        let mut said: Vec<String> = window.limit.iter().cloned().collect();
+        match window.resets_at.map(|at| at.max(0) as u64 * 1000) {
             // What was used then no longer counts.
-            Some(at) if at <= now => format!(", reset since {}", clock(at, now)),
-            Some(at) => format!(", resets {}", clock(at, now)),
-            None => String::new(),
-        };
-        let count = match allowed {
-            Some(allowed) => {
-                let made = (*allowed as f64 * used / 100.0).round();
-                format!(" ({made} of {allowed})")
+            Some(at) if at <= now => said.push(ui.dim(&format!("reset since {}", clock(at, now)))),
+            Some(at) => said.push(format!("resets {}", until(at, now))),
+            None => {}
+        }
+        match pace(window, quota.observed_at) {
+            Some(Pace::RunsOut(out)) if out > now => {
+                let text = format!("runs out {} at this pace", until(out, now));
+                said.push(ui.styled(style::WARNING, &text));
             }
-            None => String::new(),
-        };
-        let over = over.map_or(String::new(), |over| format!(", {over} over"));
-        let out = match runs_out(window, quota.observed_at) {
-            Some(out) if out > now => {
-                let text = format!("runs out {} at this pace", clock(out, now));
-                format!(", {}", ui.styled(style::WARNING, &text))
+            Some(Pace::Lasts) if window.resets_at.is_some_and(|at| at as u64 * 1000 > now) => {
+                said.push(ui.dim(&format!("on pace to last {}", span(&label))));
             }
-            _ => String::new(),
+            _ => {}
+        }
+        let said = match said.is_empty() {
+            true => String::new(),
+            false => format!("   {}", said.join(&ui.dim(" · "))),
         };
         text += &format!(
-            "{}{bar} {used:>3.0}% used{count}{over}{out}{resets}\n",
+            "  {}  {bar}  {used:>3.0}%{count}{said}\n",
             ui.dim(&format!("{label:<width$}")),
         );
     }
     if let Some(credits) = &quota.credits {
         text += &format!(
-            "{}{}\n",
+            "  {}  {}\n",
             ui.dim(&format!("{:<width$}", "Credits")),
             credits_text(credits)
         );
@@ -522,9 +576,179 @@ fn sizes(sessions: &[(String, Totals)], ui: &Terminal) -> String {
     text
 }
 
-/// The report, `current` being this session's file and `model` its model, at `now`
-/// (milliseconds since 1970): of `only`'s responses, or of every provider's.
-pub(super) fn report(
+/// `model` without its provider, unknown for none.
+fn bare(model: &str) -> &str {
+    match model.split_once('/').map_or(model, |(_, id)| id) {
+        "" => "unknown",
+        id => id,
+    }
+}
+
+/// `at`'s day said from `now`'s: today, yesterday, a weekday within the week, else a date.
+fn day_said(at: u64, now: u64) -> String {
+    match (local_day(at), local_day(now)) {
+        (Some(day), Some(today)) if day == today => "today".to_owned(),
+        (Some(day), Some(today)) if day + 1 == today => "yesterday".to_owned(),
+        (Some(day), Some(today)) if day < today && today - day < 7 => {
+            format!("on {}", WEEKDAYS[(day + 4).rem_euclid(7) as usize])
+        }
+        _ => format!("on {}", date(at, now)),
+    }
+}
+
+/// The summary `/usage` opens on, `current` being this session's file and `model` its model, at
+/// `now` (milliseconds since 1970), of `only`'s responses or of every provider's: what is left of
+/// each quota, what was spent today, this week and in the last 30 days, the models most of it
+/// went to and the costliest session. Spend is in dollars, or in tokens where nothing is priced.
+pub(super) fn summary(
+    history: &History,
+    current: &Path,
+    model: &str,
+    now: u64,
+    only: Option<&str>,
+    ui: &Terminal,
+) -> String {
+    let title = format!("Usage · {}", only.unwrap_or("All"));
+    let mut text = format!("{}\n\n", ui.styled(style::INFO_HEADING, &title));
+    text += &quotas(history, only, provider(model), now, ui);
+    let responses: Vec<&Response> = (history.responses.iter())
+        .filter(|r| only.is_none_or(|only| provider(&r.model) == only))
+        .collect();
+    if responses.is_empty() {
+        text += &format!("  {}\n", ui.dim("No responses saved yet."));
+        return text;
+    }
+    let priced = (responses.iter()).any(|r| r.cost.is_some_and(|cost| cost > 0.0));
+    let measure = |r: &Response| match priced {
+        true => r.cost.unwrap_or(0.0),
+        false => (r.input + r.cache_read + r.cache_write + r.output) as f64,
+    };
+    let amount = |totals: &Totals| match priced {
+        true => totals.cost(),
+        false => format!("{} tokens", terminal::tokens(totals.input + totals.output)),
+    };
+    let within = |from: u64, to: u64| {
+        Totals::of((responses.iter().copied()).filter(move |r| from <= r.at && r.at < to))
+    };
+    let today = local_day(now).unwrap_or(0);
+    let today_totals = Totals::of((responses.iter().copied()).filter(|r| same_day(r.at, now)));
+    let week = Totals::of(
+        (responses.iter().copied()).filter(|r| local_day(r.at).is_some_and(|d| d >= monday(today))),
+    );
+    let month_from = now.saturating_sub(30 * DAY);
+    let month = within(month_from, u64::MAX);
+    let before = within(now.saturating_sub(60 * DAY), month_from);
+    let size = |totals: &Totals| match priced {
+        true => totals.cost,
+        false => (totals.input + totals.output) as f64,
+    };
+    let change = match (size(&month), size(&before)) {
+        (_, before) if before <= 0.0 => String::new(),
+        (month, before) => {
+            let change = ((month - before) / before * 100.0).round();
+            let said = match change {
+                0.0 => "the same as the 30 before".to_owned(),
+                up if up > 0.0 => format!("up {up:.0}% on the 30 before"),
+                down => format!("down {:.0}% on the 30 before", -down),
+            };
+            ui.dim(&format!("   ({said})"))
+        }
+    };
+    let spent = [
+        ("Today", &today_totals),
+        ("This week", &week),
+        ("Last 30 days", &month),
+    ]
+    .map(|(label, totals)| format!("{} {}", ui.dim(label), amount(totals)));
+    text += &format!("  {}{change}\n\n", spent.join("   "));
+
+    let label = |label: &str| ui.dim(&format!("{label:<21}"));
+    let recent: Vec<&Response> = (responses.iter().copied())
+        .filter(|r| r.at >= month_from)
+        .collect();
+    let all: f64 = recent.iter().map(|r| measure(r)).sum();
+    let mut models: Vec<(&str, f64, Totals)> = Vec::new();
+    for response in &recent {
+        let name = bare(&response.model);
+        match models.iter_mut().find(|(model, ..)| *model == name) {
+            Some((_, size, totals)) => {
+                *size += measure(response);
+                totals.add(response);
+            }
+            None => models.push((name, measure(response), Totals::of([*response].into_iter()))),
+        }
+    }
+    models.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let shares: Vec<String> = (models.iter())
+        .filter(|(_, size, _)| all > 0.0 && size / all >= 0.01)
+        .take(TOP_MODELS)
+        .map(|(name, size, totals)| {
+            let share = ui.dim(&format!("({:.0}%)", size / all * 100.0));
+            format!("{name}  {} {share}", amount(totals))
+        })
+        .collect();
+    if !shares.is_empty() {
+        let went = match models.len() {
+            1 => "All of it went to",
+            _ => "Most of it went to",
+        };
+        text += &format!("  {}{}\n", label(went), shares.join("   "));
+    }
+
+    let this = history.session(current);
+    let here = this
+        .and_then(|this| history.summaries.get(this))
+        .and_then(|summary| summary.root.as_deref());
+    let mut sessions: Vec<(usize, f64, Totals, u64)> = Vec::new();
+    for response in &recent {
+        match sessions
+            .iter_mut()
+            .find(|(session, ..)| *session == response.session)
+        {
+            Some((_, size, totals, started)) => {
+                *size += measure(response);
+                totals.add(response);
+                *started = (*started).min(response.at);
+            }
+            None => sessions.push((
+                response.session,
+                measure(response),
+                Totals::of([*response].into_iter()),
+                response.at,
+            )),
+        }
+    }
+    let costliest = (sessions.iter()).max_by(|a, b| a.1.total_cmp(&b.1).then(b.3.cmp(&a.3)));
+    if let Some((index, _, totals, started)) = costliest.filter(|(_, size, ..)| *size > 0.0) {
+        let summary = history.summaries.get(*index);
+        let name = match summary.and_then(|summary| summary.title.as_deref()) {
+            Some(title) => format!("\"{}\"", super::text::clip(title, TITLE_WIDTH)),
+            None => ui.dim("(no prompt)"),
+        };
+        let root = summary.and_then(|summary| summary.root.as_deref());
+        let place = match root
+            .filter(|&root| Some(root) != here)
+            .and_then(Path::file_name)
+        {
+            Some(project) => format!(" in {}", project.to_string_lossy()),
+            None => String::new(),
+        };
+        let when = match Some(*index) == this {
+            true => "this session".to_owned(),
+            false => day_said(*started, now),
+        };
+        text += &format!(
+            "  {}{name}{place} {when}, {}\n",
+            label("Costliest session"),
+            amount(totals),
+        );
+    }
+    text
+}
+
+/// The details behind the summary, `current` being this session's file and `model` its model,
+/// at `now` (milliseconds since 1970): of `only`'s responses, or of every provider's.
+pub(super) fn details(
     history: &History,
     sessions: &Path,
     current: &Path,
@@ -537,12 +761,8 @@ pub(super) fn report(
     let responses: Vec<&Response> = (history.responses.iter())
         .filter(|r| only.is_none_or(|only| provider(&r.model) == only))
         .collect();
-    let title = match only {
-        Some(only) => format!("Usage of {only}"),
-        None => "Usage".to_owned(),
-    };
+    let title = format!("Usage · {} · details", only.unwrap_or("All"));
     let mut text = heading(&title) + "\n";
-    text += &quotas(history, only, provider(model), now, ui);
     if responses.is_empty() {
         text += &ui.dim("No responses saved yet.");
         text.push('\n');
@@ -734,12 +954,20 @@ the slowest tenth's (p90 and p10); cost is $? where the provider gives no price.
     text
 }
 
-/// `/usage` on the full screen: a report for each provider, the current one shown first, and
-/// one of them all, shown in the conversation's place one at a time.
+/// `/usage` on the full screen: a summary for each provider, the current one shown first, and
+/// one of them all, shown in the conversation's place one at a time, each with its details a key
+/// away.
 pub(super) struct UsageView {
-    /// Each tab's name and report: every provider's first, then each provider's.
-    tabs: Vec<(String, String)>,
+    /// Each tab's name, summary and details: every provider's first, then each provider's.
+    tabs: Vec<Tab>,
     at: usize,
+    details: bool,
+}
+
+struct Tab {
+    name: String,
+    summary: String,
+    details: String,
 }
 
 /// What a key did in the view.
@@ -750,33 +978,53 @@ pub(super) enum Took {
     Nothing,
 }
 
+/// The key that shows a tab's details, and its summary again.
+const DETAILS_KEY: &str = "d";
+
 impl UsageView {
-    /// The reports, as `report` makes them, for every provider, the current provider (`model`'s)
-    /// and then the others that have responses, the costliest first.
+    /// The summaries and details, as `summary` and `details` make them, for every provider, the
+    /// current provider (`model`'s) and then the others that have responses, the costliest
+    /// first; `details` shows the details first.
     pub(super) fn new(
         history: &History,
         sessions: &Path,
         current: &Path,
         model: &str,
         now: u64,
+        details: bool,
         ui: &Terminal,
     ) -> Self {
         let this = provider(model);
-        let mut names = vec![this.to_owned()];
+        let mut names = vec![None, Some(this.to_owned())];
         let others = grouped_by(history.responses.iter(), |r| provider(&r.model).to_owned());
-        names.extend((others.into_iter().map(|(name, _)| name)).filter(|name| name != this));
-        let report = |only: Option<&str>| report(history, sessions, current, model, now, only, ui);
-        let mut tabs = vec![("All".to_owned(), report(None))];
-        for name in names {
-            let text = report(Some(&name));
-            tabs.push((name, text));
+        names.extend(
+            (others.into_iter().map(|(name, _)| Some(name)))
+                .filter(|name| name.as_deref() != Some(this)),
+        );
+        let tabs = (names.into_iter())
+            .map(|name| {
+                let only = name.as_deref();
+                Tab {
+                    summary: summary(history, current, model, now, only, ui),
+                    details: self::details(history, sessions, current, model, now, only, ui),
+                    name: name.unwrap_or_else(|| "All".to_owned()),
+                }
+            })
+            .collect();
+        Self {
+            tabs,
+            at: 1,
+            details,
         }
-        Self { tabs, at: 1 }
     }
 
-    /// The report shown.
+    /// The summary or details shown.
     pub(super) fn report(&self) -> &str {
-        self.tabs[self.at].1.trim_end()
+        let tab = &self.tabs[self.at];
+        match self.details {
+            true => tab.details.trim_end(),
+            false => tab.summary.trim_end(),
+        }
     }
 
     pub(super) fn key(&mut self, key: &Key) -> Took {
@@ -786,6 +1034,9 @@ impl UsageView {
             Took::Moved
         } else if key.is(Binding::CursorLeft) {
             self.at = (self.at + count - 1) % count;
+            Took::Moved
+        } else if matches!(key, Key::Text(text) if text == DETAILS_KEY) {
+            self.details = !self.details;
             Took::Moved
         } else if key.is(Binding::SelectCancel) || key.is(Binding::SelectConfirm) {
             Took::Closed
@@ -798,16 +1049,21 @@ impl UsageView {
     /// marked, each row within `width`.
     pub(super) fn lines(&self, width: usize) -> Vec<String> {
         use style::{MUTED, RESET, SELECTED, SELECTOR_TITLE};
+        let shows = match self.details {
+            true => "summary",
+            false => "details",
+        };
         let keys = keymap::hint([
+            Some(format!("{DETAILS_KEY} {shows}")),
             keymap::part(&[Binding::Tab], "provider"),
             keymap::part(&[Binding::PageUp, Binding::PageDown], "scroll"),
             keymap::part(&[Binding::SelectCancel], "close"),
         ]);
         let title = format!("{SELECTOR_TITLE}Usage{RESET}  {MUTED}{keys}{RESET}");
         let tabs: Vec<String> = (self.tabs.iter().enumerate())
-            .map(|(index, (name, _))| match index == self.at {
-                true => format!("{SELECTED} {name} {RESET}"),
-                false => format!("{MUTED} {name} {RESET}"),
+            .map(|(index, tab)| match index == self.at {
+                true => format!("{SELECTED} {} {RESET}", tab.name),
+                false => format!("{MUTED} {} {RESET}", tab.name),
             })
             .collect();
         let width = width.saturating_sub(1);
@@ -877,9 +1133,9 @@ mod tests {
     }
 
     #[test]
-    fn the_report_adds_up_sessions_days_and_models() {
+    fn the_details_add_up_sessions_days_and_models() {
         let (now, history, ui) = (NOW, history(), ui());
-        let report = report(
+        let report = details(
             &history,
             Path::new("/s"),
             Path::new("/s/p/2.jsonl"),
@@ -894,7 +1150,7 @@ mod tests {
         assert_eq!(
             lines[..11],
             [
-                "Usage",
+                "Usage · All · details",
                 "",
                 "                Requests    Input   Output  Cached       Cost",
                 "This session           2      800      100     75%    $2.00+?",
@@ -1088,10 +1344,10 @@ mod tests {
     }
 
     #[test]
-    fn a_providers_report_counts_only_its_responses() {
+    fn a_providers_details_count_only_its_responses() {
         let (now, history, ui) = (NOW, history(), ui());
         let current = Path::new("/s/p/2.jsonl");
-        let report = report(
+        let report = details(
             &history,
             Path::new("/s"),
             current,
@@ -1105,7 +1361,7 @@ mod tests {
         assert_eq!(
             lines[..10],
             [
-                "Usage of a",
+                "Usage · a · details",
                 "",
                 "                Requests    Input   Output  Cached       Cost",
                 "This session           1      400       50     75%      $2.00",
@@ -1129,8 +1385,86 @@ mod tests {
         );
     }
 
+    fn lines(text: &str) -> Vec<String> {
+        let text = super::super::text::plain(text);
+        text.lines()
+            .map(|line| line.trim_end().to_owned())
+            .collect()
+    }
+
     #[test]
-    fn a_providers_quota_shows_first_with_a_bar_for_each_window() {
+    fn the_summary_says_what_was_spent_and_what_drove_it() {
+        let (now, mut history, ui) = (NOW, history(), ui());
+        let current = Path::new("/s/p/2.jsonl");
+        let three_days = now - 3 * DAY;
+        let this_week = local_day(three_days).unwrap() >= monday(local_day(now).unwrap());
+        let week = |with: &str, without: &str| match this_week {
+            true => with.to_owned(),
+            false => without.to_owned(),
+        };
+        assert_eq!(
+            lines(&summary(&history, current, "b/new", now, None, &ui)),
+            [
+                "Usage · All".to_owned(),
+                String::new(),
+                format!(
+                    "  Today $2.00+?   This week {}   Last 30 days $3.00+?   (down 67% on the 30 before)",
+                    week("$3.00+?", "$2.00+?")
+                ),
+                String::new(),
+                "  Most of it went to   one  $3.00 (100%)".to_owned(),
+                "  Costliest session    (no prompt) this session, $2.00+?".to_owned(),
+            ]
+        );
+        // Another session costlier, from another project.
+        history
+            .responses
+            .push(response(three_days, "a/one", Some(5.0), 0));
+        let a = lines(&summary(&history, current, "a/one", now, Some("a"), &ui));
+        assert_eq!(a[0], "Usage · a");
+        assert_eq!(
+            a[2],
+            format!(
+                "  Today $2.00   This week {}   Last 30 days $8.00   (down 11% on the 30 before)",
+                week("$8.00", "$2.00")
+            )
+        );
+        assert_eq!(a[4], "  All of it went to    one  $8.00 (100%)");
+        assert_eq!(
+            a[5],
+            format!(
+                "  Costliest session    \"/rs:loop\" in scramjet-rs {}, $6.00",
+                day_said(three_days, now)
+            )
+        );
+        // Nothing priced: tokens.
+        assert_eq!(
+            lines(&summary(
+                &history,
+                current,
+                "b/new",
+                now,
+                Some("unknown"),
+                &ui
+            ))[2..],
+            [
+                "  Today 450 tokens   This week 450 tokens   Last 30 days 450 tokens",
+                "",
+                "  All of it went to    sub  450 tokens (100%)",
+                "  Costliest session    (no prompt) this session, 450 tokens",
+            ]
+        );
+        assert_eq!(
+            lines(&summary(&history, current, "b/new", now, Some("b"), &ui)),
+            ["Usage · b", "", "  No responses saved yet."]
+        );
+        assert_eq!(day_said(now, now), "today");
+        assert_eq!(day_said(now - DAY, now), "yesterday");
+        assert!(day_said(three_days, now).starts_with("on "));
+    }
+
+    #[test]
+    fn each_quota_window_is_a_bar_with_its_reset_and_pace() {
         let (now, mut history, ui) = (NOW, history(), ui());
         let window = |used, minutes, resets_at| Window {
             used_percent: used,
@@ -1163,55 +1497,40 @@ mod tests {
             ("c".into(), quota(vec![premium])),
         ];
         let current = Path::new("/s/p/2.jsonl");
-        let text = |only| {
-            let text = report(&history, Path::new("/s"), current, "b/new", now, only, &ui);
-            super::super::text::plain(&text)
-        };
-        let (seen, reset, resets) = (
-            clock(now - 60_000, now),
-            clock((now / 1000 - 60) * 1000, now),
-            clock(now + 2 * 3600 * 1000, now),
-        );
-        let a = text(Some("a"));
-        let lines: Vec<&str> = a.lines().collect();
+        let text =
+            |history: &History, only| lines(&summary(history, current, "b/new", now, only, &ui));
+        let bar = |filled: usize| "█".repeat(filled) + &"░".repeat(QUOTA_BAR - filled);
+        let reset = clock((now / 1000 - 60) * 1000, now);
+        let a = text(&history, Some("a"));
         assert_eq!(
-            lines[..5],
+            a[..5],
             [
-                "Usage of a".to_owned(),
+                "Usage · a".to_owned(),
                 String::new(),
-                format!("Quota, as of {seen}"),
                 format!(
-                    "5h limit      {}{}  41% used, resets {resets}",
-                    "█".repeat(8),
-                    "░".repeat(12)
+                    "  5-hour    {}   41%   resets in 2h · on pace to last until it resets",
+                    bar(7)
                 ),
-                format!(
-                    "Weekly limit  {}{}   8% used, reset since {reset}",
-                    "█".repeat(2),
-                    "░".repeat(18)
-                ),
+                format!("  Weekly    {}    8%   reset since {reset}", bar(1)),
+                String::new(),
             ]
         );
-        assert_eq!(lines[5], "");
-        // Every provider's, the current one first.
-        let all = text(None);
-        let b = all.find(&format!(
-            "Quota of b, as of {seen}\nMonthly limit {} 100% used\n",
-            "█".repeat(20)
-        ));
-        let a = all.find("Quota of a, as of");
+        // Every provider's, each named, the current one first.
+        let all = text(&history, None).join("\n");
+        let b = all.find(&format!("  b\n  Monthly   {}  100%\n", bar(18)));
+        let a = all.find("  a\n  5-hour");
         assert!(b.is_some_and(|b| a.is_some_and(|a| b < a)), "{all}");
-        assert!(!text(Some("unknown")).contains("Quota"));
-        let c = text(Some("c"));
-        let premium = format!(
-            "Premium limit {} 100% used (300 of 300), 12 over\n",
-            "█".repeat(20)
+        assert!(!text(&history, Some("unknown")).join("\n").contains('█'));
+        let c = text(&history, Some("c"));
+        assert_eq!(
+            c[2],
+            format!("  Premium   {}  100% (300 of 300, 12 over)", bar(18))
         );
-        assert!(c.contains(&premium), "{c}");
-        // A model's own limit after the plan's, the column as wide as its label, then credits.
+        // A model's own limit, named after the bar; credits; a quota seen a while ago says when.
         history.quotas = vec![(
             "c".into(),
             Quota {
+                observed_at: now - 20 * 60_000,
                 credits: Some(Credits {
                     unlimited: false,
                     balance: Some("41.6".into()),
@@ -1225,31 +1544,21 @@ mod tests {
                 ])
             },
         )];
-        let c = report(
-            &history,
-            Path::new("/s"),
-            current,
-            "b/new",
-            now,
-            Some("c"),
-            &ui,
+        let seen = clock(now - 20 * 60_000, now);
+        let rows = [
+            format!("  5-hour    {}   41%", bar(7)),
+            format!("  5-hour    {}   80%   gpt-sonic", bar(14)),
+            "  Credits   42 credits".to_owned(),
+        ];
+        assert_eq!(
+            text(&history, Some("c"))[2..6],
+            [&[format!("  as of {seen}")], &rows[..]].concat()
         );
-        let c = super::super::text::plain(&c);
-        let rows = format!(
-            "5h limit           {}{}  41% used\n\
-             gpt-sonic 5h limit {}{}  80% used\n\
-             Credits            42 credits\n",
-            "█".repeat(8),
-            "░".repeat(12),
-            "█".repeat(16),
-            "░".repeat(4)
-        );
-        assert!(c.contains(&rows), "{c}");
         // `/status` shows the current model's provider's, with the same rows.
         let status = status_quota(&history.quotas, "c/gpt-sonic", now, &ui).unwrap();
         assert_eq!(
-            super::super::text::plain(&status),
-            format!("Quota, as of {seen}\n{rows}")
+            lines(&status),
+            [&[format!("Quota, as of {seen}")], &rows[..]].concat()
         );
         assert_eq!(status_quota(&history.quotas, "b/new", now, &ui), None);
         assert_eq!(status_quota(&history.quotas, "unsaved", now, &ui), None);
@@ -1266,6 +1575,25 @@ mod tests {
     }
 
     #[test]
+    fn resets_are_said_in_hours_within_a_day_then_by_weekday_then_by_date() {
+        let now = NOW;
+        assert_eq!(until(now + 42 * 60_000, now), "in 42m");
+        assert_eq!(until(now + 130 * 60_000 - 500, now), "in 2h 10m");
+        assert_eq!(until(now + 5 * HOUR, now), "in 5h");
+        let in_two_days = until(now + 2 * DAY, now);
+        assert!(
+            WEEKDAYS.iter().any(|day| in_two_days.starts_with(day)),
+            "{in_two_days}"
+        );
+        assert_eq!(until(now + 20 * DAY, now), date(now + 20 * DAY, now));
+        assert_eq!(window_label(Some(300)), "5-hour");
+        assert_eq!(window_label(Some(10080)), "Weekly");
+        assert_eq!(window_label(Some(90)), "90-minute");
+        assert_eq!(span("Weekly"), "the week");
+        assert_eq!(span("Premium"), "the month");
+    }
+
+    #[test]
     fn a_window_used_faster_than_it_lasts_says_when_it_runs_out() {
         let (now, mut history, ui) = (NOW, history(), ui());
         let seconds = |ms: u64| Some((ms / 1000) as i64);
@@ -1277,27 +1605,32 @@ mod tests {
             ..Window::default()
         };
         let out = now + 45 * 60_000;
-        assert_eq!(runs_out(&fast, now), Some(out));
+        assert_eq!(pace(&fast, now), Some(Pace::RunsOut(out)));
         let slow = Window {
             used_percent: 50.0,
             ..fast.clone()
         };
-        assert_eq!(runs_out(&slow, now), None);
+        assert_eq!(pace(&slow, now), Some(Pace::Lasts));
+        let unused = Window {
+            used_percent: 0.0,
+            ..fast.clone()
+        };
+        assert_eq!(pace(&unused, now), Some(Pace::Lasts));
         let early = Window {
             resets_at: seconds(now + 299 * 60_000),
             ..fast.clone()
         };
-        assert_eq!(runs_out(&early, now), None, "a minute is too little");
+        assert_eq!(pace(&early, now), None, "a minute is too little");
         let unknown = Window {
             window_minutes: None,
             ..fast.clone()
         };
-        assert_eq!(runs_out(&unknown, now), None);
+        assert_eq!(pace(&unknown, now), None);
         let full = Window {
             used_percent: 100.0,
             ..fast.clone()
         };
-        assert_eq!(runs_out(&full, now), None);
+        assert_eq!(pace(&full, now), None);
         // Copilot's monthly requests start on the first day of the month before their reset.
         let monthly = |reset: (i32, i32, i32)| Window {
             name: Some("Premium".into()),
@@ -1322,53 +1655,65 @@ mod tests {
         };
         let current = Path::new("/s/p/2.jsonl");
         let row = |history: &History| {
-            let text = report(
-                history,
-                Path::new("/s"),
-                current,
-                "b/new",
-                now,
-                Some("a"),
-                &ui,
-            );
-            let text = super::super::text::plain(&text);
-            text.lines().nth(3).unwrap_or_default().to_owned()
+            let text = summary(history, current, "b/new", now, Some("a"), &ui);
+            lines(&text)
+                .into_iter()
+                .find(|line| line.contains("5-hour"))
+                .unwrap_or_default()
         };
         history.quotas = vec![("a".into(), quota(now))];
-        let expected = format!(
-            "80% used, runs out {} at this pace, resets {}",
-            clock(out, now),
-            clock(now + 2 * 3_600_000, now)
+        assert!(
+            row(&history).ends_with("resets in 2h · runs out in 45m at this pace"),
+            "{}",
+            row(&history)
         );
-        assert!(row(&history).ends_with(&expected), "{}", row(&history));
         history.quotas = vec![("a".into(), quota(now - 50 * 60_000))];
-        assert!(!row(&history).contains("runs out"), "{}", row(&history));
+        assert!(row(&history).ends_with("resets in 2h"), "{}", row(&history));
     }
 
     #[test]
     fn the_view_opens_on_the_current_provider_and_tabs_through_the_others() {
         let (now, history, ui) = (NOW, history(), ui());
         let current = Path::new("/s/p/2.jsonl");
-        let mut view = UsageView::new(&history, Path::new("/s"), current, "b/new", now, &ui);
-        let names: Vec<&str> = view.tabs.iter().map(|(name, _)| name.as_str()).collect();
+        let mut view = UsageView::new(&history, Path::new("/s"), current, "b/new", now, false, &ui);
+        let names: Vec<&str> = view.tabs.iter().map(|tab| tab.name.as_str()).collect();
         assert_eq!(names, ["All", "b", "a", "unknown"]);
-        assert!(
-            view.report()
-                .starts_with("Usage of b\n\nNo responses saved yet.")
+        assert_eq!(
+            lines(view.report()),
+            ["Usage · b", "", "  No responses saved yet."]
         );
         let tabs = |view: &UsageView| super::super::text::plain(&view.lines(80)[1]);
+        let keys = |view: &UsageView| super::super::text::plain(&view.lines(80)[0]);
         assert_eq!(tabs(&view), " All   b   a   unknown ");
+        assert!(
+            keys(&view).starts_with("Usage  d details · "),
+            "{}",
+            keys(&view)
+        );
         let tab = Key::Press(Press::new(Code::Tab, 0));
         let left = Key::Press(Press::new(Code::Left, 0));
+        let details = Key::Text("d".into());
+        let shown = |view: &UsageView| lines(view.report())[0].clone();
         assert_eq!(view.key(&tab), Took::Moved);
-        assert!(view.report().starts_with("Usage of a\n"));
+        assert_eq!(shown(&view), "Usage · a");
+        assert_eq!(view.key(&details), Took::Moved);
+        assert_eq!(shown(&view), "Usage · a · details");
+        assert!(
+            keys(&view).starts_with("Usage  d summary · "),
+            "{}",
+            keys(&view)
+        );
         assert_eq!(view.key(&left), Took::Moved);
         assert_eq!(view.key(&left), Took::Moved);
-        assert!(view.report().starts_with("Usage\n"));
+        assert_eq!(shown(&view), "Usage · All · details");
         assert_eq!(view.key(&left), Took::Moved);
-        assert!(view.report().starts_with("Usage of unknown\n"));
+        assert_eq!(shown(&view), "Usage · unknown · details");
+        assert_eq!(view.key(&details), Took::Moved);
+        assert_eq!(shown(&view), "Usage · unknown");
         assert_eq!(view.key(&Key::Text("x".into())), Took::Nothing);
         let escape = Key::Press(Press::new(Code::Escape, 0));
         assert_eq!(view.key(&escape), Took::Closed);
+        let opened = UsageView::new(&history, Path::new("/s"), current, "b/new", now, true, &ui);
+        assert_eq!(shown(&opened), "Usage · b · details");
     }
 }
