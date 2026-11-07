@@ -419,6 +419,69 @@ continues it in a new session of this one"
 }
 
 #[test]
+fn a_chains_session_resumed_without_a_terminal_shows_the_earlier_ones_first() {
+    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-chain-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = project.canonicalize().unwrap();
+    let slug = (project.to_str().unwrap().trim_matches('/')).replace('/', "-");
+    let here = scratch.0.join("state/scramjet-rs/sessions").join(slug);
+    std::fs::create_dir_all(&here).unwrap();
+    let report = |summary: &str| {
+        let arguments = format!("{{\"status\":\"completed\",\"summary\":{summary:?}}}");
+        format!(
+            "{{\"type\":\"function_call\",\"call_id\":\"c1\",\"name\":\
+\"report_scramjet_command_status\",\"arguments\":{arguments:?}}}\n"
+        )
+    };
+    let mut parent: Option<std::path::PathBuf> = None;
+    for (at, (prompt, summary)) in [
+        ("/first", Some("Did the first.")),
+        ("/second", None),
+        ("third", None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = here.join(format!("160000000{at}000-1.jsonl"));
+        let link = (parent.as_ref())
+            .map(|parent| format!(",\"parentSession\":{:?},\"nextStep\":true", parent))
+            .unwrap_or_default();
+        let mut text = format!(
+            "{{\"type\":\"session\",\"version\":1,\"root\":{:?}{link}}}\n\
+{{\"role\":\"user\",\"content\":{prompt:?}}}\n",
+            project.to_str().unwrap()
+        );
+        text += &summary.map(report).unwrap_or_default();
+        std::fs::write(&path, text).unwrap();
+        parent = Some(path);
+    }
+    provide(&scratch.0.join("config"), "127.0.0.1:9");
+    let output = Command::new(binary)
+        .arg("--session")
+        .arg(parent.unwrap())
+        .current_dir(&project)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+        .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    let error = String::from_utf8(output.stderr).unwrap();
+    let at = |text: &str| {
+        error
+            .find(text)
+            .unwrap_or_else(|| panic!("{text}: {error}"))
+    };
+    assert!(at("[session] /first") < at("Did the first."), "{error}");
+    assert!(at("Did the first.") < at("[session] /second"), "{error}");
+    assert!(at("[session] /second") < at("> third"), "{error}");
+}
+
+#[test]
 fn no_session_saves_none_and_its_directory_goes_at_exit() {
     let binary = env!("CARGO_BIN_EXE_scramjet-rs");
     let scratch =

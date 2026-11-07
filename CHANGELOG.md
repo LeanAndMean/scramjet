@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.64.0 — Earlier sessions without a terminal
+
+### Added
+
+- Resuming a session of a chain with piped input (no full screen) prints a `[session]` block for each session before it, with what ran and its summary, above its conversation, as the full screen shows them.
+
 ## 0.63.3 — The status row during a list you opened
 
 ### Fixed

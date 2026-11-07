@@ -798,9 +798,21 @@ impl Interactive {
             self.agent.show_conversation(&mut screen.link);
             return;
         }
+        // A fresh step's new session is empty, and printed output has its earlier ones above it.
         self.spaced = !self.agent.conversation().is_empty();
         if self.spaced {
             eprintln!();
+            let (earlier, problem) = self.agent.earlier_sessions();
+            if let Some(problem) = problem {
+                eprintln!("Error: an earlier session of this chain not read: {problem}\n");
+            }
+            for session in &earlier {
+                self.ui.earlier(&record::Earlier {
+                    heading: earlier_heading(session),
+                    summary: session.summary.clone(),
+                    events: Vec::new(),
+                });
+            }
             self.agent.show_conversation(&mut self.ui);
             self.ui.clear();
         }
