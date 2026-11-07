@@ -749,6 +749,73 @@ fn a_session_goes_on_past_unreadable_lines_and_a_cut_last_line() {
 }
 
 #[test]
+fn a_session_on_a_full_disk_keeps_its_lines_until_there_is_room() {
+    let directory = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-full-{}", std::process::id())),
+    );
+    let mut session = Session::create(&directory.0, Path::new("/project"), None).unwrap();
+    let path = session.path().to_owned();
+    let say = |text: &str| json!({"role":"user","content":text});
+    session.append(&say("first")).unwrap();
+    assert_eq!(session.take_change(), None);
+
+    let full = || {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open("/dev/full")
+            .unwrap()
+    };
+    session.write_to(full());
+    session.append(&say("second")).unwrap();
+    let held = session.take_change();
+    assert!(
+        matches!(&held, Some(session::Saving::Held(error)) if error.contains("No space left")),
+        "{held:?}"
+    );
+    session.set_name("kept").unwrap();
+    session.append(&say("third")).unwrap();
+    assert_eq!(session.take_change(), None);
+    assert!(session.holding());
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(on_disk.lines().count(), 2, "{on_disk}");
+    // What it reads of itself has the held lines.
+    let prompts: Vec<_> = (session.branch().unwrap().entries.iter())
+        .map(|entry| entry["content"].clone())
+        .collect();
+    assert_eq!(prompts, ["first", "second", "third"]);
+    assert_eq!(session.leaf(), Some(4));
+
+    session.write_to(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap(),
+    );
+    session.append(&say("fourth")).unwrap();
+    assert_eq!(session.take_change(), Some(session::Saving::Saved));
+    assert!(!session.holding());
+    let (reopened, conversation, _) = Session::open(&path).unwrap();
+    let prompts: Vec<_> = conversation.iter().map(|item| &item["content"]).collect();
+    assert_eq!(prompts, ["first", "second", "third", "fourth"]);
+    assert_eq!(reopened.name(), Some("kept"));
+    assert_eq!(reopened.leaf(), Some(5));
+    assert!(reopened.skipped().is_empty());
+    drop(reopened);
+
+    // Lines still held when it ends are tried once more.
+    session.write_to(full());
+    session.append(&say("fifth")).unwrap();
+    session.write_to(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap(),
+    );
+    drop(session);
+    assert_eq!(Session::open(&path).unwrap().1.len(), 5);
+}
+
+#[test]
 fn a_session_is_found_by_the_start_of_its_id_here_before_elsewhere() {
     let sessions = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-find-{}", std::process::id())),

@@ -44,6 +44,7 @@ impl Agent {
         };
         self.add(message)?;
         self.save_command()?;
+        self.say_saving(ui);
         self.prompts.push(typed);
         self.resume_turn(ui, cancel)
     }
@@ -122,6 +123,7 @@ impl Agent {
         let mut ran = self.run(ui, cancel);
         // A command's reply that ends without a report gets a status check.
         loop {
+            self.say_saving(ui);
             match ran {
                 Err(AgentError::Paused) => return Err(AgentError::Paused),
                 Err(error) => {
@@ -319,6 +321,7 @@ to a larger-context model)"
                 }
                 self.add(item)?;
             }
+            self.say_saving(ui);
             ui.usage(
                 self.session_tokens(),
                 self.context_tokens(),

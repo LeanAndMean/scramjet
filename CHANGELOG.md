@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.57.0 — Sessions go on when the disk is full
+
+### Changed
+
+- When the disk is full, scramjet-rs starts and turns go on: the session keeps what it cannot write in memory, says so once, and writes it out as soon as there is room again (saying that too), so the agent can be asked to find what filled the disk and free it. It used to stop at start, or end the turn, with `session: No space left on device`.
+
 ## 0.56.1 — Session files survive a full disk
 
 ### Fixed

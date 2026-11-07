@@ -865,6 +865,25 @@ impl Agent {
         self.session.skipped()
     }
 
+    /// What to say, once, of a change in whether the session's lines reach its file: a full disk
+    /// keeps them in memory (`Session::write`).
+    pub fn saving_notice(&mut self) -> Option<String> {
+        Some(match self.session.take_change()? {
+            session::Saving::Held(error) => format!(
+                "Session not written: {error}. It is kept in memory and written once there is room."
+            ),
+            session::Saving::Saved => {
+                "Session written again, with what was kept in memory.".to_owned()
+            }
+        })
+    }
+
+    fn say_saving(&mut self, ui: &mut dyn AgentUi) {
+        if let Some(notice) = self.saving_notice() {
+            ui.notice(&notice);
+        }
+    }
+
     /// With `SessionChoice::Unsaved`, the directory every session of the run is in.
     pub fn unsaved_directory(&self) -> Option<&Path> {
         self.unsaved.as_ref().map(session::Unsaved::path)

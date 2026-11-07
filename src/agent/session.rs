@@ -20,6 +20,28 @@ fn write_whole(file: &mut File, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)
 }
 
+/// The most a session keeps in memory while its file cannot take its lines (a full disk); past
+/// it, writes fail as the disk's.
+const HELD_LIMIT: usize = 64 << 20;
+
+/// Whether `error` says the disk or the user's quota is full, which a session outlasts by keeping
+/// its lines in memory.
+fn full(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
+    )
+}
+
+/// A change in whether a session's lines reach its file, for the agent to say once.
+#[derive(Debug, PartialEq)]
+pub enum Saving {
+    /// Its file could not take a line, for this reason; the lines are kept in memory.
+    Held(String),
+    /// What was kept in memory is in the file now.
+    Saved,
+}
+
 /// Waits for lines being written to a session file, and keeps others from starting, for a
 /// process about to exit.
 pub(super) fn end_writes() {
@@ -183,6 +205,11 @@ pub struct Session {
     skipped: Vec<usize>,
     /// Whether the file's last line lacks its newline, which the next write starts with.
     unterminated: bool,
+    /// Lines written here that the file could not take (a full disk), counted in `lines` but not
+    /// in `size`; each write tries them first.
+    held: Vec<u8>,
+    /// The change in `held` not yet said.
+    change: Option<Saving>,
 }
 
 fn invalid(path: &Path, reason: &str) -> io::Error {
@@ -245,7 +272,10 @@ struct Context {
 }
 
 fn read(path: &Path) -> io::Result<Entries> {
-    let mut reader = BufReader::new(File::open(path)?);
+    parse(path, BufReader::new(File::open(path)?))
+}
+
+fn parse(path: &Path, mut reader: impl BufRead) -> io::Result<Entries> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut tail = None;
     let mut name = None;
@@ -667,6 +697,21 @@ pub fn state_directory() -> io::Result<PathBuf> {
     Ok(state.join("scramjet-rs"))
 }
 
+impl Drop for Session {
+    /// Tries once more to write what the file could not take; a file left empty goes.
+    fn drop(&mut self) {
+        if self.held.is_empty() {
+            return;
+        }
+        let writing = self.writing();
+        let _ = self.write(&[]);
+        if !self.held.is_empty() && self.size == 0 {
+            let _ = std::fs::remove_file(&self.path);
+        }
+        drop(writing);
+    }
+}
+
 impl Session {
     /// The sessions saved in `directory`, newest first. Unreadable and invalid files are skipped.
     pub fn list(directory: &Path) -> io::Result<Vec<SessionInfo>> {
@@ -752,18 +797,31 @@ impl Session {
         // refer to.
         let after_header = bytes.iter().position(|&byte| byte == b'\n');
         let lines = after_header.map_or(&[][..], |end| &bytes[end + 1..]);
-        let mut forked = Self::create(directory, root, Some(source))?;
+        let mut forked = Self::written(directory, root, source)?;
         if let Err(error) = write_whole(&mut forked.file, lines) {
             let _ = std::fs::remove_file(&forked.path);
             return Err(error);
         }
-        Ok(forked.path)
+        Ok(forked.path.clone())
     }
 
     /// Starts a session for the project `root` in `directory`; a fork names the session it came
     /// from, `parent`, in its header, as Scramjet's `parentSession`.
     pub fn create(directory: &Path, root: &Path, parent: Option<&Path>) -> io::Result<Self> {
         Self::start(directory, root, parent, false)
+    }
+
+    /// A session forked from `parent` whose header is in its file, for lines copied after it.
+    fn written(directory: &Path, root: &Path, parent: &Path) -> io::Result<Self> {
+        let mut forked = Self::create(directory, root, Some(parent))?;
+        match forked.change.take() {
+            Some(Saving::Held(error)) => {
+                forked.held.clear();
+                let _ = std::fs::remove_file(&forked.path);
+                Err(io::Error::new(io::ErrorKind::StorageFull, error))
+            }
+            _ => Ok(forked),
+        }
     }
 
     /// Starts a session for the project `root` in `directory` that a next step of the session
@@ -789,9 +847,16 @@ impl Session {
         }
         let mut header = serde_json::to_vec(&header)?;
         header.push(b'\n');
+        let mut held = Vec::new();
+        let mut change = None;
         if let Err(error) = write_whole(&mut file, &header) {
-            let _ = std::fs::remove_file(&path);
-            return Err(error);
+            if !full(&error) {
+                let _ = std::fs::remove_file(&path);
+                return Err(error);
+            }
+            let _ = file.set_len(0);
+            change = Some(Saving::Held(error.to_string()));
+            held = std::mem::take(&mut header);
         }
         let _ = file.lock_shared();
         Ok(Self {
@@ -813,6 +878,8 @@ impl Session {
             unused: true,
             skipped: Vec::new(),
             unterminated: false,
+            held,
+            change,
         })
     }
 
@@ -872,6 +939,8 @@ impl Session {
                 unused: false,
                 skipped: entries.skipped.clone(),
                 unterminated: entries.unterminated,
+                held: Vec::new(),
+                change: None,
             },
             context.items,
             entries.prompts(),
@@ -881,7 +950,8 @@ impl Session {
     /// The prompts this session can be forked before, in file order, on every branch and
     /// including those a compaction summarized, as Scramjet's `/fork` lists its user messages.
     pub fn fork_prompts(&self) -> io::Result<Vec<String>> {
-        Ok(read(&self.path)?
+        Ok(self
+            .read()?
             .fork_points()
             .map(|entry| prompt_text(&entry.value).to_owned())
             .collect())
@@ -892,7 +962,7 @@ impl Session {
     /// Scramjet's `/fork` copies a session's path. Returns the new file and that prompt; `None`:
     /// no such prompt.
     pub fn fork(&self, root: &Path, index: usize) -> io::Result<Option<(PathBuf, String)>> {
-        let entries = read(&self.path)?;
+        let entries = self.read()?;
         let Some(fork) = entries.fork_points().nth(index) else {
             return Ok(None);
         };
@@ -905,7 +975,7 @@ impl Session {
     /// the leaf and the session's name, as Scramjet's `/clone` duplicates a session at its
     /// current position. Returns the new file.
     pub fn clone_at_leaf(&self, root: &Path) -> io::Result<PathBuf> {
-        let entries = read(&self.path)?;
+        let entries = self.read()?;
         self.branch_file(&entries, self.leaf, root, entries.name.as_deref())
     }
 
@@ -918,28 +988,28 @@ impl Session {
         root: &Path,
         name: Option<&str>,
     ) -> io::Result<PathBuf> {
-        let source = std::fs::read(&self.path)?;
+        let source = self.bytes()?;
         let history = entries.history(&self.path, &source, leaf, name)?;
         let directory = self.path.parent().unwrap_or(Path::new("."));
-        let mut branched = Self::create(directory, root, Some(&self.path))?;
+        let mut branched = Self::written(directory, root, &self.path)?;
         if let Err(error) = write_whole(&mut branched.file, &history) {
             let _ = std::fs::remove_file(&branched.path);
             return Err(error);
         }
-        Ok(branched.path)
+        Ok(branched.path.clone())
     }
 
     /// The conversation from the start to the leaf.
     pub fn branch(&self) -> io::Result<Branch> {
-        Ok(read(&self.path)?.branch(self.leaf))
+        Ok(self.read()?.branch(self.leaf))
     }
 
     /// Writes the session's current branch to `to` as a session file of its own, as Scramjet's
     /// `/export` writes a `.jsonl`: its header, without the session it was forked from, the
     /// entries on the path to the leaf in order, and its name. An existing file is replaced.
     pub fn export(&self, to: &Path) -> io::Result<()> {
-        let entries = read(&self.path)?;
-        let source = std::fs::read(&self.path)?;
+        let source = self.bytes()?;
+        let entries = parse(&self.path, &source[..])?;
         let mut header = entries.header.clone();
         if let Some(header) = header.as_object_mut() {
             header.remove("parentSession");
@@ -973,12 +1043,12 @@ impl Session {
 
     /// Every entry of the session, in file order.
     pub fn entries(&self) -> io::Result<Vec<Entry>> {
-        Ok(read(&self.path)?.entries)
+        Ok(self.read()?.entries)
     }
 
     /// Every entry of the session, in file order, and the labels of those labeled, by line.
     pub fn labeled_entries(&self) -> io::Result<(Vec<Entry>, HashMap<usize, Label>)> {
-        let entries = read(&self.path)?;
+        let entries = self.read()?;
         Ok((entries.entries, entries.labels))
     }
 
@@ -988,7 +1058,7 @@ impl Session {
         let text = text.filter(|text| !text.is_empty());
         let _writing = self.writing()?;
         self.catch_up()?;
-        if find(&read(&self.path)?.entries, line).is_none() {
+        if find(&self.read()?.entries, line).is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "no such entry in the session",
@@ -1014,7 +1084,7 @@ impl Session {
     /// the next entry continues it, as Scramjet's tree navigation moves its leaf. Returns the
     /// conversation there. Nothing is written until the next entry; on failure nothing changes.
     pub fn move_to(&mut self, leaf: Option<usize>) -> io::Result<Vec<Value>> {
-        let entries = read(&self.path)?;
+        let entries = self.read()?;
         if leaf.is_some_and(|line| find(&entries.entries, line).is_none()) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -1036,7 +1106,7 @@ impl Session {
     /// The entries on the path to the leaf after the last one it shares with the path to
     /// `target`: the branch a move to `target` leaves, as Scramjet collects it for a summary.
     pub fn left_behind(&self, target: Option<usize>) -> io::Result<Vec<Value>> {
-        let entries = read(&self.path)?;
+        let entries = self.read()?;
         let from = entries.path(self.leaf);
         let to = entries.path(target);
         let shared = from
@@ -1145,11 +1215,43 @@ impl Session {
 
     /// Removes the file of a session this process created and left without a conversation, as
     /// Scramjet writes none before the first reply; one another process wrote to or has open stays.
-    pub fn discard_if_unused(self) -> io::Result<()> {
+    pub fn discard_if_unused(mut self) -> io::Result<()> {
         if self.unused && self.file.try_lock().is_ok() && self.file.metadata()?.len() == self.size {
+            self.held.clear();
             std::fs::remove_file(&self.path)?;
         }
         Ok(())
+    }
+
+    /// The session's file as written here: what is in it, then the lines it could not take yet.
+    fn bytes(&self) -> io::Result<Vec<u8>> {
+        let mut bytes = std::fs::read(&self.path)?;
+        bytes.extend_from_slice(&self.held);
+        Ok(bytes)
+    }
+
+    /// The session's entries as written here, the lines its file could not take yet included.
+    fn read(&self) -> io::Result<Entries> {
+        match self.held.is_empty() {
+            true => read(&self.path),
+            false => parse(&self.path, &self.bytes()?[..]),
+        }
+    }
+
+    /// Writes go to `file` in place of the session's file from now on, as `/dev/full` fills a disk.
+    #[cfg(test)]
+    pub(super) fn write_to(&mut self, file: File) {
+        self.file = file;
+    }
+
+    /// Whether lines its file could not take are kept in memory.
+    pub fn holding(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    /// The change in whether its lines reach its file since this was last asked.
+    pub fn take_change(&mut self) -> Option<Saving> {
+        self.change.take()
     }
 
     /// Locks the session directory until dropped, so that no other process's line lands between
@@ -1166,21 +1268,38 @@ impl Session {
 
     /// Writes `lines` at the file's end; callers count them once it returns. A write that fails
     /// (a full disk) cuts off what it wrote of them, so that no line is left cut short.
+    ///
+    /// On a full disk the lines are kept in memory, up to `HELD_LIMIT`, and written ahead of the
+    /// next ones; the write counts as done.
     fn write(&mut self, lines: &[u8]) -> io::Result<()> {
-        let terminated;
-        let lines = match self.unterminated {
-            true => {
-                terminated = [b"\n", lines].concat();
-                &terminated[..]
-            }
-            false => lines,
-        };
-        if let Err(error) = write_whole(&mut self.file, lines) {
-            let _ = self.file.set_len(self.size);
-            return Err(error);
+        let before = std::mem::take(&mut self.held);
+        let mut bytes = Vec::with_capacity(1 + before.len() + lines.len());
+        if self.unterminated {
+            bytes.push(b'\n');
         }
-        self.size += lines.len() as u64;
+        bytes.extend_from_slice(&before);
+        bytes.extend_from_slice(lines);
+        if let Err(error) = write_whole(&mut self.file, &bytes) {
+            let _ = self.file.set_len(self.size);
+            if !full(&error) || bytes.len() > HELD_LIMIT {
+                self.held = before;
+                return Err(error);
+            }
+            if before.is_empty() {
+                self.change = Some(Saving::Held(error.to_string()));
+            }
+            self.held = bytes;
+            self.unterminated = false;
+            return Ok(());
+        }
+        self.size += bytes.len() as u64;
         self.unterminated = false;
+        if !before.is_empty() {
+            self.change = match self.change {
+                Some(Saving::Held(_)) => None,
+                _ => Some(Saving::Saved),
+            };
+        }
         Ok(())
     }
 
@@ -1188,8 +1307,10 @@ impl Session {
     /// it, so that line numbers and branches stay right: its line count, where a line without a
     /// branch line continues, and the name it may have given. A last line left cut short is cut
     /// off, so that the next line starts on a line of its own; callers hold `writing`.
+    ///
+    /// Lines held in memory were numbered without the other process's; they keep their numbers.
     fn catch_up(&mut self) -> io::Result<()> {
-        if self.file.metadata()?.len() != self.size {
+        if self.held.is_empty() && self.file.metadata()?.len() != self.size {
             let entries = read(&self.path)?;
             if self.file.metadata()?.len() > entries.size {
                 self.file.set_len(entries.size)?;
