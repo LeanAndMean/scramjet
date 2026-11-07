@@ -5,6 +5,7 @@ use super::banner::Banner;
 use super::design::Design;
 use super::keymap::{self, Binding};
 use super::packages::{self, Source};
+use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
@@ -279,6 +280,8 @@ pub(super) struct Settings {
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
     pub(super) tree_filter: Filter,
+    /// `resumeChains`: how `/resume` shows chains of sessions, the form last chosen there.
+    pub(super) resume_chains: Chains,
     pub(super) markdown_reads: MarkdownReads,
     /// `theme`: the name of the theme everything is shown in; `None`: one that follows the
     /// terminal's background (`Settings::theme_name`).
@@ -386,6 +389,7 @@ impl Settings {
             copy_on_select: cfg!(target_os = "macos"),
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
+            resume_chains: Chains::Flat,
             markdown_reads: MarkdownReads::Rendered,
             theme: None,
             look: Design::Panels,
@@ -455,6 +459,20 @@ impl Settings {
                 "treeFilterMode",
                 &Filter::CYCLE
                     .map(|f| format!("\"{}\"", f.setting()))
+                    .join(", "),
+            ),
+        }
+        match object.get("resumeChains").map(|value| value.as_str()) {
+            None => {}
+            Some(Some(name))
+                if let Some(&chains) = Chains::CYCLE.iter().find(|c| c.setting() == name) =>
+            {
+                self.resume_chains = chains
+            }
+            Some(_) => wrong(
+                "resumeChains",
+                &Chains::CYCLE
+                    .map(|c| format!("\"{}\"", c.setting()))
                     .join(", "),
             ),
         }
@@ -868,6 +886,15 @@ impl Settings {
         }
         self.hide_thinking_block = hide;
         self.save("hideThinkingBlock", json!(hide))
+    }
+
+    /// The form `/resume` showed chains in last, saved when it changed.
+    pub(super) fn set_resume_chains(&mut self, chains: Chains) -> io::Result<()> {
+        if self.resume_chains == chains {
+            return Ok(());
+        }
+        self.resume_chains = chains;
+        self.save("resumeChains", json!(chains.setting()))
     }
 
     /// The name of the theme shown: the setting's, else the one that follows the terminal's
@@ -1450,11 +1477,12 @@ mod tests {
             r#"{"hideThinkingBlock": true, "doubleEscapeAction": "fork",
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
                 "defaultThinkingLevel": "off", "theme": "pi-light", "treeFilterMode": "labeled-only",
-                "steeringMode": "one-at-a-time", "followUpMode": "all",
+                "resumeChains": "folded", "steeringMode": "one-at-a-time", "followUpMode": "all",
                 "markdown": {"toolDisplay": "source"}, "copyOnSelect": true}"#,
         );
         assert!(settings.copy_on_select);
         assert_eq!(settings.tree_filter, Filter::Labeled);
+        assert_eq!(settings.resume_chains, Chains::Folded);
         assert_eq!(settings.markdown_reads, MarkdownReads::Source);
         assert_eq!(settings.theme.as_deref(), Some("pi-light"));
         assert!(settings.hide_thinking_block);
@@ -1597,11 +1625,12 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big"}"#,
+                "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big"}"#,
         );
         assert_eq!(settings.banner, Banner::Header);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
         assert_eq!(settings.tree_filter, Filter::Default);
+        assert_eq!(settings.resume_chains, Chains::Flat);
         assert_eq!(settings.theme, None);
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert!(!settings.hide_thinking_block);
@@ -1617,6 +1646,7 @@ mod tests {
                 format!(
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
                 ),
+                format!(r#"{path}: resumeChains must be "flat", "threaded", "folded"; ignored"#),
                 format!(r#"{path}: markdown.toolDisplay must be "rendered" or "source"; ignored"#),
                 format!("{path}: theme must be a theme's name; ignored"),
                 format!(r#"{path}: banner must be "plain", "header", "card", "logo"; ignored"#),
@@ -1816,10 +1846,16 @@ mod tests {
         let mut settings = Settings::read(Some(path.clone()));
         settings.set_hide_thinking_block(true).unwrap();
         settings.set_default_thinking_level("none").unwrap();
+        settings.set_resume_chains(Chains::Threaded).unwrap();
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             saved,
-            json!({"hideThinkingBlock": true, "defaultThinkingLevel": "off"})
+            json!({"hideThinkingBlock": true, "defaultThinkingLevel": "off",
+                "resumeChains": "threaded"})
+        );
+        assert_eq!(
+            Settings::read(Some(path.clone())).resume_chains,
+            Chains::Threaded
         );
 
         // Another process changed the file meanwhile: its keys stay.

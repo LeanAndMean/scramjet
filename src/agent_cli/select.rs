@@ -104,6 +104,9 @@ pub(super) enum Act {
     Earlier,
     Later,
     Save,
+    /// Right or Enter on a closed chain's row (`Picker::folding`), Left or Enter on an open one,
+    /// Left on one of its steps: the chain's row.
+    Fold,
 }
 
 /// How the session list's keys ask to show it, as in Scramjet's session selector.
@@ -115,6 +118,18 @@ pub(super) enum Toggle {
     Named,
     /// Ctrl+P: with the sessions' paths, or without.
     Paths,
+    /// Ctrl+X: chains of sessions in the next form.
+    Chains,
+}
+
+/// A row's place in a list whose rows fold (`Picker::folding`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Fold {
+    None,
+    Closed,
+    Open,
+    /// Under the open row at this index.
+    In(usize),
 }
 
 /// Where a list was when one of its own keys ended it, so that it shows again there.
@@ -286,6 +301,8 @@ pub(super) struct Picker {
     tabs: bool,
     /// Whether Enter returns where the list was (`placing`).
     places: bool,
+    /// Each row's fold (`folding`); empty: none fold.
+    folds: Vec<Fold>,
     /// Said in place of the keys' hint until the next key: what a key did, or why it could not
     /// (`true`: a warning).
     status: Option<(String, bool)>,
@@ -368,6 +385,7 @@ impl Picker {
             scoping: false,
             tabs: false,
             places: false,
+            folds: Vec::new(),
             status: None,
         }
     }
@@ -386,6 +404,7 @@ impl Picker {
             scoping: false,
             tabs: false,
             places: false,
+            folds: Vec::new(),
             status: None,
         }
     }
@@ -478,6 +497,12 @@ impl Picker {
     /// show it there again (`at`).
     pub(super) fn placing(mut self) -> Self {
         self.places = true;
+        self
+    }
+
+    /// Makes the rows `folds` marks open and close (`Act::Fold`).
+    pub(super) fn folding(mut self, folds: Vec<Fold>) -> Self {
+        self.folds = folds;
         self
     }
 
@@ -631,6 +656,7 @@ impl Picker {
             scoping: false,
             tabs: false,
             places: false,
+            folds: Vec::new(),
             status: None,
         }
     }
@@ -690,7 +716,20 @@ impl Picker {
             (Binding::SessionToggleSort, Toggle::Sort),
             (Binding::SessionToggleNamedFilter, Toggle::Named),
             (Binding::SessionTogglePath, Toggle::Paths),
+            (Binding::SessionToggleChains, Toggle::Chains),
         ];
+        let fold = row.and_then(|row| Some((row, *self.folds.get(row)?)));
+        let typed = (self.list.search.as_ref()).is_some_and(|search| !search.query.is_empty());
+        let folded = match fold {
+            Some((row, Fold::Closed)) if !typed && key.is(Binding::CursorRight) => Some(row),
+            Some((row, Fold::Open)) if !typed && key.is(Binding::CursorLeft) => Some(row),
+            Some((_, Fold::In(head))) if !typed && key.is(Binding::CursorLeft) => Some(head),
+            Some((row, Fold::Closed | Fold::Open)) if key.is(Binding::SelectConfirm) => Some(row),
+            _ => None,
+        };
+        if let Some(row) = folded {
+            return Some(self.act(Act::Fold, row));
+        }
         match key {
             _ if self.tabs && key.is(Binding::Tab) => return Some(Picked::Tab(self.spot())),
             _ if self.acts && key.is(Binding::SessionRename) => {
@@ -2003,6 +2042,72 @@ mod tests {
         assert_eq!(named.key(&key("enter")), None);
         let ended = Some(Picked::Toggle(Toggle::Named, place("", 0, &[])));
         assert_eq!(named.key(&key("ctrl+n")), ended);
+    }
+
+    #[test]
+    fn folded_rows_open_and_close_with_right_left_and_enter() {
+        let texts = ["chain", "step two", "step one", "alone"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let folds = [Fold::Open, Fold::In(0), Fold::In(0), Fold::None];
+        let picker = || {
+            Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row)
+                .acting()
+                .folding(folds.to_vec())
+        };
+        let place = |position, shown: &[usize]| Spot {
+            query: String::new(),
+            position,
+            shown: shown.to_vec(),
+        };
+        let all = [0, 1, 2, 3];
+        let mut list = picker();
+        assert_eq!(list.key(&key("right")), None);
+        assert_eq!(
+            list.key(&key("left")),
+            Some(Picked::Act(Act::Fold, 0, place(0, &all)))
+        );
+        assert_eq!(
+            list.key(&key("enter")),
+            Some(Picked::Act(Act::Fold, 0, place(0, &all)))
+        );
+        // A step closes its chain's row; Enter chooses it.
+        list.key(&key("down"));
+        assert_eq!(
+            list.key(&key("left")),
+            Some(Picked::Act(Act::Fold, 0, place(1, &all)))
+        );
+        assert_eq!(list.key(&key("enter")), Some(Picked::Row(Some(1))));
+        let mut alone = picker().on_row(3);
+        assert_eq!(alone.key(&key("left")), None);
+        assert_eq!(alone.key(&key("enter")), Some(Picked::Row(Some(3))));
+        let mut closed = Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row)
+            .folding(vec![Fold::Closed, Fold::None, Fold::None, Fold::None]);
+        assert_eq!(
+            closed.key(&key("ctrl+x")),
+            None,
+            "only a session list takes Ctrl+X"
+        );
+        assert_eq!(
+            closed.key(&key("right")),
+            Some(Picked::Act(Act::Fold, 0, place(0, &all)))
+        );
+        // With a query typed, Left and Right leave the rows as they are, and Enter still opens.
+        closed.key(&Key::Text("chain".into()));
+        assert_eq!(closed.key(&key("right")), None);
+        let typed = Spot {
+            query: "chain".into(),
+            position: 0,
+            shown: vec![0],
+        };
+        assert_eq!(
+            closed.key(&key("enter")),
+            Some(Picked::Act(Act::Fold, 0, typed))
+        );
+        let mut session = picker();
+        assert_eq!(
+            session.key(&key("ctrl+x")),
+            Some(Picked::Toggle(Toggle::Chains, place(0, &all)))
+        );
     }
 
     #[test]

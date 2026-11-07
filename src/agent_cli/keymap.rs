@@ -71,6 +71,7 @@ pub(super) enum Binding {
     SessionToggleSort,
     SessionToggleNamedFilter,
     SessionTogglePath,
+    SessionToggleChains,
     ModelsSave,
     ModelsEnableAll,
     ModelsClearAll,
@@ -160,7 +161,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 84] = [
+const DEFINITIONS: [Definition; 85] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -215,6 +216,7 @@ const DEFINITIONS: [Definition; 84] = [
     define(B::SessionToggleSort, "app.session.toggleSort", &["ctrl+s"], S::Resume, "Cycle the order"),
     define(B::SessionToggleNamedFilter, "app.session.toggleNamedFilter", &["ctrl+n"], S::Resume, "Show only named sessions, or all"),
     define(B::SessionTogglePath, "app.session.togglePath", &["ctrl+p"], S::Resume, "Show or hide the session files' paths"),
+    define(B::SessionToggleChains, "app.session.toggleChains", &["ctrl+x"], S::Resume, "Show chains of sessions flat, threaded or folded"),
     define(B::ModelsSave, "app.models.save", &["ctrl+s"], S::ScopedModels, "Save the models switched on"),
     define(B::ModelsEnableAll, "app.models.enableAll", &["ctrl+a"], S::ScopedModels, "Switch on all models shown"),
     define(B::ModelsClearAll, "app.models.clearAll", &["ctrl+x"], S::ScopedModels, "Switch off all models shown"),

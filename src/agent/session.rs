@@ -52,6 +52,7 @@ pub(super) fn end_writes() {
 }
 
 /// A saved session as `/resume` lists it.
+#[derive(Clone)]
 pub struct SessionInfo {
     pub path: PathBuf,
     /// Its first prompt to the model, as typed; not a `!` command.
@@ -63,6 +64,8 @@ pub struct SessionInfo {
     pub name: Option<String>,
     /// Conversation items after the latest compaction, as a resume restores them.
     pub item_count: usize,
+    /// The summary of the latest `completed` report among them.
+    pub summary: Option<String>,
     pub modified: SystemTime,
     /// The session it was forked from, as its header records it.
     pub parent: Option<PathBuf>,
@@ -826,6 +829,7 @@ impl Session {
                 text: entries.text(),
                 name: entries.name.clone(),
                 item_count: context.items.len(),
+                summary: super::status::completed_summary(&context.items),
                 modified,
                 parent: entries.parent.clone().filter(|_| !entries.continues()),
                 continues: entries.parent.clone().filter(|_| entries.continues()),

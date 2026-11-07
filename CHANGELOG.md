@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.83.0 — Chains of sessions in /resume
+
+### Added
+
+- `/resume` shows each session a fresh-session next step chained with its `completed` summary in place of its prompt, and a `chain 2/3` mark. Ctrl+X shows chains flat (the default), threaded (each step under the one before) or folded (one row per chain; Right or Enter opens it, Left closes it), and the form chosen is remembered (`resumeChains`).
+
 ## 0.82.1 — A question kept after one asked again still waits
 
 ### Fixed
