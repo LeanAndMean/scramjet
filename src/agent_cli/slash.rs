@@ -619,6 +619,13 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
         info += &heading("Cost");
         info += &row("Total:", spent);
     }
+    let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
+        .map_or(0, |since| since.as_millis() as u64);
+    let quotas = scramjet_rs::agent::quota::read();
+    if let Some(quota) = super::usage::status_quota(&quotas, agent.model(), now, ui) {
+        info += "\n";
+        info += &quota;
+    }
     info
 }
 

@@ -154,7 +154,8 @@ In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it wi
 deleted before; Ctrl+- undoes; Ctrl+] then a character jumps to it, Ctrl+Alt+] backward.
 Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 /rename NAME names the session, which /resume then lists by its name; /rename alone shows it.
-/status shows the session's file, the messages in its context, the tokens they used and the cost.
+/status shows the session's file, the messages in its context, the tokens they used, the cost and
+the current provider's quota as its latest response reported it.
 /usage (or /cost, /stats) adds up what the saved sessions of every project spent: requests,
 tokens, cache hits and cost for this session, today and the last 7 and 30 days, each day of
 the last two weeks, and each provider's (the current one first) and model's, with each model's

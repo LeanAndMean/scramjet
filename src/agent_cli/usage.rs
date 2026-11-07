@@ -341,66 +341,86 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
 ",
             ui.styled(style::INFO_HEADING, &title)
         );
-        // As Codex's rows: a window's length, after the name of the limit it is of.
-        let labels: Vec<String> = (quota.windows.iter())
-            .map(|window| {
-                let label =
-                    (window.name.clone()).unwrap_or_else(|| window_label(window.window_minutes));
-                match &window.limit {
-                    Some(limit) => format!("{limit} {label} limit"),
-                    None => format!("{label} limit"),
-                }
-            })
-            .collect();
-        let width = (labels.iter())
-            .map(|label| label.chars().count() + 1)
-            .fold(14, usize::max);
-        for (window, label) in quota.windows.iter().zip(labels) {
-            let Window {
-                used_percent,
-                resets_at,
-                allowed,
-                over,
-                ..
-            } = window;
-            let used = used_percent.clamp(0.0, 100.0);
-            let filled = ((used / 100.0 * BAR as f64).round() as usize).min(BAR);
-            let bar = ui.styled(style::USAGE_BAR, &"█".repeat(filled))
-                + &ui.dim(&"░".repeat(BAR - filled));
-            let resets = match resets_at.map(|at| at.max(0) as u64 * 1000) {
-                // What was used then no longer counts.
-                Some(at) if at <= now => format!(", reset since {}", clock(at, now)),
-                Some(at) => format!(", resets {}", clock(at, now)),
-                None => String::new(),
-            };
-            let count = match allowed {
-                Some(allowed) => {
-                    let made = (*allowed as f64 * used / 100.0).round();
-                    format!(" ({made} of {allowed})")
-                }
-                None => String::new(),
-            };
-            let over = over.map_or(String::new(), |over| format!(", {over} over"));
-            let out = match runs_out(window, quota.observed_at) {
-                Some(out) if out > now => {
-                    let text = format!("runs out {} at this pace", clock(out, now));
-                    format!(", {}", ui.styled(style::WARNING, &text))
-                }
-                _ => String::new(),
-            };
-            text += &format!(
-                "{}{bar} {used:>3.0}% used{count}{over}{out}{resets}\n",
-                ui.dim(&format!("{label:<width$}")),
-            );
-        }
-        if let Some(credits) = &quota.credits {
-            text += &format!(
-                "{}{}\n",
-                ui.dim(&format!("{:<width$}", "Credits")),
-                credits_text(credits)
-            );
-        }
+        text += &quota_rows(quota, now, ui);
         text.push('\n');
+    }
+    text
+}
+
+/// The quota of `model`'s provider for `/status`, as its latest response reported it: a heading,
+/// then `/usage`'s rows; none when no response of it reported one.
+pub(super) fn status_quota(
+    quotas: &[(String, Quota)],
+    model: &str,
+    now: u64,
+    ui: &Terminal,
+) -> Option<String> {
+    let (_, quota) = quotas.iter().find(|(name, _)| name == provider(model))?;
+    let title = format!("Quota, as of {}", clock(quota.observed_at, now));
+    Some(format!("{}\n", ui.styled(style::INFO_HEADING, &title)) + &quota_rows(quota, now, ui))
+}
+
+/// A quota's rows, each window with its bar, then its credits.
+fn quota_rows(quota: &Quota, now: u64, ui: &Terminal) -> String {
+    let mut text = String::new();
+    // As Codex's rows: a window's length, after the name of the limit it is of.
+    let labels: Vec<String> = (quota.windows.iter())
+        .map(|window| {
+            let label =
+                (window.name.clone()).unwrap_or_else(|| window_label(window.window_minutes));
+            match &window.limit {
+                Some(limit) => format!("{limit} {label} limit"),
+                None => format!("{label} limit"),
+            }
+        })
+        .collect();
+    let width = (labels.iter())
+        .map(|label| label.chars().count() + 1)
+        .fold(14, usize::max);
+    for (window, label) in quota.windows.iter().zip(labels) {
+        let Window {
+            used_percent,
+            resets_at,
+            allowed,
+            over,
+            ..
+        } = window;
+        let used = used_percent.clamp(0.0, 100.0);
+        let filled = ((used / 100.0 * BAR as f64).round() as usize).min(BAR);
+        let bar =
+            ui.styled(style::USAGE_BAR, &"█".repeat(filled)) + &ui.dim(&"░".repeat(BAR - filled));
+        let resets = match resets_at.map(|at| at.max(0) as u64 * 1000) {
+            // What was used then no longer counts.
+            Some(at) if at <= now => format!(", reset since {}", clock(at, now)),
+            Some(at) => format!(", resets {}", clock(at, now)),
+            None => String::new(),
+        };
+        let count = match allowed {
+            Some(allowed) => {
+                let made = (*allowed as f64 * used / 100.0).round();
+                format!(" ({made} of {allowed})")
+            }
+            None => String::new(),
+        };
+        let over = over.map_or(String::new(), |over| format!(", {over} over"));
+        let out = match runs_out(window, quota.observed_at) {
+            Some(out) if out > now => {
+                let text = format!("runs out {} at this pace", clock(out, now));
+                format!(", {}", ui.styled(style::WARNING, &text))
+            }
+            _ => String::new(),
+        };
+        text += &format!(
+            "{}{bar} {used:>3.0}% used{count}{over}{out}{resets}\n",
+            ui.dim(&format!("{label:<width$}")),
+        );
+    }
+    if let Some(credits) = &quota.credits {
+        text += &format!(
+            "{}{}\n",
+            ui.dim(&format!("{:<width$}", "Credits")),
+            credits_text(credits)
+        );
     }
     text
 }
@@ -1225,6 +1245,14 @@ mod tests {
             "░".repeat(4)
         );
         assert!(c.contains(&rows), "{c}");
+        // `/status` shows the current model's provider's, with the same rows.
+        let status = status_quota(&history.quotas, "c/gpt-sonic", now, &ui).unwrap();
+        assert_eq!(
+            super::super::text::plain(&status),
+            format!("Quota, as of {seen}\n{rows}")
+        );
+        assert_eq!(status_quota(&history.quotas, "b/new", now, &ui), None);
+        assert_eq!(status_quota(&history.quotas, "unsaved", now, &ui), None);
         let unlimited = Credits {
             unlimited: true,
             balance: None,

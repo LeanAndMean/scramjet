@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.77.0 — The quota in /status
+
+### Added
+
+- `/status` (`/session`) ends with the current provider's quota as its latest response reported it, the same rows as `/usage` shows (ChatGPT's windows and credits, Copilot's premium requests), as Codex shows plan limits in its `/status`.
+
 ## 0.76.1 — MCP servers stopped gently
 
 ### Fixed

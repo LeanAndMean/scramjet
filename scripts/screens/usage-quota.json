@@ -27,12 +27,18 @@
   "steps": [
     {"until": "Hello."},
     {"type": "/usage\r"},
-    {"until": "Costliest sessions"},
+    {"until": "Last 14 days"},
     {"sleep": 0.5},
     {"shot": "usage-quota"},
     {"type": "\t"},
     {"until": "Quota of screens"},
     {"sleep": 0.3},
-    {"shot": "usage-quota-all"}
+    {"shot": "usage-quota-all"},
+    {"type": "\u001b"},
+    {"sleep": 0.3},
+    {"type": "/status\r"},
+    {"until": "Credits"},
+    {"sleep": 0.3},
+    {"shot": "status-quota"}
   ]
 }
