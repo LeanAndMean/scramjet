@@ -634,7 +634,12 @@ mod tests {
             let paused = agent.resume_turn(&mut ui, &cancel);
             assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
         }
-        assert_eq!(outputs, ["output one\n", "result bash"]);
+        // The output so far may show once more with `two` before the result does.
+        let expected = ["output one\n", "output one\ntwo\n", "result bash"];
+        assert!(
+            outputs == [expected[0], expected[2]] || outputs == expected,
+            "{outputs:?}"
+        );
         agent.resume_turn(&mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
         assert_eq!(last_output(&bodies[1]), "one\ntwo\n");
