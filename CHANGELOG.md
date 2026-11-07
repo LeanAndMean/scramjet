@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.69.0 — Weekly usage, split by provider or model
+
+### Added
+
+- `/usage` shows each week of the last 12 (from Mondays) with its cost, requests and a bar, under the last 14 days. Both charts' bars are split by provider on the All tab and by model on a provider's tab, in shades a legend names (the largest three, then the rest together), and measure tokens where nothing shown has a price, so a subscription's usage is drawn too.
+
 ## 0.68.0 — /usage as a view, provider by provider
 
 ### Changed

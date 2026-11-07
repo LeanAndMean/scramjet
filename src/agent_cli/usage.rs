@@ -1,6 +1,6 @@
 //! `/usage` (also `/cost` and `/stats`): what the saved sessions spent, from their files: this
-//! session, today and the last days, each day of the last two weeks, each provider's and each
-//! model's requests, tokens and cost, and each model's speed.
+//! session, today and the last days, each day of the last two weeks and each week of the last
+//! twelve, each provider's and each model's requests, tokens and cost, and each model's speed.
 
 use super::keymap::{self, Binding};
 use super::keys::Key;
@@ -13,7 +13,9 @@ use std::path::Path;
 
 const DAY: u64 = 24 * 60 * 60 * 1000;
 /// The days the daily rows go back, today among them.
-const DAYS: u64 = 14;
+const DAYS: i64 = 14;
+/// The weeks the weekly rows go back, this one among them.
+const WEEKS: i64 = 12;
 const BAR: usize = 20;
 const MODEL_WIDTH: usize = 36;
 /// The sessions the costliest list shows.
@@ -95,6 +97,172 @@ fn date(at: u64, now: u64) -> String {
         }
         _ => "?".to_owned(),
     }
+}
+
+/// Days since 1970-01-01 of a date (Howard Hinnant's `days_from_civil`).
+fn civil_days(year: i32, month: i32, day: i32) -> i64 {
+    let year = i64::from(year) - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let of_era = year - era * 400;
+    let month = i64::from(month);
+    let of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let of_era = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+    era * 146_097 + of_era - 719_468
+}
+
+/// The date `days` after 1970-01-01 (Howard Hinnant's `civil_from_days`).
+fn civil_date(days: i64) -> (i32, i32, i32) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let of_era = days - era * 146_097;
+    let year_of_era = (of_era - of_era / 1460 + of_era / 36_524 - of_era / 146_096) / 365;
+    let of_year = of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month = (5 * of_year + 2) / 153;
+    let day = of_year - (153 * month + 2) / 5 + 1;
+    let month = if month < 10 { month + 3 } else { month - 9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year as i32, month as i32, day as i32)
+}
+
+/// The local day of `at`, in days since 1970-01-01.
+fn local_day(at: u64) -> Option<i64> {
+    local(at).map(|(year, month, day, ..)| civil_days(year, month, day))
+}
+
+/// The Monday starting the week of `day` (days since 1970-01-01, a Thursday).
+fn monday(day: i64) -> i64 {
+    day - (day + 3).rem_euclid(7)
+}
+
+/// `day` (days since 1970-01-01) as `date` shows it.
+fn day_label(day: i64, now: u64) -> String {
+    let (year, month, date) = civil_date(day);
+    match local(now) {
+        Some((this, ..)) if this == year => format!("{month:02}/{date:02}"),
+        _ => format!("{:02}/{month:02}/{date:02}", year.rem_euclid(100)),
+    }
+}
+
+/// What one bar's characters stand for, darkest first; the last stands for the rest when there
+/// are more groups than shades.
+const SHADES: [char; 4] = ['█', '▓', '▒', '░'];
+
+/// The last days' and weeks' rows, each with a bar split by provider (`by_provider`) or by
+/// model, measuring cost, or tokens where nothing shown has a price.
+fn charts(responses: &[&Response], now: u64, by_provider: bool, ui: &Terminal) -> String {
+    let group = |response: &Response| match (by_provider, response.model.as_str()) {
+        (true, model) => provider(model).to_owned(),
+        (false, "") => "unknown".to_owned(),
+        (false, model) => model.to_owned(),
+    };
+    let today = local_day(now).unwrap_or(0);
+    let first_week = monday(today) - 7 * (WEEKS - 1);
+    let dated: Vec<(i64, &Response)> = (responses.iter())
+        .filter_map(|&r| Some((local_day(r.at)?, r)))
+        .filter(|&(day, _)| day >= first_week.min(today - (DAYS - 1)))
+        .collect();
+    let by_cost = dated
+        .iter()
+        .any(|(_, r)| r.cost.is_some_and(|cost| cost > 0.0));
+    let measure = |r: &Response| match by_cost {
+        true => r.cost.unwrap_or(0.0),
+        false => (r.input + r.cache_read + r.cache_write + r.output) as f64,
+    };
+    let mut groups: Vec<(String, f64)> = Vec::new();
+    for (_, response) in &dated {
+        let name = group(response);
+        match groups.iter_mut().find(|(group, _)| *group == name) {
+            Some((_, total)) => *total += measure(response),
+            None => groups.push((name, measure(response))),
+        }
+    }
+    groups.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut named: Vec<String> = groups.into_iter().map(|(name, _)| name).collect();
+    let others = named.len() > SHADES.len();
+    named.truncate(SHADES.len() - usize::from(others));
+
+    let rows = |spans: Vec<(i64, i64)>| -> String {
+        let rows: Vec<(i64, Vec<&Response>)> = (spans.into_iter())
+            .map(|(from, to)| {
+                let span = dated.iter().filter(|&&(day, _)| from <= day && day < to);
+                (from, span.map(|&(_, r)| r).collect::<Vec<_>>())
+            })
+            .filter(|(_, span)| !span.is_empty())
+            .collect();
+        let parts = |span: &[&Response]| {
+            let mut parts = vec![0.0; SHADES.len()];
+            for response in span {
+                let name = group(response);
+                let slot =
+                    (named.iter().position(|named| *named == name)).unwrap_or(SHADES.len() - 1);
+                parts[slot] += measure(response);
+            }
+            parts
+        };
+        let most = (rows.iter())
+            .map(|(_, span)| parts(span).iter().sum::<f64>())
+            .fold(0.0, f64::max);
+        let mut text = String::new();
+        for (from, span) in &rows {
+            let mut bar = String::new();
+            let (mut sum, mut drawn) = (0.0, 0);
+            for (shade, part) in SHADES.iter().zip(parts(span)) {
+                sum += part;
+                let end = match most > 0.0 {
+                    true => (sum / most * BAR as f64).round() as usize,
+                    false => 0,
+                };
+                bar.extend(std::iter::repeat_n(*shade, end.saturating_sub(drawn)));
+                drawn = drawn.max(end);
+            }
+            let totals = Totals::of(span.iter().copied());
+            text += &format!(
+                "{}{:>11}{:>10} {}\n",
+                ui.dim(&format!("{:<8}", day_label(*from, now))),
+                totals.cost(),
+                grouped(totals.requests),
+                ui.styled(style::USAGE_BAR, &bar),
+            );
+        }
+        if rows.is_empty() {
+            text += &ui.dim("No responses.");
+            text.push('\n');
+        }
+        text
+    };
+
+    let heading = |text: &str| format!("\n{}\n", ui.styled(style::INFO_HEADING, text));
+    let mut text = heading(&format!("Last {DAYS} days"));
+    text += &rows(
+        ((today - (DAYS - 1))..=today)
+            .map(|day| (day, day + 1))
+            .collect(),
+    );
+    text += &heading(&format!("Last {WEEKS} weeks, from Mondays"));
+    let weeks = (0..WEEKS).map(|week| first_week + 7 * week);
+    text += &rows(weeks.map(|monday| (monday, monday + 7)).collect());
+    if !named.is_empty() {
+        let others = others.then(|| (&SHADES[SHADES.len() - 1], "others"));
+        let legend: Vec<String> = (SHADES.iter().zip(named.iter().map(String::as_str)))
+            .chain(others)
+            .map(|(shade, name)| {
+                let shade = ui.styled(style::USAGE_BAR, &shade.to_string());
+                format!("{shade} {}", ui.dim(name))
+            })
+            .collect();
+        let measure = match by_cost {
+            true => "cost",
+            false => "tokens",
+        };
+        let split = match by_provider {
+            true => "provider",
+            false => "model",
+        };
+        text += &ui.dim(&format!("Bars: {measure} by {split}: "));
+        text += &legend.join("  ");
+        text.push('\n');
+    }
+    text
 }
 
 fn same_day(a: u64, b: u64) -> bool {
@@ -191,34 +359,7 @@ pub(super) fn report(
     }
     text += &row("All", &Totals::of(responses.iter().copied()));
 
-    text += "\n";
-    text += &heading(&format!("Last {DAYS} days"));
-    let mut days: Vec<(u64, Totals)> = Vec::new();
-    for back in (0..DAYS).rev() {
-        let at = now.saturating_sub(back * DAY);
-        let totals = Totals::of(responses.iter().copied().filter(|r| same_day(r.at, at)));
-        if totals.requests > 0 {
-            days.push((at, totals));
-        }
-    }
-    let most = days.iter().map(|(_, day)| day.cost).fold(0.0, f64::max);
-    for (at, day) in &days {
-        let bar = match most > 0.0 {
-            true => "█".repeat((day.cost / most * BAR as f64).round() as usize),
-            false => String::new(),
-        };
-        text += &format!(
-            "{}{:>11}{:>10} {}\n",
-            ui.dim(&format!("{:<8}", date(*at, now))),
-            day.cost(),
-            grouped(day.requests),
-            ui.styled(style::USAGE_BAR, &bar),
-        );
-    }
-    if days.is_empty() {
-        text += &ui.dim("No responses.");
-        text.push('\n');
-    }
+    text += &charts(&responses, now, only.is_none(), ui);
 
     let since = now.saturating_sub(30 * DAY);
     let recent = || responses.iter().copied().filter(|r| r.at >= since);
@@ -540,8 +681,16 @@ mod tests {
             lines[11],
             format!("{:<8}    $2.00+?         2 {}", day(0), "█".repeat(20))
         );
+        let providers = (lines.iter())
+            .position(|line| *line == "Providers, last 30 days")
+            .unwrap();
+        assert_eq!(lines[13], "Last 12 weeks, from Mondays");
         assert_eq!(
-            lines[13..],
+            lines[providers - 2],
+            "Bars: cost by provider: █ a  ▓ unknown"
+        );
+        assert_eq!(
+            lines[providers..],
             [
                 "Providers, last 30 days",
                 "Provider  Requests    Input   Output  Cached       Cost",
@@ -569,13 +718,76 @@ mod tests {
                     day(40)
                 ),
                 "",
-                lines[33],
+                lines[lines.len() - 1],
             ]
         );
         assert!(
-            lines[33].starts_with("From 2 session files in /s, since "),
+            lines[lines.len() - 1].starts_with("From 2 session files in /s, since "),
             "{}",
-            lines[33]
+            lines[lines.len() - 1]
+        );
+    }
+
+    #[test]
+    fn dates_count_days_from_1970_and_weeks_from_mondays() {
+        assert_eq!(civil_days(1970, 1, 1), 0);
+        assert_eq!(civil_days(2026, 11, 7), 20_764);
+        assert_eq!(civil_date(20_764), (2026, 11, 7));
+        assert_eq!(civil_date(civil_days(2000, 2, 29)), (2000, 2, 29));
+        assert_eq!(civil_date(-1), (1969, 12, 31));
+        assert_eq!(monday(4), 4);
+        assert_eq!(monday(10), 4);
+        assert_eq!(monday(3), -3);
+        assert_eq!(civil_date(monday(20_764)), (2026, 11, 2));
+    }
+
+    #[test]
+    fn bars_split_by_model_and_count_tokens_where_nothing_is_priced() {
+        let ui = ui();
+        let today = local_day(NOW).unwrap();
+        let week_ago = NOW - 7 * DAY;
+        let mut responses: Vec<Response> = (1..=5)
+            .map(|cost| response(NOW, &format!("a/m{cost}"), Some(cost as f64), 0))
+            .collect();
+        responses.push(response(week_ago, "a/m5", Some(15.0), 0));
+        let all: Vec<&Response> = responses.iter().collect();
+        let text = super::super::text::plain(&charts(&all, NOW, false, &ui));
+        let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
+        let earlier = day_label(local_day(week_ago).unwrap(), NOW);
+        let this_week = day_label(monday(today), NOW);
+        let last_week = day_label(monday(local_day(week_ago).unwrap()), NOW);
+        let split = "█".repeat(7) + &"▓".repeat(5) + &"▒".repeat(4) + &"░".repeat(4);
+        assert_eq!(
+            lines,
+            [
+                "",
+                "Last 14 days",
+                &format!("{earlier:<8}     $15.00         1 {}", "█".repeat(20)),
+                &format!("{:<8}     $15.00         5 {split}", day_label(today, NOW)),
+                "",
+                "Last 12 weeks, from Mondays",
+                &format!("{last_week:<8}     $15.00         1 {}", "█".repeat(20)),
+                &format!("{this_week:<8}     $15.00         5 {split}"),
+                "Bars: cost by model: █ a/m5  ▓ a/m4  ▒ a/m3  ░ others",
+            ]
+        );
+
+        let unpriced = [
+            response(NOW, "c/big", None, 0),
+            Response {
+                input: 0,
+                cache_read: 0,
+                output: 150,
+                ..response(NOW, "c/small", None, 0)
+            },
+        ];
+        let all: Vec<&Response> = unpriced.iter().collect();
+        let text = super::super::text::plain(&charts(&all, NOW, false, &ui));
+        let half = "█".repeat(15) + &"▓".repeat(5);
+        assert!(text.contains(&format!("$?         2 {half}\n")), "{text}");
+        assert!(
+            text.ends_with("Bars: tokens by model: █ c/big  ▓ c/small\n"),
+            "{text}"
         );
     }
 
