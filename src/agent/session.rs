@@ -26,7 +26,7 @@ const HELD_LIMIT: usize = 64 << 20;
 
 /// Whether `error` says the disk or the user's quota is full, which a session outlasts by keeping
 /// its lines in memory.
-fn full(error: &io::Error) -> bool {
+pub(super) fn full(error: &io::Error) -> bool {
     matches!(
         error.kind(),
         io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded

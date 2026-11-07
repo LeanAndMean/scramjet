@@ -119,10 +119,11 @@ pub(super) fn record(path: &Path, model: &str, reply: &Reply) -> io::Result<()> 
     let samples = kept(samples);
     let temporary = directory.join(format!(".output-rates.{}.tmp", std::process::id()));
     let text = serde_json::to_vec_pretty(&json!({"version": 1, "samples": samples}))?;
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(&temporary, path).inspect_err(|_| {
-        let _ = std::fs::remove_file(&temporary);
-    })
+    std::fs::write(&temporary, text)
+        .and_then(|()| std::fs::rename(&temporary, path))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&temporary);
+        })
 }
 
 /// Each model's last `PER_MODEL` samples, at most `KEPT` in all, oldest first.

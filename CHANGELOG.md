@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.58.1 — Logins kept on a full disk
+
+### Fixed
+
+- On a full disk, saving `auth.json` (a token renewal, `/login`, `/logout`) could leave it cut short, losing every saved login. It is now left as it was. A token renewed then is used and kept in memory, and is written once there is room, so that requests go on; a login or logout that cannot be saved says so.
+- The model lists logins save, and the output rates, no longer leave a temporary file behind when the disk is full.
+
 ## 0.58.0 — Earlier sessions of a chain stay on screen
 
 ### Added

@@ -7,6 +7,8 @@
 //! two refreshing a token at once do not undo each other's, and reads it holding the lock shared.
 //! It is written in place, as Scramjet writes its own: a sandbox hides it by mounting an empty
 //! file over it, and a file renamed over that path would show in every sandbox already running.
+//! A full disk leaves it as it was (`write_in_place`), and a token renewed then is held in memory
+//! until there is room for it (`HELD`), so that requests go on.
 //! What a login lists that is not secret, its models, is kept apart, in the state directory.
 //! Besides its own, `/login` lists those packages' programs do (`program`).
 
@@ -16,11 +18,14 @@ pub use program::{LoginProgram, Said};
 
 use super::client::{Failure, Fetched};
 use super::{codex, copilot};
+use rustix::{fs::FallocateFlags, io::Errno};
 use serde_json::{Map, Value};
 use std::{
+    collections::BTreeMap,
     io::Write,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
+    sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -132,7 +137,9 @@ pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
 
 /// Removes `provider`'s credentials, and what its login listed; returns whether there were any.
 pub fn logout(logins: &Logins, provider: &str) -> Result<bool, String> {
-    let removed = update::<_, String>(&logins.auth, |saved| Ok(saved.remove(provider).is_some()))?;
+    let removed = update::<_, String>(&logins.auth, false, |saved| {
+        Ok(saved.remove(provider).is_some())
+    })?;
     // What a key's provider listed is asked for again with the key it is left with.
     std::fs::remove_file(logins.listed(provider)).ok();
     if !LOGINS.iter().any(|(login, _)| *login == provider) {
@@ -191,7 +198,7 @@ pub fn relist(logins: &Logins, provider: &str) -> Result<Option<String>, String>
 
 /// Saves `credential` in `path` as `provider`'s, in place of any it had.
 pub(super) fn save(path: &Path, provider: &str, credential: Value) -> Result<(), String> {
-    update(path, |saved| {
+    update(path, false, |saved| {
         saved.insert(provider.to_owned(), credential);
         Ok(())
     })
@@ -240,7 +247,7 @@ fn access_with(
         return Ok(token);
     }
     // Another process may have refreshed it meanwhile: it is looked at again under the lock.
-    update(path, |saved| {
+    update(path, true, |saved| {
         let credential = current(saved)?;
         if let Some(token) = fresh(&credential) {
             return Ok(token);
@@ -279,8 +286,11 @@ pub(super) fn save_list(path: &Path, list: &Value) -> Result<(), String> {
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(failed)?;
     let written = path.with_extension(format!("{}.tmp", std::process::id()));
     let text = serde_json::to_string_pretty(list).unwrap_or_default() + "\n";
-    std::fs::write(&written, text).map_err(failed)?;
-    std::fs::rename(&written, path).map_err(failed)
+    let saved = std::fs::write(&written, text).and_then(|()| std::fs::rename(&written, path));
+    if saved.is_err() {
+        let _ = std::fs::remove_file(&written);
+    }
+    saved.map_err(failed)
 }
 
 /// A renewal's JSON answer from `what`, as `answer` reads it, or what failed; transiently when
@@ -328,7 +338,24 @@ pub(super) fn saved(path: &Path) -> Result<Map<String, Value>, String> {
     if let Some(lock) = &lock {
         let _ = rustix::fs::flock(lock, rustix::fs::FlockOperation::LockShared);
     }
-    read(path)
+    let mut saved = read(path)?;
+    let held = held(path);
+    drop(lock);
+    if !held.is_empty() {
+        // Written as soon as the disk has room for them.
+        let _ = update(path, false, |_| Ok::<(), String>(()));
+        saved.extend(held);
+    }
+    Ok(saved)
+}
+
+/// Credentials renewed while the disk was too full to save them, by `auth.json`'s path: used
+/// in place of the file's until written, at the next read or change with room for them.
+static HELD: Mutex<BTreeMap<PathBuf, Map<String, Value>>> = Mutex::new(BTreeMap::new());
+
+fn held(path: &Path) -> Map<String, Value> {
+    let held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    held.get(path).cloned().unwrap_or_default()
 }
 
 fn lock_file(path: &Path) -> PathBuf {
@@ -353,9 +380,11 @@ fn read(path: &Path) -> Result<Map<String, Value>, String> {
 }
 
 /// Runs `change` on the saved credentials holding the file's lock, and writes them when it
-/// changed them. A file that cannot be read is left as it is.
+/// changed them or some are held. A file that cannot be read is left as it is. With `hold`, what
+/// a full disk cannot take is held in memory (`HELD`) rather than failing the change.
 fn update<T, E: From<String>>(
     path: &Path,
+    hold: bool,
     change: impl FnOnce(&mut Map<String, Value>) -> Result<T, E>,
 ) -> Result<T, E> {
     let failed = |error: std::io::Error| E::from(format!("{}: {error}", path.display()));
@@ -373,26 +402,51 @@ fn update<T, E: From<String>>(
     .map_err(failed)?;
     rustix::fs::flock(&lock, rustix::fs::FlockOperation::LockExclusive)
         .map_err(|error| failed(error.into()))?;
-    let mut saved = read(path)?;
+    let file = read(path)?;
+    let held = held(path);
+    let mut saved = file.clone();
+    saved.extend(held.clone());
     let before = saved.clone();
     let result = change(&mut saved)?;
-    if saved != before {
-        let mut text = serde_json::to_string_pretty(&Value::Object(saved)).unwrap_or_default();
-        text.push('\n');
-        let write = || {
-            let mut file = (std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true))
-            .mode(0o600)
-            .open(path)?;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-            file.write_all(text.as_bytes())?;
-            file.sync_all()
-        };
-        write().map_err(failed)?;
+    if saved == before && held.is_empty() {
+        return Ok(result);
+    }
+    let mut text = serde_json::to_string_pretty(&Value::Object(saved.clone())).unwrap_or_default();
+    text.push('\n');
+    let mut all_held = HELD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    match write_in_place(path, text.as_bytes()) {
+        Ok(()) => {
+            all_held.remove(path);
+        }
+        Err(error) if hold && super::session::full(&error) => {
+            let changed = saved
+                .into_iter()
+                .filter(|(name, credential)| file.get(name) != Some(credential));
+            all_held.insert(path.to_owned(), changed.collect());
+        }
+        Err(error) => return Err(failed(error)),
     }
     Ok(result)
+}
+
+/// Writes `text` over the contents of `path`, in place (the module says why), once the disk has
+/// given it room: a full disk leaves them as they were, where truncating first would lose them.
+fn write_in_place(path: &Path, text: &[u8]) -> std::io::Result<()> {
+    let mut file = (std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false))
+    .mode(0o600)
+    .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    let room = rustix::fs::fallocate(&file, FallocateFlags::empty(), 0, text.len() as u64);
+    match room {
+        Ok(()) | Err(Errno::OPNOTSUPP | Errno::NOSYS) => {}
+        Err(error) => return Err(error.into()),
+    }
+    file.write_all(text)?;
+    file.set_len(text.len() as u64)?;
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -411,7 +465,7 @@ mod tests {
     fn credentials_are_saved_for_their_owner_only_and_removed_by_provider() {
         let scratch = scratch("login-store");
         let path = scratch.0.join("config/scramjet-rs/auth.json");
-        update::<_, String>(&path, |saved| {
+        update::<_, String>(&path, false, |saved| {
             saved.insert(
                 "github-copilot".into(),
                 json!({"type": "oauth", "access": "a"}),
@@ -424,7 +478,8 @@ mod tests {
         assert_eq!(mode(&path), 0o600);
         assert_eq!(mode(path.parent().unwrap()), 0o700);
         assert_eq!(saved(&path).unwrap().len(), 2);
-        let removed = update::<_, String>(&path, |saved| Ok(saved.remove("other").is_some()));
+        let removed =
+            update::<_, String>(&path, false, |saved| Ok(saved.remove("other").is_some()));
         let removed = removed.unwrap();
         assert!(removed);
         let saved = saved(&path).unwrap();
@@ -438,6 +493,69 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, ["auth.json", "auth.json.lock"]);
+    }
+
+    /// Runs in a mount namespace of its own, where `SCRAMJET_TEST_FULL_DIR` is a tmpfs that this
+    /// test fills; outside, it starts itself there, and passes where that cannot be done.
+    #[test]
+    fn a_full_disk_keeps_the_saved_logins_and_holds_a_renewed_token_until_there_is_room() {
+        const NAME: &str = "agent::login::tests::\
+            a_full_disk_keeps_the_saved_logins_and_holds_a_renewed_token_until_there_is_room";
+        let Some(directory) = std::env::var_os("SCRAMJET_TEST_FULL_DIR") else {
+            let scratch = scratch("login-full");
+            std::fs::create_dir_all(&scratch.0).unwrap();
+            let script = r#"mount -t tmpfs -o size=64k tmpfs "$1" || exit 77
+                SCRAMJET_TEST_FULL_DIR="$1" exec "$2" --exact "$3" --nocapture"#;
+            let status = std::process::Command::new("unshare")
+                .args(["-r", "-m", "sh", "-c", script, "sh"])
+                .arg(&scratch.0)
+                .arg(std::env::current_exe().unwrap())
+                .arg(NAME)
+                .status();
+            match status.map(|status| status.code()) {
+                Ok(Some(0)) => {}
+                Ok(Some(101)) => panic!("the test failed on a full tmpfs"),
+                other => eprintln!("skipped: no tmpfs of its own ({other:?})"),
+            }
+            return;
+        };
+        let directory = PathBuf::from(directory);
+        let path = directory.join("auth.json");
+        let expired = json!({"type": "oauth", "refresh": "gho", "access": "old", "expires": 0});
+        save(&path, "github-copilot", expired).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let mut fill = std::fs::File::create(directory.join("fill")).unwrap();
+        while fill.write_all(&[0; 4096]).is_ok() {}
+        // Larger than the page the file has, so that it needs room the disk does not have.
+        let access = "new".repeat(3000);
+        let bought = json!({"access": access, "expires": now_ms() + 60_000.0});
+        let token = access_with(&path, "github-copilot", "GitHub Copilot", |_| {
+            Ok(bought.clone())
+        });
+        assert_eq!(token.unwrap(), access);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert_eq!(saved(&path).unwrap()["github-copilot"]["access"], access);
+        let token = access_with(
+            &path,
+            "github-copilot",
+            "GitHub Copilot",
+            |_| unreachable!(),
+        );
+        assert_eq!(token.unwrap(), access);
+        // A login is not held: it says it was not saved.
+        let other = json!({"type": "api_key", "key": "k".repeat(5000)});
+        let failed = save(&path, "other", other).unwrap_err();
+        assert!(failed.contains("No space left on device"), "{failed}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        drop(fill);
+        std::fs::remove_file(directory.join("fill")).unwrap();
+        let saved = saved(&path).unwrap();
+        assert_eq!(saved["github-copilot"]["access"], access);
+        assert!(saved.get("other").is_none());
+        let file: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(file["github-copilot"]["access"], access);
+        assert_eq!(file["github-copilot"]["refresh"], "gho");
+        assert!(held(&path).is_empty());
     }
 
     #[test]
@@ -616,7 +734,7 @@ mod tests {
         let scratch = scratch("login-broken");
         let path = scratch.0.join("auth.json");
         std::fs::write(&path, "{not json").unwrap();
-        let changed = update::<_, String>(&path, |saved| {
+        let changed = update::<_, String>(&path, false, |saved| {
             saved.insert("github-copilot".into(), json!({}));
             Ok(())
         });
