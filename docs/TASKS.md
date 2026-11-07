@@ -6,6 +6,7 @@ Last steer: b11ce00
 
 ## From review
 
+- **The editor's PTY test needs `fd` on the `PATH`** (review of 4c2f47b): `tests/agent_editor_pty.py` points `SCRAMJET_CODING_AGENT_DIR` at a scratch directory, so `@` completion finds `fd` only on the `PATH`. Here it is only in `~/.scramjet/agent/bin`, and `prompt_editor_and_running_turns_keep_input_and_restore_the_terminal` fails at `completes_file_references` on 4c2f47b and after it; with that directory on the `PATH` it passes. The test could put the found `fd` in its agent directory's `bin`, or skip that journey without one.
 - **Nested repositories in build and dependency trees pin those trees** (review of 80ec4e9): a CMake `FetchContent` checkout (`build/_deps/foo-src/.git`) or `pip install -e git+…` (`.venv/src/foo/.git`) makes `rm -rf build` fail with "Device or resource busy" and a reconfigure's `git fetch` there fail read-only, for the whole process. Skipping ignored directories would undo the protection where a build runs `git` outside the sandbox; a choice for the user at the next steer.
 
 ## Current focus

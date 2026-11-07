@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.74.2 — Nested repositories kept read-only behind a changed permission
+
+### Fixed
+
+- Under `--sandbox workspace-write`, a command that made a directory unreadable (`chmod 300`) or unsearchable (`chmod 000`) no longer leaves the repositories below it writable to the next command, and a repository made at the moment a command starts is no longer missed.
+
 ## 0.74.1 — Repositories made during a sandboxed session kept read-only
 
 ### Fixed
