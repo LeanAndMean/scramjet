@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.85.1 — The Seatbelt sandbox keeps a project under /tmp read-only
+
+### Fixed
+
+- On macOS, a read-only sandbox (subagents, `--sandbox read-only`) no longer lets commands write a project that lies under `/tmp`, `/var/tmp` or `TMPDIR`, and no directory above the project can be renamed, which in `workspace-write` would have moved its `.git`, `.scramjet` and `.agents` out of their protection.
+
 ## 0.85.0 — A Seatbelt sandbox for macOS
 
 ### Added

@@ -294,6 +294,30 @@ mod tests {
     }
 
     #[test]
+    fn a_project_under_a_temporary_directory_stays_read_only_and_cannot_be_moved() {
+        let tmp = std::fs::canonicalize("/tmp").unwrap();
+        let scratch = tmp.join(format!("seatbelt-test-{}", std::process::id()));
+        let root = scratch.join("clone");
+        std::fs::create_dir_all(&root).unwrap();
+        let hidden = super::super::Hidden::default();
+        let text = spelled(&super::super::closed(&root, &hidden, false, false, None));
+        std::fs::remove_dir_all(&scratch).unwrap();
+        let (tmp, root) = (tmp.display(), root.display());
+        assert!(
+            text.contains(&format!(
+                "(subpath \"{tmp}\") (require-not (literal \"{root}\")) \
+             (require-not (subpath \"{root}\")))"
+            )),
+            "{text}"
+        );
+        for directory in [root.to_string(), scratch.display().to_string()] {
+            let anchor = format!("(vnode-type DIRECTORY) (literal \"{directory}\"))");
+            assert!(text.contains(&anchor), "{anchor} in\n{text}");
+        }
+        assert!(!text.contains("(literal \"/\")"));
+    }
+
+    #[test]
     fn an_open_profile_only_hides_the_stores() {
         let tmux = PathBuf::from("/private/tmp/tmux-501");
         let text = spelled(&open(Path::new("/w"), (Vec::new(), vec![&tmux])));

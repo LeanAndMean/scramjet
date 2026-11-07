@@ -670,9 +670,16 @@ fn closed(
         closed.protected.sort();
         closed.protected.dedup();
         closed.anchored = pinned(&real_root, &closed.protected).into_iter().collect();
-        closed.anchored.push(real_root.clone());
-        closed.writable.push(real_root);
+        closed.writable.push(real_root.clone());
+    } else {
+        // A project under a temporary directory stays read-only, as bubblewrap mounts it.
+        closed.protected.push(real_root.clone());
     }
+    // Renaming the project or a directory above it would move what it protects out of its path.
+    let above = real_root
+        .ancestors()
+        .filter(|directory| directory.parent().is_some());
+    closed.anchored.extend(above.map(Path::to_owned));
     closed.writable.extend(writable_too.map(Path::to_owned));
     let (files, directories) = hidden.mounted();
     // Servers that commands with the stores hidden started run what a client asks writable and
