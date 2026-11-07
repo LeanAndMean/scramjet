@@ -1,0 +1,26 @@
+{
+  "files": {"edit.cmd": "@echo edited by cmd>> %1\r\n"},
+  "env": {"EDITOR": "$PROJECT/edit.cmd"},
+  "prompt": "unused",
+  "replies": [[{"text": "Copy **this** reply."}]],
+  "steps": [
+    {"shot": "started", "wait": 5},
+    {"host": ["powershell.exe", "-NoProfile", "-Command", "Set-Clipboard -Value 'pasted from Windows'"]},
+    {"text": "\u001b[<2;20;20M\u001b[<2;20;20m"},
+    {"shot": "right click pasted the clipboard's text", "wait": 3},
+    {"keys": ["C-g"]},
+    {"shot": "Ctrl+G ran edit.cmd through cmd.exe", "wait": 4},
+    {"keys": ["Enter"]},
+    {"shot": "sent", "wait": 4},
+    {"text": "/copy"},
+    {"keys": ["Enter"]},
+    {"shot": "/copy", "wait": 3},
+    {"host": ["powershell.exe", "-NoProfile", "-Command", "Get-Clipboard"]},
+    {"host": ["powershell.exe", "-NoProfile", "-STA", "-Command", "Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; [System.Windows.Forms.Clipboard]::SetImage((New-Object System.Drawing.Bitmap 3,2))"]},
+    {"keys": ["M-v"]},
+    {"shot": "Alt+V pasted the image's path", "wait": 3},
+    {"keys": ["C-u"]},
+    {"keys": ["C-d"]},
+    {"shot": "after Ctrl+D", "wait": 3}
+  ]
+}

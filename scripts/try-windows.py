@@ -9,12 +9,16 @@ WSL's mirrored networking lets the Windows process reach the server on 127.0.0.1
     uv run scripts/try-windows.py SCENARIO.json [--screen] [--binary target/…/scramjet-rs.exe]
 
 Without --screen it runs `-p PROMPT` and prints the output and the project's files. With it, the
-full screen runs in a tmux pane (a Windows console through WSL interop), the prompt is typed and
-sent, the window resized to 80x24 and Ctrl+D pressed, printing the pane after each.
+full screen runs in a tmux pane (a Windows console through WSL interop) and plays the scenario's
+"steps", by default: the prompt typed and sent, the window resized to 80x24 and Ctrl+D pressed,
+printing the pane after each.
 
 A scenario holds "files", "settings", "args" (more command-line words), "path" (WSL paths
 of directories put ahead of Windows' own PATH, relative ones from %TEMP%\\scramjet-rs-try),
-"prompt" and "replies", each reply as in scripts/screens.py.
+"env" (more variables, WSL paths among them given as Windows ones), "prompt", "replies", each
+reply as in scripts/screens.py, and "steps", each one of {"text": typed}, {"keys": [tmux key
+names]}, {"resize": [columns, rows]}, {"host": [a WSL command run in the project]} and
+{"shot": label, "wait": seconds}.
 """
 import argparse, json, os, shutil, subprocess, sys, time
 
@@ -49,6 +53,7 @@ json.dump({'providers': {'screens': provider}}, open(os.path.join(work, 'config/
 json.dump(scenario.get('settings', {}), open(os.path.join(work, 'config/scramjet-rs/settings.json'), 'w'))
 env = dict(XDG_STATE_HOME=work + '/state', XDG_CONFIG_HOME=work + '/config', XDG_DATA_HOME=work + '/data',
            SCRAMJET_CODING_AGENT_DIR=work + '/agent')
+env.update({name: value.replace('$PROJECT', work + '/proj') for name, value in scenario.get('env', {}).items()})
 if scenario.get('path'):
     windows_path = subprocess.run(['cmd.exe', '/c', 'echo %PATH%'], capture_output=True, text=True, cwd='/mnt/c').stdout.strip()
     ahead = [os.path.join(win, directory) for directory in scenario['path']]
@@ -80,14 +85,22 @@ def shot(label, wait):
     print(pane.rstrip('\n'))
 
 
+DEFAULT = [{'shot': 'started', 'wait': 5}, {'text': scenario.get('prompt', '')}, {'keys': ['Enter']},
+           {'shot': 'replied', 'wait': 5}, {'resize': [80, 24]}, {'shot': 'resized to 80x24', 'wait': 2},
+           {'keys': ['C-d']}, {'shot': 'after Ctrl+D', 'wait': 3}]
 try:
-    shot('started', 5)
-    subprocess.run(tmux + ['send-keys', '-l', scenario['prompt']])
-    subprocess.run(tmux + ['send-keys', 'Enter'])
-    shot('replied', 5)
-    subprocess.run(tmux + ['resize-window', '-x', '80', '-y', '24'])
-    shot('resized to 80x24', 2)
-    subprocess.run(tmux + ['send-keys', 'C-d'])
-    shot('after Ctrl+D', 3)
+    for step in scenario.get('steps', DEFAULT):
+        if 'text' in step:
+            subprocess.run(tmux + ['send-keys', '-l', step['text']])
+        elif 'keys' in step:
+            subprocess.run(tmux + ['send-keys'] + step['keys'])
+        elif 'resize' in step:
+            subprocess.run(tmux + ['resize-window', '-x', str(step['resize'][0]), '-y', str(step['resize'][1])])
+        elif 'host' in step:
+            ran = subprocess.run(step['host'], cwd=project, capture_output=True, text=True)
+            print('=====', ' '.join(step['host'])[:60], '->', ran.returncode)
+            print((ran.stdout + ran.stderr).rstrip('\n'))
+        else:
+            shot(step['shot'], step.get('wait', 2))
 finally:
     subprocess.run(tmux + ['kill-server'], stderr=subprocess.DEVNULL)

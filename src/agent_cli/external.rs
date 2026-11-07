@@ -63,8 +63,7 @@ fn windows_line(command: &str, file: &Path) -> String {
 }
 
 /// Runs the editor on a temporary file holding `text`. `Ok(None)` when it exits with another
-/// status than 0, which keeps the prompt text. Its file's text, without one trailing newline,
-/// replaces the prompt text.
+/// status than 0, which keeps the prompt text. Its file's text (`taken`) replaces the prompt text.
 fn run_editor(command: &str, text: &str) -> Result<Option<String>, String> {
     let (path, mut file) = create_prompt_file()
         .map_err(|error| format!("cannot create a file for the prompt: {error}"))?;
@@ -82,7 +81,14 @@ fn run_editor(command: &str, text: &str) -> Result<Option<String>, String> {
                 .map_err(|error| error.to_string())
         });
     let _ = fs::remove_file(&path);
-    outcome.map(|edited| edited.map(|text| text.strip_suffix('\n').unwrap_or(&text).to_owned()))
+    outcome.map(|edited| edited.map(taken))
+}
+
+/// An edited file's text as the prompt takes it: line breaks as `\n`, as Scramjet's `setText`
+/// makes them (Windows' editors save `\r\n`), without one trailing line break.
+fn taken(text: String) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    text.strip_suffix('\n').unwrap_or(&text).to_owned()
 }
 
 /// Creates a new file in the temporary directory; an existing file is never opened.
@@ -110,6 +116,13 @@ fn create_prompt_file() -> io::Result<(PathBuf, File)> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_edited_file_has_its_line_breaks_made_newlines_and_one_trailing_dropped() {
+        assert_eq!(super::taken("a\r\nb\rc\r\n".into()), "a\nb\nc");
+        assert_eq!(super::taken("a\n\n".into()), "a\n");
+        assert_eq!(super::taken("a".into()), "a");
+    }
+
     #[test]
     fn cmd_gets_the_editor_and_its_file_quoted_within_one_quoted_line() {
         let file = std::path::Path::new(r"C:\Users\A B\Temp\p.md");

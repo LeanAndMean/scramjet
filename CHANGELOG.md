@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.88.4 — Ctrl+G and pasted images on Windows
+
+### Fixed
+
+- A prompt edited with Ctrl+G in an editor that saves Windows line endings (`\r\n`) no longer shows `\r` at each line's end: line breaks become plain newlines, as in Scramjet.
+- On Windows, a pasted image's path no longer reads `Temp\/scramjet-rs-clipboard-….png`.
+
 ## 0.88.3 — Commands on Windows run in Git Bash, not WSL
 
 ### Fixed

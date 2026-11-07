@@ -12,6 +12,7 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::{Read, Write},
+    path::Path,
     process::{self, Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -266,11 +267,14 @@ fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String
     let stamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    let path = format!(
-        "{}/scramjet-rs-clipboard-{}-{stamp:x}.{extension}",
-        directory.trim_end_matches('/'),
+    let name = format!(
+        "scramjet-rs-clipboard-{}-{stamp:x}.{extension}",
         process::id()
     );
+    let path = Path::new(directory)
+        .join(name)
+        .to_string_lossy()
+        .into_owned();
     let failed = |error| format!("Cannot save the image to {path}: {error}");
     let mut file = scramjet_rs::os::private_file(OpenOptions::new().write(true).create_new(true))
         .open(&path)
@@ -533,14 +537,20 @@ mod tests {
             env::temp_dir().join(format!("scramjet-rs-clipboard-test-{}", process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let directory = directory.to_string_lossy().into_owned();
-        let first = save(b"one", "png", &format!("{directory}/")).unwrap();
+        let first = save(
+            b"one",
+            "png",
+            &format!("{directory}{}", std::path::MAIN_SEPARATOR),
+        )
+        .unwrap();
         let second = save(b"two", "jpg", &directory).unwrap();
         let read = |path: &str| std::fs::read(path).unwrap();
         assert_eq!(
             (read(&first), read(&second)),
             (b"one".to_vec(), b"two".to_vec())
         );
-        assert!(first.starts_with(&format!("{directory}/scramjet-rs-clipboard-")));
+        let named = Path::new(&directory).join("scramjet-rs-clipboard-");
+        assert!(first.starts_with(&*named.to_string_lossy()), "{first}");
         assert!(first.ends_with(".png") && second.ends_with(".jpg"));
         #[cfg(unix)]
         {
