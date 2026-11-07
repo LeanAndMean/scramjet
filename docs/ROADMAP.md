@@ -82,6 +82,8 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 **Exit evidence:** daily-use journeys pass; native acceptance is tied to the exact candidate and tested matrix, not inherited from the probe. Completion of the selected offline milestone does not complete all S4. Known gaps are visible; no platform is described as first-class merely because it compiles.
 
+**Platforms (user decision, 2026-11-07):** macOS (Terminal.app, and Homebrew's xterm under XQuartz), then native Windows, both before what is left of S3's parallel work and S5. No platform is called supported until it has been used there.
+
 ## S5 — Capacity and admission hardening
 
 **Demonstration:** reproducible sustained high-concurrency workloads with responsive control, bounded resources, accountable failures, and explainable admission adjustments.

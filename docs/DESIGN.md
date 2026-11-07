@@ -5,7 +5,7 @@ Established 2026-10-08 from the founding discussion. This file owns product dire
 ## Agreed scope
 
 - Build an independent Rust product under Apache-2.0, not a Rust port of the Pi package structure.
-- Make Ubuntu Linux, macOS, and WSL Ubuntu first-class. Native Windows is out of initial scope.
+- Make Ubuntu Linux, macOS, and WSL Ubuntu first-class. Native Windows comes after macOS, before the scale work (user decision, 2026-11-07).
 - Improve current usage first: independent project tabs, a main agent, and efficient parallel subagents.
 - Preserve valuable Scramjet outcomes: coding tools, reusable commands/agents/skills, project instructions, command composition and continuation, graduated autonomy, informed approval, model selection, and useful session continuity.
 - Keep the retained alternate-screen experience: browse unfinished output, edit while browsing, expand tool/agent details, and copy selected text without disrupting live work.
@@ -17,7 +17,7 @@ Established 2026-10-08 from the founding discussion. This file owns product dire
 
 ## Current direction (2026-11-03)
 
-Make scramjet-rs a rock-solid daily driver with Scramjet's features, its retained full-screen UI included, on a small, well-organized codebase. Build beyond Scramjet (admission and bounds for many children, children that write, macOS, capacity) only after that (user decision, 2026-11-03). That scale work stays lower priority, but every design keeps it in mind, so that nothing built now corners it (user, 2026-11-06). Order: first remove the earlier-stage demos and the runtime they exercised, so that `scramjet-rs` itself is the agent and the tests are fast (git history keeps the removed code; admission is written for the agent when its phase comes); then review the code drafted by test-only models; then Scramjet's features, usability first ([the task list](TASKS.md)).
+Make scramjet-rs a rock-solid daily driver with Scramjet's features, its retained full-screen UI included, on a small, well-organized codebase. Build beyond Scramjet (admission and bounds for many children, children that write, capacity) only after that (user decision, 2026-11-03). Platforms come before that scale work: macOS first, in Terminal.app and in xterm (Homebrew's, under XQuartz), then native Windows (user decision, 2026-11-07). That scale work stays lower priority, but every design keeps it in mind, so that nothing built now corners it (user, 2026-11-06). Order: first remove the earlier-stage demos and the runtime they exercised, so that `scramjet-rs` itself is the agent and the tests are fast (git history keeps the removed code; admission is written for the agent when its phase comes); then review the code drafted by test-only models; then Scramjet's features, usability first ([the task list](TASKS.md)).
 
 Approvals (user decision, 2026-10-30, replacing the same day's read-only command list): tool calls run without approval questions by default, as in Scramjet. `--ask` opts in to questions (every shell command, writes and edits outside the project, `a` to allow all until exit) for when the user wants to watch. Approval questions and command allowlists are not containment: the shell can do anything, and a question shows a command, not what it does. Recoverability comes from Git and clones or worktrees; real confinement needs an OS sandbox (Landlock or bubblewrap on Linux, Seatbelt on macOS), planned with parallel subagents and unattended runs, and offered for the main agent too ([sandbox](#a-sandbox-for-the-main-agent-2026-11-06)).
 
@@ -96,12 +96,28 @@ User decisions from the second `/rs:steer` of 2026-11-04:
 
 User request at the second steer of 2026-11-06, polish rather than a priority. `/usage` (Claude Code's name) opens a view of what the user has used and has left: subscription quota for subscription providers (Copilot's premium requests, ChatGPT's windows), spend and rate limits for pay-per-token ones, for the current provider by default and the others one key away. Each provider's quota is read its own way; packages report their providers'. It also shows history across sessions: spend over days and weeks per model and provider, and charts such as latency and throughput percentiles per model and tokens per session. History starts with timing recorded in each session, so the recording comes first. Unknown usage stays unknown, as elsewhere.
 
+Less is more (user decision, 2026-11-07, after seeing 0.77.0's view as a wall of tables that gave little insight). The view answers three questions at a glance: how much is left (each quota window as one bar with its reset and whether it lasts at this pace), what was spent (today, this week, the last 30 days, with the change from the 30 before), and what drove it (the top models by share, the costliest session). Everything else (cache shares, speed percentiles, daily and weekly charts, sessions by size, the per-period table) is dropped or kept behind a details key. The sketch the user approved:
+
+```
+Usage · ChatGPT                                        ◂ All · ChatGPT · Copilot · Proxy ▸
+
+  5-hour   ████████░░░░░░░░░░  41%   resets in 2h 10m
+  Weekly   ██░░░░░░░░░░░░░░░░  12%   resets Tue 07:26 · on pace to last the week
+
+  Today $1.20   This week $8.40   Last 30 days $31.10   (up 40% on the 30 before)
+
+  Most of it went to   claude-opus-5-5  $26.80 (86%)   gpt-6-luna  $3.10 (10%)
+  Costliest session    "/rs:loop sandbox" yesterday, $4.10
+
+  d details · Tab provider · Esc close
+```
+
 ### Session chains (2026-11-05)
 
 User decisions of 2026-11-05. Next steps that start a fresh session link sessions into a chain (a `/rs:loop` run is one), but nothing records that link, so `/resume` cannot show a chain again. Scramjet has the same gap: its fresh-session dispatch passes no `parentSession`.
 
 - **Save the link.** A session started by a fresh-session next step names the session it came from in its header, as `parentSession`, as forks do. Pi's handoff example does the same for a new session that copies nothing. The header also marks that a next step started it, so a continuation can be told from a fork. The earlier session's next-step record names the new session's file.
-- **A chain can be seen in `/resume`.** How it shows there is still open. The concern: threading each step under the one before, as forks are threaded today, indents a long chain one level per step. One proposal was a single row per chain (its newest session, with a count); it did not convince the user. Choose the form with the user.
+- **A chain can be seen in `/resume`** (user decision, 2026-11-07), in three forms one key cycles through, the last one used remembered: flat, the default, as today's list, each chain step showing its `completed` summary in place of its first prompt (every `/rs:loop` step starts with the same prompt) and a `chain 11/12` mark; threaded, each step under the one before as forks are threaded (a first version for the user to see, then polished); folded, one row per chain that Right or Enter opens into its steps, one level deep, newest first, and Left closes. Flat stays the default so that users who do not know chains are not confused.
 - **Resuming shows the earlier sessions.** Resuming a session of a chain shows the sessions before it above its own conversation. While a chain runs, a fresh-session step likewise keeps what came before on the screen instead of clearing it. The form is not settled yet. Proposed: one collapsed block per earlier session (its command, its `completed` summary, when it ran), which Ctrl+O opens into its full conversation.
 - **For display only.** Earlier sessions never enter the model's context: a fresh session stays fresh.
 
@@ -112,7 +128,16 @@ User decisions of 2026-11-06, for machines and filesystems where deleting data i
 - **Two modes, Codex's names:** `--sandbox read-only` and `--sandbox workspace-write` (`-s`), and a `sandbox` setting, off by default. `read-only` runs the main agent's shell in the subagents' sandbox (every file read-only, a private `/tmp`, its own processes, credential stores hidden) and refuses its writes and edits. `workspace-write` does the same with the project directory writable.
 - **Network is a setting of its own**, on by default.
 - **It must hold.** What the agent starts runs inside: MCP servers over stdio included. Under WSL, Windows programs (`cmd.exe`, `powershell.exe`), which could change Windows' files, are out of its reach. Without Bubblewrap it refuses to start rather than run unconfined. A small mark shows while it is on. The `!` commands the user types are the user's own and stay outside.
+- **Protected paths as Codex's** (user decision, 2026-11-07): `workspace-write` keeps only the project's own `.git` (with the gitdir a `.git` file names), `.scramjet` and `.agents` read-only, as Codex's `default_read_only_subpaths_for_writable_root` does (`codex-rs/protocol/src/permissions.rs`, read 2026-11-07; it also keeps `.codex` and `.aws`). Repositories nested in the project are not protected: pinning them made `rm -rf build` fail over a CMake or pip checkout, and an exception list by directory name, or by `.gitignore`, would not be trustworthy.
+- **Unix sockets as Codex's** (user decision, 2026-11-07): left open on Linux, as Codex leaves them; on macOS, follow Codex's Seatbelt behavior there when the macOS sandbox comes.
 - Item 7's children that write reuse it, with their worktree writable.
+
+### Hand-offs and going back (2026-11-07)
+
+User decisions of 2026-11-07:
+
+- **Waiting for you, always.** Whenever the turn is with the user (the end of every turn, the agent's freetext, select and confirm questions, next-step lists, `--ask` approvals), the status row says `Waiting for you` with the time since the agent stopped, until the user sends something, typing included. Not at start, before any turn.
+- **Going back reopens what was there.** Going back (`/tree`, double Escape) to a point where a choice was offered (a next-step list after a `completed` report or from `suggest_scramjet_next_steps`, or the agent's select, confirm or freetext question) reopens it as it was, with its options, rather than leaving the user after it as if dismissed; what the user picks then branches from there, as going back to a prompt puts its text back in the editor.
 
 ## Essential responsibilities and invariants
 
