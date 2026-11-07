@@ -1,5 +1,6 @@
 use super::Tokens;
 use super::compaction::FileLists;
+pub use kept::{Written, write_kept};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
@@ -9,6 +10,8 @@ use std::{
     sync::{Mutex, PoisonError},
     time::SystemTime,
 };
+
+pub(super) mod kept;
 
 /// Held while lines are written to a session file, so that a process ending on a signal leaves
 /// none cut short, which would make the file unreadable.
@@ -219,6 +222,10 @@ pub struct Session {
     held: Vec<u8>,
     /// The change in `held` not yet said.
     change: Option<Saving>,
+    /// Where `held` is copied so that it outlives the process (`kept`), for a saved session.
+    keep_in: Option<PathBuf>,
+    /// The copy of `held` while there is one.
+    kept: Option<kept::Kept>,
     /// The session whose next step started this one, as the header's `parentSession` with
     /// `nextStep` records it.
     continues: Option<PathBuf>,
@@ -935,6 +942,8 @@ impl Session {
         let (path, created) = new_name(directory);
         let held = header(created)?;
         Ok(Self {
+            keep_in: kept::directory_for(&path),
+            kept: None,
             path,
             file: None,
             model: None,
@@ -990,12 +999,34 @@ impl Session {
 
     /// Opens an existing session for appending and returns its conversation items and every
     /// prompt the user gave in it, including those a compaction summarized.
+    ///
+    /// Lines an earlier run kept for want of room are written first, or taken over when there is
+    /// still none.
     pub fn open(path: &Path) -> io::Result<Opened> {
-        let entries = read(path)?;
-        let context = entries.context(path, entries.tail)?;
         let file = OpenOptions::new().append(true).open(path)?;
+        let keep_in = kept::directory_for(path);
+        let taken = keep_in.as_ref().and_then(|_| kept::adopt(path));
+        let entries = match &taken {
+            Some((taken, _)) => {
+                let mut bytes = std::fs::read(path)?;
+                bytes.truncate(taken.size as usize);
+                bytes.extend_from_slice(&taken.lines);
+                parse(path, &bytes[..])?
+            }
+            None => read(path)?,
+        };
+        let context = entries.context(path, entries.tail)?;
+        let (size, held, kept, change) = match taken {
+            Some((taken, error)) => {
+                let change = Saving::Held(error.to_string());
+                (taken.size, taken.lines, Some(taken.kept), Some(change))
+            }
+            None => (entries.size, Vec::new(), None, None),
+        };
         Ok((
             Self {
+                keep_in,
+                kept,
                 path: path.to_owned(),
                 file: Some(file),
                 model: context.model,
@@ -1010,13 +1041,13 @@ impl Session {
                 leaf: entries.tail,
                 tail: entries.tail,
                 lines: entries.lines,
-                size: entries.size,
+                size,
                 unused: false,
-                failing: false,
+                failing: !held.is_empty(),
                 skipped: entries.skipped.clone(),
                 unterminated: entries.unterminated,
-                held: Vec::new(),
-                change: None,
+                held,
+                change,
                 continues: entries.parent.clone().filter(|_| entries.continues()),
             },
             context.items,
@@ -1139,6 +1170,7 @@ impl Session {
             Ok(opened) => opened,
             Err(error) => {
                 self.held.clear();
+                self.discard_kept();
                 if self.file.is_some() {
                     let _ = std::fs::remove_file(&self.path);
                 }
@@ -1320,6 +1352,7 @@ impl Session {
     /// As `delete`, with `trash` for the `trash` command.
     pub(super) fn delete_with(path: &Path, trash: &str) -> io::Result<Removal> {
         read(path)?;
+        kept::forget(path);
         let trash = std::process::Command::new(trash)
             .arg(path)
             .stdin(std::process::Stdio::null())
@@ -1476,8 +1509,10 @@ impl Session {
             self.failing = true;
             self.held = bytes;
             self.unterminated = false;
+            self.keep_held();
             return Ok(());
         }
+        self.discard_kept();
         self.size += bytes.len() as u64;
         self.unterminated = false;
         if std::mem::take(&mut self.failing) {
@@ -1487,6 +1522,33 @@ impl Session {
             };
         }
         Ok(())
+    }
+
+    /// Copies the lines held in memory where they outlive the process; without a copy they are
+    /// only in memory, as before there was one.
+    fn keep_held(&mut self) {
+        let Some(directory) = &self.keep_in else {
+            return;
+        };
+        if self.kept.is_none() {
+            self.kept = kept::Kept::create(directory, &self.path).ok();
+        }
+        if let Some(kept) = &mut self.kept
+            && kept.keep(&self.path, self.size, &self.held).is_err()
+        {
+            self.discard_kept();
+        }
+    }
+
+    fn discard_kept(&mut self) {
+        if let Some(kept) = self.kept.take() {
+            kept.discard();
+        }
+    }
+
+    /// Where the lines held in memory are copied to outlive the process, while they are.
+    pub fn kept_path(&self) -> Option<&Path> {
+        self.kept.as_ref().map(kept::Kept::path)
     }
 
     /// Takes in the lines another process appended to the file since this one last read or wrote

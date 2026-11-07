@@ -536,6 +536,11 @@ pub struct Agent {
     /// Sessions switched away from while a full disk kept some of their lines in memory, tried
     /// again with the current one's until written.
     left: Vec<Session>,
+    /// Whether lines runs that ended kept for want of room still wait for it
+    /// (`session::write_kept`).
+    kept_waiting: bool,
+    /// What to say of those lines, once.
+    kept_notes: Vec<String>,
     /// With `SessionChoice::Unsaved`, where every session of the run is, removed with the agent.
     unsaved: Option<session::Unsaved>,
     executor: tokio::runtime::Runtime,
@@ -648,6 +653,8 @@ impl Agent {
     pub fn start(mut config: AgentConfig, choice: SessionChoice) -> Result<Self, AgentError> {
         config.model = config.providers.reference(&config.model);
         let directory = || session::directory(&config.root);
+        // Before a session is opened, which may be one they belong to.
+        let (kept_notes, kept_waiting) = kept_notes(session::write_kept(), true);
         let mut unsaved = None;
         let latest = match choice {
             SessionChoice::Continue => Session::latest(&directory()?)?,
@@ -709,6 +716,8 @@ impl Agent {
             session,
             next_session: None,
             left: Vec::new(),
+            kept_waiting,
+            kept_notes,
             unsaved,
             executor,
             usage: Usage {
@@ -998,24 +1007,34 @@ impl Agent {
     /// What to say, once, of a change in whether the session's lines reach its file: a full disk
     /// keeps them in memory (`Session::write`).
     pub fn saving_notice(&mut self) -> Option<String> {
-        let change = self.session.take_change()?;
-        if !self.session_saved() {
-            return None;
-        }
-        Some(match change {
+        let mut said = std::mem::take(&mut self.kept_notes);
+        let change = self.session.take_change().filter(|_| self.session_saved());
+        said.extend(change.map(|change| match change {
             session::Saving::Held(error) => format!(
                 "Session not written: {error}. It is kept in memory and written once there is room."
             ),
             session::Saving::Saved => {
                 "Session written again, with what was kept in memory.".to_owned()
             }
-        })
+        }));
+        (!said.is_empty()).then(|| said.join("\n"))
     }
 
     /// Whether the session, or one switched away from, keeps lines in memory that its file could
     /// not take.
     pub fn session_holding(&self) -> bool {
-        self.session.holding() || !self.left.is_empty()
+        self.session.holding() || !self.left.is_empty() || self.kept_waiting
+    }
+
+    /// The directory where every line held in memory for want of room is copied, so that a later
+    /// run writes it once there is room; `None` while some are only in memory.
+    pub fn held_kept_in(&self) -> Option<&Path> {
+        let holding = std::iter::once(&self.session).chain(&self.left);
+        let mut kept = holding.filter(|session| session.held_len() > 0);
+        let first = kept.next()?.kept_path()?;
+        kept.all(|session| session.kept_path().is_some())
+            .then(|| first.parent())
+            .flatten()
     }
 
     /// How many bytes of lines the session and those switched away from keep in memory, for want
@@ -1032,6 +1051,11 @@ impl Agent {
     /// what to say of it, as a quiet session has no next write to take it.
     pub fn write_held(&mut self) -> Option<String> {
         let mut said = self.write_left();
+        if self.kept_waiting {
+            let (notes, waiting) = kept_notes(session::write_kept(), false);
+            said.extend(notes);
+            self.kept_waiting = waiting;
+        }
         if let Err(error) = self.session.write_held() {
             said.push(format!("Error: session not written: {error}"));
         }
@@ -1800,6 +1824,33 @@ impl Agent {
     fn save_command(&mut self) -> Result<(), AgentError> {
         self.session.record_command(&self.lifecycle.saved())?;
         Ok(())
+    }
+}
+
+/// What to say of the lines `written` (`session::write_kept`), its problems only when `problems`,
+/// and whether some still wait for room.
+fn kept_notes(written: session::Written, problems: bool) -> (Vec<String>, bool) {
+    let mut notes: Vec<String> = (written.sessions.iter())
+        .map(|(path, len)| {
+            format!(
+                "Session {} written, with the {} an earlier run kept in memory for want of room.",
+                path.display(),
+                byte_size(*len)
+            )
+        })
+        .collect();
+    if problems {
+        notes.extend(written.problems);
+    }
+    (notes, written.waiting > 0)
+}
+
+/// `bytes` for people: `512 bytes`, `1.5 KB`, `2.0 MB`.
+pub fn byte_size(bytes: usize) -> String {
+    match bytes {
+        ..1024 => format!("{bytes} bytes"),
+        1024..1_048_576 => format!("{:.1} KB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.0),
     }
 }
 

@@ -2598,3 +2598,86 @@ fn models_that_replied_before_a_compaction_are_still_on_the_branch() {
         .unwrap();
     assert_eq!(session.contributors(), ["a", "b", "c"]);
 }
+
+#[test]
+fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
+    let directory = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-kept-{}", std::process::id())),
+    );
+    let copies = directory.0.join("kept");
+    session::kept::keep_in(&copies);
+    let say = |text: &str| json!({"role":"user","content":text});
+    let full = || {
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open("/dev/full")
+            .unwrap()
+    };
+    let listed = || std::fs::read_dir(&copies).unwrap().count();
+
+    let mut session = Session::create(&directory.0, Path::new("/project"), None).unwrap();
+    let path = session.path().to_owned();
+    session.append(&say("first")).unwrap();
+    assert_eq!(session.kept_path(), None);
+    session.write_to(full());
+    session.append(&say("second")).unwrap();
+    session.append(&say("third")).unwrap();
+    let copy = session.kept_path().unwrap().to_owned();
+    assert!(copy.starts_with(&copies));
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(&copies).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o700);
+    // Locked while its run lives: nothing writes it from under the session.
+    let written = session::write_kept();
+    assert!(written.sessions.is_empty() && written.problems.is_empty());
+    assert_eq!(written.waiting, 0);
+    // The run ends with them still held, as on a signal or Ctrl+D.
+    drop(session);
+    assert!(copy.exists());
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("second"));
+
+    let written = session::write_kept();
+    assert!(written.problems.is_empty(), "{:?}", written.problems);
+    let len = std::fs::read(&path).unwrap().len();
+    assert_eq!(written.sessions, [(path.clone(), written.sessions[0].1)]);
+    assert!(written.sessions[0].1 > 0 && written.sessions[0].1 < len);
+    assert_eq!(listed(), 0);
+    let (mut reopened, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(conversation, [say("first"), say("second"), say("third")]);
+    reopened.append(&say("fourth")).unwrap();
+    let (_, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(conversation.len(), 4);
+
+    // Opening the session writes them in first.
+    let mut session = Session::open(&path).unwrap().0;
+    session.write_to(full());
+    session.append(&say("held")).unwrap();
+    drop(session);
+    assert_eq!(listed(), 1);
+    let (_, conversation, _) = Session::open(&path).unwrap();
+    assert_eq!(conversation.last(), Some(&say("held")));
+    assert_eq!(listed(), 0);
+
+    // A file changed since keeps its copy, said, rather than lines numbered for another file.
+    let mut session = Session::open(&path).unwrap().0;
+    session.write_to(full());
+    session.append(&say("fifth")).unwrap();
+    drop(session);
+    let mut other = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(other, "{}", say("elsewhere")).unwrap();
+    let written = session::write_kept();
+    assert!(written.sessions.is_empty());
+    assert!(
+        written.problems[0].contains("changed since"),
+        "{:?}",
+        written.problems
+    );
+    assert_eq!(listed(), 1);
+
+    // Deleting the session removes its copy.
+    session::Session::delete_with(&path, "scramjet-no-such-trash").unwrap();
+    assert_eq!(listed(), 0);
+}

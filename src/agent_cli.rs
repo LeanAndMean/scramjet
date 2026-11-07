@@ -473,8 +473,9 @@ fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> 
     Ok(())
 }
 
-/// Before the agent ends, writes once more what its sessions keep in memory for want of room. On a
-/// terminal the user can free space and try again, as what is still held then is lost.
+/// Before the agent ends, writes once more what its sessions keep in memory for want of room. What
+/// is copied where a later run finds it waits there; otherwise, on a terminal the user can free
+/// space and try again, as what is still held then is lost.
 fn write_held_at_exit(agent: &mut Agent) {
     let asking = std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
     while agent.held_len() > 0 {
@@ -484,11 +485,15 @@ fn write_held_at_exit(agent: &mut Agent) {
             eprintln!("Session written, with what was kept in memory.");
             return;
         }
-        let size = match held {
-            ..1024 => format!("{held} bytes"),
-            1024..1_048_576 => format!("{:.1} KB", held as f64 / 1024.0),
-            _ => format!("{:.1} MB", held as f64 / 1_048_576.0),
-        };
+        let size = scramjet_rs::agent::byte_size(held);
+        if let Some(directory) = agent.held_kept_in() {
+            eprintln!(
+                "Session not written for want of room: the {size} kept in memory wait in {}, for \
+                 the next run that finds room to write them.",
+                directory.display()
+            );
+            return;
+        }
         if !asking {
             eprintln!(
                 "Error: session not written: the {size} kept in memory for want of room are lost."

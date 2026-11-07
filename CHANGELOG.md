@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.74.0 — A full disk's session lines kept past the exit
+
+### Changed
+
+- Session lines kept in memory while the disk is full are also copied to a private directory in memory (`$XDG_RUNTIME_DIR/scramjet-rs-kept`, else `/dev/shm`), so they survive leaving, a signal or a kill. The next scramjet-rs run writes them to their session once there is room, and says so; resuming that session first takes them in. Leaving while they are copied no longer asks you to free space first.
+
 ## 0.73.0 — Every folder's sessions in /resume
 
 ### Added
