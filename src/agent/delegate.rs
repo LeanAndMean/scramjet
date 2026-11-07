@@ -113,7 +113,7 @@ or aborting the delegation.\n\n{body}"
 }
 
 /// The command and arguments of a call, or what is wrong with them as Pi's validation says it.
-fn given(arguments: &Value) -> Result<(&str, &str), Vec<String>> {
+pub(super) fn given(arguments: &Value) -> Result<(&str, &str), Vec<String>> {
     let field = |key: &str| match arguments.get(key) {
         None => Err(format!("  - {key}: must have required property")),
         Some(Value::String(text)) => Ok(text.as_str()),

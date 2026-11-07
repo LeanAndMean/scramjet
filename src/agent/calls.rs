@@ -210,6 +210,7 @@ impl Agent {
                     if let Some(output) = again.kept.remove(id) {
                         super::show_items(&[item.clone(), output.clone()], Some(self.root()), ui);
                         ends &= ended(item, &output);
+                        self.replay(item, &output);
                         self.add(output)?;
                         next += 1;
                         continue;
@@ -257,6 +258,37 @@ impl Agent {
                 }
                 Ok(ends)
             }
+        }
+    }
+
+    /// Does again what the call `item`, kept with its earlier `output` rather than run again,
+    /// did to the turn's state as it ran: a question's answer to the active command, and a
+    /// delegation's place in the cycle check.
+    fn replay(&mut self, item: &Value, output: &Value) {
+        if output[super::FAILED] == true {
+            return;
+        }
+        let Ok(call) = Call::parse(item) else { return };
+        match call.name {
+            question::NAME => {
+                let answer: Value = (output["output"].as_str())
+                    .and_then(|text| serde_json::from_str(text).ok())
+                    .unwrap_or_default();
+                if answer.get("parked").is_some() {
+                    self.lifecycle.wait();
+                    self.suggestion = suggest::Pending::Reply;
+                } else if answer["cancelled"] == true {
+                    self.lifecycle.wait();
+                } else if answer.get("confirmed").is_some() || answer.get("selected").is_some() {
+                    self.lifecycle.answered();
+                }
+            }
+            delegate::NAME => {
+                if let Ok((name, args)) = delegate::given(&call.arguments) {
+                    self.delegated.push((name.to_owned(), args.to_owned()));
+                }
+            }
+            _ => {}
         }
     }
 

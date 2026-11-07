@@ -463,7 +463,7 @@ fn asked_at(entries: &[session::Entry], entry: &session::Entry) -> Option<Asked>
 mod tests {
     use super::*;
     use crate::agent::tests::*;
-    use crate::agent::{Session, show_items};
+    use crate::agent::{Session, delegate, show_items};
     use crate::provider_fixture as fixture;
 
     #[test]
@@ -665,6 +665,56 @@ mod tests {
         let summary = input.last().unwrap()["content"].as_str().unwrap();
         assert!(summary.contains("## Goal\nsummary"), "{summary}");
         assert_eq!(input[input.len() - 2]["type"], "function_call_output");
+    }
+
+    #[test]
+    fn a_freetext_question_kept_after_one_asked_again_leaves_the_command_waiting() {
+        let select = json!({"type":"select","message":"Which?",
+            "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]});
+        let freetext = json!({"type":"freetext","message":"Why?"});
+        let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[
+                (question::NAME, select),
+                (delegate::NAME, json!({"command":"rs:work","args":"x"})),
+                (question::NAME, freetext),
+            ]),
+            text("Waiting."),
+            text("Waiting again."),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "tree-freetext");
+        let commands = agent.root().join(".scramjet/rs/commands");
+        std::fs::create_dir_all(&commands).unwrap();
+        std::fs::write(commands.join("rs:work.md"), "Work on $1.\n").unwrap();
+        project_sets(&mut agent);
+        agent.autonomy = None;
+        let cancel = AtomicBool::new(false);
+        let mut ui = Recorder {
+            choices: vec![Some(0)],
+            ..Recorder::default()
+        };
+        agent.turn("/rs:work go", &mut ui, &cancel).unwrap();
+        let tree = agent.tree().unwrap();
+        let first = (tree.entries.iter())
+            .find(|entry| matches!(&entry.item, TreeItem::Tool(name, _) if name == question::NAME))
+            .unwrap()
+            .line;
+        agent.navigate(first, None, &mut ui, &cancel).unwrap();
+        let mut ui = Recorder {
+            choices: vec![Some(1)],
+            ..Recorder::default()
+        };
+        agent.resume_turn(&mut ui, &cancel).unwrap();
+        assert_eq!(agent.lifecycle.active(), Some("rs:work"));
+        assert_eq!(agent.delegated, [("rs:work".to_owned(), "x".to_owned())]);
+        // No status check follows, as the freetext question left the command waiting.
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 3);
+        let answers: Vec<_> = (outputs(&bodies[2]).into_iter())
+            .map(|(_, text)| text)
+            .collect();
+        assert_eq!(answers[0], r#"{"selected":"b"}"#);
+        assert_eq!(answers[2], r#"{"parked":true}"#);
     }
 
     #[test]

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.82.1 — A question kept after one asked again still waits
+
+### Fixed
+
+- When a question asked again by going back is followed, in the same reply, by a question you were to answer at the prompt, the running command waits for your reply again, as it did the first time, instead of getting a status check. A delegated command kept there is still refused if delegated again in the turn.
+
 ## 0.82.0 — Going back asks a question again
 
 ### Changed
