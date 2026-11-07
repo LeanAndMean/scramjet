@@ -2296,6 +2296,8 @@ def settings_menu(read, until, send, output):
     send(b'/settings\r')
     rows = on_screen('Settings  \u2191\u2193 move')
     assert 'Command: ' not in '\n'.join(rows), rows
+    # A list the user opened leaves the status row on what the turn does.
+    assert any(' Running ' in row for row in rows), rows
     send(b'\x1b[B' * 13 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')

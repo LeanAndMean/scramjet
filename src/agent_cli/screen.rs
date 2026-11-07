@@ -115,7 +115,9 @@ enum ToScreen {
     /// The session's tokens, how full the context is and the model's output rate, after a
     /// response or a compaction.
     Usage(Tokens, Option<u64>, Option<f64>),
-    Dialog(Dialog, mpsc::Sender<Answer>),
+    /// A dialog and where its answer goes; `true` when the agent asks it, so that the turn
+    /// waits for the user, `false` for one the user opened.
+    Dialog(Dialog, mpsc::Sender<Answer>, bool),
     /// The dialog's question is no longer asked.
     Dismiss,
     /// A sequence for the terminal itself: OSC 52's copy.
@@ -618,7 +620,7 @@ impl App {
                 self.efforts = efforts;
             }
             ToScreen::Usage(tokens, context, rate) => self.footer.usage(tokens, context, rate),
-            ToScreen::Dialog(dialog, reply) => {
+            ToScreen::Dialog(dialog, reply, asks) => {
                 let shown = match dialog {
                     Dialog::Pick(picker) if picker.is_empty() => {
                         let _ = reply.send(Answer::Picked(None));
@@ -649,7 +651,9 @@ impl App {
                     answered: false,
                 });
                 self.top = None;
-                if let Some(activity) = &mut self.activity {
+                if let Some(activity) = &mut self.activity
+                    && asks
+                {
                     let doing = std::mem::replace(activity, Activity::asking());
                     if !doing.asks() {
                         self.before_dialog = Some(doing);
@@ -659,6 +663,7 @@ impl App {
             }
             ToScreen::Dismiss => {
                 self.dialog = None;
+                self.after_dialog();
                 self.replay();
             }
             ToScreen::Terminal(_) | ToScreen::Edit(..) | ToScreen::Quit => {}
@@ -785,9 +790,7 @@ impl App {
                 },
             ) => {
                 let _ = reply.send(Answer::Label(entry, Some(picker)));
-                if let Some(activity) = &mut self.activity {
-                    *activity = Activity::new("Working");
-                }
+                self.after_dialog();
                 return;
             }
             pair => pair,
@@ -809,12 +812,16 @@ impl App {
         self.after_dialog();
     }
 
-    /// The status line says again what the turn did before a dialog opened, as a command run
-    /// while a tool runs leaves it running.
+    /// The status line says again what the turn did before the agent asked; a dialog the user
+    /// opened left it as it was.
     fn after_dialog(&mut self) {
         let doing = self.before_dialog.take();
         if let Some(activity) = &mut self.activity {
-            *activity = doing.unwrap_or_else(|| Activity::new("Working"));
+            match doing {
+                Some(doing) => *activity = doing,
+                None if activity.asks() => *activity = Activity::new("Working"),
+                None => {}
+            }
         }
     }
 

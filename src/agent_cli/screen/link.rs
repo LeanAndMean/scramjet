@@ -204,8 +204,12 @@ impl Link {
         dialog: Dialog,
         cancel: Option<&AtomicBool>,
     ) -> Option<Answer> {
+        self.open(dialog, cancel, false)
+    }
+    /// As `ask`, for a question of the agent's, which the turn waits on (`ToScreen::Dialog`).
+    fn open(&self, dialog: Dialog, cancel: Option<&AtomicBool>, asks: bool) -> Option<Answer> {
         let (reply, answer) = mpsc::channel();
-        self.send(ToScreen::Dialog(dialog, reply));
+        self.send(ToScreen::Dialog(dialog, reply, asks));
         loop {
             match answer.recv_timeout(Duration::from_millis(50)) {
                 Ok(answer) => return Some(answer),
@@ -253,7 +257,7 @@ impl Link {
 
     /// The row chosen from `picker`, `None` when cancelled.
     pub(in crate::agent_cli) fn pick(&self, picker: Picker) -> Option<usize> {
-        self.pick_timed(picker).map(|(row, ..)| row)
+        self.timed(picker, false).map(|(row, ..)| row)
     }
 
     /// As `pick`, with where the list was when the row was chosen (`Picker::placing`).
@@ -289,9 +293,13 @@ impl Link {
     }
 
     /// As `pick`, whether the picker's countdown chose the row rather than the user, and the
-    /// model and effort chosen in a next step's list (`Picker::routing`).
+    /// model and effort chosen in a next step's list (`Picker::routing`): for the agent's next
+    /// steps and questions, which the turn waits on.
     pub(in crate::agent_cli) fn pick_timed(&self, picker: Picker) -> Option<(usize, bool, Routed)> {
-        match self.ask(Dialog::Pick(Box::new(picker)), None) {
+        self.timed(picker, true)
+    }
+    fn timed(&self, picker: Picker, asks: bool) -> Option<(usize, bool, Routed)> {
+        match self.open(Dialog::Pick(Box::new(picker)), None, asks) {
             Some(Answer::Picked(chosen)) => chosen.map(|row| (row, false, Routed::default())),
             Some(Answer::Routed(row, routed)) => Some((row, false, routed)),
             Some(Answer::Expired(row)) => Some((row, true, Routed::default())),
@@ -479,7 +487,7 @@ impl AgentUi for Link {
     }
     /// As Scramjet's, the question shows until answered; a cancelled one shows no answer.
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> agent::Answer {
-        match self.ask(Dialog::Approve(question.to_owned()), Some(cancel)) {
+        match self.open(Dialog::Approve(question.to_owned()), Some(cancel), true) {
             Some(Answer::Approved(answer)) => {
                 self.event(Event::Approval(question.to_owned(), answer));
                 answer
@@ -528,7 +536,8 @@ impl AgentUi for Link {
         options: &[Choice],
         recommended: Option<usize>,
     ) -> Option<usize> {
-        self.pick(Picker::question(title, options, recommended))
+        self.pick_timed(Picker::question(title, options, recommended))
+            .map(|(row, ..)| row)
     }
 }
 

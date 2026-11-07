@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.63.3 — The status row during a list you opened
+
+### Fixed
+
+- A list or dialog you open during a turn (`/model`, `/settings`, `/tree`) leaves the status row on what the turn is doing, where it said `Waiting for you` as for the agent's own questions.
+
 ## 0.63.2 — No session file before the first prompt
 
 ### Fixed
