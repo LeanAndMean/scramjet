@@ -613,8 +613,8 @@ fn decode(text: &str) -> String {
 
 fn random(count: usize) -> Result<Vec<u8>, String> {
     let mut bytes = vec![0; count];
-    let read = std::fs::File::open("/dev/urandom").and_then(|mut file| file.read_exact(&mut bytes));
-    read.map_err(|error| format!("/dev/urandom: {error}"))?;
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| format!("cannot get random bytes: {error}"))?;
     Ok(bytes)
 }
 

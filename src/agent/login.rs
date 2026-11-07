@@ -382,9 +382,15 @@ fn update<T, E: From<String>>(
     let directory = path.parent().unwrap_or(Path::new("."));
     let made = os::private_directory(std::fs::DirBuilder::new().recursive(true)).create(directory);
     made.map_err(failed)?;
-    let lock = os::private_file(std::fs::OpenOptions::new().create(true).append(true))
-        .open(lock_file(path))
-        .map_err(failed)?;
+    // Windows locks only a handle that can read or write; one that only appends cannot.
+    let lock = os::private_file(
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false),
+    )
+    .open(lock_file(path))
+    .map_err(failed)?;
     lock.lock().map_err(failed)?;
     let file = read(path)?;
     let held = held(path);

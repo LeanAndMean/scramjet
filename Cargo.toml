@@ -1,6 +1,6 @@
 [package]
 name = "scramjet-rs"
-version = "0.88.1"
+version = "0.88.2"
 edition = "2024"
 license = "Apache-2.0"
 description = "An independent Rust terminal coding harness"
@@ -9,6 +9,7 @@ description = "An independent Rust terminal coding harness"
 httpdate = { version = "=1.0.3", default-features = false }
 serde = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std", "float_roundtrip"] }
+getrandom = { version = "=0.2.17", default-features = false }
 sha2 = { version = "=0.10.9", default-features = false }
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "termios", "process", "event", "time"] }
 signal-hook = { version = "=0.3.18", default-features = false }

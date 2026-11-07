@@ -1457,22 +1457,20 @@ impl Session {
     }
 
     /// Locks the session directory until dropped, so that no other process's line lands between
-    /// `catch_up` and the write after it. Without `flock`, writes go unserialized, as they do
+    /// `catch_up` and the write after it. Where no lock can be taken, writes go unserialized, as they do
     /// while a session without its file has no directory either.
     fn writing(&self) -> io::Result<Option<File>> {
         let directory = match self.path.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent,
             _ => Path::new("."),
         };
-        let directory = match crate::os::open_directory(directory) {
-            Ok(directory) => directory,
+        match crate::os::lock_directory(directory) {
+            Ok(lock) => Ok(lock),
             Err(error) if error.kind() == io::ErrorKind::NotFound && self.file.is_none() => {
-                return Ok(None);
+                Ok(None)
             }
-            Err(error) => return Err(error),
-        };
-        let _ = directory.lock();
-        Ok(Some(directory))
+            Err(error) => Err(error),
+        }
     }
 
     /// Writes `lines` at the file's end; callers count them once it returns. A write that fails

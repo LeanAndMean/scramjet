@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.88.2 — Logins and sessions on Windows
+
+### Fixed
+
+- On Windows, `/login` saves its credentials (the lock beside `auth.json` was refused as `Access is denied`), and the ChatGPT login no longer fails reading `/dev/urandom`.
+- On Windows, two scramjet-rs processes writing the same session take turns, as on Linux and macOS, where before their writes went unserialized (Windows cannot lock a directory, so a `.lock` file in it is locked).
+
 ## 0.88.1 — Starting on Windows
 
 ### Fixed

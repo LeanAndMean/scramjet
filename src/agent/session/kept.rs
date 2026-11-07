@@ -169,8 +169,7 @@ fn write_out(taken: Taken) -> Result<(PathBuf, usize), (Taken, io::Error)> {
     let written = (|| {
         let directory = taken.session.parent().unwrap_or(Path::new("."));
         make_directory(directory)?;
-        let lock = crate::os::open_directory(directory)?;
-        let _ = lock.lock();
+        let _lock = crate::os::lock_directory(directory)?;
         let found = match std::fs::metadata(&taken.session) {
             Ok(metadata) => metadata.len(),
             Err(error) if error.kind() == io::ErrorKind::NotFound => 0,

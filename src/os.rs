@@ -20,16 +20,23 @@ pub fn private_directory(builder: &mut DirBuilder) -> &mut DirBuilder {
     builder
 }
 
-/// Opens a directory to lock it, which Windows allows only with backup semantics.
-pub fn open_directory(path: &Path) -> std::io::Result<std::fs::File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
+/// Locks `directory` against other processes until the file returned is dropped. Windows cannot
+/// lock a directory's handle (ERROR_INVALID_PARAMETER), so there a `.lock` file in it is locked.
+/// A lock that cannot be taken is passed over (`None` where that file cannot be made, as on a full
+/// disk); only a directory that cannot be opened fails.
+pub fn lock_directory(directory: &Path) -> std::io::Result<Option<std::fs::File>> {
     #[cfg(windows)]
-    std::os::windows::fs::OpenOptionsExt::custom_flags(
-        &mut options,
-        windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS,
-    );
-    options.open(path)
+    let lock = match private_file(OpenOptions::new().create(true).write(true).truncate(false))
+        .open(directory.join(".lock"))
+    {
+        Ok(lock) => lock,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(error),
+        Err(_) => return Ok(None),
+    };
+    #[cfg(not(windows))]
+    let lock = std::fs::File::open(directory)?;
+    let _ = lock.lock();
+    Ok(Some(lock))
 }
 
 /// Makes an open file readable by its owner only.
@@ -302,6 +309,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_locked_directory_is_locked_against_other_handles() {
+        let directory =
+            std::env::temp_dir().join(format!("scramjet-rs-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let held = lock_directory(&directory).unwrap().unwrap();
+        #[cfg(not(windows))]
+        let other = || std::fs::File::open(&directory).unwrap();
+        #[cfg(windows)]
+        let other = || {
+            OpenOptions::new()
+                .write(true)
+                .open(directory.join(".lock"))
+                .unwrap()
+        };
+        let (first, second) = (other(), other());
+        let refused = matches!(first.try_lock(), Err(std::fs::TryLockError::WouldBlock));
+        drop(held);
+        let taken = second.try_lock().is_ok();
+        drop((first, second));
+        std::fs::remove_dir_all(&directory).unwrap();
+        assert!(refused && taken);
+    }
+
+    #[test]
     fn a_tilde_names_the_home_directory_only_before_a_separator() {
         assert_eq!(after_tilde("~"), Some(""));
         assert_eq!(after_tilde("~/a/b"), Some("a/b"));
@@ -337,7 +368,10 @@ mod tests {
         let home = std::env::home_dir().unwrap();
         assert_eq!(tilde(&home), "~");
         let shown = Path::new("~").join("repos").join("x");
-        assert_eq!(tilde(&home.join("repos/x")), shown.display().to_string());
+        assert_eq!(
+            tilde(&home.join("repos").join("x")),
+            shown.display().to_string()
+        );
         assert_eq!(tilde(Path::new("/elsewhere/x")), "/elsewhere/x");
         let beside = format!("{}x", home.display());
         assert_eq!(tilde(Path::new(&beside)), beside);
