@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.87.0 — The terminal UI's code builds for Windows
+
+### Changed
+
+- The full screen, `-p` and line mode now compile for native Windows, with the console's own modes, size and input in place of a Unix terminal's; the console closing exits as a hangup does, and Ctrl+Z does nothing there. Only type-checked: no Windows build has been linked or run yet.
+
 ## 0.86.0 — A clipboard image pastes on macOS
 
 ### Added

@@ -4,6 +4,7 @@ mod banner;
 mod children;
 mod clipboard;
 mod completion;
+mod console;
 mod design;
 mod diff;
 mod editor;
@@ -44,7 +45,6 @@ mod tree;
 mod usage;
 
 use args::{Options, Start, USAGE};
-use rustix::termios::{self, QueueSelector};
 use scramjet_rs::agent::{
     self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
     Next, Providers, Sandbox, Session, SessionChoice, SkillOptions,
@@ -53,7 +53,6 @@ use settings::Settings;
 use std::{
     ffi::OsString,
     io::IsTerminal,
-    os::fd::BorrowedFd,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -444,11 +443,11 @@ fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) ->
 /// see `InputMode::turn`) flips `hide_thinking`. Ctrl-Z stops and continues as `job` says, and
 /// SIGTERM and SIGHUP exit as `exit` says.
 fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> Result<(), String> {
-    let startup = termios::tcgetattr(std::io::stdin()).ok();
+    let startup = console::Mode::get();
     job::install(startup.clone()).map_err(|e| e.to_string())?;
     exit::install(startup).map_err(|e| e.to_string())?;
     let flag = cancel.clone();
-    // SAFETY: the handler only swaps an atomic and calls tcflush and `exit::on_signal`, all
+    // SAFETY: the handler only swaps an atomic and calls `console::flush_input` and `exit::on_signal`, all
     // async-signal-safe.
     unsafe {
         signal_hook::low_level::register(signal_hook::consts::SIGINT, move || {
@@ -458,18 +457,24 @@ fn handle_signals(cancel: &Arc<AtomicBool>, hide_thinking: &Arc<AtomicBool>) -> 
                 return;
             }
             // Keys typed before it answer nothing and are not left for the shell.
-            let _ = termios::tcflush(BorrowedFd::borrow_raw(0), QueueSelector::IFlush);
+            console::flush_input();
         })
     }
     .map_err(|e| e.to_string())?;
-    let flag = hide_thinking.clone();
-    // SAFETY: the handler only flips an atomic.
-    unsafe {
-        signal_hook::low_level::register(signal_hook::consts::SIGQUIT, move || {
-            flag.fetch_xor(true, Ordering::Relaxed);
-        })
+    // Windows has no quit character to give Ctrl+T.
+    #[cfg(unix)]
+    {
+        let flag = hide_thinking.clone();
+        // SAFETY: the handler only flips an atomic.
+        unsafe {
+            signal_hook::low_level::register(signal_hook::consts::SIGQUIT, move || {
+                flag.fetch_xor(true, Ordering::Relaxed);
+            })
+        }
+        .map_err(|e| e.to_string())?;
     }
-    .map_err(|e| e.to_string())?;
+    #[cfg(not(unix))]
+    let _ = hide_thinking;
     Ok(())
 }
 

@@ -2,7 +2,6 @@
 //! interface during a turn, and the `Handle` that starts the thread and reads the user's input.
 
 use super::{Answer, App, Dialog, Input, Queue, Sides, ToScreen, stops_turn};
-use crate::agent_cli::clipboard;
 use crate::agent_cli::completion::Completions;
 use crate::agent_cli::editor::{Editor, Note};
 use crate::agent_cli::footer;
@@ -14,6 +13,7 @@ use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
 use crate::agent_cli::theme_editor::ThemeEditor;
 use crate::agent_cli::usage::UsageView;
+use crate::agent_cli::{clipboard, console};
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
@@ -342,8 +342,8 @@ impl Handle {
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
         let (woken, wake) = io::pipe()?;
-        rustix::fs::fcntl_setfl(&wake, rustix::fs::OFlags::NONBLOCK)?;
-        rustix::fs::fcntl_setfl(&woken, rustix::fs::OFlags::NONBLOCK)?;
+        console::nonblocking(&wake)?;
+        console::nonblocking(&woken)?;
         let raw = RawMode::enter()?;
         clipboard::warm();
         let queue = Arc::new(Mutex::new(Queue::default()));

@@ -473,11 +473,16 @@ fn clock_at(at: Local, now: Local) -> String {
 
 pub(super) fn local(milliseconds: u64) -> Option<Local> {
     let seconds = libc::time_t::try_from(milliseconds / 1000).ok()?;
-    // SAFETY: `tm` is plain data, which `localtime_r` fills in from `seconds` without keeping
+    // SAFETY: `tm` is plain data, which `localtime_r` (`localtime_s`) fills in from `seconds` without keeping
     // either pointer.
     let tm = unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
+        #[cfg(unix)]
         if libc::localtime_r(&seconds, &mut tm).is_null() {
+            return None;
+        }
+        #[cfg(windows)]
+        if libc::localtime_s(&mut tm, &seconds) != 0 {
             return None;
         }
         tm

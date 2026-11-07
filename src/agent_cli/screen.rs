@@ -529,6 +529,8 @@ impl App {
             }
             match flow {
                 Flow::Go => {}
+                // No job control there.
+                Flow::Suspend if cfg!(windows) => {}
                 Flow::Suspend => {
                     drop(screen);
                     raw.suspend();

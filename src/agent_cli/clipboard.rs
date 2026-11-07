@@ -12,7 +12,6 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::OpenOptionsExt,
     process::{self, Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -22,7 +21,26 @@ use std::{
 };
 
 mod powershell;
+#[cfg(unix)]
 mod x11;
+/// No X server is looked for on Windows.
+#[cfg(not(unix))]
+mod x11 {
+    pub(super) const SERVE: &str = "__x11-selection-owner";
+    const NONE: &str = "no X11 clipboard on Windows";
+    pub(super) fn copy(_text: &str) -> Result<(), String> {
+        Err(NONE.into())
+    }
+    pub(super) fn serve(_selection: &str) -> Result<(), String> {
+        Err(NONE.into())
+    }
+    pub(super) fn text(_max: usize) -> Result<Option<String>, String> {
+        Err(NONE.into())
+    }
+    pub(super) fn image(_max: usize) -> Result<Option<(Vec<u8>, &'static str)>, String> {
+        Err(NONE.into())
+    }
+}
 
 /// How long a clipboard tool may take, as Scramjet's.
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -254,10 +272,7 @@ fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String
         process::id()
     );
     let failed = |error| format!("Cannot save the image to {path}: {error}");
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
+    let mut file = scramjet_rs::os::private_file(OpenOptions::new().write(true).create_new(true))
         .open(&path)
         .map_err(failed)?;
     if let Err(error) = file.write_all(bytes) {

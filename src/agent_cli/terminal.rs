@@ -10,12 +10,7 @@ use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
 use super::style::{self, Band, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, style_at, visible};
-use super::{children, diff, editor, job, markdown, record};
-use rustix::{
-    event::{PollFd, PollFlags, Timespec, poll},
-    io::Errno,
-    termios::{self, LocalModes, OptionalActions, SpecialCodeIndex, Termios},
-};
+use super::{children, console, diff, editor, job, markdown, record};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
     DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE,
@@ -56,36 +51,22 @@ fn frame(spun: Duration) -> char {
 }
 
 /// Changes the terminal's input settings until dropped.
-pub(super) struct InputMode(Option<Termios>);
+pub(super) struct InputMode(Option<console::Mode>);
 
 impl InputMode {
-    /// While a turn runs, typed keys are not echoed, and each is readable at once, so a lone
-    /// Escape can be told from the start of a sequence. Ctrl+T becomes the quit character, so
-    /// the kernel sends SIGQUIT for it, and `NOFLSH` keeps unread keys when it does.
+    /// As `console::Mode::turn` says.
     pub(super) fn turn() -> Self {
-        Self::change(|mode| {
-            mode.local_modes
-                .remove(LocalModes::ECHO | LocalModes::ICANON);
-            mode.local_modes.insert(LocalModes::NOFLSH);
-            mode.special_codes[SpecialCodeIndex::VQUIT] = 0x14;
-            mode.special_codes[SpecialCodeIndex::VMIN] = 1;
-            mode.special_codes[SpecialCodeIndex::VTIME] = 0;
-        })
+        Self::change(console::Mode::turn)
     }
     /// An approval answer: an echoed line, edited by the terminal.
     fn answer() -> Self {
-        Self::change(|mode| {
-            mode.local_modes
-                .insert(LocalModes::ECHO | LocalModes::ICANON)
-        })
+        Self::change(console::Mode::answer)
     }
-    fn change(change: impl FnOnce(&mut Termios)) -> Self {
-        let Ok(previous) = termios::tcgetattr(std::io::stdin()) else {
+    fn change(change: impl FnOnce(&console::Mode) -> console::Mode) -> Self {
+        let Some(previous) = console::Mode::get() else {
             return Self(None);
         };
-        let mut changed = previous.clone();
-        change(&mut changed);
-        let _ = termios::tcsetattr(std::io::stdin(), OptionalActions::Now, &changed);
+        let _ = change(&previous).set();
         Self(Some(previous))
     }
 }
@@ -93,7 +74,7 @@ impl InputMode {
 impl Drop for InputMode {
     fn drop(&mut self) {
         if let Some(previous) = &self.0 {
-            let _ = termios::tcsetattr(std::io::stdin(), OptionalActions::Now, previous);
+            let _ = previous.set();
         }
     }
 }
@@ -1609,7 +1590,7 @@ impl Terminal {
         // On a terminal, keys typed before it answer nothing, and the answer is an echoed line.
         let terminal = stdin.is_terminal();
         if terminal {
-            let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
+            console::flush_input();
         }
         let _answer = terminal.then(InputMode::answer);
         numbered_choice(title, options, recommended, blank, terminal)
@@ -1627,31 +1608,24 @@ impl Terminal {
             }
             typed
         } else {
-            let _ = termios::tcflush(&stdin, termios::QueueSelector::IFlush);
+            console::flush_input();
             eprint!("{ask}");
             let _answer = InputMode::answer();
-            // SIGINT does not interrupt a blocking read, so wait in poll and watch for Ctrl-C.
+            // SIGINT does not interrupt a blocking read, so wait and watch for Ctrl-C.
             loop {
                 if cancel.load(Ordering::Relaxed) {
                     eprintln!();
                     return Answer::Deny;
                 }
-                let mut fds = [PollFd::new(&stdin, PollFlags::IN)];
-                match poll(
-                    &mut fds,
-                    Some(&Timespec {
-                        tv_sec: 0,
-                        tv_nsec: 50_000_000,
-                    }),
-                ) {
-                    Ok(0) | Err(Errno::INTR) => {}
-                    Ok(_) => break,
+                match console::wait(None, Some(Duration::from_millis(50))) {
+                    Ok((false, _)) => {}
+                    Ok((true, _)) => break,
                     Err(_) => return Answer::Deny,
                 }
             }
             // In canonical mode one read returns one typed line.
-            let mut typed = [0; 4096];
-            match rustix::io::read(&stdin, &mut typed) {
+            let mut typed = [0; console::READ];
+            match console::read(&mut typed) {
                 Ok(n) => String::from_utf8_lossy(&typed[..n]).into_owned(),
                 Err(_) => return Answer::Deny,
             }

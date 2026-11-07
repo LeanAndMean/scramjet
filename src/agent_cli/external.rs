@@ -3,7 +3,6 @@
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
@@ -78,10 +77,7 @@ fn create_prompt_file() -> io::Result<(PathBuf, File)> {
             "scramjet-rs-prompt-{}-{nanos}-{attempt}.md",
             std::process::id()
         ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
+        match scramjet_rs::os::private_file(OpenOptions::new().write(true).create_new(true))
             .open(&path)
         {
             Ok(file) => return Ok((path, file)),

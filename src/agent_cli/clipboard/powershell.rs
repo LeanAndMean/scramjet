@@ -9,7 +9,6 @@
 
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
-    os::unix::process::CommandExt,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Mutex, PoisonError, mpsc},
     time::Duration,
@@ -143,12 +142,11 @@ impl Reader {
     /// while an external editor or `!` command has it; it ends when its input closes, as when
     /// scramjet-rs exits.
     fn start(program: &str, arguments: &[&str], max: usize) -> io::Result<Self> {
-        let mut child = Command::new(program)
+        let mut child = scramjet_rs::os::own_group(&mut Command::new(program))
             .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .process_group(0)
             .spawn()?;
         let (stdin, stdout) = (child.stdin.take(), child.stdout.take());
         let (Some(stdin), Some(stdout)) = (stdin, stdout) else {

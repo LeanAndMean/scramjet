@@ -2,7 +2,6 @@
 
 use super::{Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Optional, Shown};
 use crate::agent_cli::background::{self, Asked};
-use crate::agent_cli::clipboard;
 use crate::agent_cli::editor::{Action, Note};
 use crate::agent_cli::interactive::effort_note;
 use crate::agent_cli::keymap::Binding;
@@ -13,10 +12,7 @@ use crate::agent_cli::style;
 use crate::agent_cli::theme::{self, Theme};
 use crate::agent_cli::theme_editor::Ended;
 use crate::agent_cli::usage::Took;
-use rustix::{
-    event::{PollFd, PollFlags, Timespec, poll},
-    io::Errno,
-};
+use crate::agent_cli::{clipboard, console};
 use scramjet_rs::agent;
 use std::{
     io::{self, PipeReader, Read},
@@ -53,36 +49,17 @@ impl ByteSource for Source {
             self.start += 1;
             return Ok(Some(self.buffer[self.start - 1]));
         }
-        let stdin = io::stdin();
         let wakes = wait != Some(ESCAPE_WAIT);
-        let timeout = wait.map(|wait| Timespec {
-            tv_sec: wait.as_secs() as i64,
-            tv_nsec: i64::from(wait.subsec_nanos()),
-        });
-        let mut fds = vec![PollFd::new(&stdin, PollFlags::IN)];
-        if wakes {
-            fds.push(PollFd::new(&self.woken, PollFlags::IN));
-        }
-        match poll(&mut fds, timeout.as_ref()) {
-            Ok(0) | Err(Errno::INTR) => return Ok(None),
-            Ok(_) => {}
-            Err(error) => return Err(error.into()),
-        }
-        let typed = !fds[0].revents().is_empty();
-        if wakes && !fds[1].revents().is_empty() {
+        let (typed, woken) = console::wait(wakes.then_some(&self.woken), wait)?;
+        if woken {
             let mut drained = [0; 256];
             while matches!(self.woken.read(&mut drained), Ok(n) if n > 0) {}
         }
         if !typed {
             return Ok(None);
         }
-        self.buffer.resize(4096, 0);
-        let read = loop {
-            match rustix::io::read(&stdin, &mut self.buffer) {
-                Err(Errno::INTR) => continue,
-                result => break result?,
-            }
-        };
+        self.buffer.resize(console::READ, 0);
+        let read = console::read(&mut self.buffer)?;
         if read == 0 {
             return Err(io::ErrorKind::UnexpectedEof.into());
         }

@@ -2,10 +2,9 @@
 //! pastes and the terminal's answers decoded into `Key`s, the keys pressed with their modifiers;
 //! what each does is the keymap's (`keymap.rs`).
 
-use super::background;
 use super::keymap::{self, Binding};
 use super::palette::Rgb;
-use rustix::termios::{self, OptionalActions, Termios};
+use super::{background, console};
 use std::{
     io::{self, Write},
     time::Duration,
@@ -390,12 +389,12 @@ pub(super) fn clean(text: &str) -> String {
 }
 
 pub(super) struct RawMode {
-    original: Termios,
+    original: console::Mode,
 }
 
 impl RawMode {
     pub(super) fn enter() -> io::Result<Self> {
-        let original = termios::tcgetattr(io::stdin())?;
+        let original = console::Mode::get().ok_or(io::ErrorKind::Unsupported)?;
         let mode = Self { original };
         mode.resume()?;
         Ok(mode)
@@ -403,9 +402,7 @@ impl RawMode {
 
     /// Raw mode with bracketed paste on.
     pub(super) fn resume(&self) -> io::Result<()> {
-        let mut raw = self.original.clone();
-        raw.make_raw();
-        termios::tcsetattr(io::stdin(), OptionalActions::Now, &raw)?;
+        self.original.raw().set()?;
         eprint!("\x1b[?2004h");
         Ok(())
     }
@@ -414,7 +411,7 @@ impl RawMode {
     pub(super) fn suspend(&self) {
         eprint!("\x1b[?2004l");
         let _ = io::stderr().flush();
-        let _ = termios::tcsetattr(io::stdin(), OptionalActions::Now, &self.original);
+        let _ = self.original.set();
     }
 }
 

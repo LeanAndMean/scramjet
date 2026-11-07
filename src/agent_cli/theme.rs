@@ -6,7 +6,6 @@
 
 use scramjet_rs::agent::{Problem, agent_directory};
 use serde_json::{Map, Value};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -507,7 +506,11 @@ type Stamp = (Option<std::time::SystemTime>, u64, u64);
 
 fn stamp(file: &Path) -> Option<Stamp> {
     let metadata = std::fs::metadata(file).ok()?;
-    Some((metadata.modified().ok(), metadata.len(), metadata.ino()))
+    Some((
+        metadata.modified().ok(),
+        metadata.len(),
+        scramjet_rs::os::inode(&metadata),
+    ))
 }
 
 /// The file of the theme in use, read again when it changes, as Scramjet's own are.

@@ -6,10 +6,8 @@ use super::file_search;
 use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::text::{FROM, JOINED, SPACE};
-use super::{spelling, style};
-use rustix::termios;
+use super::{console, spelling, style};
 use std::{
-    io,
     ops::Range,
     path::PathBuf,
     sync::{
@@ -393,12 +391,9 @@ fn spelling_style() -> String {
 }
 
 pub(super) fn terminal_size() -> (usize, usize) {
-    termios::tcgetwinsize(io::stderr())
-        .ok()
-        .filter(|size| size.ws_col > 0 && size.ws_row > 0)
-        .map_or((80, 24), |size| {
-            (usize::from(size.ws_col), usize::from(size.ws_row))
-        })
+    console::size().map_or((80, 24), |(columns, rows)| {
+        (usize::from(columns), usize::from(rows))
+    })
 }
 
 pub struct Editor {

@@ -84,6 +84,21 @@ pub fn same_file(a: &std::fs::File, b: &Path) -> bool {
     }
 }
 
+/// A file's inode number, which a save that replaces the file changes (on Windows, 0: its
+/// index is not in the metadata).
+pub fn inode(metadata: &Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        metadata.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        0
+    }
+}
+
 /// Whether an open file was removed since it was opened.
 pub fn removed(file: &std::fs::File) -> std::io::Result<bool> {
     #[cfg(unix)]
