@@ -9,7 +9,7 @@ use super::slash::grouped;
 use super::style;
 use super::terminal::{self, Terminal};
 use super::tree::local;
-use scramjet_rs::agent::quota::{Quota, Window};
+use scramjet_rs::agent::quota::{Credits, Quota, Window};
 use scramjet_rs::agent::usage::{History, Response, civil_days};
 use std::path::Path;
 
@@ -299,15 +299,28 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
 ",
             ui.styled(style::INFO_HEADING, &title)
         );
-        for Window {
-            name,
-            used_percent,
-            window_minutes,
-            resets_at,
-            allowed,
-            over,
-        } in &quota.windows
-        {
+        // As Codex's rows: a window's length, after the name of the limit it is of.
+        let labels: Vec<String> = (quota.windows.iter())
+            .map(|window| {
+                let label =
+                    (window.name.clone()).unwrap_or_else(|| window_label(window.window_minutes));
+                match &window.limit {
+                    Some(limit) => format!("{limit} {label} limit"),
+                    None => format!("{label} limit"),
+                }
+            })
+            .collect();
+        let width = (labels.iter())
+            .map(|label| label.chars().count() + 1)
+            .fold(14, usize::max);
+        for (window, label) in quota.windows.iter().zip(labels) {
+            let Window {
+                used_percent,
+                resets_at,
+                allowed,
+                over,
+                ..
+            } = window;
             let used = used_percent.clamp(0.0, 100.0);
             let filled = ((used / 100.0 * BAR as f64).round() as usize).min(BAR);
             let bar = ui.styled(style::USAGE_BAR, &"█".repeat(filled))
@@ -326,17 +339,33 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
                 None => String::new(),
             };
             let over = over.map_or(String::new(), |over| format!(", {over} over"));
-            let label = name
-                .clone()
-                .unwrap_or_else(|| window_label(*window_minutes));
             text += &format!(
                 "{}{bar} {used:>3.0}% used{count}{over}{resets}\n",
-                ui.dim(&format!("{:<14}", label + " limit")),
+                ui.dim(&format!("{label:<width$}")),
+            );
+        }
+        if let Some(credits) = &quota.credits {
+            text += &format!(
+                "{}{}\n",
+                ui.dim(&format!("{:<width$}", "Credits")),
+                credits_text(credits)
             );
         }
         text.push('\n');
     }
     text
+}
+
+/// Credits as Codex shows them: `Unlimited`, the balance rounded, or `Available` without one.
+fn credits_text(credits: &Credits) -> String {
+    let balance = (credits.balance.as_deref())
+        .and_then(|balance| balance.trim().parse::<f64>().ok())
+        .filter(|balance| balance.is_finite() && *balance > 0.0);
+    match (credits.unlimited, balance) {
+        (true, _) => "Unlimited".to_owned(),
+        (false, Some(balance)) => format!("{} credits", balance.round()),
+        (false, None) => "Available".to_owned(),
+    }
 }
 
 fn same_day(a: u64, b: u64) -> bool {
@@ -920,6 +949,7 @@ mod tests {
         let quota = |windows| Quota {
             observed_at: now - 60_000,
             windows,
+            credits: None,
         };
         let premium = Window {
             name: Some("Premium".into()),
@@ -985,6 +1015,53 @@ mod tests {
             "█".repeat(20)
         );
         assert!(c.contains(&premium), "{c}");
+        // A model's own limit after the plan's, the column as wide as its label, then credits.
+        history.quotas = vec![(
+            "c".into(),
+            Quota {
+                credits: Some(Credits {
+                    unlimited: false,
+                    balance: Some("41.6".into()),
+                }),
+                ..quota(vec![
+                    window(41.0, 300, None),
+                    Window {
+                        limit: Some("gpt-sonic".into()),
+                        ..window(80.0, 300, None)
+                    },
+                ])
+            },
+        )];
+        let c = report(
+            &history,
+            Path::new("/s"),
+            current,
+            "b/new",
+            now,
+            Some("c"),
+            &ui,
+        );
+        let c = super::super::text::plain(&c);
+        let rows = format!(
+            "5h limit           {}{}  41% used\n\
+             gpt-sonic 5h limit {}{}  80% used\n\
+             Credits            42 credits\n",
+            "█".repeat(8),
+            "░".repeat(12),
+            "█".repeat(16),
+            "░".repeat(4)
+        );
+        assert!(c.contains(&rows), "{c}");
+        let unlimited = Credits {
+            unlimited: true,
+            balance: None,
+        };
+        assert_eq!(credits_text(&unlimited), "Unlimited");
+        let hidden = Credits {
+            unlimited: false,
+            balance: Some("0".into()),
+        };
+        assert_eq!(credits_text(&hidden), "Available");
     }
 
     #[test]

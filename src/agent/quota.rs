@@ -1,7 +1,8 @@
 //! What is left of a subscription's quota, as its responses' headers report it, kept for each
 //! provider's latest response across sessions in `$XDG_STATE_HOME/scramjet-rs/quota.json`, for
-//! `/usage`. ChatGPT's (Codex) backend sends `x-codex-primary-*` and `x-codex-secondary-*`, read
-//! as Codex reads them (`codex-rs/codex-api/src/rate_limits.rs`); GitHub Copilot's sends
+//! `/usage`. ChatGPT's (Codex) backend sends `x-codex-primary-*` and `x-codex-secondary-*`, a
+//! model's own limits under other names (`x-<id>-primary-*`) and `x-codex-credits-*`, read as
+//! Codex reads them (`codex-rs/codex-api/src/rate_limits.rs`); GitHub Copilot's sends
 //! `x-quota-snapshot-*` and `x-usage-ratelimit-*`, read as VS Code's Copilot extension (0.66.0)
 //! reads them.
 
@@ -17,6 +18,9 @@ use std::{
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Window {
+    /// The limit it belongs to where a provider has several (Codex's for a model).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<String>,
     /// What the limit is called where its length does not say (Copilot's).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -41,28 +45,45 @@ pub struct Quota {
     /// When the response came, in milliseconds since 1970.
     pub observed_at: u64,
     pub windows: Vec<Window>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credits: Option<Credits>,
 }
 
-/// The quota a response's headers report, `header` giving a header's value by its lower-case
-/// name; none when they report none.
-pub(super) fn from_headers<'a>(
-    header: impl Fn(&str) -> Option<&'a str>,
-    observed_at: u64,
-) -> Option<Quota> {
-    let mut windows = codex_windows(&header);
-    if windows.is_empty() {
-        windows = copilot_windows(&header);
+/// The credits an account has besides its windows (ChatGPT's).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Credits {
+    pub unlimited: bool,
+    /// As the provider wrote it; Codex shows it rounded, or `Available` without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub balance: Option<String>,
+}
+
+/// The quota a response's headers report, as `(name, value)` pairs with lower-case names; none
+/// when they report none.
+pub(super) fn from_headers(headers: &[(&str, &str)], observed_at: u64) -> Option<Quota> {
+    let header =
+        |name: &str| (headers.iter()).find_map(|(n, value)| (*n == name).then_some(*value));
+    let credits = codex_credits(header);
+    let mut windows = codex_windows(headers, header);
+    if windows.is_empty() && credits.is_none() {
+        windows = copilot_windows(header);
     }
-    (!windows.is_empty()).then_some(Quota {
+    (!windows.is_empty() || credits.is_some()).then_some(Quota {
         observed_at,
         windows,
+        credits,
     })
 }
 
-/// ChatGPT's shorter window (five hours) and its weekly one.
-fn codex_windows<'a>(header: impl Fn(&str) -> Option<&'a str>) -> Vec<Window> {
-    let window = |which: &str| {
-        let value = |part: &str| header(&format!("x-codex-{which}-{part}")).map(str::trim);
+/// ChatGPT's shorter window (five hours) and its weekly one, then those of each other limit the
+/// headers name (`x-<id>-primary-used-percent`), by id.
+fn codex_windows<'a>(
+    headers: &[(&str, &str)],
+    header: impl Fn(&str) -> Option<&'a str>,
+) -> Vec<Window> {
+    let window = |prefix: &str, which: &str, limit: Option<&str>| {
+        let value = |part: &str| header(&format!("{prefix}-{which}-{part}")).map(str::trim);
         let used_percent =
             (value("used-percent")?.parse::<f64>().ok()).filter(|percent| percent.is_finite())?;
         let window_minutes = value("window-minutes").and_then(|text| text.parse().ok());
@@ -70,17 +91,53 @@ fn codex_windows<'a>(header: impl Fn(&str) -> Option<&'a str>) -> Vec<Window> {
         // Codex takes all three empty for no window.
         let some =
             used_percent != 0.0 || window_minutes.is_some_and(|m| m != 0) || resets_at.is_some();
-        some.then_some(Window {
+        some.then(|| Window {
+            limit: limit.map(str::to_owned),
             used_percent,
             window_minutes,
             resets_at,
             ..Window::default()
         })
     };
-    [window("primary"), window("secondary")]
+    let mut prefixes: Vec<&str> = (headers.iter())
+        .filter_map(|(name, _)| name.strip_suffix("-primary-used-percent"))
+        .filter(|prefix| prefix.starts_with("x-") && *prefix != "x-codex")
+        .collect();
+    prefixes.sort_unstable();
+    prefixes.dedup();
+    let mut windows: Vec<Window> = ["primary", "secondary"]
         .into_iter()
-        .flatten()
-        .collect()
+        .filter_map(|which| window("x-codex", which, None))
+        .collect();
+    for prefix in prefixes {
+        let name = (header(&format!("{prefix}-limit-name")).map(str::trim))
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&prefix[2..]);
+        windows.extend(
+            ["primary", "secondary"]
+                .map(|which| window(prefix, which, Some(name)))
+                .into_iter()
+                .flatten(),
+        );
+    }
+    windows
+}
+
+/// ChatGPT's credits, when the account has some or no limit to them.
+fn codex_credits<'a>(header: impl Fn(&str) -> Option<&'a str>) -> Option<Credits> {
+    let flag = |name: &str| match header(name)?.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        text if text.eq_ignore_ascii_case("true") => Some(true),
+        text if text.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
+    };
+    let has = flag("x-codex-credits-has-credits")?;
+    let unlimited = flag("x-codex-credits-unlimited")?;
+    let balance = (header("x-codex-credits-balance").map(str::trim))
+        .filter(|balance| !balance.is_empty())
+        .map(str::to_owned);
+    (has || unlimited).then_some(Credits { unlimited, balance })
 }
 
 /// Copilot's session and weekly rate limits, then its monthly premium requests (a free plan's
@@ -286,21 +343,16 @@ fn read_from(text: &[u8]) -> Vec<(String, Quota)> {
 mod tests {
     use super::*;
 
-    fn headers(pairs: &[(&'static str, &'static str)]) -> impl Fn(&str) -> Option<&'static str> {
-        let pairs = pairs.to_vec();
-        move |name| pairs.iter().find(|(n, _)| *n == name).map(|(_, v)| *v)
-    }
-
     #[test]
     fn chatgpts_headers_give_both_windows() {
         let quota = from_headers(
-            headers(&[
+            &[
                 ("x-codex-primary-used-percent", "12.5"),
                 ("x-codex-primary-window-minutes", "300"),
                 ("x-codex-primary-reset-at", "1704069000"),
                 ("x-codex-secondary-used-percent", " 40 "),
                 ("x-codex-secondary-window-minutes", "10080"),
-            ]),
+            ],
             7,
         )
         .unwrap();
@@ -327,18 +379,67 @@ mod tests {
     }
 
     #[test]
+    fn chatgpts_other_limits_follow_its_own_with_its_credits() {
+        let quota = from_headers(
+            &[
+                ("x-codex-bengalfox-primary-used-percent", "80"),
+                ("x-codex-bengalfox-primary-window-minutes", "300"),
+                ("x-codex-bengalfox-limit-name", "gpt-5.2-codex-sonic"),
+                ("x-codex-primary-used-percent", "12.5"),
+                ("x-codex-other-primary-used-percent", "0"),
+                ("x-codex-other-secondary-used-percent", "3"),
+                ("x-codex-credits-has-credits", "true"),
+                ("x-codex-credits-unlimited", "False"),
+                ("x-codex-credits-balance", " 41.6 "),
+            ],
+            1,
+        )
+        .unwrap();
+        let limits: Vec<_> = (quota.windows.iter())
+            .map(|window| (window.limit.as_deref(), window.used_percent))
+            .collect();
+        assert_eq!(
+            limits,
+            [
+                (None, 12.5),
+                (Some("gpt-5.2-codex-sonic"), 80.0),
+                (Some("codex-other"), 3.0),
+            ]
+        );
+        assert_eq!(
+            quota.credits,
+            Some(Credits {
+                unlimited: false,
+                balance: Some("41.6".into()),
+            })
+        );
+        // Credits alone are a quota; an account without any shows none.
+        let unlimited = [
+            ("x-codex-credits-has-credits", "0"),
+            ("x-codex-credits-unlimited", "1"),
+        ];
+        let quota = from_headers(&unlimited, 1).unwrap();
+        assert!(quota.windows.is_empty() && quota.credits.unwrap().unlimited);
+        let none = [
+            ("x-codex-credits-has-credits", "false"),
+            ("x-codex-credits-unlimited", "false"),
+        ];
+        assert_eq!(from_headers(&none, 1), None);
+    }
+
+    #[test]
     fn no_or_empty_windows_are_no_quota() {
-        assert_eq!(from_headers(headers(&[]), 1), None);
-        let empty = headers(&[
+        assert_eq!(from_headers(&[], 1), None);
+        let empty = &[
             ("x-codex-primary-used-percent", "0"),
             ("x-codex-primary-window-minutes", "0"),
             ("x-codex-secondary-used-percent", "NaN"),
-        ]);
+        ];
         assert_eq!(from_headers(empty, 1), None);
-        let unused = headers(&[
+        let unused = &[
             ("x-codex-primary-used-percent", "0"),
             ("x-codex-primary-window-minutes", "300"),
-        ]);
+        ];
         let quota = from_headers(unused, 1).unwrap();
         assert_eq!(quota.windows.len(), 1);
         assert_eq!(quota.windows[0].used_percent, 0.0);
@@ -456,7 +557,7 @@ mod tests {
     #[test]
     fn copilots_headers_give_its_rate_limits_then_its_premium_requests() {
         let quota = from_headers(
-            headers(&[
+            &[
                 (
                     "x-quota-snapshot-premium_models",
                     "ent=300&ov=12.0&ovPerm=true&rem=-4&rst=2026-12-01",
@@ -467,7 +568,7 @@ mod tests {
                     "rem=62.5&rst=2026-11-07T18%3A30%3A00.250%2B01%3A00",
                 ),
                 ("x-usage-ratelimit-weekly", "ent=-1&rem=100"),
-            ]),
+            ],
             9,
         )
         .unwrap();
@@ -493,19 +594,19 @@ mod tests {
         );
         // A free plan's chat requests where it has no premium ones; no limit is no window.
         let free = from_headers(
-            headers(&[
+            &[
                 ("x-quota-snapshot-premium_interactions", "ent=0&rem=0"),
                 ("x-quota-snapshot-chat", "ent=50&rem=90"),
-            ]),
+            ],
             1,
         )
         .unwrap();
         assert_eq!(free.windows[0].name.as_deref(), Some("Chat"));
         assert_eq!(free.windows[0].allowed, Some(50));
-        let unlimited = headers(&[("x-quota-snapshot-premium_models", "ent=-1&rem=100")]);
+        let unlimited = &[("x-quota-snapshot-premium_models", "ent=-1&rem=100")];
         assert_eq!(from_headers(unlimited, 1), None);
         assert_eq!(
-            from_headers(headers(&[("x-usage-ratelimit-weekly", "ent=5")]), 1),
+            from_headers(&[("x-usage-ratelimit-weekly", "ent=5")], 1),
             None
         );
     }
@@ -541,6 +642,7 @@ mod tests {
                 window_minutes: Some(300),
                 ..Window::default()
             }],
+            credits: None,
         };
         record(&path, "openai-codex", &quota(2, 20.0)).unwrap();
         record(&path, "other", &quota(1, 5.0)).unwrap();

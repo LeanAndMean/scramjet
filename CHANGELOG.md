@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.72.0 — ChatGPT's other limits and credits in /usage
+
+### Added
+
+- `/usage` shows the limits ChatGPT keeps for particular models beside the plan's 5-hour and weekly ones, each row named after its model (`gpt-5.3-codex-spark 5h limit`), and the account's credits (`118 credits`, `Unlimited` or `Available`), read as Codex reads them.
+
 ## 0.71.1 — The quota of a refused response
 
 ### Fixed

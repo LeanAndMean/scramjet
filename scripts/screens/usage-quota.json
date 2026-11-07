@@ -11,7 +11,14 @@
     "x-codex-primary-reset-at": "1794040000",
     "x-codex-secondary-used-percent": "12.5",
     "x-codex-secondary-window-minutes": "10080",
-    "x-codex-secondary-reset-at": "1794400000"
+    "x-codex-secondary-reset-at": "1794400000",
+    "x-codex-bengalfox-primary-used-percent": "64",
+    "x-codex-bengalfox-primary-window-minutes": "300",
+    "x-codex-bengalfox-primary-reset-at": "1794040000",
+    "x-codex-bengalfox-limit-name": "gpt-5.3-codex-spark",
+    "x-codex-credits-has-credits": "true",
+    "x-codex-credits-unlimited": "false",
+    "x-codex-credits-balance": "118.4"
   },
   "prompt": "Say hello.",
   "replies": [
@@ -20,7 +27,7 @@
   "steps": [
     {"until": "Hello."},
     {"type": "/usage\r"},
-    {"until": "session files"},
+    {"until": "Costliest sessions"},
     {"sleep": 0.5},
     {"shot": "usage-quota"},
     {"type": "\t"},

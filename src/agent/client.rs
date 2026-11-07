@@ -379,8 +379,12 @@ async fn exchange(
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty());
-    let header = |name: &str| response.headers().get(name)?.to_str().ok();
-    let quota = super::quota::from_headers(header, super::login::now_ms() as u64);
+    let quota = {
+        let headers: Vec<(&str, &str)> = (response.headers().iter())
+            .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
+            .collect();
+        super::quota::from_headers(&headers, super::login::now_ms() as u64)
+    };
     let mut body = response.into_body();
     let result = if status != 200 {
         let mut text = Vec::new();
