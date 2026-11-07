@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.63.0 — MCP server names completed
+
+### Added
+
+- `/mcp reconnect ` lists `all` and the MCP servers the settings name as you type, and Tab puts in the one selected.
+
 ## 0.62.0 — Usage across sessions
 
 ### Added

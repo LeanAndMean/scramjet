@@ -90,6 +90,15 @@ fn scoped_models() -> Option<String> {
 /// Rows of the completion list, as Scramjet's autocomplete shows at most.
 const COMPLETION_ROWS: usize = 5;
 
+/// What the loaded settings add to the completions: the commands and skills the `/` list shows
+/// after the built-in ones (names and descriptions), and the MCP servers `/mcp reconnect` names.
+#[derive(Default)]
+pub(super) struct Completions {
+    pub commands: Vec<(String, String)>,
+    pub mcp_servers: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Suggestion {
     /// What replaces the completed text.
     pub(super) value: String,
@@ -188,9 +197,14 @@ impl Completion {
 
     /// The argument of a built-in command that Scramjet completes: after `/model `, the
     /// providers' `models` (references, `provider/id`) whose id and provider match it fuzzily,
-    /// each shown by its id with its provider; after `/autopilot `, the words starting with it.
-    pub(super) fn argument(before: &str, models: &[String]) -> Option<Self> {
-        let (name, typed) = before.strip_prefix('/')?.split_once(' ')?;
+    /// each shown by its id with its provider; after `/autopilot `, the words starting with it;
+    /// after `/mcp reconnect `, `all` and the `mcp_servers` starting with it.
+    pub(super) fn argument(
+        before: &str,
+        models: &[String],
+        mcp_servers: &[String],
+    ) -> Option<Self> {
+        let (name, mut typed) = before.strip_prefix('/')?.split_once(' ')?;
         if typed.contains('\n') {
             return None;
         }
@@ -200,6 +214,16 @@ impl Completion {
             description: String::new(),
         };
         let items = match name {
+            "mcp" if typed.starts_with("reconnect ") => {
+                typed = typed["reconnect ".len()..].trim_start();
+                if typed.contains(char::is_whitespace) {
+                    return None;
+                }
+                (std::iter::once("all").chain(mcp_servers.iter().map(String::as_str)))
+                    .filter(|name| name.starts_with(typed))
+                    .map(word)
+                    .collect()
+            }
             "autopilot" | "mcp" => (match name {
                 "autopilot" => &["on", "off", "status"][..],
                 _ => &["reconnect"][..],
@@ -571,7 +595,7 @@ mod tests {
         .map(String::from);
         // The models in the providers' order, then those matching what is typed, best first,
         // each by its id with its provider.
-        let list = Completion::argument("/model ", &models).unwrap();
+        let list = Completion::argument("/model ", &models, &[]).unwrap();
         assert_eq!(
             labels(&list),
             ["gpt-6-luna", "claude-haiku-5-5", "gpt-6.1-sol"]
@@ -583,9 +607,9 @@ mod tests {
                 format!("  claude-haiku-5-5{}anthropic", " ".repeat(16))
             ]
         );
-        let list = Completion::argument("/model 6 sol", &models).unwrap();
+        let list = Completion::argument("/model 6 sol", &models, &[]).unwrap();
         assert_eq!(labels(&list), ["gpt-6.1-sol"]);
-        let list = Completion::argument("/model luna openai", &models).unwrap();
+        let list = Completion::argument("/model luna openai", &models, &[]).unwrap();
         assert_eq!(labels(&list), ["gpt-6-luna"]);
         // An id two providers offer is two entries, the one typed in full selected.
         let twice = [
@@ -594,7 +618,7 @@ mod tests {
             "github-copilot/gpt-6-luna",
         ];
         let twice = twice.map(String::from);
-        let list = Completion::argument("/model gpt-6-luna", &twice).unwrap();
+        let list = Completion::argument("/model gpt-6-luna", &twice, &[]).unwrap();
         let shown: Vec<_> = (list.items.iter())
             .map(|item| (item.label.as_str(), item.description.as_str()))
             .collect();
@@ -605,7 +629,7 @@ mod tests {
         assert_eq!(list.items[list.selected].value, "openai/gpt-6-luna");
         // Equal matches put the shorter id first, as Scramjet's `fuzzyFilter` does.
         let gpt = ["openai/gpt-6.1-sol", "openai/gpt-6-luna"].map(String::from);
-        let list = Completion::argument("/model gpt", &gpt).unwrap();
+        let list = Completion::argument("/model gpt", &gpt, &[]).unwrap();
         assert_eq!(labels(&list), ["gpt-6-luna", "gpt-6.1-sol"]);
         let list = Completion::slash("/se", &[]).unwrap();
         assert_eq!(labels(&list)[0], "/settings");
@@ -613,27 +637,42 @@ mod tests {
             text: "/model hai".into(),
             cursor: 10,
         };
-        Completion::argument(&buffer.text, &models)
+        Completion::argument(&buffer.text, &models, &[])
             .unwrap()
             .apply(&mut buffer);
         assert_eq!(
             (buffer.text.as_str(), buffer.cursor),
             ("/model anthropic/claude-haiku-5-5", 33)
         );
-        // `/autopilot`'s words are those that start with what is typed, as typed.
-        let words = |before| Completion::argument(before, &[]).map(|list| labels(&list).join(" "));
+        // `/autopilot`'s words are those that start with what is typed, as typed, and so are
+        // `/mcp reconnect`'s servers.
+        let servers = ["tavily", "test"].map(String::from);
+        let words = |before| {
+            Completion::argument(before, &[], &servers).map(|list| labels(&list).join(" "))
+        };
         assert_eq!(words("/autopilot ").unwrap(), "on off status");
         assert_eq!(words("/autopilot o").unwrap(), "on off");
         assert_eq!(words("/autopilot st").unwrap(), "status");
         assert!(words("/autopilot O").is_none());
         assert!(words("/autopilot on x").is_none());
         assert_eq!(words("/mcp r").unwrap(), "reconnect");
+        assert_eq!(words("/mcp reconnect ").unwrap(), "all tavily test");
+        assert_eq!(words("/mcp reconnect  t").unwrap(), "tavily test");
+        assert!(words("/mcp reconnect x").is_none());
+        assert!(words("/mcp reconnect test x").is_none());
+        let mut buffer = Buffer {
+            text: "/mcp reconnect ta".into(),
+            cursor: 17,
+        };
+        let list = Completion::argument(&buffer.text, &[], &servers).unwrap();
+        list.apply(&mut buffer);
+        assert_eq!(buffer.text, "/mcp reconnect tavily");
         // Nothing else completes: other commands, a later line, no models.
-        assert!(Completion::argument("/name ", &models).is_none());
-        assert!(Completion::argument("/model x\nhai", &models).is_none());
-        assert!(Completion::argument("say /model ", &models).is_none());
-        assert!(Completion::argument("/model ", &[]).is_none());
-        assert!(Completion::argument("/model zzz", &models).is_none());
+        assert!(Completion::argument("/name ", &models, &[]).is_none());
+        assert!(Completion::argument("/model x\nhai", &models, &[]).is_none());
+        assert!(Completion::argument("say /model ", &models, &[]).is_none());
+        assert!(Completion::argument("/model ", &[], &[]).is_none());
+        assert!(Completion::argument("/model zzz", &models, &[]).is_none());
     }
 
     #[test]
@@ -643,7 +682,7 @@ mod tests {
             Vec::new(),
             Arc::default(),
             PathBuf::new(),
-            Vec::new(),
+            Completions::default(),
             models,
             false,
         );

@@ -3,6 +3,7 @@
 
 use super::{Answer, App, Dialog, Input, Queue, Sides, ToScreen, stops_turn};
 use crate::agent_cli::clipboard;
+use crate::agent_cli::completion::Completions;
 use crate::agent_cli::editor::{Editor, Note};
 use crate::agent_cli::footer;
 use crate::agent_cli::keys::{Press, RawMode};
@@ -171,15 +172,11 @@ impl Link {
     pub(in crate::agent_cli) fn note(&self, note: Note) {
         self.send(ToScreen::Note(note));
     }
-    /// What `/reload` read: the commands and skills the `/` list shows, and the `settings`.
-    pub(in crate::agent_cli) fn reloaded(
-        &mut self,
-        commands: Vec<(String, String)>,
-        settings: &Settings,
-    ) {
+    /// What `/reload` read: what the editor completes, and the `settings`.
+    pub(in crate::agent_cli) fn reloaded(&mut self, completions: Completions, settings: &Settings) {
         self.modes = (settings.steering_mode, settings.follow_up_mode);
         self.send(ToScreen::Reloaded {
-            commands,
+            completions,
             double_escape: settings.double_escape != DoubleEscape::Nothing,
             markdown_reads: settings.markdown_reads,
             copy_on_select: settings.copy_on_select,

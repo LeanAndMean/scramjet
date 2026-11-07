@@ -1,6 +1,7 @@
 //! The interactive session: prompts read from the editor, the full screen or piped lines, the
 //! built-in commands (`slash.rs`), model turns and a completed command's next step.
 use super::banner::{self, Opening};
+use super::completion::Completions;
 use super::editor::Note;
 use super::record::{self, Event};
 use super::screen::{self, Handle};
@@ -839,17 +840,21 @@ fn add_shells(agent: &mut Agent, screen: &mut Handle) {
     }
 }
 
-/// The rows the `/` list shows after the built-in commands: the loaded commands that are not
-/// only delegated, then the skills as `skill:<name>`.
-pub(super) fn completions(agent: &Agent) -> Vec<(String, String)> {
-    (agent.commands().list().iter())
+/// What the loaded settings complete: in the `/` list after the built-in commands, the loaded
+/// commands that are not only delegated, then the skills as `skill:<name>`; and the MCP servers.
+pub(super) fn completions(agent: &Agent) -> Completions {
+    let commands = (agent.commands().list().iter())
         .filter(|command| !command.delegate_only)
         .map(command_entry)
         .chain(
             (agent.skills().list().iter())
                 .map(|skill| (format!("skill:{}", skill.name), skill.description.clone())),
         )
-        .collect()
+        .collect();
+    Completions {
+        commands,
+        mcp_servers: agent.mcp_names(),
+    }
 }
 
 /// A loaded command's row in the `/` list: the argument hint before the description, as

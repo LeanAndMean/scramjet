@@ -1,7 +1,7 @@
 //! The prompt editor of the full screen: editing, its layout on screen, and history. Its
 //! keys are read in `keys.rs`, its completion list is in `completion.rs`.
 
-use super::completion::{Completion, Kind, Lookup};
+use super::completion::{Completion, Completions, Kind, Lookup};
 use super::file_search;
 use super::keymap::{self, Binding};
 use super::keys::Key;
@@ -406,8 +406,7 @@ pub struct Editor {
     hide_thinking: Arc<AtomicBool>,
     /// Where Tab completes relative paths from.
     root: PathBuf,
-    /// The commands listed after the built-in ones: names and descriptions.
-    commands: Vec<(String, String)>,
+    completions: Completions,
     /// The providers' models, which complete `/model`'s argument.
     models: Vec<String>,
     /// Whether Escape twice on an empty prompt returns `Action::DoubleEscape`.
@@ -439,7 +438,7 @@ impl Editor {
         history: Vec<String>,
         hide_thinking: Arc<AtomicBool>,
         root: PathBuf,
-        commands: Vec<(String, String)>,
+        completions: Completions,
         models: Vec<String>,
         double_escape: bool,
     ) -> Self {
@@ -447,7 +446,7 @@ impl Editor {
             history,
             hide_thinking,
             root,
-            commands,
+            completions,
             models,
             double_escape,
             dialog: false,
@@ -463,7 +462,7 @@ impl Editor {
                 Vec::new(),
                 hide_thinking,
                 PathBuf::new(),
-                Vec::new(),
+                Completions::default(),
                 Vec::new(),
                 false,
             )
@@ -474,11 +473,18 @@ impl Editor {
         self.models = models;
     }
 
-    /// Lists `commands` after the built-in ones, and makes Escape twice on an empty prompt
-    /// return `Action::DoubleEscape` when `double_escape`.
-    pub fn reloaded(&mut self, commands: Vec<(String, String)>, double_escape: bool) {
-        self.commands = commands;
+    /// Completes what `completions` lists, and makes Escape twice on an empty prompt return
+    /// `Action::DoubleEscape` when `double_escape`.
+    pub fn reloaded(&mut self, completions: Completions, double_escape: bool) {
+        self.completions = completions;
         self.double_escape = double_escape;
+    }
+
+    /// The list of commands, or of a built-in command's arguments, that `before` begins.
+    fn complete_command(&self, before: &str) -> Option<Completion> {
+        let listed = &self.completions;
+        Completion::slash(before, &listed.commands)
+            .or_else(|| Completion::argument(before, &self.models, &listed.mcp_servers))
     }
 
     /// Makes `prompt` the most recent entry that Up recalls.
@@ -728,8 +734,7 @@ impl Editor {
             // looked for.
             _ if tab && !self.dialog => {
                 let before = &buffer.text[..buffer.cursor];
-                *completion = Completion::slash(before, &self.commands)
-                    .or_else(|| Completion::argument(before, &self.models));
+                *completion = self.complete_command(before);
                 match file_search::Mention::find(before) {
                     Some(mention) if completion.is_none() => {
                         *lookup = Lookup::start(&self.root, mention, buffer, true);
@@ -842,8 +847,7 @@ impl Editor {
             (None, Some(list)) if list.kind == Kind::Path => {
                 Completion::path(before, &self.root).filter(|next| next.start == list.start)
             }
-            (None, _) => Completion::slash(before, &self.commands)
-                .or_else(|| Completion::argument(before, &self.models)),
+            (None, _) => self.complete_command(before),
         };
         true
     }
@@ -1184,7 +1188,14 @@ mod tests {
 
     fn prompt_editor(history: Vec<String>) -> Editor {
         let root = PathBuf::new();
-        Editor::new(history, Arc::default(), root, Vec::new(), Vec::new(), false)
+        Editor::new(
+            history,
+            Arc::default(),
+            root,
+            Completions::default(),
+            Vec::new(),
+            false,
+        )
     }
 
     #[test]

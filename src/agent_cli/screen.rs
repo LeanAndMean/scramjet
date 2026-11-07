@@ -9,6 +9,7 @@
 
 use super::background;
 use super::banner::Banner;
+use super::completion::Completions;
 use super::design::Design;
 use super::editor::{Draft, Editor, Note, RESIZE_CHECK};
 use super::footer::{self, Footer};
@@ -93,7 +94,7 @@ enum ToScreen {
     /// `/reload` or `/settings` read the commands and skills (the `/` list's rows after the
     /// built-in ones) and the settings the screen follows.
     Reloaded {
-        commands: Vec<(String, String)>,
+        completions: Completions,
         /// Escape twice on an empty prompt does something.
         double_escape: bool,
         markdown_reads: MarkdownReads,
@@ -593,14 +594,14 @@ impl App {
             ToScreen::Remember(prompt) => self.editor.remember(&prompt),
             ToScreen::Note(note) => self.draft.set_note(note),
             ToScreen::Reloaded {
-                commands,
+                completions,
                 double_escape,
                 markdown_reads,
                 copy_on_select,
                 design,
                 banner,
             } => {
-                self.editor.reloaded(commands, double_escape);
+                self.editor.reloaded(completions, double_escape);
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
                 self.design = design;

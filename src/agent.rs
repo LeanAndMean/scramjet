@@ -758,6 +758,13 @@ impl Agent {
         }
     }
 
+    /// The names of the MCP servers the settings list.
+    pub fn mcp_names(&self) -> Vec<String> {
+        (self.config.mcp_servers.iter())
+            .map(|server| server.name.clone())
+            .collect()
+    }
+
     /// The MCP servers and how each is, in the settings' order.
     pub fn mcp_servers(&self) -> Vec<(McpServer, McpState)> {
         let states = (self.mcp.as_deref()).map(|servers| {
