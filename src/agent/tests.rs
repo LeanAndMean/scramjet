@@ -790,6 +790,50 @@ fn a_session_whose_file_could_not_be_created_creates_it_once_there_is_room() {
 }
 
 #[test]
+fn a_copy_on_a_full_disk_holds_its_lines_until_there_is_room() {
+    let directory = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-full-copy-{}", std::process::id())),
+    );
+    let mut copy = Session::create(&directory.0, Path::new("/project"), None).unwrap();
+    let path = copy.path().to_owned();
+    copy.write_to(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open("/dev/full")
+            .unwrap(),
+    );
+    let lines = concat!(
+        "{\"role\":\"user\",\"content\":\"one\"}\n",
+        "{\"type\":\"session_info\",\"name\":\"Work\"}\n",
+        "{\"role\":\"user\",\"content\":\"two\"}\n",
+        "{\"role\":\"user\",\"cont",
+    );
+    let (mut copy, conversation, prompts) = copy.filled(lines.as_bytes()).unwrap();
+    assert!(copy.holding());
+    assert!(matches!(copy.take_change(), Some(session::Saving::Held(_))));
+    assert_eq!(prompts, ["one", "two"]);
+    assert_eq!(conversation.len(), 2);
+    assert_eq!(copy.name(), Some("Work"));
+    assert_eq!(copy.leaf(), Some(3));
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+
+    copy.write_to(
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap(),
+    );
+    copy.append(&json!({"role":"user","content":"three"}))
+        .unwrap();
+    assert_eq!(copy.take_change(), Some(session::Saving::Saved));
+    let (reopened, conversation, _) = Session::open(&path).unwrap();
+    let prompts: Vec<_> = conversation.iter().map(|item| &item["content"]).collect();
+    assert_eq!(prompts, ["one", "two", "three"]);
+    assert_eq!(reopened.name(), Some("Work"));
+    assert!(reopened.skipped().is_empty());
+}
+
+#[test]
 fn a_session_on_a_full_disk_keeps_its_lines_until_there_is_room() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-full-{}", std::process::id())),
@@ -970,7 +1014,8 @@ fn a_fork_from_a_session_file_holds_all_of_it_in_a_new_session_of_the_project() 
     let here = scratch.0.join("here");
     let root = Path::new("/work/here");
 
-    let forked = Session::fork_from(&here, root, &source).unwrap();
+    let (session, conversation, prompts) = Session::fork_from(&here, root, &source).unwrap();
+    let forked = session.path().to_owned();
     assert_eq!(forked.parent(), Some(here.as_path()));
     let text = std::fs::read_to_string(&forked).unwrap();
     let (header, lines) = text.split_once('\n').unwrap();
@@ -980,7 +1025,9 @@ fn a_fork_from_a_session_file_holds_all_of_it_in_a_new_session_of_the_project() 
     assert_eq!(lines, saved.split_once('\n').unwrap().1);
     assert_eq!(std::fs::read_to_string(&source).unwrap(), saved);
 
-    let (session, conversation, prompts) = Session::open(&forked).unwrap();
+    let reopened = Session::open(&forked).unwrap();
+    assert_eq!((&reopened.1, &reopened.2), (&conversation, &prompts));
+    assert_eq!(reopened.0.leaf(), session.leaf());
     assert_eq!(session.name(), Some("Work"));
     // Up/Down recalls the prompts of every branch.
     assert_eq!(prompts, ["one", "two", "other"]);
@@ -1003,12 +1050,14 @@ fn a_fork_from_a_session_file_holds_all_of_it_in_a_new_session_of_the_project() 
     let notes = scratch.0.join("notes.jsonl");
     std::fs::write(&notes, "{\"type\":\"note\"}\n").unwrap();
     let error = Session::fork_from(&here, root, &notes)
-        .unwrap_err()
+        .err()
+        .unwrap()
         .to_string();
     assert!(error.contains("not a scramjet-rs session"), "{error}");
     let missing = scratch.0.join("missing.jsonl");
     let error = Session::fork_from(&here, root, &missing)
-        .unwrap_err()
+        .err()
+        .unwrap()
         .to_string();
     assert!(error.contains("missing.jsonl"), "{error}");
     assert_eq!(std::fs::read_dir(&here).unwrap().count(), 1);
@@ -1392,6 +1441,42 @@ fn names_another_process_gives_while_entries_go_in_keep_the_file_readable() {
     let (reopened, items, _) = Session::open(&path).unwrap();
     assert_eq!((items.len(), reopened.name()), (2000, Some(last.as_str())));
     assert_eq!(reopened.leaf(), session.leaf());
+}
+
+#[test]
+fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "left-held");
+    let original = scratch.0.join("1700000000000-1.jsonl");
+    write_session(
+        &original,
+        &[
+            json!({"type":"session","version":1}),
+            json!({"role":"user","content":"one"}),
+        ],
+        std::time::SystemTime::now(),
+    );
+    agent.resume_session(&original).unwrap();
+    let full = std::fs::OpenOptions::new().append(true).open("/dev/full");
+    agent.session.write_to(full.unwrap());
+    let said = json!({"role":"user","content":"two"});
+    agent.session.append(&said).unwrap();
+    assert!(agent.saving_notice().is_some());
+
+    assert!(agent.clone_session().unwrap());
+    assert_ne!(agent.session_path(), original);
+    assert_eq!(agent.conversation.len(), 2);
+    assert!(agent.session_holding());
+    // Still full: nothing more to say.
+    assert_eq!(agent.write_held(), None);
+    assert!(agent.session_holding());
+
+    let room = std::fs::OpenOptions::new().append(true).open(&original);
+    agent.left[0].write_to(room.unwrap());
+    let notice = agent.write_held().unwrap();
+    assert!(notice.contains("1700000000000-1.jsonl written"), "{notice}");
+    assert!(!agent.session_holding());
+    let (_, conversation, _) = Session::open(&original).unwrap();
+    assert_eq!(conversation, [json!({"role":"user","content":"one"}), said]);
 }
 
 #[test]

@@ -765,6 +765,9 @@ impl Interactive {
         if self.screen.is_some() {
             self.say(message);
         }
+        if let Some(notice) = self.agent.saving_notice() {
+            self.say(&notice);
+        }
     }
 
     /// Shows a resumed conversation under its header, as Scramjet redraws it; it then ends with

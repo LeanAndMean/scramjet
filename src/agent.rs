@@ -505,6 +505,9 @@ pub struct Agent {
     session: Session,
     /// The session the next step just recorded starts, which `new_session` continues in.
     next_session: Option<Session>,
+    /// Sessions switched away from while a full disk kept some of their lines in memory, tried
+    /// again with the current one's until written.
+    left: Vec<Session>,
     /// With `SessionChoice::Unsaved`, where every session of the run is, removed with the agent.
     unsaved: Option<session::Unsaved>,
     executor: tokio::runtime::Runtime,
@@ -618,29 +621,22 @@ impl Agent {
         config.model = config.providers.reference(&config.model);
         let directory = || session::directory(&config.root);
         let mut unsaved = None;
-        let opened = match choice {
-            SessionChoice::New => None,
-            SessionChoice::Unsaved => {
-                unsaved = Some(session::Unsaved::create()?);
-                None
-            }
-            SessionChoice::Continue => Session::latest(&directory()?)?.map(|path| (path, false)),
-            SessionChoice::Open(path) => Some((path, false)),
-            SessionChoice::Fork(source) => Some((
-                Session::fork_from(&directory()?, &config.root, &source)?,
-                true,
-            )),
+        let latest = match choice {
+            SessionChoice::Continue => Session::latest(&directory()?)?,
+            _ => None,
         };
-        let (session, conversation, prompts) = match opened {
-            Some((path, forked)) => Session::open(&path).inspect_err(|_| {
-                if forked {
-                    let _ = std::fs::remove_file(&path);
-                }
-            })?,
-            None => {
-                let directory = match &unsaved {
-                    Some(unsaved) => unsaved.path().to_owned(),
-                    None => directory()?,
+        let (session, conversation, prompts) = match (choice, latest) {
+            (_, Some(path)) | (SessionChoice::Open(path), _) => Session::open(&path)?,
+            (SessionChoice::Fork(source), _) => {
+                Session::fork_from(&directory()?, &config.root, &source)?
+            }
+            (choice, None) => {
+                let directory = match choice {
+                    SessionChoice::Unsaved => unsaved
+                        .insert(session::Unsaved::create()?)
+                        .path()
+                        .to_owned(),
+                    _ => directory()?,
                 };
                 let created = Session::create(&directory, &config.root, None)?;
                 (created, Vec::new(), Vec::new())
@@ -684,6 +680,7 @@ impl Agent {
             prompts,
             session,
             next_session: None,
+            left: Vec::new(),
             unsaved,
             executor,
             usage: Usage {
@@ -851,7 +848,12 @@ impl Agent {
 
     fn replace_session(&mut self, session: Session) {
         let left = std::mem::replace(&mut self.session, session);
-        let _ = left.discard_if_unused();
+        match left.holding() && !left.unused() {
+            true => self.left.push(left),
+            false => {
+                let _ = left.discard_if_unused();
+            }
+        }
     }
 
     /// Whether the session is saved: not with `SessionChoice::Unsaved`.
@@ -882,21 +884,46 @@ impl Agent {
         })
     }
 
-    /// Whether the session keeps lines in memory that its file could not take.
+    /// Whether the session, or one switched away from, keeps lines in memory that its file could
+    /// not take.
     pub fn session_holding(&self) -> bool {
-        self.session.holding()
+        self.session.holding() || !self.left.is_empty()
     }
 
-    /// Tries again to write what the session keeps in memory, with what to say of it, as a
-    /// quiet session has no next write to take it.
+    /// Tries again to write what the session and those switched away from keep in memory, with
+    /// what to say of it, as a quiet session has no next write to take it.
     pub fn write_held(&mut self) -> Option<String> {
+        let mut said = self.write_left();
         if let Err(error) = self.session.write_held() {
-            return Some(format!("Error: session not written: {error}"));
+            said.push(format!("Error: session not written: {error}"));
         }
-        self.saving_notice()
+        said.extend(self.saving_notice());
+        (!said.is_empty()).then(|| said.join("\n"))
+    }
+
+    /// Writes what the sessions switched away from keep in memory where there is room now, and
+    /// says which were written; one that still cannot be written stays, said already.
+    fn write_left(&mut self) -> Vec<String> {
+        let mut said = Vec::new();
+        self.left.retain_mut(|session| {
+            let _ = session.write_held();
+            session.take_change();
+            if session.holding() {
+                return true;
+            }
+            said.push(format!(
+                "Session {} written, with what was kept in memory.",
+                session.path().display()
+            ));
+            false
+        });
+        said
     }
 
     fn say_saving(&mut self, ui: &mut dyn AgentUi) {
+        for notice in self.write_left() {
+            ui.notice(&notice);
+        }
         if let Some(notice) = self.saving_notice() {
             ui.notice(&notice);
         }
@@ -970,25 +997,22 @@ impl Agent {
     /// prompt, for editing before it is sent again; `None`: no such prompt. On failure nothing
     /// changes. Approvals given with `a` still apply.
     pub fn fork(&mut self, index: usize) -> Result<Option<String>, AgentError> {
-        let Some((path, prompt)) = self.session.fork(&self.config.root, index)? else {
+        let Some(((mut session, conversation, prompts), prompt)) =
+            self.session.fork(&self.config.root, index)?
+        else {
             return Ok(None);
         };
-        let opened = Session::open(&path).and_then(|(mut session, conversation, prompts)| {
-            // As in Scramjet, a fork without a conversation keeps the current model, and is not
-            // written before the first reply (its lines are the current session's).
-            if conversation.is_empty() {
-                session.record_model(&self.config.model)?;
+        // As in Scramjet, a fork without a conversation keeps the current model, and is not
+        // written before the first reply (its lines are the current session's).
+        if conversation.is_empty() {
+            if let Err(error) = session.record_model(&self.config.model) {
                 session.forked_unused();
-            }
-            Ok((session, conversation, prompts))
-        });
-        match opened {
-            Ok(opened) => self.switch_session(opened)?,
-            Err(error) => {
-                let _ = std::fs::remove_file(&path);
+                let _ = session.discard_if_unused();
                 return Err(error.into());
             }
+            session.forked_unused();
         }
+        self.switch_session((session, conversation, prompts))?;
         Ok(Some(prompt))
     }
 
@@ -1000,14 +1024,8 @@ impl Agent {
         if self.conversation.is_empty() {
             return Ok(false);
         }
-        let path = self.session.clone_at_leaf(&self.config.root)?;
-        match Session::open(&path) {
-            Ok(opened) => self.switch_session(opened)?,
-            Err(error) => {
-                let _ = std::fs::remove_file(&path);
-                return Err(error.into());
-            }
-        }
+        let opened = self.session.clone_at_leaf(&self.config.root)?;
+        self.switch_session(opened)?;
         Ok(true)
     }
 
@@ -1031,14 +1049,8 @@ impl Agent {
     /// Scramjet's `/import` does; the current session stays as it is. On failure nothing changes.
     pub fn import_session(&mut self, path: &Path) -> Result<(), AgentError> {
         let directory = self.session.path().parent().unwrap_or(Path::new("."));
-        let copy = Session::import(directory, path)?;
-        match Session::open(&copy) {
-            Ok(opened) => self.switch_session(opened),
-            Err(error) => {
-                let _ = std::fs::remove_file(&copy);
-                Err(error.into())
-            }
-        }
+        let opened = Session::import(directory, path)?;
+        self.switch_session(opened)
     }
 
     /// The instructions the model's next request starts with: those of the session, then the

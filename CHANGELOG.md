@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.57.4 — Forks, clones and imports on a full disk
+
+### Fixed
+
+- `/fork`, `/clone`, `/import` and `--fork` work on a full disk: the new session is kept in memory and written once there is room, where they failed with `No space left on device`.
+- A session left (by `/new`, `/resume`, a fork, a clone or an import) while a full disk kept some of its lines in memory keeps them and writes them once there is room, saying so, where they were lost.
+
 ## 0.57.3 — A quiet session written once the disk has room
 
 ### Fixed

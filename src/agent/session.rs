@@ -103,6 +103,9 @@ pub struct Label {
     pub time: u64,
 }
 
+/// A session opened: it, its conversation items and every prompt the user gave in it.
+pub type Opened = (Session, Vec<Value>, Vec<String>);
+
 /// The saved session `Session::find` found.
 #[derive(Debug, PartialEq)]
 pub enum Found {
@@ -828,10 +831,10 @@ impl Session {
         }))
     }
 
-    /// Saves a session for the project `root` in `directory` with every entry, branch, name and
+    /// Starts a session for the project `root` in `directory` with every entry, branch, name and
     /// label of the session file `source`, forked from it, as Scramjet's `--fork` copies a
-    /// session. Returns the new file; a file that is not a session is not copied.
-    pub fn fork_from(directory: &Path, root: &Path, source: &Path) -> io::Result<PathBuf> {
+    /// session, and opens it; a file that is not a session is not copied.
+    pub fn fork_from(directory: &Path, root: &Path, source: &Path) -> io::Result<Opened> {
         let bytes = std::fs::read(source).map_err(|error| {
             io::Error::new(error.kind(), format!("{}: {error}", source.display()))
         })?;
@@ -840,31 +843,13 @@ impl Session {
         // refer to.
         let after_header = bytes.iter().position(|&byte| byte == b'\n');
         let lines = after_header.map_or(&[][..], |end| &bytes[end + 1..]);
-        let mut forked = Self::written(directory, root, source)?;
-        if let Err(error) = write_whole(forked.created(), lines) {
-            let _ = std::fs::remove_file(&forked.path);
-            return Err(error);
-        }
-        Ok(forked.path.clone())
+        Self::create(directory, root, Some(source))?.filled(lines)
     }
 
     /// Starts a session for the project `root` in `directory`; a fork names the session it came
     /// from, `parent`, in its header, as Scramjet's `parentSession`.
     pub fn create(directory: &Path, root: &Path, parent: Option<&Path>) -> io::Result<Self> {
         Self::start(directory, root, parent, false)
-    }
-
-    /// A session forked from `parent` whose header is in its file, for lines copied after it.
-    fn written(directory: &Path, root: &Path, parent: &Path) -> io::Result<Self> {
-        let mut forked = Self::create(directory, root, Some(parent))?;
-        match forked.change.take() {
-            Some(Saving::Held(error)) => {
-                forked.held.clear();
-                let _ = std::fs::remove_file(&forked.path);
-                Err(io::Error::new(io::ErrorKind::StorageFull, error))
-            }
-            _ => Ok(forked),
-        }
     }
 
     /// Starts a session for the project `root` in `directory` that a next step of the session
@@ -880,16 +865,37 @@ impl Session {
         parent: Option<&Path>,
         next_step: bool,
     ) -> io::Result<Self> {
+        Self::begin(directory, |created| {
+            let mut header =
+                json!({"type":"session","version":1,"root":root,"created":created as u64});
+            if let Some(parent) = parent {
+                header["parentSession"] = json!(std::path::absolute(parent)?);
+            }
+            if next_step {
+                header["nextStep"] = json!(true);
+            }
+            let mut header = serde_json::to_vec(&header)?;
+            header.push(b'\n');
+            Ok(header)
+        })
+    }
+
+    /// Starts a session in `directory` whose first line is `header`, given the millisecond its
+    /// file is named for; on a full disk the line is held in memory, as later ones are.
+    fn begin(
+        directory: &Path,
+        header: impl FnOnce(u128) -> io::Result<Vec<u8>>,
+    ) -> io::Result<Self> {
         let (path, file, created) = new_file(directory)?;
-        let mut header = json!({"type":"session","version":1,"root":root,"created":created as u64});
-        if let Some(parent) = parent {
-            header["parentSession"] = json!(std::path::absolute(parent)?);
-        }
-        if next_step {
-            header["nextStep"] = json!(true);
-        }
-        let mut header = serde_json::to_vec(&header)?;
-        header.push(b'\n');
+        let mut header = match header(created) {
+            Ok(header) => header,
+            Err(error) => {
+                if file.is_ok() {
+                    let _ = std::fs::remove_file(&path);
+                }
+                return Err(error);
+            }
+        };
         let mut held = Vec::new();
         let mut change = None;
         let (file, written) = match file {
@@ -967,7 +973,7 @@ impl Session {
 
     /// Opens an existing session for appending and returns its conversation items and every
     /// prompt the user gave in it, including those a compaction summarized.
-    pub fn open(path: &Path) -> io::Result<(Self, Vec<Value>, Vec<String>)> {
+    pub fn open(path: &Path) -> io::Result<Opened> {
         let entries = read(path)?;
         let context = entries.context(path, entries.tail)?;
         let file = OpenOptions::new().append(true).open(path)?;
@@ -1011,46 +1017,41 @@ impl Session {
             .collect())
     }
 
-    /// Saves a session for the project `root` next to this one with the entries on the path to
+    /// Starts a session for the project `root` next to this one with the entries on the path to
     /// its prompt `index` (0-based, as `fork_prompts` lists them), that prompt left out, as
-    /// Scramjet's `/fork` copies a session's path. Returns the new file and that prompt; `None`:
-    /// no such prompt.
-    pub fn fork(&self, root: &Path, index: usize) -> io::Result<Option<(PathBuf, String)>> {
+    /// Scramjet's `/fork` copies a session's path. Returns it opened and that prompt; `None`: no
+    /// such prompt.
+    pub fn fork(&self, root: &Path, index: usize) -> io::Result<Option<(Opened, String)>> {
         let entries = self.read()?;
         let Some(fork) = entries.fork_points().nth(index) else {
             return Ok(None);
         };
         let prompt = prompt_text(&fork.value).to_owned();
-        let path = self.branch_file(&entries, fork.parent, root, None)?;
-        Ok(Some((path, prompt)))
+        let opened = self.branch_file(&entries, fork.parent, root, None)?;
+        Ok(Some((opened, prompt)))
     }
 
-    /// Saves a session for the project `root` next to this one with the entries on the path to
+    /// Starts a session for the project `root` next to this one with the entries on the path to
     /// the leaf and the session's name, as Scramjet's `/clone` duplicates a session at its
-    /// current position. Returns the new file.
-    pub fn clone_at_leaf(&self, root: &Path) -> io::Result<PathBuf> {
+    /// current position, and opens it.
+    pub fn clone_at_leaf(&self, root: &Path) -> io::Result<Opened> {
         let entries = self.read()?;
         self.branch_file(&entries, self.leaf, root, entries.name.as_deref())
     }
 
-    /// Saves a session next to this one, forked from it, with the entries of `entries` (this
-    /// file's) on the path to `leaf`, then `name` when given.
+    /// Starts a session next to this one, forked from it, with the entries of `entries` (this
+    /// file's) on the path to `leaf`, then `name` when given, and opens it.
     fn branch_file(
         &self,
         entries: &Entries,
         leaf: Option<usize>,
         root: &Path,
         name: Option<&str>,
-    ) -> io::Result<PathBuf> {
+    ) -> io::Result<Opened> {
         let source = self.bytes()?;
         let history = entries.history(&self.path, &source, leaf, name)?;
         let directory = self.path.parent().unwrap_or(Path::new("."));
-        let mut branched = Self::written(directory, root, &self.path)?;
-        if let Err(error) = write_whole(branched.created(), &history) {
-            let _ = std::fs::remove_file(&branched.path);
-            return Err(error);
-        }
-        Ok(branched.path.clone())
+        Self::create(directory, root, Some(&self.path))?.filled(&history)
     }
 
     /// The conversation from the start to the leaf.
@@ -1080,20 +1081,67 @@ impl Session {
     }
 
     /// Copies the session file `source` into `directory` under a new session's name, so that it
-    /// is listed and continued as one made there; returns the copy. A file that is not a session
-    /// is not copied.
-    pub fn import(directory: &Path, source: &Path) -> io::Result<PathBuf> {
+    /// is listed and continued as one made there, and opens the copy. A file that is not a
+    /// session is not copied.
+    pub fn import(directory: &Path, source: &Path) -> io::Result<Opened> {
         let bytes = std::fs::read(source).map_err(|error| {
             io::Error::new(error.kind(), format!("{}: {error}", source.display()))
         })?;
         read(source)?;
-        let (path, file, _) = new_file(directory)?;
-        let mut file = file?;
-        if let Err(error) = write_whole(&mut file, &bytes) {
-            let _ = std::fs::remove_file(&path);
-            return Err(error);
+        let (header, lines) = match bytes.iter().position(|&byte| byte == b'\n') {
+            Some(end) => bytes.split_at(end + 1),
+            None => (&bytes[..], &[][..]),
+        };
+        let mut header = header.to_vec();
+        if !header.ends_with(b"\n") {
+            header.push(b'\n');
         }
-        Ok(path)
+        Self::begin(directory, |_| Ok(header))?.filled(lines)
+    }
+
+    /// This session, just started, with `lines` after its header, written or held in memory as
+    /// any lines are, opened as `open` opens a file: its conversation items and prompts. A last
+    /// line left cut short is left out. On failure its file goes.
+    pub(super) fn filled(mut self, lines: &[u8]) -> io::Result<Opened> {
+        let opened = (|| {
+            let mut bytes = self.bytes()?;
+            let header = bytes.len();
+            bytes.extend_from_slice(lines);
+            let entries = parse(&self.path, &bytes[..])?;
+            let context = entries.context(&self.path, entries.tail)?;
+            let mut lines = bytes[header..entries.size as usize].to_vec();
+            if entries.unterminated {
+                lines.push(b'\n');
+            }
+            self.write(&lines)?;
+            Ok((entries, context))
+        })();
+        let (entries, context) = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                self.held.clear();
+                if self.file.is_some() {
+                    let _ = std::fs::remove_file(&self.path);
+                }
+                return Err(error);
+            }
+        };
+        let prompts = entries.prompts();
+        self.model = context.model;
+        self.contributors = context.contributors;
+        self.name = entries.name;
+        self.effort = context.effort;
+        self.files = context.files;
+        self.context_tokens = context.context_tokens;
+        self.command = context.command;
+        self.autopilot = context.autopilot;
+        self.tokens = entries.tokens;
+        self.leaf = entries.tail;
+        self.tail = entries.tail;
+        self.lines = entries.lines;
+        self.unused = false;
+        self.skipped = entries.skipped;
+        Ok((self, context.items, prompts))
     }
 
     /// Every entry of the session, in file order.
@@ -1269,6 +1317,11 @@ impl Session {
     /// here, which `discard_if_unused` removes unless something is said in it.
     pub fn forked_unused(&mut self) {
         self.unused = true;
+    }
+
+    /// Whether this process created it and nothing was said in it yet.
+    pub fn unused(&self) -> bool {
+        self.unused
     }
 
     /// Removes the file of a session this process created and left without a conversation, as
