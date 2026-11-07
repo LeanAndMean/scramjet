@@ -355,6 +355,19 @@ talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 approved = serve_call('echo approved-$((6*7)); sleep 30')
 pausing = serve_call('sleep 2')
+# `@` completion and the `grep` and `find` tools run the rg and fd the harness finds: in the agent
+# directory's `bin`, else on the PATH.
+user_bin = os.path.join(os.environ.get('SCRAMJET_CODING_AGENT_DIR') or os.path.expanduser('~/.scramjet/agent'), 'bin')
+os.makedirs(os.path.join(work, 'agent', 'bin'))
+found = {}
+for program, names in [('rg', ['rg']), ('fd', ['fd', 'fdfind'])]:
+    local = os.path.join(user_bin, program)
+    found[program] = local if os.access(local, os.X_OK) else next(filter(None, map(shutil.which, names)), None)
+    if found[program]:
+        os.symlink(found[program], os.path.join(work, 'agent', 'bin', program))
+fd = found['fd']
+# The settings journey switches the grep tool on, which needs rg.
+assert found['rg'], f'rg is needed: neither {user_bin}/rg nor rg on the PATH'
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'),
            XDG_CONFIG_HOME=os.path.join(work, 'config'), SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'))
 env.pop('VISUAL', None)
@@ -1983,7 +1996,10 @@ run(['--retries', '0'], completes_paths_and_commands)
 (completed,) = set(session_files()) - known
 prompts = [item['content'] for item in map(json.loads, open(completed)) if item.get('role') == 'user']
 assert prompts == ['see completion/alpine-file and completion/unique-file'], prompts
-run([], completes_file_references)
+if fd:
+    run([], completes_file_references)
+else:
+    print('skipped completes_file_references: no fd', file=sys.stderr)
 known = set(session_files())
 run([], bang_commands)
 (ran,) = set(session_files()) - known

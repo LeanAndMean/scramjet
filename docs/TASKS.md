@@ -6,7 +6,6 @@ Last steer: b11ce00
 
 ## From review
 
-- **The editor's PTY test needs `fd` on the `PATH`** (review of 4c2f47b): `tests/agent_editor_pty.py` points `SCRAMJET_CODING_AGENT_DIR` at a scratch directory, so `@` completion finds `fd` only on the `PATH`. Here it is only in `~/.scramjet/agent/bin`, and `prompt_editor_and_running_turns_keep_input_and_restore_the_terminal` fails at `completes_file_references` on 4c2f47b and after it; with that directory on the `PATH` it passes. The test could put the found `fd` in its agent directory's `bin`, or skip that journey without one.
 - **Nested repositories in build and dependency trees pin those trees** (review of 80ec4e9): a CMake `FetchContent` checkout (`build/_deps/foo-src/.git`) or `pip install -e git+…` (`.venv/src/foo/.git`) makes `rm -rf build` fail with "Device or resource busy" and a reconfigure's `git fetch` there fail read-only, for the whole process. Skipping ignored directories would undo the protection where a build runs `git` outside the sandbox; a choice for the user at the next steer.
 
 ## Current focus
@@ -113,7 +112,6 @@ Not scheduled; fix them when they matter.
 - A theme chosen in `/settings` re-renders the conversation, but `/status` (`/session`) and `/hotkeys` output already shown keeps the colors it was shown in: it is stored styled (`Event::Text`), where notes in one style (`Event::Styled`) take the new theme.
 - Without `--sandbox`, MCP servers run as the user, outside any sandbox and with the whole environment plus their `env`, also in unattended turns, whose tools have credential variables removed (Claude Code runs them so too). A tool result with several images sends only the first.
 - `/export`'s page shows a skill's text with its `<skill>` tags, and compactions, commands and skills under its own headings (`✓ Compacted: …`, `Sent as N lines`), not the screen's labels (`[compaction]`, `[skill]`).
-- `tests/agent_editor_pty.py`'s file-reference journey needs `fd` on the `PATH` (its agent directory has no `bin`); here it is only in `~/.scramjet/agent/bin`, so run the tests with that directory on the `PATH`.
 - `agent::mcp::tests::http_servers_that_cannot_be_reached_or_refuse_say_why` failed once under the full run's load and passed alone and in three later runs (2026-11-06): `connection error` in place of `Connection refused`.
 - `agent::tests::a_fork_continues_from_before_a_prompt_in_a_new_session` failed once under the full run's load at `src/agent/tests.rs:1321` (the fork left before a prompt still existed) and passed alone three times (2026-11-06, 0.51.0). Not looked into; session files are named by millisecond and process id.
 - `agent::turn::tests::what_a_paused_turn_left_running_shows_from_another_thread_meanwhile` failed under the full run's load at its outputs assertion (`src/agent/turn.rs:621`), once each in 0.53.2, 0.53.3 and 0.73.0, and passed alone three times and in the next lib run each time (2026-11-06, 2026-11-07). Not looked into; the bash output's chunks may split differently under load.
