@@ -294,7 +294,14 @@ impl Interactive {
         let history = scramjet_rs::agent::usage::History::read(&sessions, current);
         let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
             .map_or(0, |since| since.as_millis() as u64);
-        let report = super::usage::report(&history, &sessions, current, now, &self.ui);
+        let report = super::usage::report(
+            &history,
+            &sessions,
+            current,
+            self.agent.model(),
+            now,
+            &self.ui,
+        );
         self.say(report.trim_end());
     }
 

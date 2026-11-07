@@ -156,7 +156,8 @@ Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 /status shows the session's file, the messages in its context, the tokens they used and the cost.
 /usage (or /cost, /stats) adds up what the saved sessions of every project spent: requests,
 tokens, cache hits and cost for this session, today and the last 7 and 30 days, each day of
-the last two weeks, and each model's, with its median time to first output and output rate.
+the last two weeks, and each provider's (the current one first) and model's, with each model's
+time to first output and output rate, median and slowest tenth.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved

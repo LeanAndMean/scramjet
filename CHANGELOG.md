@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.66.0 — Usage by provider, and speed percentiles
+
+### Changed
+
+- `/usage` adds a table of the last 30 days by provider, the current provider first, and a speed table for the models with timing saved: the median first output and output rate beside the slowest tenth's (p90 and p10). Models saved without a provider (before 0.17.0) count under `unknown`.
+
 ## 0.65.0 — Turning MCP servers off and on
 
 ### Added
