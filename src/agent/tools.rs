@@ -25,6 +25,14 @@ pub(super) const MAX_LINES: usize = 2000;
 pub(super) const MAX_BYTES: usize = 50 * 1024;
 /// How the line that says what a cut read left out starts.
 pub const READ_MORE: &str = "[Showing lines ";
+
+/// Whether a read's answer is only the note that its first line is too long to show.
+pub fn read_line_too_long(output: &str) -> bool {
+    output.starts_with("[Line ")
+        && output.ends_with(']')
+        && !output.contains('\n')
+        && output.contains(" limit. Use bash: sed -n '")
+}
 /// Bash output kept in memory while a command runs; only the tail is shown to the model.
 const CAPTURE_BYTES: usize = 4 << 20;
 /// How often a running command's output is passed on to be shown, as in Scramjet.
@@ -527,7 +535,7 @@ fn read(root: &Path, call: &Call, hidden: Option<&Hidden>) -> Result<Output, Str
     let bytes = contents(&path, hidden)?;
     let (text, image) = match image::mime(&bytes) {
         Some(mime) => read_image(&bytes, mime),
-        None => (read_text(bytes, call, &path)?, None),
+        None => (read_text(bytes, call, &path, given)?, None),
     };
     Ok(Output {
         text,
@@ -557,7 +565,7 @@ inline image size limit.]"
     }
 }
 
-fn read_text(bytes: Vec<u8>, call: &Call, path: &Path) -> Result<String, String> {
+fn read_text(bytes: Vec<u8>, call: &Call, path: &Path, given: &str) -> Result<String, String> {
     let text = String::from_utf8(bytes)
         .map_err(|_| format!("{} is not a UTF-8 text file", path.display()))?;
     let lines: Vec<&str> = text.split_inclusive('\n').collect();
@@ -574,22 +582,60 @@ fn read_text(bytes: Vec<u8>, call: &Call, path: &Path) -> Result<String, String>
     let selected = &lines[offset - 1..lines.len().min((offset - 1).saturating_add(limit))];
     let mut output = String::new();
     let mut shown = 0;
+    let mut by_bytes = false;
     for line in selected {
-        if shown == MAX_LINES || output.len() + line.len() > MAX_BYTES {
+        if shown == MAX_LINES {
+            break;
+        }
+        if output.len() + line.len() > MAX_BYTES {
+            by_bytes = true;
             break;
         }
         output.push_str(line);
         shown += 1;
     }
+    // As Scramjet's: a line too long to show at all is pointed to, else the next read would
+    // start at it again.
+    if shown == 0 && by_bytes {
+        let size = size_text(selected[0].trim_end_matches('\n').len());
+        return Ok(format!(
+            "[Line {offset} is {size}, exceeds {} limit. Use bash: sed -n '{offset}p' {} | head -c \
+{MAX_BYTES}]",
+            size_text(MAX_BYTES),
+            shell_word(given)
+        ));
+    }
     let last = offset - 1 + shown;
     if last < lines.len() {
+        let limit = match by_bytes {
+            true => format!(" ({} limit)", size_text(MAX_BYTES)),
+            false => String::new(),
+        };
         output.push_str(&format!(
-            "\n{READ_MORE}{offset}-{last} of {}. Use offset={} to continue.]",
+            "\n{READ_MORE}{offset}-{last} of {}{limit}. Use offset={} to continue.]",
             lines.len(),
             last + 1
         ));
     }
     Ok(output)
+}
+
+/// A size as Scramjet's `formatSize` writes it.
+fn size_text(bytes: usize) -> String {
+    match bytes {
+        0..1024 => format!("{bytes}B"),
+        1024..1_048_576 => format!("{:.1}KB", bytes as f64 / 1024.0),
+        _ => format!("{:.1}MB", bytes as f64 / 1_048_576.0),
+    }
+}
+
+/// `text` as one shell word, quoted only when it needs to be.
+fn shell_word(text: &str) -> String {
+    let plain = |c: char| c.is_ascii_alphanumeric() || "_./~+,:@%-".contains(c);
+    match !text.is_empty() && text.chars().all(plain) {
+        true => text.to_owned(),
+        false => format!("'{}'", text.replace('\'', r"'\''")),
+    }
 }
 
 /// Writes a file, making the directories missing.
@@ -1878,6 +1924,27 @@ inline image size limit.]",
             .unwrap()
             .text;
         assert_eq!(page, "line 2999\nline 3000\n");
+        let wide = format!("short\n{}\nlast\n", "x".repeat(60_000));
+        std::fs::write(root.join("it's wide.txt"), &wide).unwrap();
+        let read = |arguments| {
+            call("read", arguments)
+                .run(&root, None, &cancel, &mut |_| {})
+                .unwrap()
+                .text
+        };
+        assert_eq!(
+            read(json!({"path":"it's wide.txt"})),
+            "short\n\n[Showing lines 1-1 of 3 (50.0KB limit). Use offset=2 to continue.]"
+        );
+        let stuck = read(json!({"path":"it's wide.txt","offset":2}));
+        assert_eq!(
+            stuck,
+            "[Line 2 is 58.6KB, exceeds 50.0KB limit. Use bash: sed -n '2p' 'it'\\''s wide.txt' \
+| head -c 51200]"
+        );
+        assert!(read_line_too_long(&stuck));
+        assert_eq!(read(json!({"path":"it's wide.txt","offset":3})), "last\n");
+        assert_eq!(shell_word("~/a/b-c.txt"), "~/a/b-c.txt");
         let summary = |arguments| call("read", arguments).summary();
         assert_eq!(summary(json!({"path":"f"})), "f");
         assert_eq!(summary(json!({"path":"f","offset":40})), "f:40");

@@ -14,7 +14,7 @@ use super::{children, console, diff, editor, job, markdown, record};
 use scramjet_rs::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
     DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE,
-    StreamProgress, ToolDetail, UserCommand, publication_choices,
+    StreamProgress, ToolDetail, UserCommand, publication_choices, read_line_too_long,
 };
 use std::{
     collections::VecDeque,
@@ -416,6 +416,9 @@ impl Terminal {
                 let limited = Shown::First(WRITE_LINES);
                 (code(content, path, content, limited))
                     .unwrap_or_else(|| styled(preview(content, shown(limited), width)))
+            }
+            (_, Some(ToolDetail::Read(_))) if read_line_too_long(output) => {
+                styled(preview(output, Shown::All, width))
             }
             // As Scramjet's, a Markdown file's first lines rendered as a document, and the note
             // after a cut read in the tool's style.

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.1 — A read stuck on a long line
+
+### Fixed
+
+- `read` at a line longer than 50 KB now says how long it is and gives a `sed … | head -c` command to see it, as Scramjet does, instead of returning nothing and pointing at the same line again; a read cut by the 50 KB limit says so.
+
 ## 0.97.0 — Calls that change files run in their order
 
 ### Changed
