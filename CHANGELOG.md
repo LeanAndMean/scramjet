@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.2 — Compaction that frees the context after long thinking
+
+### Fixed
+
+- Compaction keeps about the latest 20k tokens of the conversation again when the model thought at length: a reply counts as many tokens as it added to the context, as the next request's usage shows, where only its thinking's summary was counted. A `/compact` after a reply of 27k tokens of Claude's thinking kept about 56k tokens; it now keeps about 32k, from the start of that reply.
+
 ## 0.95.1 — Why commands do not run unattended on Windows
 
 ### Fixed

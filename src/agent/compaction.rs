@@ -2,7 +2,7 @@
 //! items, and the agent replacing older history with a summary, on `/compact` or when the context
 //! fills.
 use super::client::Protocol;
-use super::{Agent, AgentError, AgentUi, PRODUCER, Purpose, message_text, tools};
+use super::{Agent, AgentError, AgentUi, PRODUCER, Purpose, USAGE, message_text, tools};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -395,6 +395,47 @@ pub(super) fn estimate(items: &[Value]) -> u64 {
         .sum()
 }
 
+fn assistant(item: &Value) -> bool {
+    item["type"] == "reasoning" || item["type"] == "function_call" || item["role"] == "assistant"
+}
+
+/// Each item's tokens in the context: chars/4, as Scramjet estimates them, but a reply as many
+/// as its context measured, up to its output, as thinking counts in full where only its summary
+/// is saved. The measure is how much the next request's input grew past the reply's input and
+/// the items between; the last reply's is its output.
+fn weights(items: &[Value], start: usize) -> Vec<u64> {
+    let mut weights: Vec<u64> = (items.iter())
+        .map(|item| estimate(std::slice::from_ref(item)))
+        .collect();
+    let replies: Vec<(usize, usize, u64, u64)> = (start..items.len())
+        .filter_map(|end| {
+            let usage = &items[end][USAGE];
+            let input = ["input", "cache_read", "cache_write"]
+                .iter()
+                .map(|field| usage[field].as_u64())
+                .sum::<Option<u64>>()?;
+            let first = (start..end)
+                .rev()
+                .take_while(|&i| assistant(&items[i]))
+                .last()
+                .unwrap_or(end);
+            Some((first, end, input, usage["output"].as_u64()?))
+        })
+        .collect();
+    for (n, &(first, end, input, output)) in replies.iter().enumerate() {
+        let measured = match replies.get(n + 1) {
+            Some(&(next, _, next_input, _)) => {
+                let between: u64 = weights[end + 1..next].iter().sum();
+                next_input.saturating_sub(input + between)
+            }
+            None => output,
+        };
+        let estimated: u64 = weights[first..=end].iter().sum();
+        weights[first] += measured.min(output).saturating_sub(estimated);
+    }
+    weights
+}
+
 /// Walk backwards to ~20k tokens, then choose the next safe assistant/user boundary.
 /// Responses splits an assistant's text, reasoning and calls into separate items; outstanding
 /// calls prevent a cut anywhere inside a call/output group (including parallel calls).
@@ -402,11 +443,6 @@ pub(super) fn cut_point(items: &[Value], start: usize, budget: u64) -> usize {
     let mut pending = HashSet::new();
     let mut cuts = Vec::new();
     for (i, item) in items.iter().enumerate().skip(start) {
-        let assistant = |item: &Value| {
-            item["type"] == "reasoning"
-                || item["type"] == "function_call"
-                || item["role"] == "assistant"
-        };
         // One Responses assistant reply can contain reasoning, text and several calls. Keep
         // these together, including encrypted reasoning paired with a function call's fc_ id.
         let inside_reply = i > start && assistant(&items[i - 1]) && assistant(item);
@@ -422,9 +458,10 @@ pub(super) fn cut_point(items: &[Value], start: usize, budget: u64) -> usize {
             }
         }
     }
+    let weights = weights(items, start);
     let mut tokens = 0;
     for i in (start..items.len()).rev() {
-        tokens += estimate(&items[i..i + 1]);
+        tokens += weights[i];
         if tokens >= budget {
             return cuts.iter().copied().find(|&cut| cut >= i).unwrap_or(start);
         }
@@ -830,6 +867,41 @@ mod tests {
             json!({"role":"user","content":"x".repeat(80_000)}),
         ];
         assert_eq!(cut_point(&users, 0, 20_000), 1);
+    }
+
+    #[test]
+    fn replies_count_as_many_tokens_as_the_context_grew_by_them_up_to_their_output() {
+        let usage = |input: u64, output: u64| json!({"input": 4, "cache_read": input - 4, "cache_write": 0, "output": output});
+        let call = |id: &str, usage: Value| {
+            json!({"type":"function_call","call_id":id,"name":"read","arguments":"{}",
+                "_scramjet_usage":usage})
+        };
+        let thinking = json!({"type":"reasoning","summary":[{"text":"a short summary"}]});
+        let output = |id: &str| json!({"type":"function_call_output","call_id":id,"output":"ok"});
+        let items = |second: u64, third: u64| {
+            vec![
+                json!({"role":"user","content":"start"}),
+                thinking.clone(),
+                call("a", usage(20_000, 30_000)),
+                output("a"),
+                thinking.clone(),
+                call("b", usage(second, 30_000)),
+                output("b"),
+                json!({"type":"message","role":"assistant","content":[{"text":"done"}],
+                    "_scramjet_usage":usage(third, 10)}),
+            ]
+        };
+        // Claude's thinking stays in the context in full: each reply took 30k of it, and the
+        // budget is reached within the later one.
+        let claude = items(50_001, 80_002);
+        assert_eq!(cut_point(&claude, 0, 20_000), 4);
+        assert_eq!(cut_point(&claude, 0, 40_000), 1);
+        // Thinking the provider drops from the context, or input that shrank, as when kept
+        // items' usage predates a compaction, counts as estimated.
+        let dropped = items(20_100, 20_200);
+        assert_eq!(cut_point(&dropped, 0, 20_000), 0);
+        let shrunk = items(50_001, 5_000);
+        assert_eq!(cut_point(&shrunk, 0, 20_000), 1);
     }
 
     #[test]
