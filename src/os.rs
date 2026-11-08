@@ -415,6 +415,24 @@ pub fn end_group(id: u32) {
     windows::control_break(id);
 }
 
+/// Whether a process `pid` runs, as Node's `process.kill(pid, 0)` tells it: one that only
+/// refuses the signal runs.
+pub fn process_runs(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let pid = i32::try_from(pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw);
+        pid.is_some_and(|pid| {
+            rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH)
+        })
+    }
+    #[cfg(windows)]
+    {
+        windows::process_runs(pid)
+    }
+}
+
 #[cfg(windows)]
 mod windows {
     use std::os::windows::io::AsRawHandle;
@@ -451,6 +469,28 @@ mod windows {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
+    }
+
+    /// As libuv's `uv_kill` with signal 0: a process that cannot be opened for want of rights
+    /// runs, and one that has an exit code does not.
+    pub(super) fn process_runs(pid: u32) -> bool {
+        use windows_sys::Win32::Foundation::{
+            CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, STILL_ACTIVE,
+        };
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: the handle is checked, closed once, and the code is the call's to fill.
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return GetLastError() != ERROR_INVALID_PARAMETER;
+            }
+            let mut code = 0;
+            let got = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            got == 0 || code == STILL_ACTIVE as u32
+        }
     }
 
     pub(super) fn control_break(id: u32) {

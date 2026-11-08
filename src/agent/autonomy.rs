@@ -13,6 +13,8 @@ use super::yaml;
 use std::path::{Path, PathBuf};
 use yaml_rust2::Yaml;
 
+mod lock;
+
 /// The project's file, under its root.
 const PROJECT_FILE: &str = ".scramjet/autonomy.yaml";
 
@@ -493,17 +495,18 @@ fn update(
     change: impl FnOnce(&mut File) -> bool,
 ) -> Result<(), String> {
     let shown = shown_path(path);
-    let mut file = read(path, in_project)
-        .map_err(|message| format!("{shown}: {message}"))?
-        .unwrap_or_default();
-    if !change(&mut file) {
-        return Ok(());
-    }
-    let written = match file.edges.is_empty() && file.publications.is_empty() {
-        true => std::fs::remove_file(path),
-        false => write_replacing(path, &serialized(&file)),
-    };
-    written.map_err(|error| format!("{shown}: {error}"))
+    lock::locked(path, || {
+        let mut file = read(path, in_project)?.unwrap_or_default();
+        if !change(&mut file) {
+            return Ok(());
+        }
+        let written = match file.edges.is_empty() && file.publications.is_empty() {
+            true => std::fs::remove_file(path),
+            false => write_replacing(path, &serialized(&file)),
+        };
+        written.map_err(|error| error.to_string())
+    })
+    .map_err(|message| format!("{shown}: {message}"))
 }
 
 /// A file's settings in Scramjet's layout, in their order.

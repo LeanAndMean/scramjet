@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.109.1 — Next-step and approval settings safe alongside Scramjet
+
+### Fixed
+
+- `/settings` now takes Scramjet's update lock (`autonomy.yaml.lock`) while it changes an `autonomy.yaml`, so a next-step or publication setting saved by Scramjet at the same moment is no longer lost. A lock left by a process that has ended is taken back; one held by a running process is waited for briefly, then the change is refused with `update lock is busy`.
+
 ## 0.109.0 — Wheel, prompt height and completion rows as you set them
 
 ### Added
