@@ -35,8 +35,8 @@ const COMMAND_VERSION: u64 = 1;
 /// The program runs before the first prompt and each time the models are listed.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const COMMAND_OUTPUT_BYTES: u64 = 16 << 20;
-/// Scramjet's levels, each with the name requests give it, and whether a model that reasons has
-/// it unless its `thinkingLevelMap` says otherwise.
+/// Scramjet's levels, each with the name efforts give it (`none` is off), and whether a model
+/// that reasons has it unless its `thinkingLevelMap` says otherwise.
 const LEVELS: [(&str, &str, bool); 7] = [
     ("off", "none", true),
     ("minimal", "minimal", true),
@@ -104,8 +104,10 @@ pub(super) struct ModelInfo {
     /// (`maxInputTokens`): compaction runs past it too.
     pub input: Option<u64>,
     pub reasoning: bool,
-    /// The effort levels it takes, as requests name them, in order; empty: any.
+    /// The effort levels it takes, in order; empty: any.
     pub levels: Vec<String>,
+    /// Levels its `thinkingLevelMap` sends as another text, with that text.
+    pub renamed: Vec<(String, String)>,
     pub images: bool,
     pub prices: Prices,
     /// What its server accepts, for Chat Completions.
@@ -128,6 +130,7 @@ impl ModelInfo {
             input: None,
             reasoning: true,
             levels: Vec::new(),
+            renamed: Vec::new(),
             images: true,
             prices: Prices::default(),
             compat: Compat::default(),
@@ -138,6 +141,15 @@ impl ModelInfo {
     /// `effort` fitted to the model's levels (`fit`).
     pub(super) fn fit<'a>(&'a self, effort: &'a str) -> &'a str {
         fit(&self.levels, effort)
+    }
+
+    /// The text requests send for `effort` fitted (`fit`): its `thinkingLevelMap`'s, if it
+    /// renames that level.
+    pub(super) fn sent<'a>(&'a self, effort: &'a str) -> &'a str {
+        let level = self.fit(effort);
+        (self.renamed.iter())
+            .find(|(renamed, _)| renamed == level)
+            .map_or(level, |(_, text)| text)
     }
 }
 
@@ -904,9 +916,9 @@ impl Reading {
             _ => Compat::default(),
         };
         let reasoning = entry["reasoning"].as_bool().unwrap_or(false);
-        let levels = match reasoning {
+        let (levels, renamed) = match reasoning {
             true => levels(&entry["thinkingLevelMap"]),
-            false => Vec::new(),
+            false => Default::default(),
         };
         let input = entry["input"].as_array();
         let info = ModelInfo {
@@ -922,6 +934,7 @@ impl Reading {
                 .filter(|tokens| *tokens > 0),
             reasoning,
             levels,
+            renamed,
             images: input.is_some_and(|input| input.iter().any(|kind| kind == "image")),
             prices: Prices::of(&entry["cost"]),
             compat,
@@ -936,24 +949,31 @@ impl Reading {
     }
 }
 
-/// The levels a model that reasons takes, as Scramjet reads its `thinkingLevelMap`: a level the
-/// map gives a text is sent as that text, one it gives `null` is not taken, and those it leaves
-/// out are taken but `xhigh` and `max`.
-fn levels(map: &Value) -> Vec<String> {
-    let mut levels: Vec<String> = Vec::new();
-    for (level, sent, ordinary) in LEVELS {
-        let sent = match map.get(level) {
-            Some(Value::String(text)) => text.as_str(),
-            Some(_) => continue,
-            None if ordinary => sent,
-            None => continue,
-        };
-        // Scramjet's own maps send two levels as one (`minimal` as `low`); Shift+Tab steps once.
-        if !levels.iter().any(|listed| listed == sent) {
-            levels.push(sent.to_owned());
-        }
-    }
-    levels
+/// The levels a model that reasons takes, as Scramjet reads its `thinkingLevelMap`, and those it
+/// sends as another text: a level the map gives a text is sent as that text, one it gives `null`
+/// is not taken, and those it leaves out are taken but `xhigh` and `max`.
+fn levels(map: &Value) -> (Vec<String>, Vec<(String, String)>) {
+    let taken: Vec<(&str, &str)> = (LEVELS.iter())
+        .filter_map(|(level, name, ordinary)| match map.get(level) {
+            Some(Value::String(text)) => Some((*name, text.as_str())),
+            Some(_) => None,
+            None => ordinary.then_some((*name, *name)),
+        })
+        .collect();
+    // Scramjet's own maps send two levels as one (`minimal` as `low`); Shift+Tab steps once, on
+    // the level named as it is sent.
+    let doubled = |name: &str, text: &str| {
+        name != text
+            && taken
+                .iter()
+                .any(|(other, sent)| other != &name && *sent == text)
+    };
+    let kept = (taken.iter()).filter(|(name, text)| !doubled(name, text));
+    let levels = kept.clone().map(|(name, _)| name.to_string()).collect();
+    let renamed = (kept.filter(|(name, text)| name != text))
+        .map(|(name, text)| (name.to_string(), text.to_string()))
+        .collect();
+    (levels, renamed)
 }
 
 /// The `thinkingLevelMap` of a model a login lists with the effort levels `efforts`, as
@@ -1238,8 +1258,14 @@ mod tests {
         assert!(info.reasoning && info.images);
         assert_eq!(info.levels, ["none", "low", "medium", "high", "xhigh"]);
         // A level sent as another's is taken once, as in Scramjet's maps for GPT-5.
-        let shared = levels(&json!({"xhigh": "xhigh", "minimal": "low"}));
+        let (shared, renamed) = levels(&json!({"xhigh": "xhigh", "minimal": "low"}));
         assert_eq!(shared, ["none", "low", "medium", "high", "xhigh"]);
+        assert_eq!(renamed, []);
+        // A level sent as a text of the map's own keeps Scramjet's name, and is sent as that text.
+        let (named, renamed) = levels(&json!({"off": "disabled", "xhigh": "max"}));
+        assert_eq!(named, ["none", "minimal", "low", "medium", "high", "xhigh"]);
+        let pair = |level: &str, text: &str| (level.to_owned(), text.to_owned());
+        assert_eq!(renamed, [pair("none", "disabled"), pair("xhigh", "max")]);
         let local = route(&providers, "luna");
         assert_eq!((local.host.as_str(), local.port), ("127.0.0.1", 18080));
         assert_eq!(

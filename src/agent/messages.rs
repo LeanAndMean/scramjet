@@ -80,8 +80,15 @@ fn budget(effort: Option<&str>) -> u64 {
 /// prompt (with the tools before it) and the conversation up to its last block are marked for
 /// caching; Foundry rejects `cache_control` on tools. Claude models before 4.6 that reason get
 /// budget thinking, which takes room from `max_tokens`; without room for it the request is an
-/// error. Other models, such as `deepseek-v4-pro`, get no thinking parameter.
-pub(super) fn request(request: &Value, max_tokens: u64, thinking: bool) -> Result<Value, String> {
+/// error. Other models, such as `deepseek-v4-pro`, get no thinking parameter. `renamed`: the
+/// text the model's `thinkingLevelMap` sends for the effort, as Scramjet sends it for adaptive
+/// thinking.
+pub(super) fn request(
+    request: &Value,
+    max_tokens: u64,
+    thinking: bool,
+    renamed: Option<&str>,
+) -> Result<Value, String> {
     let items = request["input"]
         .as_array()
         .map(Vec::as_slice)
@@ -109,7 +116,11 @@ pub(super) fn request(request: &Value, max_tokens: u64, thinking: bool) -> Resul
             // Opus 4.7 and later omit the thinking text unless asked; Scramjet asks for summaries.
             body["thinking"] = json!({"type":"adaptive","display":"summarized"});
             if let Some(effort) = effort {
-                let effort = if effort == "minimal" { "low" } else { effort };
+                let effort = match renamed {
+                    Some(text) => text,
+                    None if effort == "minimal" => "low",
+                    None => effort,
+                };
                 body["output_config"] = json!({ "effort": effort });
             }
         } else {
@@ -615,7 +626,7 @@ mod tests {
             {"type":"function_call","call_id":"c","name":"read","arguments":"{\"path\":\"a.png\"}"},
             {"type":"function_call_output","call_id":"c","output":output},
         ]});
-        let body = super::request(&request, 9, false).unwrap();
+        let body = super::request(&request, 9, false, None).unwrap();
         assert_eq!(
             body["messages"][1],
             json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"c","content":[
@@ -633,7 +644,7 @@ mod tests {
                 {"type":"input_image","detail":"auto","image_url":"data:image/png;base64,iVBORw0K"},
             ],"_scramjet_typed":"@a.png What is it?"},
         ]});
-        let body = super::request(&request, 9, false).unwrap();
+        let body = super::request(&request, 9, false, None).unwrap();
         assert_eq!(
             body["messages"],
             json!([{"role":"user","content":[
@@ -664,7 +675,7 @@ mod tests {
                 {"role":"user","content":"second"},
             ],
         });
-        let body = super::request(&request, 9, true).unwrap();
+        let body = super::request(&request, 9, true, None).unwrap();
         assert_eq!(body["max_tokens"], 500);
         assert_eq!(body["output_config"], json!({"effort":"low"}));
         assert!(body.get("tools").is_none());
@@ -688,21 +699,26 @@ mod tests {
                 ]},
             ])
         );
-        let plain = super::request(&json!({"model":"claude-sonnet-4-5","input":[]}), 9, false);
+        let plain = super::request(
+            &json!({"model":"claude-sonnet-4-5","input":[]}),
+            9,
+            false,
+            None,
+        );
         let plain = plain.unwrap();
         assert_eq!(plain["max_tokens"], 9);
         assert!(plain.get("thinking").is_none());
         assert_eq!(betas(&plain), None);
         let deepseek = json!({"model":"deepseek-v4-pro","input":[]});
         assert!(
-            super::request(&deepseek, 9, true)
+            super::request(&deepseek, 9, true, None)
                 .unwrap()
                 .get("thinking")
                 .is_none()
         );
         let none = json!({"model":"m","input":[],"reasoning":{"effort":"none"}});
         assert!(
-            super::request(&none, 9, true)
+            super::request(&none, 9, true, None)
                 .unwrap()
                 .get("thinking")
                 .is_none()
@@ -726,7 +742,7 @@ mod tests {
             if let Some(effort) = effort {
                 request["reasoning"] = json!({"effort":effort});
             }
-            let body = super::request(&request, DEFAULT_MAX_TOKENS, true).unwrap();
+            let body = super::request(&request, DEFAULT_MAX_TOKENS, true, None).unwrap();
             assert_eq!(body["max_tokens"], 40000);
             assert_eq!(
                 body["thinking"],
@@ -737,7 +753,7 @@ mod tests {
             assert!(body.get("output_config").is_none());
         }
         let card = json!({"model":"claude-haiku-4-5-20251001","input":[]});
-        let body = super::request(&card, 4096, true).unwrap();
+        let body = super::request(&card, 4096, true, None).unwrap();
         assert_eq!(body["max_tokens"], 4096);
         // No effort is medium, 8192, more than the 4096 limit: the budget becomes 4096 - 1024.
         assert_eq!(body["thinking"]["budget_tokens"], 3072);
@@ -750,18 +766,18 @@ mod tests {
                 "reasoning":{"effort":effort}})
         };
         // A limit at or below the budget gives the budget the limit less 1024 tokens.
-        let body = super::request(&request(8192, "medium"), 0, true).unwrap();
+        let body = super::request(&request(8192, "medium"), 0, true, None).unwrap();
         assert_eq!(body["thinking"]["budget_tokens"], 7168);
-        let body = super::request(&request(2048, "high"), 0, true).unwrap();
+        let body = super::request(&request(2048, "high"), 0, true, None).unwrap();
         assert_eq!(body["thinking"]["budget_tokens"], 1024);
-        let error = super::request(&request(2047, "high"), 0, true).unwrap_err();
+        let error = super::request(&request(2047, "high"), 0, true, None).unwrap_err();
         assert_eq!(
             error,
             "Insufficient output space for Anthropic thinking; reduce input or request more output space."
         );
-        assert!(super::request(&request(1024, "low"), 0, true).is_err());
+        assert!(super::request(&request(1024, "low"), 0, true, None).is_err());
         // Without thinking, the limit alone decides.
-        let body = super::request(&request(1000, "low"), 0, false).unwrap();
+        let body = super::request(&request(1000, "low"), 0, false, None).unwrap();
         assert!(body.get("thinking").is_none());
     }
 
@@ -959,6 +975,7 @@ call it was making did not run"
                 &json!({"model":model,"input":[],"tools":tools,"max_output_tokens":40000}),
                 0,
                 true,
+                None,
             )
             .unwrap()
         };

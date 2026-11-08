@@ -293,6 +293,59 @@ pub(super) enum Sending<'a> {
     Retrying(&'a str, u32, Duration),
 }
 
+type Headers = Vec<(&'static str, String)>;
+
+/// The body `request` is sent as to the model `info` describes, in its protocol, with the headers
+/// that protocol adds; the effort in it is sent as the model's `thinkingLevelMap` names it.
+fn body(request: &Value, info: &ModelInfo) -> Result<(Vec<u8>, Headers), AgentError> {
+    let without_images = (!info.images).then(|| without_images(request)).flatten();
+    let request = without_images.as_ref().unwrap_or(request);
+    let mut headers = Vec::new();
+    let body = match info.protocol {
+        Protocol::Responses | Protocol::Codex => {
+            let mut request = match info.protocol {
+                Protocol::Codex => super::codex::body(request),
+                _ => request.clone(),
+            };
+            // As Scramjet's, a model that does not reason is asked nothing of reasoning.
+            if !info.reasoning
+                && let Some(object) = request.as_object_mut()
+            {
+                object.remove("reasoning");
+                object.remove("include");
+            }
+            if let Some(effort) = request["reasoning"]["effort"].as_str() {
+                request["reasoning"]["effort"] = info.sent(effort).to_owned().into();
+            }
+            serde_json::to_vec(&request)
+        }
+        Protocol::Messages => {
+            let effort = request["reasoning"]["effort"].as_str();
+            let renamed =
+                (effort.map(|effort| info.sent(effort))).filter(|sent| Some(*sent) != effort);
+            let body = messages::request(
+                request,
+                info.output.unwrap_or(messages::DEFAULT_MAX_TOKENS),
+                info.reasoning,
+                renamed,
+            )
+            .map_err(AgentError::Provider)?;
+            headers.extend(messages::betas(&body).map(|betas| ("anthropic-beta", betas)));
+            serde_json::to_vec(&body)
+        }
+        Protocol::Completions => {
+            let session = request["prompt_cache_key"].as_str();
+            if let Some(session) = session.filter(|_| info.compat.session_affinity) {
+                for name in ["session_id", "x-client-request-id", "x-session-affinity"] {
+                    headers.push((name, session.to_owned()));
+                }
+            }
+            serde_json::to_vec(&completions::request(request, info))
+        }
+    };
+    Ok((body.map_err(std::io::Error::from)?, headers))
+}
+
 /// Sends `request` to the model `info` describes, sending it again after transient failures. A
 /// failed response's items are discarded, so a retry never runs a tool call from it. `replying`:
 /// it is a step of the user's turn, not a summary or a subagent's, which Copilot bills apart.
@@ -311,45 +364,7 @@ pub(super) fn send(
             "no provider offers the model {model}"
         )));
     };
-    let without_images = (!info.images).then(|| without_images(request)).flatten();
-    let request = without_images.as_ref().unwrap_or(request);
-    let mut headers = Vec::new();
-    let body = match info.protocol {
-        Protocol::Responses | Protocol::Codex => {
-            let mut request = match info.protocol {
-                Protocol::Codex => super::codex::body(request),
-                _ => request.clone(),
-            };
-            // As Scramjet's, a model that does not reason is asked nothing of reasoning.
-            if !info.reasoning
-                && let Some(object) = request.as_object_mut()
-            {
-                object.remove("reasoning");
-                object.remove("include");
-            }
-            serde_json::to_vec(&request)
-        }
-        Protocol::Messages => {
-            let body = messages::request(
-                request,
-                info.output.unwrap_or(messages::DEFAULT_MAX_TOKENS),
-                info.reasoning,
-            )
-            .map_err(AgentError::Provider)?;
-            headers.extend(messages::betas(&body).map(|betas| ("anthropic-beta", betas)));
-            serde_json::to_vec(&body)
-        }
-        Protocol::Completions => {
-            let session = request["prompt_cache_key"].as_str();
-            if let Some(session) = session.filter(|_| info.compat.session_affinity) {
-                for name in ["session_id", "x-client-request-id", "x-session-affinity"] {
-                    headers.push((name, session.to_owned()));
-                }
-            }
-            serde_json::to_vec(&completions::request(request, info))
-        }
-    };
-    let body = body.map_err(std::io::Error::from)?;
+    let (body, headers) = body(request, info)?;
     let mut attempt = 0;
     let mut failed = Vec::new();
     loop {
@@ -528,6 +543,56 @@ mod tests {
         for key in ["tools", "tool_choice", "parallel_tool_calls"] {
             assert!(request.get(key).is_none(), "{key}");
         }
+    }
+
+    #[test]
+    fn a_level_the_models_map_renames_is_sent_as_its_text_in_each_protocol() {
+        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "renamed-levels");
+        let map = json!({"off": "disabled", "minimal": null, "xhigh": "max"});
+        let entry = |id: &str, api: &str| json!({"id": id, "api": api, "reasoning": true, "thinkingLevelMap": map});
+        agent.config.providers = crate::agent::Providers::given(json!({"providers": {"p": {
+            "baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+            "models": [
+                entry("gpt-6-luna", "openai-responses"),
+                entry("claude-opus-5-5", "anthropic-messages"),
+                entry("open", "openai-completions"),
+            ],
+        }}}));
+        let sent = |agent: &mut Agent, model: &str, effort: &str| {
+            agent.set_model(model).unwrap();
+            agent.load_model_info();
+            agent.set_effort(effort).unwrap();
+            let (body, _) = body(&agent.request(), &agent.info).unwrap();
+            serde_json::from_slice::<Value>(&body).unwrap()
+        };
+        let responses = |agent: &mut Agent, effort| sent(agent, "gpt-6-luna", effort);
+        assert_eq!(
+            responses(&mut agent, "none")["reasoning"]["effort"],
+            "disabled"
+        );
+        assert_eq!(
+            agent.effort_levels(),
+            ["none", "low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(agent.effort(), Some("none"));
+        assert_eq!(responses(&mut agent, "xhigh")["reasoning"]["effort"], "max");
+        assert_eq!(
+            responses(&mut agent, "minimal")["reasoning"]["effort"],
+            "low"
+        );
+
+        let messages = |agent: &mut Agent, effort| sent(agent, "claude-opus-5-5", effort);
+        let body = messages(&mut agent, "xhigh");
+        assert_eq!(body["output_config"], json!({"effort": "max"}));
+        let body = messages(&mut agent, "none");
+        assert!(body.get("thinking").is_none() && body.get("output_config").is_none());
+
+        let completions = |agent: &mut Agent, effort| sent(agent, "open", effort);
+        assert_eq!(
+            completions(&mut agent, "none")["reasoning_effort"],
+            "disabled"
+        );
+        assert_eq!(completions(&mut agent, "xhigh")["reasoning_effort"], "max");
     }
 
     #[test]

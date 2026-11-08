@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.99.3 — Thinking levels a model's map renames are sent as named
+
+### Fixed
+
+- A `thinkingLevelMap` that sends a level as a text of its own (`"off": "disabled"`, `"xhigh": "max"`) now sends that text for that level, in Responses, Messages and Chat Completions, as Scramjet does; before, `off` became the next level up and a renamed level could become a lower one. Shift+Tab, the footer and `/settings` show Scramjet's level names (`xhigh`), not the text sent.
+
 ## 0.99.2 — SIGTERM no longer leaves the editor behind
 
 ### Fixed

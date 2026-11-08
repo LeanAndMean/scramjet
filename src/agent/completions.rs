@@ -297,7 +297,7 @@ pub(super) fn request(request: &Value, info: &ModelInfo) -> Value {
     if info.reasoning
         && let Some(effort) = effort
     {
-        reasoning(&mut body, compat, effort);
+        reasoning(&mut body, compat, effort, info.sent(effort));
     }
     if let Some(routing) = &compat.open_router_routing {
         body["provider"] = routing.clone();
@@ -308,9 +308,9 @@ pub(super) fn request(request: &Value, info: &ModelInfo) -> Value {
     body
 }
 
-/// Asks for `effort`, a level as the model's `thinkingLevelMap` names it; `none` is off.
-fn reasoning(body: &mut Value, compat: &Compat, effort: &str) {
-    let on = (effort != "none").then_some(effort);
+/// Asks for `level` (`none` is off), sent as `effort`, the model's `thinkingLevelMap`'s text.
+fn reasoning(body: &mut Value, compat: &Compat, level: &str, effort: &str) {
+    let on = (level != "none").then_some(effort);
     match compat.thinking {
         Thinking::Enable => body["enable_thinking"] = json!(on.is_some()),
         Thinking::QwenChatTemplate => {

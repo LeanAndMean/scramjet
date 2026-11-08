@@ -1410,7 +1410,7 @@ auto-dispatches it only when its message is a slash command."
         assert_eq!(input[4]["content"], "go on");
         // Claude's Messages: a tool use for each record, answered first in the next message.
         let request = json!({"model":"claude-x","instructions":"i","input":input});
-        let messages = messages::request(&request, 1000, false).unwrap()["messages"].clone();
+        let messages = messages::request(&request, 1000, false, None).unwrap()["messages"].clone();
         let shapes: Vec<_> = (messages.as_array().unwrap().iter())
             .map(|message| {
                 let blocks = message["content"].as_array().unwrap().iter();
