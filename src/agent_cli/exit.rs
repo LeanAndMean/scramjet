@@ -132,7 +132,8 @@ fn exit(startup: Option<&console::Mode>) -> ! {
         let _ = stderr.flush();
     }
     if let Some(startup) = startup {
-        let _ = startup.set();
+        // In a background job the shell has the terminal, as it left it.
+        let _ = startup.set_in_foreground();
     }
     std::process::exit(128 + SIGNAL.load(Ordering::SeqCst))
 }

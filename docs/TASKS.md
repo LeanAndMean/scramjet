@@ -73,7 +73,7 @@ To compare a display with Scramjet's: `scripts/screens.py --binary "$(which scra
 Not scheduled; fix them when they matter.
 
 - Replies' markdown departs from Scramjet's in smaller rules: code lines wrap under the block's indent (kept: it reads better); a quote's item holding a quote; a lazy line after a quoted table; a quoted `| t |` over an unquoted `|-|`; setext headings and tables without a leading `|` stream before the line that decides them; code spans across lines. Scramjet's renderer under Node: `new Markdown(text, 0, 0, theme).render(width)` from `~/repos/scramjet/packages/tui/dist/components/markdown.js`.
-- `bg` after Ctrl-Z during a turn stops the agent again at once (the SIGTSTP handler restores the turn's terminal mode). In `-p` output on a terminal, a reply rewritten in place after a lossy stream (`text_rows`) counts rows from before a stop.
+- In `-p` output on a terminal, a reply rewritten in place after a lossy stream (`text_rows`) counts rows from before a stop.
 - The terminal's answers to the full screen's color questions (OSC 11, 10, 4) arrive as typed text in whatever reads the terminal next when the screen is left within a slow link's round trip (ssh). Not seen locally.
 - A SIGKILL leaves a `--no-session` run's directory (`scramjet-rs-unsaved-PID-N`) in the temporary directory. Removing those of dead runs at start would need a lock held per run, as `kept.rs` does, and is a destructive operation to review.
 - On a screen too short for a second line, `/resume`'s list keys are cut at the end.

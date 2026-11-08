@@ -455,9 +455,10 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
     return output
 
 
-def run_in_shell(script, endpoint):
-    """Runs the agent from an interactive shell with job control, which on a stop restores no
-    terminal mode of its own (dash), so the agent's own restoring is what the shell sees."""
+def run_in_shell(script, endpoint, arguments=''):
+    """Runs the agent, with `arguments`, from an interactive shell with job control, which on a
+    stop restores no terminal mode of its own (dash), so the agent's own restoring is what the
+    shell sees."""
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 60, 0, 0))
 
@@ -491,7 +492,7 @@ def run_in_shell(script, endpoint):
     def send(data):
         os.write(master, data)
 
-    send(b'stty -g > ../mode; %s\r' % agent(endpoint)[0].encode())
+    send(b'stty -g > ../mode; %s %s\r' % (agent(endpoint)[0].encode(), arguments.encode()))
     script(read, until, send, output)
     send(b'exit\r')
     assert shell.wait(timeout=10) == 0, bytes(output[-2000:])
@@ -1653,6 +1654,32 @@ run([], calls_running_together_show_at_once, serve_items([
     [message('Both ended.')]]))
 run_in_shell(suspend_in_shell, talking)
 
+
+def printing_in_background(read, until, send, output):
+    mark = until(b'Waiting for reply')
+    send(b'\x1a')
+    mark = until(b'Stopped', mark)
+    send(b'bg\r')
+    mark = until(b'$ ', until(b'bg', mark))
+    # The shell has the terminal as it left it, and the turn goes on without it.
+    send(SAME_MODE)
+    mark = until(b'restored-42', mark)
+    send(b'jobs\r')
+    mark = until(b'Running', mark)
+    read(1.5)
+    assert b'Waiting for reply' not in output[mark:], 'the status line drawn over the shell'
+    background_gate.set()
+    mark = until(b'Answered in the background.', mark)
+    send(b'echo after-$((2+3))\r')
+    mark = until(b'after-5', mark)
+    send(SAME_MODE)
+    until(b'restored-42', mark)
+    assert b'tty output' not in output, bytes(output[-2000:])
+
+
+background_gate = threading.Event()
+run_in_shell(printing_in_background, serve_items([[message('Answered in the background.')]], gate=background_gate),
+             '-p go')
 
 BUSY, IDLE = b'\x1b]9;4;3\x07', b'\x1b]9;4;0;\x07'
 

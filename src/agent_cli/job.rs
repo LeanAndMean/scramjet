@@ -19,14 +19,15 @@ static CONTINUED: AtomicBool = AtomicBool::new(false);
 static STOPS: AtomicUsize = AtomicUsize::new(0);
 
 /// Handles SIGTSTP, sent by Ctrl-Z during a turn or by `suspend`, with `startup` the terminal
-/// mode the agent started in.
+/// mode the agent started in, and SIGCONT, which after `bg` and `fg` gives the terminal back.
 #[cfg(unix)]
 pub(super) fn install(startup: Option<console::Mode>) -> io::Result<()> {
-    // SAFETY: `stop` makes only async-signal-safe calls.
+    // SAFETY: `stop` and `console::set_held` make only async-signal-safe calls.
     unsafe {
         signal_hook::low_level::register(signal_hook::consts::SIGTSTP, move || {
             stop(startup.as_ref())
-        })
+        })?;
+        signal_hook::low_level::register(signal_hook::consts::SIGCONT, console::set_held)
     }
     .map(drop)
 }
@@ -78,8 +79,9 @@ fn stop(startup: Option<&console::Mode>) {
             libc::sigaction(libc::SIGTSTP, &handler, std::ptr::null_mut());
         }
     }
+    // After `bg` the turn goes on without the terminal's mode, which `fg` brings back.
     if let Some(mode) = &mode {
-        let _ = mode.set();
+        let _ = mode.set_in_foreground();
     }
     CONTINUED.store(true, Ordering::Relaxed);
     STOPS.fetch_add(1, Ordering::SeqCst);

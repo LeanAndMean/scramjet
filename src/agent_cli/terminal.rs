@@ -84,7 +84,7 @@ impl InputMode {
         let Some(previous) = console::Mode::get() else {
             return Self(None);
         };
-        let _ = change(&previous).set();
+        let _ = change(&previous).set_in_foreground();
         Self(Some(previous))
     }
 }
@@ -92,7 +92,7 @@ impl InputMode {
 impl Drop for InputMode {
     fn drop(&mut self) {
         if let Some(previous) = &self.0 {
-            let _ = previous.set();
+            let _ = previous.set_in_foreground();
         }
     }
 }
@@ -144,6 +144,10 @@ impl Status {
         let Some(text) = self.line() else {
             return;
         };
+        // Drawn in place, it would overwrite the shell's prompt; redrawn at `fg`.
+        if !console::foreground() {
+            return;
+        }
         // After a stop the shell has written below the drawn rows, which stay as they are.
         if job::continued() {
             self.drawn = None;

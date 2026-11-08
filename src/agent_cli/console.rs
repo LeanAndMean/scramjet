@@ -12,8 +12,14 @@ impl Mode {
     pub(super) fn get() -> Option<Self> {
         imp::get().map(Self)
     }
+    /// In a background job, the kernel stops the job until it has the terminal again.
     pub(super) fn set(&self) -> io::Result<()> {
         imp::set(&self.0)
+    }
+    /// Sets the mode now if the agent has the terminal; in a background job, holds it for
+    /// `set_held` to set once `fg` gives the terminal back, rather than stop the job for it.
+    pub(super) fn set_in_foreground(&self) -> io::Result<()> {
+        imp::set_in_foreground(&self.0)
     }
     /// Keys read as typed, one at a time, with nothing done for them and nothing echoed.
     pub(super) fn raw(&self) -> Self {
@@ -29,6 +35,17 @@ impl Mode {
     pub(super) fn answer(&self) -> Self {
         Self(imp::answer(&self.0))
     }
+}
+
+/// Whether the agent's job has the terminal; true when the input is not a terminal.
+pub(super) fn foreground() -> bool {
+    imp::foreground()
+}
+
+/// Sets the mode held by `Mode::set_in_foreground`, if the agent now has the terminal.
+#[cfg(unix)]
+pub(super) fn set_held() {
+    imp::set_held();
 }
 
 /// Drops the keys typed and not read yet.
@@ -79,9 +96,45 @@ mod imp {
         io::Errno,
         termios::{self, LocalModes, OptionalActions, QueueSelector, SpecialCodeIndex, Termios},
     };
-    use std::{io, io::PipeReader, time::Duration};
+    use std::{
+        cell::UnsafeCell,
+        io,
+        io::PipeReader,
+        mem::MaybeUninit,
+        sync::atomic::{AtomicU8, Ordering},
+        time::Duration,
+    };
 
     pub(super) type Mode = Termios;
+
+    const NONE: u8 = 0;
+    const HELD: u8 = 1;
+    const BUSY: u8 = 2;
+    /// Whether `HELD_MODE` holds a mode to set in the foreground, or is being accessed.
+    static HOLD: AtomicU8 = AtomicU8::new(NONE);
+    static HELD_MODE: Held = Held(UnsafeCell::new(MaybeUninit::uninit()));
+    struct Held(UnsafeCell<MaybeUninit<Mode>>);
+    // SAFETY: only whoever moved `HOLD` to BUSY touches the cell.
+    unsafe impl Sync for Held {}
+
+    /// Gives `access` the held mode if the state is `from`, leaving `after`. Never waits, as a
+    /// signal handler may have interrupted the thread that has it.
+    fn with_held(from: u8, after: u8, access: impl FnOnce(&mut MaybeUninit<Mode>)) -> bool {
+        if HOLD
+            .compare_exchange(from, BUSY, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        // SAFETY: BUSY gives the cell to this call alone.
+        access(unsafe { &mut *HELD_MODE.0.get() });
+        HOLD.store(after, Ordering::Release);
+        true
+    }
+
+    pub(super) fn foreground() -> bool {
+        termios::tcgetpgrp(stdin()).map_or(true, |group| group == rustix::process::getpgrp())
+    }
 
     // Fd 0 stays open for the life of the process; these run in signal handlers too, where only
     // their system calls are made.
@@ -95,7 +148,37 @@ mod imp {
     }
 
     pub(super) fn set(mode: &Mode) -> io::Result<()> {
+        // A mode held from before would otherwise replace this one at `fg`.
+        with_held(HELD, NONE, |_| ());
         Ok(termios::tcsetattr(stdin(), OptionalActions::Now, mode)?)
+    }
+
+    pub(super) fn set_in_foreground(mode: &Mode) -> io::Result<()> {
+        if foreground() {
+            return set(mode);
+        }
+        let hold = |cell: &mut MaybeUninit<Mode>| {
+            cell.write(mode.clone());
+        };
+        if with_held(NONE, HELD, hold) || with_held(HELD, HELD, hold) {
+            // `fg` may have come before the mode was held.
+            set_held();
+        }
+        Ok(())
+    }
+
+    pub(super) fn set_held() {
+        if !foreground() {
+            return;
+        }
+        let mut held = None;
+        // SAFETY: HELD means the cell was written.
+        with_held(HELD, NONE, |cell| {
+            held = Some(unsafe { cell.assume_init_ref() }.clone())
+        });
+        if let Some(mode) = held {
+            let _ = termios::tcsetattr(stdin(), OptionalActions::Now, &mode);
+        }
     }
 
     pub(super) fn raw(mode: &Mode) -> Mode {
@@ -225,6 +308,15 @@ mod imp {
             unsafe { SetConsoleMode(stderr(), output) };
         }
         Ok(())
+    }
+
+    /// No job control: the agent always has the console.
+    pub(super) fn set_in_foreground(mode: &Mode) -> io::Result<()> {
+        set(mode)
+    }
+
+    pub(super) fn foreground() -> bool {
+        true
     }
 
     /// The keys arrive as the escape sequences a Unix terminal sends, and the output takes them

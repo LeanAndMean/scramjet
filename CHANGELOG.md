@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.115.1 — `bg` lets a stopped turn run on
+
+### Fixed
+
+- After Ctrl-Z during a turn outside the full screen (as in `-p`), `bg` now lets the turn run on in the background, printing its reply there, instead of stopping it again at once (`Stopped (tty output)`). The status line waits for `fg`, which also brings back the turn's keys; a backgrounded run now exits on SIGTERM rather than stopping for the terminal. The full screen still stops when put in the background, as vim does.
+
 ## 0.115.0 — `/resume` continues a session in its own folder
 
 ### Changed
