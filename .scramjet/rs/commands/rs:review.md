@@ -37,4 +37,4 @@ Fix required findings that are small and clear, verify, and commit. Put the rest
 
 ## Report
 
-Tell the user briefly what was reviewed, what was found, and what was fixed or recorded. Then call `report_scramjet_command_status` with the work performed as `summary` and `status: "completed"`. Include one `next_steps` entry: `/rs:loop` with `fresh_session: true` and a concrete `reason`, and set `recommended_next_step` to its index. If only the user can unblock the work, report `status: "blocked"`, name the exact need and omit `next_steps`.
+Tell the user briefly what was reviewed, what was found, and what was fixed or recorded. Then call `report_scramjet_command_status` with the work performed as `summary` and `status: "completed"`. Include one `next_steps` entry: `/rs:loop` with `fresh_session: true` and a concrete `reason`, and set `recommended_next_step` to its index. If only the user can unblock the work, ask them with `get_scramjet_user_input`, naming the exact need, and report once they answer; the statuses are only `completed` and `abandoned`.

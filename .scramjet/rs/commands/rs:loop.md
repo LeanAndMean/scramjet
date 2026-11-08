@@ -51,5 +51,5 @@ Stop for the user only as described in `CLAUDE.md`, using `get_scramjet_user_inp
 Tell the user briefly what changed, how it was verified, the commit, any open questions or choices recorded, and what comes next. Then call `report_scramjet_command_status` with the work performed as `summary`:
 
 - `status: "completed"` when this run committed real progress, including partial progress with its continuation recorded. Include one `next_steps` entry with `fresh_session: true` and a concrete `reason`: `/rs:review <commits>` when the increment changed process isolation, credential handling or destructive file operations; `/rs:steer` when the remaining useful work depends on recorded open questions; otherwise `/rs:loop`. Set `recommended_next_step` to that entry's index.
-- `status: "blocked"` when only the user can unblock the work and they have not answered. Name the exact need and omit `next_steps`.
-- `status: "incomplete"` when nothing usable could be saved. Describe what happened and omit `next_steps`.
+
+The statuses are only `completed` and `abandoned`. When only the user can unblock the work, ask them with `get_scramjet_user_input`, naming the exact need; the command waits for their answer. When nothing usable could be saved, say what happened and ask whether to try another way or stop; report `status: "abandoned"`, without `next_steps`, only when they want to stop.
