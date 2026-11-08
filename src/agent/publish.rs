@@ -248,7 +248,8 @@ impl Proposal {
         )
     }
 
-    /// Each field whole under its heading, as Scramjet's expanded call shows them.
+    /// Each field's exact text in a code block under its heading, so that nothing in it renders
+    /// as markdown or passes for a field.
     fn payload(&self) -> String {
         let mut fields: Vec<(&str, String)> = Vec::new();
         if let Some(url) = &self.repository {
@@ -276,10 +277,17 @@ impl Proposal {
             }
         }
         let fields: Vec<String> = (fields.into_iter())
-            .map(|(label, value)| format!("## {label}\n\n{value}"))
+            .map(|(label, value)| format!("## {label}\n\n{}", fenced(&value)))
             .collect();
         fields.join("\n\n")
     }
+}
+
+/// `text` in a fence longer than any run of backticks in it, which no line of it can close.
+fn fenced(text: &str) -> String {
+    let longest = (text.split(|c| c != '`').map(str::len).max()).unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!("{fence}\n{text}\n{fence}")
 }
 
 /// What the publication call `name` with `arguments` proposes, as its result shows it once
@@ -453,6 +461,16 @@ mod tests {
         ])
     }
 
+    #[test]
+    fn a_fields_fence_is_longer_than_any_backticks_in_it() {
+        assert_eq!(fenced(""), "```\n\n```");
+        assert_eq!(fenced("a `b` c"), "```\na `b` c\n```");
+        assert_eq!(
+            fenced("```\n## Body\n`````x"),
+            "``````\n```\n## Body\n`````x\n``````"
+        );
+    }
+
     fn issue() -> Value {
         json!({"title":"Fix it","body":"It **breaks**."})
     }
@@ -509,7 +527,7 @@ mod tests {
             )
         );
         // What was approved stays with the result, for Ctrl+O.
-        let fields = "## Title\n\nFix it\n\n## Body\n\nIt **breaks**.";
+        let fields = "## Title\n\n```\nFix it\n```\n\n## Body\n\n```\nIt **breaks**.\n```";
         assert_eq!(output.detail, Some(ToolDetail::Publication(fields.into())));
         assert_eq!(payload("create_issue", &issue()), output.detail);
         assert_eq!(payload("create_issue", &json!({"title":"x"})), None);
@@ -517,7 +535,7 @@ mod tests {
             ui.shown,
             [
                 "question **Create issue**\nProvider: github\nRepository: o/r\nConsequence: \
-publish a new issue\n\n## Title\n\nFix it\n\n## Body\n\nIt **breaks**.",
+publish a new issue\n\n## Title\n\n```\nFix it\n```\n\n## Body\n\n```\nIt **breaks**.\n```",
                 "choose Create issue in o/r — publish a new issue [\"Approve publication\", \
 \"Cancel\"] None",
             ]
@@ -618,7 +636,7 @@ publish a new issue\n\n## Title\n\nFix it\n\n## Body\n\nIt **breaks**.",
         );
         assert!(ui.shown[0].starts_with(
             "question **Create issue**\nProvider: github\nRepository: \
-x/y\nConsequence: publish a new issue\n\n## Repository\n\nhttps://github.com/x/y\n\n## Title"
+x/y\nConsequence: publish a new issue\n\n## Repository\n\n```\nhttps://github.com/x/y\n```\n\n## Title"
         ));
         // The same repository by its URL keeps the policy.
         let mut same = issue();

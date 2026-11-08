@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.10 — Publications shown as they will be sent
+
+### Fixed
+
+- A publication's approval, and its call once expanded, show each field's exact text in a code block rather than rendering it as markdown: an image's address, an HTML comment GitHub would hide, and a heading in the body that looked like one of the approval's own fields now show as written.
+
 ## 0.97.9 — YAML that cannot fill memory
 
 ### Fixed

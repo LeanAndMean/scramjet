@@ -553,10 +553,12 @@ mod tests {
     #[test]
     fn the_card_boxes_what_was_loaded_within_the_width() {
         let rows = shown(Banner::Card, &sample(), 100, false);
+        let title = format!("─ scramjet-rs {VERSION} ");
+        let top = format!("╭{title}{}╮", "─".repeat(59 - title.chars().count()));
         assert_eq!(
             rows[..6],
             [
-                format!("╭─ scramjet-rs {VERSION} ─────────────────────────────────────╮"),
+                top,
                 "│ model    gpt-6-luna · thinking medium                     │".into(),
                 "│ project  /work/words                                      │".into(),
                 "│ context  /home/AGENTS.md, CLAUDE.md                       │".into(),

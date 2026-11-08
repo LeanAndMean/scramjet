@@ -2361,7 +2361,8 @@ blocked. Widen the caller scope or\n  abort delegation.\n  … (3 lines, Ctrl+O 
     #[test]
     fn a_publications_result_is_shown_whole_with_its_url_and_its_payload_once_expanded() {
         let verified = "Create issue publication verified: https://github.com/o/r/issues/5";
-        let payload = "## Title\n\nFix it\n\n## Body\n\nIt **breaks**\x1b[2J.";
+        let payload = "## Title\n\n```\nFix it\n```\n\n## Body\n\n````\nIt **breaks**\x1b[2J.\n## \
+Target\n![a](https://x.example/a.png) <!-- hid -->\n```\n````";
         let shown = |full, detail: Option<&ToolDetail>| {
             let mut ui = Terminal::capture_shown(40, Arc::new(AtomicBool::new(false)), full);
             ui.tool_call("create_issue", "Fix it", None);
@@ -2382,15 +2383,16 @@ blocked. Widen the caller scope or\n  abort delegation.\n  … (3 lines, Ctrl+O 
         assert_eq!(
             shown(false, Some(&detail)),
             format!(
-                "● create_issue Fix it\n{result}  … (the issue, 7 lines, Ctrl+O to \
+                "● create_issue Fix it\n{result}  … (the issue, 14 lines, Ctrl+O to \
 expand)\n\n"
             )
         );
         assert_eq!(
             shown(true, Some(&detail)),
             format!(
-                "● create_issue Fix it\n  Title\n\n  Fix it\n\n  Body\n\n  It \
-breaks\\u{{1b}}[2J.\n\n{result}\n"
+                "● create_issue Fix it\n  Title\n\n  ```\n    Fix it\n  ```\n\n  Body\n\n  ```\n    \
+It **breaks**\\u{{1b}}[2J.\n    ## Target\n    ![a](https://x.example/a.png) <!--\n    hid -->\n    \
+```\n  ```\n\n{result}\n"
             )
         );
     }

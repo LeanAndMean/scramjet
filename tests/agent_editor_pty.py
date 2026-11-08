@@ -3937,7 +3937,7 @@ def publications(read, until, send, output):
     rows = on_screen('\u2192 Approve publication')
     text = '\n'.join(rows)
     for expected in [' create_issue  Fix the parser', 'Provider: github', 'Repository: o/r',
-                     'Consequence: publish a new issue', 'It breaks on tabs.', 'Create issue in o/r',
+                     'Consequence: publish a new issue', 'It **breaks** on tabs.', 'Create issue in o/r',
                      '  Cancel']:
         assert expected in text, (expected, text)
     send(b'\r')
@@ -3973,11 +3973,11 @@ def publications(read, until, send, output):
     rows = on_screen('Posted.')
     assert 'Approve publication' not in '\n'.join(rows), rows
     # Published without a preview, it shows what it published once Ctrl+O expands it.
-    assert 'issues/5\n \u2026 (the issue, 7 lines, Ctrl+O to expand)\n\n\n Posted.' in '\n'.join(rows), rows
-    expanded = ' It breaks on tabs.\n\n Create issue publication verified:\n https://github.com/o/r/issues/5\n\n\n Posted.'
+    assert 'issues/5\n \u2026 (the issue, 11 lines, Ctrl+O to expand)\n\n\n Posted.' in '\n'.join(rows), rows
+    expanded = '   It **breaks** on tabs.\n ```\n\n Create issue publication verified:\n https://github.com/o/r/issues/5\n\n\n Posted.'
     send(b'\x0f')
     rows = on_screen(expanded)
-    assert re.search(' create_issue  Fix the parser +\u2713\n\n Title\n\n Fix the parser\n\n Body\n\n'
+    assert re.search(' create_issue  Fix the parser +\u2713\n\n Title\n\n ```\n   Fix the parser\n ```\n\n Body\n\n ```\n'
                      + re.escape(expanded), '\n'.join(rows)), rows
     send(b'\x0f')
     on_screen(expanded, gone=True)

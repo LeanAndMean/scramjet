@@ -567,8 +567,8 @@ mod tests {
                 "call bash two",
                 "result bash 2",
                 "call add_issue_comment #3",
-                "result add_issue_comment Cancelled. Publication(\"## Target\\n\\n#3\\n\\n## \
-Comment\\n\\nMe too.\")",
+                "result add_issue_comment Cancelled. Publication(\"## Target\\n\\n```\\n#3\\n```\\n\\n## \
+Comment\\n\\n```\\nMe too.\\n```\")",
                 "call add_issue_comment #0",
                 "result add_issue_comment Invalid failed",
                 "call read x",
