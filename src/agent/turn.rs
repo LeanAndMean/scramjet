@@ -549,7 +549,17 @@ mod tests {
         let paused = agent.turn("go", &mut ui, &cancel);
         assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
         assert!(started.elapsed() < std::time::Duration::from_millis(800));
-        let last = agent.conversation().last().unwrap().clone();
+        // The pause may come while the call's request streams; then it comes again at the call.
+        let mut last = agent.conversation().last().unwrap().clone();
+        for _ in 0..3 {
+            if last["type"] == "function_call" {
+                break;
+            }
+            ui.pauses = vec![true];
+            let paused = agent.resume_turn(&mut ui, &cancel);
+            assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+            last = agent.conversation().last().unwrap().clone();
+        }
         assert_eq!(last["type"], "function_call");
         std::thread::sleep(std::time::Duration::from_millis(1200));
         let resumed = std::time::Instant::now();

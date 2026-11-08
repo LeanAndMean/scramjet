@@ -2687,6 +2687,17 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
             .unwrap()
     };
     let listed = || std::fs::read_dir(&copies).unwrap().count();
+    // A dropped session's copy, once no child that another test forked shares its lock: the
+    // descriptor is the child's too until its exec closes it.
+    let released = |copy: &Path| {
+        for _ in 0..250 {
+            if std::fs::File::open(copy).unwrap().try_lock().is_ok() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("{} stays locked", copy.display());
+    };
 
     let mut session = Session::create(&directory.0, Path::new("/project"), None).unwrap();
     let path = session.path().to_owned();
@@ -2711,6 +2722,7 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     drop(session);
     assert!(copy.exists());
     assert!(!std::fs::read_to_string(&path).unwrap().contains("second"));
+    released(&copy);
 
     let written = session::write_kept();
     assert!(written.problems.is_empty(), "{:?}", written.problems);
@@ -2728,8 +2740,10 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     let mut session = Session::open(&path).unwrap().0;
     session.write_to(full());
     session.append(&say("held")).unwrap();
+    let copy = session.kept_path().unwrap().to_owned();
     drop(session);
     assert_eq!(listed(), 1);
+    released(&copy);
     let (_, conversation, _) = Session::open(&path).unwrap();
     assert_eq!(conversation.last(), Some(&say("held")));
     assert_eq!(listed(), 0);
@@ -2738,7 +2752,9 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     let mut session = Session::open(&path).unwrap().0;
     session.write_to(full());
     session.append(&say("fifth")).unwrap();
+    let copy = session.kept_path().unwrap().to_owned();
     drop(session);
+    released(&copy);
     let mut other = std::fs::OpenOptions::new()
         .append(true)
         .open(&path)
