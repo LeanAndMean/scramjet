@@ -225,7 +225,7 @@ fn write_beneath(root: &Path, real: &Path, content: &[u8]) -> Result<(), String>
 
 /// `path` with its longest existing part resolved, the rest as given; `None` when a part exists
 /// but does not resolve, as a dangling symlink, which a write would follow out of the check.
-fn real_path(path: &Path) -> Option<PathBuf> {
+pub(super) fn real_path(path: &Path) -> Option<PathBuf> {
     let mut rest = Vec::new();
     let mut existing = path;
     loop {

@@ -279,11 +279,21 @@ impl<'a> Call<'a> {
             // The call line above the question shows the whole command.
             "bash" => Approval::Ask(format!("Run in {}", root.display())),
             "write" | "edit" => {
-                let path = self.arguments["path"].as_str().unwrap_or("");
-                if resolve(root, path).starts_with(root) {
-                    Approval::None
-                } else {
-                    Approval::Ask(format!("{} outside the project: {path}", self.name))
+                let given = self.arguments["path"].as_str().unwrap_or("");
+                let path = resolve(root, given);
+                let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+                let outside = format!("{} outside the project: {given}", self.name);
+                match super::sandbox::real_path(&path) {
+                    Some(real) if real.starts_with(&root) => Approval::None,
+                    Some(real) if real != path => Approval::Ask(format!(
+                        "{outside} (through a symlink to {})",
+                        real.display()
+                    )),
+                    Some(_) => Approval::Ask(outside),
+                    None => Approval::Ask(format!(
+                        "{} through a symlink that leads nowhere: {given}",
+                        self.name
+                    )),
                 }
             }
             _ => Approval::None,
@@ -2408,6 +2418,50 @@ inline image size limit.]",
         assert!(
             !call("edit", json!({"path":"~/escape.txt","edits":[]}))
                 .approval(&root)
+                .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_through_a_symlink_out_of_the_project_ask_naming_where_it_leads() {
+        let base =
+            std::env::temp_dir().join(format!("scramjet-agent-links-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(base.clone());
+        let (root, out) = (base.join("project"), base.join("elsewhere"));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        std::os::unix::fs::symlink(&out, root.join("away")).unwrap();
+        std::os::unix::fs::symlink(root.join("sub"), root.join("here")).unwrap();
+        std::os::unix::fs::symlink(out.join("gone/x"), root.join("dangling")).unwrap();
+        std::os::unix::fs::symlink(&root, base.join("alias")).unwrap();
+        let question =
+            |path: &str| match call("write", json!({"path":path,"content":""})).approval(&root) {
+                Approval::Ask(question) => Some(question.replace(&base.display().to_string(), "B")),
+                Approval::None => None,
+            };
+        assert_eq!(
+            question("away/new/f.txt").as_deref(),
+            Some(
+                "write outside the project: away/new/f.txt (through a symlink to B/elsewhere/new/f.txt)"
+            )
+        );
+        assert_eq!(question("here/f.txt"), None);
+        assert_eq!(
+            question(&base.join("alias/sub/f").display().to_string()),
+            None
+        );
+        assert_eq!(
+            question("dangling").as_deref(),
+            Some("write through a symlink that leads nowhere: dangling")
+        );
+        assert_eq!(
+            question("../elsewhere/f").as_deref(),
+            Some("write outside the project: ../elsewhere/f")
+        );
+        assert!(
+            call("edit", json!({"path":"sub/f","edits":[]}))
+                .approval(&base.join("alias"))
                 .is_none()
         );
     }

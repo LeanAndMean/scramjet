@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.2 — `--ask` sees through symlinks
+
+### Fixed
+
+- Under `--ask`, a `write` or `edit` whose path leads out of the project through a symlink now asks first, naming where the link leads, as one given outside it does; one through a symlink that leads nowhere asks too. Before, only the path as given was compared with the project's, while the write followed the link.
+
 ## 0.98.1 — Saved keys' refusals say what helps
 
 ### Fixed
