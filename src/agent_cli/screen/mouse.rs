@@ -42,6 +42,8 @@ pub(super) struct Selection {
     follow: bool,
     /// It started in the dock, which it then reaches wherever the view is.
     in_dock: bool,
+    /// The column Shift+Up and Down keep to while they alone move the end there.
+    goal: Option<(Mark, usize)>,
 }
 
 /// What is selected, by line and column, from its start to before its end; the dock's rows are
@@ -371,6 +373,7 @@ impl App {
                         dragged: false,
                         follow,
                         in_dock,
+                        goal: None,
                     });
                     self.click = Some(Click {
                         count,
@@ -423,7 +426,13 @@ impl App {
     /// cells' edges, and a line up or down goes between the conversation and the dock.
     pub(super) fn extend_selection(&mut self, key: &Key) -> bool {
         use crate::agent_cli::keymap::Binding as B;
-        let Some(head) = self.selection.as_ref().map(|selection| selection.head) else {
+        let Some((head, goal)) = (self.selection.as_ref()).map(|selection| {
+            let goal = selection.goal.filter(|&(mark, _)| mark == selection.head);
+            (
+                selection.head,
+                goal.map_or(selection.head.column, |(_, goal)| goal),
+            )
+        }) else {
             return false;
         };
         let line = self.shown(head.at);
@@ -449,7 +458,7 @@ impl App {
         };
         let moved = |at: At| Mark {
             at,
-            column: selection::snap(&self.shown(at), head.column),
+            column: selection::snap(&self.shown(at), goal),
         };
         let within = |column| Mark { column, ..head };
         let next = if key.is(B::SelectLeft) {
@@ -471,8 +480,10 @@ impl App {
         } else {
             return false;
         };
+        let vertical = key.is(B::SelectLineUp) || key.is(B::SelectLineDown);
         if let Some(selection) = &mut self.selection {
             selection.head = next;
+            selection.goal = vertical.then_some((next, goal));
         }
         if let At::Line(place) = next.at {
             let (line, top) = (self.transcript.line(place), self.shown_top());

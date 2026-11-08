@@ -52,6 +52,15 @@
       "shot": "prompt"
     },
     {
+      "type": "\u0005\u0015First line\nsecond line\u001b[1;2A\u001b[1;2H"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "prompt-lines"
+    },
+    {
       "type": "\u0005\u0015/hotkeys\r"
     },
     {

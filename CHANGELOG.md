@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.92.1 — Selected line breaks and steady columns
+
+### Fixed
+
+- A line break selected in the prompt shows as a selected cell at the end of its row, which showed nothing before.
+- Shift+Up and Shift+Down in the conversation come back to the column they started from after passing a shorter line, rather than keeping the shorter line's.
+
 ## 0.92.0 — Selecting with the keyboard
 
 ### Added

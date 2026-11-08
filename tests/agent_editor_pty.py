@@ -4325,6 +4325,12 @@ def fullscreen_mouse(read, until, send, output):
     until(b'\x1b[7m20 ', mark)
     send(b'\x1b[1;2B\x1b[1;2F\x03')
     copied_text('20 of the reply.\nRow 21 of the reply.')
+    # Shift+Down past a shorter row comes back to the column it left.
+    mark = len(output)
+    send(b'\x1b[<0;6;%dM\x1b[<32;10;%dM\x1b[<0;10;%dm' % (row + 2, row + 2, row + 2))
+    until(b'\x1b[7m22 ', mark)
+    send(b'\x1b[1;2F\x1b[1;2B\x1b[1;2B\x03')
+    copied_text('22 of the reply.\nRow 23.\nRow 24 of the reply.')
     # The prompt selects with them too, shown reversed; Ctrl+C copies it, which stays.
     mark = len(output)
     send(b'hello world\x1b[1;6D\x1b[1;2D')
@@ -4741,7 +4747,7 @@ with open(os.path.join(clipboard_bin, 'wl-copy'), 'w') as script_file:
     script_file.write('#!/bin/sh\ncat > "$CLIPBOARD"\n')
 os.chmod(os.path.join(clipboard_bin, 'wl-copy'), 0o755)
 # Never the desktop's clipboard: a stand-in wl-copy, or no tool at all.
-run([], fullscreen_mouse, serve_items([[message(rows_reply)]]), variables={
+run([], fullscreen_mouse, serve_items([[message(rows_reply.replace('Row 23 of the reply.', 'Row 23.'))]]), variables={
     'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test', 'DISPLAY': '',
     'CLIPBOARD': clipboard})
 run([], fullscreen_copied_by_the_terminal, serve_items([[message(rows_reply)]]))

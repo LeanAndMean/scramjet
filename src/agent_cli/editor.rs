@@ -5,7 +5,7 @@ use super::completion::{Completion, Completions, Kind, Lookup};
 use super::file_search;
 use super::keymap::{self, Binding};
 use super::keys::Key;
-use super::text::{FROM, JOINED, SPACE};
+use super::text::{FROM, JOINED, SPACE, UNTIL};
 use super::{console, spelling, style};
 use std::{
     ops::Range,
@@ -401,6 +401,14 @@ impl Layout {
                 row_has_text = true;
             }
             let end = offset + line.len();
+            // A selected line break shows as one selected cell, which a copy leaves out.
+            if selected.contains(&end) {
+                let row = rows.last_mut().unwrap();
+                if marked {
+                    row.push(UNTIL);
+                }
+                pick(row, " ", after_selected && !marked);
+            }
             stops.push(Stop {
                 offset: end,
                 row: rows.len() - 1,
@@ -1513,6 +1521,36 @@ mod tests {
         assert_eq!(
             layout.rows[0],
             format!("> a{selected}b {end}{underline}cd{end}")
+        );
+    }
+
+    #[test]
+    fn a_selected_line_break_shows_as_a_selected_cell_left_out_of_a_copy() {
+        let selected = Some(1..4);
+        let (on, end) = (style::SELECTION.get(), style::RESET);
+        let layout = Layout::marked(
+            "ab
+cd",
+            40,
+            false,
+            &[],
+            selected.clone(),
+        );
+        assert_eq!(
+            layout.rows,
+            [format!("> a{on}b {end}"), format!(". {on}c{end}d")]
+        );
+        let layout = Layout::marked(
+            "ab
+cd",
+            40,
+            true,
+            &[],
+            selected,
+        );
+        assert_eq!(
+            layout.rows[0],
+            format!("> {FROM}a{on}b{end}{UNTIL}{on} {end}")
         );
     }
 }
