@@ -12,6 +12,7 @@ mod commands;
 mod compaction;
 mod completions;
 mod configured;
+mod cooldown;
 pub mod copilot;
 mod delegate;
 mod forge;

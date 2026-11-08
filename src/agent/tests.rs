@@ -9,6 +9,8 @@ use std::{net::SocketAddr, sync::atomic::AtomicBool, time::Duration};
 #[derive(Default)]
 pub(super) struct Recorder {
     pub(super) retries: Vec<(String, u32, Duration)>,
+    /// Each wait for a provider's Retry-After before a request is sent.
+    pub(super) cooling: Vec<Duration>,
     pub(super) replies: Vec<String>,
     pub(super) calls: Vec<String>,
     pub(super) compactions: Vec<(u64, usize, Option<AutoCompaction>)>,
@@ -55,6 +57,9 @@ impl AgentUi for Recorder {
     }
     fn retrying(&mut self, error: &str, attempt: u32, _: u32, delay: Duration) {
         self.retries.push((error.to_owned(), attempt, delay));
+    }
+    fn cooling(&mut self, delay: Duration) {
+        self.cooling.push(delay);
     }
     fn assistant(&mut self, text: &str) {
         self.shown.push(format!("reply {text}"));

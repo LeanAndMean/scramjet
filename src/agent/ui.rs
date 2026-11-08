@@ -32,6 +32,8 @@ pub trait AgentUi {
     fn progress(&mut self, update: &StreamProgress);
     /// A model request failed transiently and will be sent again after `delay`.
     fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration);
+    /// A model request waits `delay` before it is sent, as the provider asked of another.
+    fn cooling(&mut self, _delay: Duration) {}
     /// The complete text of an assistant message, after any streamed progress for it.
     fn assistant(&mut self, text: &str);
     /// `compact`: the call is a read Scramjet shows in one line until expanded.

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.118.0 — Requests wait out a provider's Retry-After together
+
+### Changed
+
+- When a provider answers a request with Retry-After, the other requests this process sends to the same model there, the main agent's, subagents' and compactions', wait until then before they are sent, rather than each being refused in turn. The status line says `Provider asked to wait, sending in Ns`; Escape stops the wait. A wait longer than `retry.provider.maxRetryDelayMs` is not waited for.
+
 ## 0.117.0 — At most 8 subagents at once
 
 ### Changed

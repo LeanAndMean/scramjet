@@ -68,7 +68,7 @@ impl Transcript {
         let calls = matches!(event, Event::Calls(_));
         let streamed = matches!(
             event,
-            Event::Progress(_) | Event::Retrying(..) | Event::Assistant(_)
+            Event::Progress(_) | Event::Retrying(..) | Event::Cooling(_) | Event::Assistant(_)
         );
         if streamed && let Some((part, at)) = self.reply {
             return self.insert(part, at, event);

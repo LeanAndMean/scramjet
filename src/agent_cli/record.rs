@@ -16,6 +16,8 @@ pub(super) enum Event {
     Waiting(Purpose),
     Progress(StreamProgress),
     Retrying(String, u32, u32, Duration),
+    /// A request waits out the provider's Retry-After for this long.
+    Cooling(Duration),
     Assistant(String),
     ToolCall(String, String, Option<CompactRead>),
     /// Since when.
@@ -71,6 +73,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::Retrying(error, attempt, retries, delay) => {
             ui.retrying(error, *attempt, *retries, *delay)
         }
+        Event::Cooling(delay) => ui.cooling(*delay),
         Event::Assistant(text) => ui.assistant(text),
         Event::ToolCall(name, summary, compact) => ui.tool_call(name, summary, compact.as_ref()),
         Event::ToolRunning(since) => ui.tool_running(*since),

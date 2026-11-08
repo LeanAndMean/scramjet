@@ -141,6 +141,7 @@ impl Agent {
                             Sending::Retrying(error, attempt, delay) => {
                                 Streamed::Retrying(error.to_owned(), attempt, delay)
                             }
+                            Sending::Cooling(delay) => Streamed::Cooling(delay),
                         });
                     };
                     send(&executor, &info, retries, &request, true, &stop, &mut on)
@@ -188,6 +189,7 @@ impl Agent {
                 Ok(Streamed::Retrying(error, attempt, delay)) => {
                     ui.retrying(&error, attempt, self.config.retries.attempts, delay)
                 }
+                Ok(Streamed::Cooling(delay)) => ui.cooling(delay),
                 Ok(Streamed::Ended(ended)) => {
                     let reply = (*ended)?;
                     self.count(&replying.model, &reply, Purpose::Reply);
@@ -228,6 +230,7 @@ impl Agent {
                 Sending::Retrying(error, attempt, delay) => {
                     ui.retrying(error, attempt, retries.attempts, delay)
                 }
+                Sending::Cooling(delay) => ui.cooling(delay),
             },
         )?;
         let model = self.config.model.clone();
@@ -260,6 +263,7 @@ impl Replying {
                 Ok(Streamed::Retrying(error, attempt, delay)) => {
                     ui.retrying(&error, attempt, retries, delay)
                 }
+                Ok(Streamed::Cooling(delay)) => ui.cooling(delay),
                 Ok(Streamed::Sent) => self.held.push_back(Streamed::Sent),
                 Ok(ended @ Streamed::Ended(_)) => {
                     self.held.push_back(ended);
@@ -284,6 +288,7 @@ enum Streamed {
     Sent,
     Progress(StreamProgress),
     Retrying(String, u32, Duration),
+    Cooling(Duration),
     Ended(Box<Result<client::Reply, AgentError>>),
 }
 
@@ -297,6 +302,8 @@ pub(super) enum Sending<'a> {
     Progress(&'a StreamProgress),
     /// An attempt failed transiently; the next one, the given attempt, starts after the delay.
     Retrying(&'a str, u32, Duration),
+    /// The provider asked another request to the model to wait; this one is sent after it.
+    Cooling(Duration),
 }
 
 type Headers = Vec<(&'static str, String)>;
@@ -378,7 +385,16 @@ pub(super) fn send(
     let (body, headers) = body(request, info)?;
     let mut attempt = 0;
     let mut failed = Vec::new();
+    let model = request["model"].as_str().unwrap_or_default();
+    let max_wait = retries.max_wait.unwrap_or(Duration::MAX);
     loop {
+        // A wait longer than the settings allow is the provider's to refuse again.
+        if let Some(left) = super::cooldown::left(route, model).filter(|left| *left <= max_wait) {
+            on(Sending::Cooling(left));
+            if sleep(executor, left, cancel) {
+                return Err(AgentError::Cancelled);
+            }
+        }
         let mut sent_at = None;
         on(Sending::Attempt);
         // A login's token, renewed when it expired, which it may have during a retry's wait.
@@ -465,7 +481,12 @@ pub(super) fn send(
                     .collect(),
             });
         }
-        let max_wait = retries.max_wait.unwrap_or(Duration::MAX);
+        if let Some(wait) = failure
+            .wait
+            .filter(|wait| failure.transient && *wait < Duration::MAX)
+        {
+            super::cooldown::hold(route, model, wait);
+        }
         let backoff = retries.delay.saturating_mul(2u32.pow(attempt.min(5)));
         let delay = backoff.min(max_wait).max(failure.wait.unwrap_or_default());
         let too_long = delay > max_wait || failure.wait == Some(Duration::MAX);
@@ -482,17 +503,21 @@ pub(super) fn send(
         }
         attempt += 1;
         on(Sending::Retrying(&failure.message, attempt, delay));
-        let interrupted = executor.block_on(async {
-            tokio::select! {
-                biased;
-                () = client::cancelled(cancel) => true,
-                () = tokio::time::sleep(delay) => false,
-            }
-        });
-        if interrupted {
+        if sleep(executor, delay, cancel) {
             return Err(AgentError::Cancelled);
         }
     }
+}
+
+/// Waits `delay`; true when `cancel` was set first.
+fn sleep(executor: &tokio::runtime::Runtime, delay: Duration, cancel: &AtomicBool) -> bool {
+    executor.block_on(async {
+        tokio::select! {
+            biased;
+            () = client::cancelled(cancel) => true,
+            () = tokio::time::sleep(delay) => false,
+        }
+    })
 }
 
 /// The token `login` keeps, renewed when it expired. Escape stops the wait at once, but not the
@@ -774,6 +799,40 @@ response is incomplete; retry the request."});
         assert_eq!(ui.retries.len(), 1);
         assert_eq!((ui.retries[0].1, ui.retries[0].2), (1, Duration::ZERO));
         assert_eq!(server.join().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_request_after_a_providers_retry_after_waits_it_out_unless_the_settings_forbid_so_long() {
+        let busy = |after: u32| {
+            format!("HTTP/1.1 429 Too Many Requests\r\nretry-after: {after}\r\ncontent-length: 4\r\n\r\nbusy")
+                .into_bytes()
+        };
+        let done = || stream(&fixture::text_events("done", fixture::known_usage()));
+        let (endpoint, server) = serve(vec![busy(1), done(), busy(5), done()]);
+        let (mut agent, _scratch) = agent(endpoint, "cooldown");
+        agent.set_retries(Retries {
+            attempts: 0,
+            delay: Duration::ZERO,
+            max_wait: Some(Duration::from_secs(2)),
+        });
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        assert!(agent.turn("hi", &mut ui, &cancel).is_err());
+        let refused = Instant::now();
+        agent.turn("hi", &mut ui, &cancel).unwrap();
+        assert!(refused.elapsed() >= Duration::from_millis(900));
+        assert_eq!(ui.cooling.len(), 1);
+        assert!(
+            ui.cooling[0] > Duration::from_millis(900) && ui.cooling[0] <= Duration::from_secs(1)
+        );
+        // Five seconds is more than the settings wait: the provider says again.
+        assert!(agent.turn("hi", &mut ui, &cancel).is_err());
+        let refused = Instant::now();
+        agent.turn("hi", &mut ui, &cancel).unwrap();
+        assert!(refused.elapsed() < Duration::from_secs(2));
+        assert_eq!(ui.cooling.len(), 1);
+        assert!(ui.retries.is_empty());
+        assert_eq!(server.join().unwrap().len(), 4);
     }
 
     #[test]
@@ -1447,7 +1506,7 @@ response is incomplete; retry the request."});
                             // Another process renews it during the wait.
                             login::save(&auth, "openai-codex", fresh("fresh")).unwrap();
                         }
-                        Sending::Progress(_) => {}
+                        Sending::Progress(_) | Sending::Cooling(_) => {}
                     }
                 },
             )

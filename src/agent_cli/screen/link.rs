@@ -444,6 +444,9 @@ impl AgentUi for Link {
     fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration) {
         self.event(Event::Retrying(error.to_owned(), attempt, retries, delay));
     }
+    fn cooling(&mut self, delay: Duration) {
+        self.event(Event::Cooling(delay));
+    }
     fn assistant(&mut self, text: &str) {
         self.event(Event::Assistant(text.to_owned()));
     }

@@ -258,6 +258,10 @@ pub(super) fn retrying(attempt: u32, retries: u32) -> String {
     format!("Retrying ({attempt}/{retries}) in")
 }
 
+/// What the status line says while a request waits out the provider's Retry-After, before the
+/// seconds left.
+pub(super) const COOLING: &str = "Provider asked to wait, sending in";
+
 pub(super) fn elapsed(seconds: u64) -> String {
     match seconds {
         0 => String::new(),
@@ -1002,6 +1006,9 @@ impl AgentUi for Terminal {
         // As every block, it ends with a blank line before what follows.
         self.err(&format!("{text}\n\n"));
         self.show_countdown(retrying(attempt, retries), delay);
+    }
+    fn cooling(&mut self, delay: Duration) {
+        self.show_countdown(COOLING.into(), delay);
     }
     fn assistant(&mut self, text: &str) {
         self.clear();

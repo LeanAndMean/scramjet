@@ -11,7 +11,7 @@ use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::settings::{Layout, scramjet_level};
 use crate::agent_cli::style::{self, Band};
 use crate::agent_cli::terminal::{
-    COMMAND_LINES, Terminal, elapsed, retrying, spinner, waiting_for,
+    COMMAND_LINES, COOLING, Terminal, elapsed, retrying, spinner, waiting_for,
 };
 use crate::agent_cli::text::{Wrap, clip, columns, one_line, plain, visible};
 use scramjet_rs::agent::{Purpose, Shell, StreamProgress};
@@ -77,6 +77,10 @@ impl Activity {
             Event::Retrying(_, attempt, retries, delay) => Self {
                 countdown: Some(*delay),
                 ..Self::cancellable(retrying(*attempt, *retries))
+            },
+            Event::Cooling(delay) => Self {
+                countdown: Some(*delay),
+                ..Self::cancellable(COOLING)
             },
             _ => return None,
         })
@@ -622,6 +626,11 @@ mod tests {
         );
         let retry = Event::Retrying("busy".into(), 2, 3, Duration::from_secs(2));
         assert_eq!(said(retry, true), "Retrying (2/3) in 2s (Esc to cancel)");
+        let cooling = Event::Cooling(Duration::from_secs(5));
+        assert_eq!(
+            said(cooling, true),
+            "Provider asked to wait, sending in 5s (Esc to cancel)"
+        );
         assert_eq!(Activity::asking().line(true), "Waiting for you");
     }
 
