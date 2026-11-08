@@ -4,8 +4,8 @@ use super::client::{self, ClientError, Protocol};
 use super::completions;
 use super::providers::{Login, ModelInfo};
 use super::{
-    Agent, AgentError, AgentUi, PRODUCER, Purpose, Retries, StreamProgress, messages, rates, sent,
-    status, tools,
+    Agent, AgentError, AgentUi, PRODUCER, Purpose, Retries, StreamProgress, image, messages, rates,
+    sent, status, tools,
 };
 use serde_json::{Value, json};
 use std::{
@@ -304,7 +304,12 @@ type Headers = Vec<(&'static str, String)>;
 /// The body `request` is sent as to the model `info` describes, in its protocol, with the headers
 /// that protocol adds; the effort in it is sent as the model's `thinkingLevelMap` names it.
 fn body(request: &Value, info: &ModelInfo) -> Result<(Vec<u8>, Headers), AgentError> {
-    let without_images = (!info.images).then(|| without_images(request)).flatten();
+    let note = match (image::blocked(), info.images) {
+        (true, _) => Some(BLOCKED),
+        (false, false) => Some(UNSUPPORTED),
+        (false, true) => None,
+    };
+    let without_images = note.and_then(|note| without_images(request, note));
     let request = without_images.as_ref().unwrap_or(request);
     let mut headers = Vec::new();
     let body = match info.protocol {
@@ -515,31 +520,39 @@ fn login_token(login: &Login, cancel: &AtomicBool) -> Result<String, ClientError
     }
 }
 
-/// `request` for a model that takes no images, when it has any: each tool result's images become
-/// a note after its text, and a user message's a note in its place. `None` when it has none.
-fn without_images(request: &Value) -> Option<Value> {
-    const NOTE: &str = "[Image omitted: the current model does not support images.]";
+const UNSUPPORTED: &str = "[Image omitted: the current model does not support images.]";
+/// Scramjet's text in an image's place when the settings' `images.blockImages` is on.
+const BLOCKED: &str = "Image reading is disabled.";
+
+/// `request` without its images, when it has any: each tool result's images become `note` after
+/// its text, and a user message's `note` in its place, once for images in a row. `None` when it
+/// has none.
+fn without_images(request: &Value, note: &str) -> Option<Value> {
     let has_images = |item: &Value| tools::item_images(item) > 0;
     if !request["input"].as_array()?.iter().any(has_images) {
         return None;
     }
     let mut request = request.clone();
     for item in request["input"].as_array_mut()? {
-        let images = tools::result_images(&item["output"]);
-        if images > 0 {
+        if tools::result_images(&item["output"]) > 0 {
             let mut text = tools::result_text(&item["output"]);
-            for _ in 0..images {
-                text.push('\n');
-                text.push_str(NOTE);
-            }
+            text.push('\n');
+            text.push_str(note);
             item["output"] = json!(text);
         }
-        let parts = item.get_mut("content").and_then(Value::as_array_mut);
-        for part in parts.into_iter().flatten() {
-            if part["type"] == "input_image" {
-                *part = json!({"type":"input_text","text":format!("\n{NOTE}")});
+        let Some(parts) = item.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let replaced = json!({"type":"input_text","text":format!("\n{note}")});
+        let mut kept: Vec<Value> = Vec::with_capacity(parts.len());
+        for part in parts.drain(..) {
+            match part["type"] == "input_image" {
+                true if kept.last() == Some(&replaced) => {}
+                true => kept.push(replaced.clone()),
+                false => kept.push(part),
             }
         }
+        *parts = kept;
     }
     Some(request)
 }
@@ -550,6 +563,35 @@ mod tests {
     use crate::agent::tests::*;
     use crate::agent::{AgentConfig, Session, SessionChoice};
     use crate::provider_fixture as fixture;
+
+    #[test]
+    fn blocked_images_become_one_note_for_images_in_a_row() {
+        let image =
+            json!({"type":"input_image","detail":"auto","image_url":"data:image/png;base64,AAAA"});
+        let text = |text: &str| json!({"type":"input_text","text":text});
+        let request = json!({"input": [
+            {"role":"user","content":[text("Look:"), image, image, text("and"), image]},
+            {"type":"function_call_output","call_id":"c","output":[text("Read image file [image/png]"), image]},
+            {"role":"user","content":"plain"},
+        ]});
+        let note = format!("\n{BLOCKED}");
+        assert_eq!(
+            without_images(&request, BLOCKED).unwrap()["input"],
+            json!([
+                {"role":"user","content":[text("Look:"), text(&note), text("and"), text(&note)]},
+                {"type":"function_call_output","call_id":"c",
+                 "output":format!("Read image file [image/png]\n{BLOCKED}")},
+                {"role":"user","content":"plain"},
+            ])
+        );
+        assert_eq!(
+            without_images(
+                &json!({"input": [{"role":"user","content":"plain"}]}),
+                BLOCKED
+            ),
+            None
+        );
+    }
 
     #[test]
     fn a_request_without_tools_says_nothing_of_them() {

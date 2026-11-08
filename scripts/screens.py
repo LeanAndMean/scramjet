@@ -43,6 +43,8 @@ A scenario (scripts/screens/*.json) holds:
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
                 {"sleep": SECONDS}, {"shot": NAME} writes NAME.ansi and NAME.png.
 
+Each request's body is written to requests.jsonl in OUTDIR, a line each.
+
 Nothing reaches a provider or the user's settings, sessions, packages, clipboard or browser: the
 pages scramjet-rs opens are written to opened.txt in the scratch directory."""
 import argparse
@@ -143,9 +145,9 @@ def receive(connection):
     return head + b'\r\n\r\n' + body
 
 
-def serve(replies, headers=None, total=None):
+def serve(replies, headers=None, total=None, log=None):
     """Answers each request with the next reply, then with `No more replies.`, each with `headers`
-    besides its own; the address."""
+    besides its own, appending each request's body to `log` as a line; the address."""
     extra = b''.join(b'%s: %s\r\n' % (name.encode(), str(text).encode()) for name, text in (headers or {}).items())
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
@@ -157,7 +159,10 @@ def serve(replies, headers=None, total=None):
         pending = iter(streams)
         while True:
             connection, _ = listener.accept()
-            receive(connection)
+            request = receive(connection)
+            if log:
+                with open(log, 'ab') as file:
+                    file.write(request.partition(b'\r\n\r\n')[2].replace(b'\n', b' ') + b'\n')
             pieces = next(pending, None) or stream(*items([{'text': 'No more replies.'}], len(streams)))
             if isinstance(pieces, dict):
                 body = json.dumps(pieces.get('body', {})).encode()
@@ -400,7 +405,11 @@ def main():
 
         # The scripted server is the first provider, offering the scenario's model.
         model = scenario.get('model', 'gpt-6-luna')
-        base = 'http://%s/v1' % serve(scenario.get('replies', []), scenario.get('headers'), scenario.get('total'))
+        requests = os.path.join(options.outdir, options.name + 'requests.jsonl')
+        if os.path.exists(requests):
+            os.remove(requests)
+        base = 'http://%s/v1' % serve(scenario.get('replies', []), scenario.get('headers'), scenario.get('total'),
+                                     requests)
         env['SCREENS_BASE_URL'] = base
         provider = {'baseUrl': base, 'api': 'openai-responses',
                     'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}

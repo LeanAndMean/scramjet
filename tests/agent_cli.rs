@@ -1205,17 +1205,130 @@ fn shell_path_and_shell_command_prefix_run_the_agents_commands() {
     );
 }
 
+#[test]
+fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
+    let binary = &binary();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-images-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    let wide = image::RgbImage::from_fn(2100, 10, |x, y| image::Rgb([x as u8, y as u8, 7]));
+    let mut png = Vec::new();
+    image::ImageEncoder::write_image(
+        image::codecs::png::PngEncoder::new(&mut png),
+        &wide,
+        2100,
+        10,
+        image::ExtendedColorType::Rgb8,
+    )
+    .unwrap();
+    std::fs::write(project.join("wide.png"), &png).unwrap();
+    let (port, bodies) = serve_call("read", serde_json::json!({"path": "wide.png"}));
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test", "input": ["text", "image"]}],
+    }}});
+    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+    // The read call's result, as the second request sends it.
+    let run = |images: serde_json::Value| {
+        let file = config.join("scramjet-rs/settings.json");
+        std::fs::write(file, serde_json::json!({"images": images}).to_string()).unwrap();
+        let output = Command::new(binary)
+            .args(["--retries", "0", "--no-session", "-p", "hi"])
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{stderr}");
+        assert!(!stderr.contains("images"), "{stderr}");
+        let _first = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let second = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+        let messages = second["messages"].as_array().unwrap();
+        let result = messages.last().unwrap()["content"][0].clone();
+        assert_eq!(result["type"], "tool_result", "{second}");
+        match &result["content"] {
+            serde_json::Value::String(text) => {
+                vec![serde_json::json!({"type": "text", "text": text})]
+            }
+            content => content.as_array().unwrap().clone(),
+        }
+    };
+    let image_data = |content: &[serde_json::Value]| {
+        let image = content.iter().find(|part| part["type"] == "image").unwrap();
+        image["source"]["data"].as_str().unwrap().to_owned()
+    };
+    let texts = |content: &[serde_json::Value]| {
+        (content.iter())
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let decoded = |data: &str| {
+        let value = |c: u8| match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            _ => 63,
+        };
+        let digits: Vec<u8> = data.bytes().filter(|&c| c != b'=').map(value).collect();
+        (digits.chunks(4))
+            .flat_map(|chunk| {
+                let bits = (chunk.iter().enumerate())
+                    .fold(0u32, |bits, (i, &d)| bits | u32::from(d) << (18 - 6 * i));
+                (0..chunk.len() - 1).map(move |i| (bits >> (16 - 8 * i)) as u8)
+            })
+            .collect::<Vec<u8>>()
+    };
+    // By default the image is scaled to 2000 pixels wide, and the model told so.
+    let content = run(serde_json::json!({}));
+    assert!(
+        texts(&content).contains("original 2100x10, displayed at 2000x10"),
+        "{content:?}"
+    );
+    assert_ne!(decoded(&image_data(&content)), png);
+    // Without resizing it goes as read.
+    let content = run(serde_json::json!({"autoResize": false}));
+    assert_eq!(texts(&content), "Read image file [image/png]");
+    assert_eq!(decoded(&image_data(&content)), png);
+    // Blocked, no image goes, and the model is told why.
+    let content = run(serde_json::json!({"blockImages": true}));
+    assert!(
+        content.iter().all(|part| part["type"] != "image"),
+        "{content:?}"
+    );
+    assert_eq!(
+        texts(&content),
+        "Read image file [image/png]\n[Image: original 2100x10, displayed at 2000x10. Multiply \
+coordinates by 1.05 to map to original image.]\nImage reading is disabled."
+    );
+}
+
 /// A Messages provider on a port of 127.0.0.1 whose replies alternate between a bash call
 /// running `command` and a short text: its port, and each request's body.
 #[cfg(unix)]
 fn serve_bash_call(command: &str) -> (u16, std::sync::mpsc::Receiver<String>) {
+    serve_call("bash", serde_json::json!({"command": command}))
+}
+
+/// As `serve_bash_call`, with a call of the tool `name` with `input`.
+fn serve_call(name: &str, input: serde_json::Value) -> (u16, std::sync::mpsc::Receiver<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let (sent, received) = std::sync::mpsc::channel();
-    let input = serde_json::json!({"command": command}).to_string();
+    let input = input.to_string();
     let call = vec![
         r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
-        r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"bash","input":{}}}"#.to_owned(),
+        serde_json::json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": name, "input": {}}}).to_string(),
         serde_json::json!({"type": "content_block_delta", "index": 0,
             "delta": {"type": "input_json_delta", "partial_json": input}}).to_string(),
         r#"{"type":"content_block_stop","index":0}"#.to_owned(),

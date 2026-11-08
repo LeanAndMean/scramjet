@@ -166,6 +166,8 @@ pub(super) enum Row {
     CompletionRows,
     SpellCheck,
     AutoCompact,
+    ResizeImages,
+    BlockImages,
     BranchSummary,
     TreeFilter,
     Tools,
@@ -176,7 +178,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 24] = [
+pub(super) const ROWS: [Row; 26] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -193,6 +195,8 @@ pub(super) const ROWS: [Row; 24] = [
     Row::CompletionRows,
     Row::SpellCheck,
     Row::AutoCompact,
+    Row::ResizeImages,
+    Row::BlockImages,
     Row::BranchSummary,
     Row::TreeFilter,
     Row::Tools,
@@ -222,6 +226,8 @@ impl Row {
             Self::CompletionRows => "Completion rows",
             Self::SpellCheck => "Spelling",
             Self::AutoCompact => "Auto-compact",
+            Self::ResizeImages => "Resize images",
+            Self::BlockImages => "Block images",
             Self::BranchSummary => "Leaving a branch",
             Self::TreeFilter => "Tree entries",
             Self::Tools => "Tools",
@@ -323,6 +329,14 @@ impl Row {
                 "The conversation's older part is summarized by itself as the context nears the \
                  model's window, and after a request exceeds it. /compact works either way."
             }
+            Self::ResizeImages => {
+                "Images the agent reads or a prompt attaches that are larger than 2000x2000 pixels \
+                 or 4.5 MB are scaled down before they are sent; else they are sent as they are."
+            }
+            Self::BlockImages => {
+                "No image goes to any model: each is replaced by a note saying image reading is \
+                 disabled."
+            }
             Self::BranchSummary => {
                 "When /tree moves to another branch: ask whether to summarize the one left behind."
             }
@@ -372,6 +386,10 @@ pub(super) struct Settings {
     pub(super) copy_on_select: bool,
     /// `spellCheck`: misspelled words in the prompt are underlined.
     pub(super) spell_check: bool,
+    /// `images.autoResize`: images too large to send are scaled down, as Scramjet's.
+    pub(super) resize_images: bool,
+    /// `images.blockImages`: no image is sent to any model, as Scramjet's.
+    pub(super) block_images: bool,
     pub(super) layout: Layout,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
@@ -516,6 +534,8 @@ impl Settings {
             double_escape: DoubleEscape::Tree,
             copy_on_select: cfg!(target_os = "macos"),
             spell_check: true,
+            resize_images: true,
+            block_images: false,
             layout: Layout::default(),
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
@@ -582,6 +602,20 @@ impl Settings {
             None => {}
             Some(Value::Bool(check)) => self.spell_check = *check,
             Some(_) => wrong("spellCheck", "true or false"),
+        }
+        match object.get("images") {
+            None => {}
+            Some(Value::Object(images)) => {
+                for key in ["autoResize", "blockImages"] {
+                    match (images.get(key), key) {
+                        (None, _) => {}
+                        (Some(Value::Bool(on)), "autoResize") => self.resize_images = *on,
+                        (Some(Value::Bool(on)), _) => self.block_images = *on,
+                        (Some(_), _) => wrong(&format!("images.{key}"), "true or false"),
+                    }
+                }
+            }
+            Some(_) => wrong("images", "an object"),
         }
         // As Scramjet's, a number outside its range is taken as its nearest end.
         for (row, key, low, high, _) in LAYOUT_KEYS {
@@ -1512,6 +1546,10 @@ impl Settings {
             Row::SpellCheck => "off".into(),
             Row::AutoCompact if self.compacting.automatic => "on".into(),
             Row::AutoCompact => "off".into(),
+            Row::ResizeImages if self.resize_images => "on".into(),
+            Row::ResizeImages => "off".into(),
+            Row::BlockImages if self.block_images => "on".into(),
+            Row::BlockImages => "off".into(),
             Row::BranchSummary if self.skip_branch_summary_prompt => "no summary".into(),
             Row::BranchSummary => "asks for a summary".into(),
             Row::TreeFilter => match self.tree_filter {
@@ -1605,6 +1643,14 @@ impl Settings {
             Row::SpellCheck => {
                 self.spell_check = !self.spell_check;
                 self.save("spellCheck", json!(self.spell_check))
+            }
+            Row::ResizeImages => {
+                self.resize_images = !self.resize_images;
+                self.save_in("images", "autoResize", json!(self.resize_images))
+            }
+            Row::BlockImages => {
+                self.block_images = !self.block_images;
+                self.save_in("images", "blockImages", json!(self.block_images))
             }
             Row::WheelStep | Row::PromptHeight | Row::CompletionRows => {
                 let Some((_, key, _, _, values)) =
@@ -1984,6 +2030,48 @@ mod tests {
         assert_eq!(
             not_object.warnings,
             [format!("{path}: retry must be an object; ignored")]
+        );
+    }
+
+    #[test]
+    fn images_take_scramjets_keys_and_name_wrong_ones() {
+        let scratch = Scratch::new("images");
+        let defaults = settings_with(&scratch, "{}");
+        assert_eq!(
+            (defaults.resize_images, defaults.block_images),
+            (true, false)
+        );
+        let mut settings = settings_with(
+            &scratch,
+            r#"{"images": {"autoResize": false, "blockImages": true, "showImages": false}}"#,
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        assert_eq!(
+            (settings.resize_images, settings.block_images),
+            (false, true)
+        );
+        settings.reload();
+        assert_eq!(
+            (settings.resize_images, settings.block_images),
+            (false, true)
+        );
+        let path = shown(&scratch.0.join("settings.json"));
+        let wrong = settings_with(
+            &scratch,
+            r#"{"images": {"autoResize": "no", "blockImages": 1}}"#,
+        );
+        assert_eq!((wrong.resize_images, wrong.block_images), (true, false));
+        assert_eq!(
+            wrong.warnings,
+            [
+                format!("{path}: images.autoResize must be true or false; ignored"),
+                format!("{path}: images.blockImages must be true or false; ignored"),
+            ]
+        );
+        let wrong = settings_with(&scratch, r#"{"images": true}"#);
+        assert_eq!(
+            wrong.warnings,
+            [format!("{path}: images must be an object; ignored")]
         );
     }
 
@@ -2642,6 +2730,14 @@ mod tests {
         );
         assert_eq!(settings.compacting.branch_reserve, 1);
         assert_eq!(
+            seen(Row::ResizeImages, &mut settings),
+            ["on", "off", "on", "off"]
+        );
+        assert_eq!(
+            seen(Row::BlockImages, &mut settings),
+            ["off", "on", "off", "on"]
+        );
+        assert_eq!(
             seen(Row::WheelStep, &mut settings),
             ["3 lines", "4 lines", "5 lines", "6 lines"]
         );
@@ -2690,6 +2786,7 @@ mod tests {
             json!({
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
                 "compaction": {"enabled": false},
+                "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "unattended",

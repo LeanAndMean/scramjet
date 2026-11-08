@@ -227,7 +227,9 @@ global; retry: enabled, maxRetries (3), baseDelayMs (2000, doubled at each retry
 provider.maxRetryDelayMs (60000: a longer wait, the provider's or the backoff's, fails the
 request; 0 for no limit); compaction: enabled (true), reserveTokens (16384: compaction runs
 once the context passes the window less this) and keepRecentTokens (20000, kept whole), and
-branchSummary.reserveTokens (16384); and the full screen's scrollWheelStep (3 lines a notch,
+branchSummary.reserveTokens (16384); images: autoResize (true: images over 2000x2000 pixels or
+4.5 MB are scaled down before they are sent) and blockImages (false; true: no image is sent);
+and the full screen's scrollWheelStep (3 lines a notch,
 1-20), editorMaxHeightPercent (30: the prompt's most rows as a share of the screen's, 10-50) and
 autocompleteMaxVisible (5 completion entries shown at once, 3-20).";
 

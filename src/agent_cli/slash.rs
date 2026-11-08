@@ -503,6 +503,7 @@ impl Interactive {
             self.settings.shell_path.clone(),
             self.settings.shell_command_prefix.clone(),
         );
+        scramjet_rs::agent::set_images(self.settings.resize_images, self.settings.block_images);
         self.discover_themes();
         self.use_theme();
         self.keybindings = keymap::load(self.settings.path());

@@ -6,7 +6,26 @@ use image::{
     codecs::{jpeg::JpegEncoder, png::PngEncoder},
     imageops::FilterType,
 };
-use std::io::Cursor;
+use std::{
+    io::Cursor,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
+/// The settings' `images.autoResize` and `images.blockImages`, as Scramjet's; process-wide, as
+/// the settings are, so that a change in `/settings` applies to the next read and request.
+static RESIZE: AtomicBool = AtomicBool::new(true);
+static BLOCK: AtomicBool = AtomicBool::new(false);
+
+/// Whether images too large to send are scaled down (else sent as they are), and whether no
+/// image is sent to any model.
+pub fn set_images(resize: bool, block: bool) {
+    RESIZE.store(resize, Ordering::Relaxed);
+    BLOCK.store(block, Ordering::Relaxed);
+}
+
+pub(super) fn blocked() -> bool {
+    BLOCK.load(Ordering::Relaxed)
+}
 
 const MAX_SIDE: u32 = 2000;
 const MAX_BASE64: usize = 4_718_592;
@@ -93,8 +112,21 @@ fn animated_png(bytes: &[u8]) -> bool {
 }
 
 /// The image of type `mime` in `bytes` as it can be sent; `None` when it does not decode or
-/// cannot be made small enough.
+/// cannot be made small enough. With resizing off, the bytes as they are, unchecked as Scramjet
+/// sends them.
 pub(super) fn fit(bytes: &[u8], mime: &'static str) -> Option<Fitted> {
+    if !RESIZE.load(Ordering::Relaxed) {
+        let image = Image {
+            mime,
+            data: base64(bytes),
+        };
+        let (original, sent) = ((0, 0), (0, 0));
+        return Some(Fitted {
+            image,
+            original,
+            sent,
+        });
+    }
     let mut decoder =
         ImageReader::with_format(Cursor::new(bytes), ImageFormat::from_mime_type(mime)?)
             .into_decoder()

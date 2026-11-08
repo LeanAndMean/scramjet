@@ -1,0 +1,85 @@
+{
+  "size": "100x40",
+  "prompt": "Look at the dot",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo iVBORw0KGgoAAAANSUhEUgAAAAQAAAADCAIAAAA7ljmRAAAAI0lEQVR4nA3HsQEAMAyDMHAG/v+41SYgaXQEps3On+XauvUAB/8Ac95GHpcAAAAASUVORK5CYII= | base64 -d > dot.png"
+        }
+      }
+    ],
+    [
+      {
+        "call": "read",
+        "arguments": {
+          "path": "dot.png"
+        }
+      }
+    ],
+    [
+      {
+        "text": "A dot."
+      }
+    ],
+    [
+      {
+        "text": "Still a dot."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "A dot."
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "/settings\r"
+    },
+    {
+      "until": "Esc close"
+    },
+    {
+      "type": "\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "row"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "row-on"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "And now?\r"
+    },
+    {
+      "until": "Still a dot"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "after"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}

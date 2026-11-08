@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.110.0 — Images sent as they are, or not at all
+
+### Added
+
+- Scramjet's image settings: `images.autoResize` (on: images over 2000x2000 pixels or 4.5 MB that the agent reads or a prompt attaches are scaled down; off: sent as they are) and `images.blockImages` (on: no image goes to any model, each replaced by `Image reading is disabled.`, also in the conversation already held). `/settings` has a row for each (Resize images, Block images), applied at once.
+
 ## 0.109.1 — Next-step and approval settings safe alongside Scramjet
 
 ### Fixed
