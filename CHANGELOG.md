@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.99.1 — A full disk no longer empties a hard-linked file
+
+### Fixed
+
+- `write` and `edit` on a file with other hard links, or owned by someone else, which they write in place, now find room for the new text before cutting the old, so a full disk leaves the file as it was rather than empty.
+- On Windows, `read` of a directory says it is a directory (use `ls`) rather than `Access is denied`, and `scramjet-rs remove` takes a `~\…` path, as `install` writes them and Windows' shells pass `~` on as typed.
+
 ## 0.99.0 — What another user left where scramjet-rs looks is left out
 
 ### Changed

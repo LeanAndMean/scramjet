@@ -53,6 +53,29 @@ pub fn make_private(file: &std::fs::File) -> std::io::Result<()> {
     }
 }
 
+/// Writes `bytes` over the contents of `file`, opened for writing at its start, once the disk
+/// has given them room: a full disk leaves the contents as they were, where cutting first
+/// would lose them.
+pub fn overwrite(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let size = bytes.len() as u64;
+    #[cfg(unix)]
+    {
+        use rustix::{fs::FallocateFlags, io::Errno};
+        match rustix::fs::fallocate(&*file, FallocateFlags::empty(), 0, size) {
+            Ok(()) | Err(Errno::OPNOTSUPP | Errno::NOSYS) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    // Windows gives a file room as its end moves out.
+    #[cfg(not(unix))]
+    if file.metadata()?.len() < size {
+        file.set_len(size)?;
+    }
+    file.write_all(bytes)?;
+    file.set_len(size)
+}
+
 /// Cuts `file`, opened at `path` for appending, to `size` bytes. On Windows a file opened for
 /// appending may not change its length (it lacks `FILE_WRITE_DATA`), so another handle cuts it.
 pub fn truncate(file: &std::fs::File, path: &Path, size: u64) -> std::io::Result<()> {

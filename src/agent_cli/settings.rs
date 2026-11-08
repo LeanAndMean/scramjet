@@ -904,7 +904,11 @@ impl Settings {
                 shown(&path)
             )
         })?;
-        let given = std::path::absolute(reference).ok();
+        // `~` too, which Windows' shells leave as typed.
+        let given = match scramjet_rs::os::after_tilde(reference).zip(std::env::home_dir()) {
+            Some((rest, home)) => Some(scramjet_rs::os::join(&home, rest)),
+            None => std::path::absolute(reference).ok(),
+        };
         let position = entries.iter().position(|entry| {
             let known = self.resolve(entry);
             known.file_name().is_some_and(|name| name == reference)
@@ -2168,10 +2172,11 @@ mod tests {
             ("mach12", &mach12)
         );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let absolute = mach12.display().to_string();
+        // Under the home, as Windows' temporary directory is, it is written with `~`.
+        let written = scramjet_rs::os::tilde(&mach12);
         assert_eq!(
             saved,
-            json!({"theme": "x", "commandSets": ["../rs", absolute]})
+            json!({"theme": "x", "commandSets": ["../rs", written]})
         );
         assert_eq!(
             Settings::read(Some(path.clone())).command_sets,
@@ -2185,7 +2190,10 @@ mod tests {
         );
         assert_eq!(
             settings.install_sets(&other).unwrap_err(),
-            format!("a command set named mach12 is installed from {absolute}; remove it first")
+            format!(
+                "a command set named mach12 is installed from {}; remove it first",
+                mach12.display()
+            )
         );
         let plain = scratch.0.join("plain");
         assert_eq!(
@@ -2219,7 +2227,7 @@ mod tests {
         );
         assert!(settings.remove_set(&other.display().to_string()).is_err());
         assert_eq!(
-            settings.remove_set(&absolute).unwrap(),
+            settings.remove_set(&written).unwrap(),
             std::slice::from_ref(&mach12)
         );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();

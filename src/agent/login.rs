@@ -440,7 +440,7 @@ fn update<T, E: From<String>>(
 }
 
 /// Writes `text` over the contents of `path`, in place (the module says why), once the disk has
-/// given it room: a full disk leaves them as they were, where truncating first would lose them.
+/// given it room (`os::overwrite`).
 fn write_in_place(path: &Path, text: &[u8]) -> std::io::Result<()> {
     let mut file = os::private_file(
         std::fs::OpenOptions::new()
@@ -450,17 +450,7 @@ fn write_in_place(path: &Path, text: &[u8]) -> std::io::Result<()> {
     )
     .open(path)?;
     os::make_private(&file)?;
-    #[cfg(unix)]
-    {
-        use rustix::{fs::FallocateFlags, io::Errno};
-        let room = rustix::fs::fallocate(&file, FallocateFlags::empty(), 0, text.len() as u64);
-        match room {
-            Ok(()) | Err(Errno::OPNOTSUPP | Errno::NOSYS) => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    file.write_all(text)?;
-    file.set_len(text.len() as u64)?;
+    os::overwrite(&mut file, text)?;
     file.sync_all()
 }
 

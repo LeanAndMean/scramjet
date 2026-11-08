@@ -714,9 +714,9 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             loaded.problems[0].file,
             Some(ProblemFile::Path(unread.clone()))
         );
+        // Linux opens a directory and fails the read; Windows refuses to open it.
         assert!(
-            (loaded.problems[0].text)
-                .starts_with(&format!("could not read {}: ", unread.display())),
+            (loaded.problems[0].text).contains(&format!("{}: ", unread.display())),
             "{:?}",
             loaded.problems
         );

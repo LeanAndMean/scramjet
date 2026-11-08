@@ -539,6 +539,13 @@ fn regular_file(path: &Path, hidden: Option<&Hidden>) -> Result<std::fs::File, S
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
     }
+    // Without it Windows refuses to open a directory, so the check below could not say so.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        options.custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    }
     let file = match hidden {
         Some(hidden) => hidden.opened(path, options.open(path))?,
         None => options.open(path).map_err(failed)?,
@@ -984,11 +991,9 @@ fn replace(
     rustix::fs::renameat(directory, &temp, directory, name).map_err(|e| removed(e.into()))
 }
 
-/// Cuts `file` and writes `content` into it.
+/// Writes `content` over `file`'s, once the disk has room for it.
 fn in_place(file: &mut std::fs::File, content: &str) -> io::Result<()> {
-    use std::io::Write;
-    file.set_len(0)?;
-    file.write_all(content.as_bytes())
+    crate::os::overwrite(file, content.as_bytes())
 }
 
 /// A name, unused by anyone else, for the new file replacing `name` beside it.
@@ -2857,6 +2862,9 @@ to see full lines]",
         let root = PathBuf::from(directory);
         let original = "line\n".repeat(400);
         std::fs::write(root.join("a.txt"), &original).unwrap();
+        // A file with another name is written in place, so it must find room before cutting.
+        std::fs::write(root.join("b.txt"), &original).unwrap();
+        std::fs::hard_link(root.join("b.txt"), root.join("c.txt")).unwrap();
         let mut fill = std::fs::File::create(root.join("fill")).unwrap();
         while std::io::Write::write_all(&mut fill, &[0; 512]).is_ok() {}
         let shown = Hidden::under(&root, Vec::new());
@@ -2864,25 +2872,28 @@ to see full lines]",
         let longer = "longer line\n".repeat(400);
         let edits = json!([{"oldText": original.clone(), "newText": longer.clone()}]);
         for hidden in [None, Some(&shown)] {
-            for (name, arguments) in [
-                ("write", json!({"path": "a.txt", "content": longer})),
-                ("edit", json!({"path": "a.txt", "edits": edits})),
-            ] {
-                let run = call(name, arguments).run(&root, hidden, &cancel, &mut |_| {});
-                let error = run.map(|output| output.text).unwrap_err();
-                assert!(error.contains("No space left on device"), "{name}: {error}");
-                assert_eq!(
-                    std::fs::read_to_string(root.join("a.txt")).unwrap(),
-                    original
-                );
-                assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2, "{name}");
+            for path in ["a.txt", "b.txt"] {
+                for (name, arguments) in [
+                    ("write", json!({"path": path, "content": longer})),
+                    ("edit", json!({"path": path, "edits": edits})),
+                ] {
+                    let run = call(name, arguments).run(&root, hidden, &cancel, &mut |_| {});
+                    let error = run.map(|output| output.text).unwrap_err();
+                    assert!(error.contains("No space left on device"), "{name}: {error}");
+                    let now = std::fs::read_to_string(root.join(path)).unwrap();
+                    assert!(now == original, "{name} {path}");
+                    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 4, "{name}");
+                }
             }
         }
         drop(fill);
         std::fs::remove_file(root.join("fill")).unwrap();
-        let run = call("write", json!({"path": "a.txt", "content": longer}));
-        run.run(&root, Some(&shown), &cancel, &mut |_| {}).unwrap();
+        for path in ["a.txt", "b.txt"] {
+            let run = call("write", json!({"path": path, "content": longer}));
+            run.run(&root, Some(&shown), &cancel, &mut |_| {}).unwrap();
+        }
         assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), longer);
+        assert_eq!(std::fs::read_to_string(root.join("c.txt")).unwrap(), longer);
     }
 
     #[test]
