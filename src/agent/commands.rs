@@ -306,7 +306,8 @@ impl Commands {
     /// The suggested edges and publication defaults of `set`'s `autonomy-defaults.yaml`, as
     /// Scramjet keeps them: edges for any command, a set before it suggesting one first, and
     /// publication defaults only for the set's own top-level commands and the tools their
-    /// `allowed-tools` name.
+    /// `allowed-tools` name. A project's sets cannot approve publications, as a project's
+    /// `autonomy.yaml` cannot set them.
     fn add_defaults(&mut self, set: &Set) {
         let path = set.directory.join("autonomy-defaults.yaml");
         let text = match fs::read_to_string(&path) {
@@ -359,6 +360,18 @@ impl Commands {
             };
             let (kept, undeclared): (Vec<_>, Vec<_>) =
                 tools.into_iter().partition(|(tool, _)| declared(tool));
+            let project = set.origin == Origin::Project;
+            let (kept, approved): (Vec<_>, Vec<_>) = (kept.into_iter())
+                .partition(|(_, setting)| !project || *setting != Publication::Auto);
+            for (tool, _) in approved {
+                self.warnings.push(Problem::in_file(
+                    format!(
+                        "{shown}: ignored auto-approve for {name} → {tool}: a project's command \
+                         set cannot approve its own publications"
+                    ),
+                    &path,
+                ));
+            }
             for (tool, _) in undeclared {
                 self.warnings.push(Problem::in_file(
                     format!(
@@ -843,7 +856,7 @@ fn split_number(text: &str) -> Option<(usize, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::ProblemFile;
+    use crate::agent::{Edge, ProblemFile};
 
     /// A scratch directory removed when dropped, also when a test panics.
     struct Scratch(PathBuf);
@@ -1091,24 +1104,24 @@ or agents directory, nor a models.json",
     )]
     fn a_sets_publication_defaults_hold_for_its_own_commands_and_their_declared_tools() {
         let scratch = Scratch::new("publication-defaults");
-        let project = scratch.0.join("project");
+        let global = scratch.0.join("global");
         scratch.file(
-            "project/rs/commands/rs:post.md",
+            "global/rs/commands/rs:post.md",
             "---\nallowed-tools: [create_issue, add_issue_comment]\n---\nPost\n",
         );
         scratch.file(
-            "project/rs/commands/rs:helper.md",
+            "global/rs/commands/rs:helper.md",
             "---\ndelegate-only: true\nallowed-tools: [create_pr]\n---\nHelp\n",
         );
-        scratch.file("project/other/commands/other:x.md", "X\n");
+        scratch.file("global/other/commands/other:x.md", "X\n");
         scratch.file(
-            "project/rs/autonomy-defaults.yaml",
+            "global/rs/autonomy-defaults.yaml",
             "publications:\n  rs:post:\n    create_issue: auto-approve\n    add_issue_comment: \
 require-approval\n    create_pr: auto-approve\n  rs:helper:\n    create_pr: auto-approve\n  \
 other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n",
         );
-        scratch.file("project/other/autonomy-defaults.yaml", "publications: [\n");
-        let commands = Commands::discover(&project_sets(&project));
+        scratch.file("global/other/autonomy-defaults.yaml", "publications: [\n");
+        let commands = Commands::discover(&Sets::find(&[], Some(&global), &scratch.0.join("none")));
         let default = |command: &str, tool: &str| commands.publication_default(command, tool);
         assert_eq!(default("rs:post", "create_issue"), Some(Publication::Auto));
         assert_eq!(
@@ -1122,7 +1135,7 @@ other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n
         ] {
             assert_eq!(default(command, tool), None, "{command} {tool}");
         }
-        let file = |set: &str| project.join(set).join("autonomy-defaults.yaml");
+        let file = |set: &str| global.join(set).join("autonomy-defaults.yaml");
         let rs = file("rs").display().to_string();
         let (first, rest) = commands.warnings().split_at(1);
         assert!(
@@ -1153,6 +1166,38 @@ other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n
                 ),
             ]
         );
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
+    fn a_project_set_cannot_approve_its_own_publications_but_its_other_defaults_hold() {
+        let scratch = Scratch::new("project-publication-defaults");
+        let project = scratch.0.join("project");
+        scratch.file(
+            "project/rs/commands/rs:post.md",
+            "---\nallowed-tools: [create_issue, add_issue_comment]\n---\nPost\n",
+        );
+        scratch.file(
+            "project/rs/autonomy-defaults.yaml",
+            "edges:\n  rs:post:\n    rs:post: chain\npublications:\n  rs:post:\n    create_issue: \
+auto-approve\n    add_issue_comment: require-approval\n",
+        );
+        let commands = Commands::discover(&project_sets(&project));
+        let default = |tool| commands.publication_default("rs:post", tool);
+        assert_eq!(default("create_issue"), None);
+        assert_eq!(default("add_issue_comment"), Some(Publication::Ask));
+        let edge = commands.suggested("rs:post", "rs:post").map(|s| s.edge);
+        assert_eq!(edge, Some(Edge::Chain));
+        let file = project.join("rs/autonomy-defaults.yaml");
+        let text = format!(
+            "{}: ignored auto-approve for rs:post → create_issue: a project's command set \
+             cannot approve its own publications",
+            file.display()
+        );
+        assert_eq!(commands.warnings(), [Problem::in_file(text, &file)]);
     }
 
     #[test]

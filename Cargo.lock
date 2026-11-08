@@ -901,7 +901,7 @@ dependencies = [
 
 [[package]]
 name = "scramjet-rs"
-version = "0.97.6"
+version = "0.97.7"
 dependencies = [
  "bytes",
  "futures-util",

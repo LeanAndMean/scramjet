@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.7 — Projects cannot approve their own publications
+
+### Fixed
+
+- A command set inside a project (`.scramjet/<set>/`) can no longer approve its own commands' publications: an `auto-approve` in its `autonomy-defaults.yaml` is ignored with a warning at start, and they ask you, as a project's `autonomy.yaml` already could not approve any. Installed and global sets keep their defaults.
+
 ## 0.97.6 — Replies cannot drive the terminal
 
 ### Fixed

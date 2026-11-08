@@ -1176,7 +1176,11 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
             "sets/rs/autonomy-defaults.yaml",
             "publications:\n  rs:post:\n    create_issue: require-approval\n    add_pr_comment: auto-approve\n",
         );
-        let commands = Commands::discover(&super::super::Sets::find(&[], None, &root.join("sets")));
+        let commands = Commands::discover(&super::super::Sets::find(
+            &[],
+            Some(&root.join("sets")),
+            &root.join("none"),
+        ));
         let global = root.join("autonomy.yaml");
         let approval = |tool, setting, default| Approval {
             command: "rs:post".into(),
