@@ -760,6 +760,14 @@ pub(super) fn listing() -> Vec<(&'static str, Vec<Shortcut>)> {
 mod tests {
     use super::*;
 
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn every_action_is_defined_once_in_order_with_keys_that_are_keys() {
         let keymap = Keymap::defaults();
@@ -857,6 +865,7 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("scramjet-rs-keys-save-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&directory);
+        let _scratch = Scratch(directory.clone());
         let settings = directory.join("settings.json");
         let read = || -> Value {
             serde_json::from_str(&std::fs::read_to_string(path(&settings)).unwrap()).unwrap()
@@ -884,7 +893,6 @@ mod tests {
         std::fs::write(path(&settings), "{\"app.exit\": ").unwrap();
         let broken = save(&settings, B::Exit, &[ctrl('x')]);
         let left = std::fs::read_to_string(path(&settings)).unwrap();
-        let _ = std::fs::remove_dir_all(&directory);
         assert!(saved.iter().all(Result::is_ok), "{saved:?}");
         assert_eq!(restored, Ok(()));
         assert_eq!(
@@ -982,12 +990,12 @@ mod tests {
         let directory =
             std::env::temp_dir().join(format!("scramjet-rs-keymap-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
+        let _scratch = Scratch(directory.clone());
         let settings = directory.join("settings.json");
         assert_eq!(path(&settings), directory.join(FILE));
         assert!(load(Some(&settings)).is_empty());
         std::fs::write(path(&settings), "{\"tui.select.up\": \"bogus\"}").unwrap();
         let problems = load(Some(&settings));
-        let _ = std::fs::remove_dir_all(&directory);
         assert_eq!(problems.len(), 1, "{problems:?}");
         assert!(
             problems[0]

@@ -463,11 +463,20 @@ mod windows {
 mod tests {
     use super::*;
 
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn a_locked_directory_is_locked_against_other_handles() {
         let directory =
             std::env::temp_dir().join(format!("scramjet-rs-lock-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
+        let _scratch = Scratch(directory.clone());
         let held = lock_directory(&directory).unwrap().unwrap();
         #[cfg(not(windows))]
         let other = || std::fs::File::open(&directory).unwrap();
@@ -483,13 +492,13 @@ mod tests {
         drop(held);
         let taken = second.try_lock().is_ok();
         drop((first, second));
-        std::fs::remove_dir_all(&directory).unwrap();
         assert!(refused && taken);
     }
 
     #[test]
     fn windows_finds_git_bash_or_another_bash_but_never_wsls() {
         let root = std::env::temp_dir().join(format!("scramjet-rs-bash-{}", std::process::id()));
+        let _scratch = Scratch(root.clone());
         let file = |parts: &[&str]| {
             let path = parts
                 .iter()
@@ -523,12 +532,12 @@ mod tests {
         assert_eq!(found(&[at(&["Program Files"])]), Some(installed));
         let only_wsl = [wsl.parent().unwrap().to_owned()];
         assert_eq!(windows_bash(&[], &only_wsl, Some(&windows)), None);
-        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
     fn windows_programs_are_found_with_their_extension_in_path_order() {
         let root = std::env::temp_dir().join(format!("scramjet-rs-program-{}", std::process::id()));
+        let _scratch = Scratch(root.clone());
         let (node, tools) = (root.join("node"), root.join("tools"));
         std::fs::create_dir_all(&node).unwrap();
         std::fs::create_dir_all(&tools).unwrap();
@@ -544,7 +553,6 @@ mod tests {
         assert_eq!(found("npx.exe"), Some(tools.join("npx.exe")));
         std::fs::create_dir(node.join("uvx.cmd")).unwrap();
         assert_eq!(found("uvx"), None);
-        std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(program("a/b", None), PathBuf::from("a/b"));
     }
 

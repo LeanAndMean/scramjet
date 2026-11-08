@@ -186,6 +186,14 @@ mod tests {
     use super::*;
     use std::sync::OnceLock;
 
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn marked(line: &str) -> Vec<&str> {
         static PLAIN: OnceLock<Dictionary> = OnceLock::new();
         let dictionary = PLAIN.get_or_init(|| build(&[]).unwrap());
@@ -238,6 +246,7 @@ mod tests {
         };
         let directory = std::env::temp_dir().join(format!("rs-words-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
+        let _scratch = Scratch(directory.clone());
         let file = directory.join(WORDS);
         configure(true, Some(&file));
         let text = "héllo wrld\nfine\nwrld Aidd's";
@@ -250,6 +259,5 @@ mod tests {
         assert!(misspelled(text).is_empty());
         configure(true, Some(&file));
         ready(text, &["héllo"]);
-        std::fs::remove_dir_all(&directory).unwrap();
     }
 }

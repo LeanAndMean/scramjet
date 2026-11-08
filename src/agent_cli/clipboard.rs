@@ -434,6 +434,14 @@ fn base64(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    struct Scratch(std::path::PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn the_clipboard_is_read_with_the_platforms_tools_in_scramjets_order() {
         let names = |variables: &[&str]| -> Vec<&str> {
@@ -538,6 +546,7 @@ mod tests {
         let directory =
             env::temp_dir().join(format!("scramjet-rs-clipboard-test-{}", process::id()));
         std::fs::create_dir_all(&directory).unwrap();
+        let _scratch = Scratch(directory.clone());
         let directory = directory.to_string_lossy().into_owned();
         let first = save(
             b"one",
@@ -574,6 +583,7 @@ mod tests {
         let directory =
             env::temp_dir().join(format!("scramjet-rs-clipboard-mac-{}", process::id()));
         fs::create_dir_all(&directory).unwrap();
+        let _scratch = Scratch(directory.clone());
         let directory = directory.to_string_lossy().into_owned();
         let run = |script: &str| saved_by("sh", &["-c", script, "sh"], &directory);
         let path = run("printf '\\211PNG' > \"$1\"; echo saved")
@@ -589,7 +599,6 @@ mod tests {
             Err("Cannot read the clipboard's image (sh failed)".to_owned())
         );
         assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
-        fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]

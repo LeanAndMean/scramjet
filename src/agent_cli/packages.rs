@@ -234,6 +234,14 @@ fn run(command: &mut Command, what: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     fn parsed(text: &str) -> (String, String, String, Option<String>) {
         let source = Source::parse(text).unwrap().unwrap();
         assert_eq!(source.written, text.trim());
@@ -334,6 +342,7 @@ mod tests {
         let scratch =
             std::env::temp_dir().join(format!("scramjet-packages-{}", std::process::id()));
         let _ = fs::remove_dir_all(&scratch);
+        let _guard = Scratch(scratch.clone());
         let root = scratch.join("git");
         let made = |path: &str| {
             let path = scratch.join(path);
@@ -373,7 +382,6 @@ mod tests {
         }
         assert!(outside.exists() && plain.exists());
         assert_eq!(delete(&root.join("host/user/missing"), &root), Ok(()));
-        fs::remove_dir_all(&scratch).unwrap();
     }
 
     #[test]
