@@ -29,6 +29,9 @@ enum Line {
     Held,
     /// A horizontal rule, already shown.
     Rule,
+    /// A line whose text goes on in the open quote, its `>` taken off; and whether the space
+    /// after the `>` may still come.
+    Quote(bool),
 }
 
 /// What the start of a line shows it is.
@@ -36,6 +39,8 @@ enum Kind {
     Text,
     Heading(usize),
     Quote,
+    /// A line of text that goes on in the open quote's paragraph, as CommonMark's lazy lines.
+    Lazy,
     Item,
     Rule,
     Held,
@@ -134,11 +139,42 @@ pub struct Markdown {
     /// The line starting may be shown after a blank line between blocks: none came before it and
     /// it is not in a list.
     separable: bool,
-    /// The quotes the line before's text is in, which a line of text goes on in.
-    quoted: usize,
+    /// The open block quote, whose lines go on in a renderer of their own.
+    quote: Option<Box<Quote>>,
+    /// The current line, or the ended one whose newline has not come, goes on in the quote.
+    quoting: bool,
+    /// The style of paragraphs and items: none, or a quote's.
+    plain: &'static str,
     /// The line before ended in a backslash, a line break if the next line goes on with its
     /// text and shown otherwise: the style it is shown in, and whether its newline came.
     broken: Option<(&'static str, bool)>,
+}
+
+/// A block quote: its content rendered as blocks of their own, as Scramjet's, each line shown
+/// after `lead`, the indent of the item it is in and a border.
+struct Quote {
+    inner: Markdown,
+    lead: String,
+    /// A line of the quote started and its lead is not shown yet.
+    owed: bool,
+}
+
+impl Quote {
+    /// The quote's rendered `text`, each line after its lead.
+    fn show(&mut self, text: &str) -> String {
+        let mut out = String::new();
+        for c in text.chars() {
+            if std::mem::take(&mut self.owed) {
+                out += &self.lead;
+                if c == '\n' {
+                    out += &format!("{RESET}{}", self.inner.base);
+                }
+            }
+            out.push(c);
+            self.owed = c == '\n';
+        }
+        out
+    }
 }
 
 /// A table's lines so far, or the one line that may start a table.
@@ -207,7 +243,9 @@ impl Markdown {
             blanks: 0,
             previous: None,
             separable: false,
-            quoted: 0,
+            quote: None,
+            quoting: false,
+            plain: "",
             broken: None,
         }
     }
@@ -234,7 +272,7 @@ impl Markdown {
         }
         for line in lines {
             out += &self.end_line();
-            out += self.newline();
+            out += &self.newline();
             self.pending.push_str(line);
             out += &self.advance(false);
         }
@@ -266,9 +304,9 @@ impl Markdown {
                 out += &self.flush_table();
                 let mut line = std::mem::take(&mut self.pending);
                 let Some(fence) = self.block.filter(|fence| !fence.indented) else {
+                    out += &self.close_quote();
                     self.blank = true;
                     self.lazy = false;
-                    self.quoted = 0;
                     return self.ended_line(out);
                 };
                 line.drain(..line.len().min(fence.indent));
@@ -310,6 +348,12 @@ impl Markdown {
                 out += &self.hold(line);
                 self.held = true;
             }
+            Line::Quote(_) => {
+                if let Some(quote) = &mut self.quote {
+                    let text = quote.inner.end_line();
+                    out += &quote.show(&text);
+                }
+            }
             Line::Text("") | Line::Rule => {}
             Line::Code if self.code.is_some() => {}
             Line::Text(_) | Line::Code => out += &format!("{RESET}{}", self.base),
@@ -329,6 +373,8 @@ impl Markdown {
     pub fn finish(&mut self) -> String {
         let empty = !self.ended && self.line == Line::Start && self.pending.is_empty();
         let mut out = self.end_line();
+        out += &self.close_quote();
+        self.quoting = false;
         if let Some((style, newline)) = self.broken.take() {
             out += &self.backslash(style);
             out += if newline { "\n" } else { "" };
@@ -349,8 +395,33 @@ impl Markdown {
         self.blank = false;
         self.blanks = 0;
         self.previous = None;
-        self.quoted = 0;
         out
+    }
+
+    /// Ends the open quote, without the blank lines it ended with, as Scramjet's.
+    fn close_quote(&mut self) -> String {
+        let Some(mut quote) = self.quote.take() else {
+            return String::new();
+        };
+        quote.inner.end_line();
+        quote.inner.blanks = 0;
+        let text = quote.inner.finish();
+        quote.show(&text)
+    }
+
+    /// Whether a line of text, or a table's line if `held`, goes on in the paragraph or table the
+    /// text before ended in, as CommonMark's lazy lines, in the innermost quote.
+    fn continues(&self, held: bool) -> bool {
+        if self.blank || self.blanks > 0 || self.block.is_some() {
+            return false;
+        }
+        match &self.quote {
+            Some(quote) => quote.inner.continues(held),
+            None if (self.table.as_ref()).is_some_and(|table| table.rows.is_some()) => held,
+            // A line that may start a table may also be a paragraph's.
+            None if self.table.is_some() => true,
+            None => self.lazy && matches!(self.previous, Some(Block::Paragraph | Block::List)),
+        }
     }
 
     /// The style in effect, to set again after other output reset it.
@@ -359,6 +430,10 @@ impl Markdown {
             return String::new();
         }
         let line = match self.line {
+            Line::Quote(_) => match &self.quote {
+                Some(quote) => return quote.inner.reopen(),
+                None => "",
+            },
             Line::Text(style) => style,
             Line::Code if self.code.is_none() => CODE_BLOCK.get(),
             _ => "",
@@ -391,23 +466,29 @@ impl Markdown {
     }
 
     /// The newline after an ended line, which waits with a table's line or a blank line.
-    fn newline(&mut self) -> &'static str {
+    fn newline(&mut self) -> String {
         self.ended = false;
+        if std::mem::take(&mut self.quoting)
+            && let Some(quote) = &mut self.quote
+        {
+            let text = quote.inner.push("\n");
+            return quote.show(&text);
+        }
         if std::mem::take(&mut self.blank) {
             self.blanks += 1;
-            return "";
+            return String::new();
         }
         if let Some((_, newline)) = &mut self.broken {
             *newline = true;
-            return "";
+            return String::new();
         }
         if !std::mem::take(&mut self.held) {
-            return "\n";
+            return "\n".into();
         }
         if let Some(table) = &mut self.table {
             table.newline = true;
         }
-        ""
+        String::new()
     }
 
     fn advance(&mut self, ended: bool) -> String {
@@ -416,17 +497,18 @@ impl Markdown {
             let Some(kind) = self.decide(ended) else {
                 return out;
             };
+            let lazy = |held| (self.quote.as_ref()).is_some_and(|q| q.inner.continues(held));
+            let kind = match kind {
+                Kind::Text if lazy(false) => Kind::Lazy,
+                Kind::Held if lazy(true) => Kind::Lazy,
+                kind => kind,
+            };
+            if !matches!(kind, Kind::Quote | Kind::Lazy) {
+                out += &self.close_quote();
+            }
             // As CommonMark's hard line break: a backslash before a line its text goes on in.
             if let Some((style, newline)) = self.broken.take() {
-                let goes_on = self.blanks == 0
-                    && match kind {
-                        Kind::Text => true,
-                        Kind::Quote => {
-                            let rest = self.pending.trim_start_matches(['>', ' ']);
-                            self.previous == Some(Block::Quote) && !rest.is_empty()
-                        }
-                        _ => false,
-                    };
+                let goes_on = self.blanks == 0 && matches!(kind, Kind::Text);
                 if !goes_on {
                     out += &self.backslash(style);
                 }
@@ -471,6 +553,19 @@ impl Markdown {
                 Some(_) => {}
             },
             Line::Text(style) => out += &self.inline(ended, style),
+            Line::Quote(space) => {
+                if space && !self.pending.is_empty() {
+                    if self.pending.starts_with(' ') {
+                        self.pending.remove(0);
+                    }
+                    self.line = Line::Quote(false);
+                }
+                let text = std::mem::take(&mut self.pending);
+                if let Some(quote) = self.quote.as_mut().filter(|_| !text.is_empty()) {
+                    let shown = quote.inner.push(&text);
+                    out += &quote.show(&shown);
+                }
+            }
         }
         out
     }
@@ -507,8 +602,7 @@ impl Markdown {
                 return Some(Kind::Held);
             }
             if text.starts_with('>') {
-                let markers = text.chars().all(|c| c == '>' || c == ' ');
-                return (ended || !markers).then_some(Kind::Quote);
+                return Some(Kind::Quote);
             }
             let first = text.chars().next().filter(|c| matches!(c, '-' | '*' | '_'));
             if let Some(c) = first.filter(|&c| text.chars().all(|m| m == c || m == ' ')) {
@@ -573,10 +667,9 @@ impl Markdown {
             return None;
         }
         Some(match kind {
-            Kind::Text if self.quoted > 0 => Block::Quote,
             Kind::Text => Block::Paragraph,
             Kind::Heading(_) => Block::Heading,
-            Kind::Quote => Block::Quote,
+            Kind::Quote | Kind::Lazy => Block::Quote,
             Kind::Item => Block::List,
             Kind::Rule => Block::Rule,
             Kind::Fence | Kind::Code | Kind::Indented => Block::Code,
@@ -600,7 +693,10 @@ impl Markdown {
         if self.block.is_some() {
             return false;
         }
-        let lazy = matches!(kind, Kind::Text | Kind::Item | Kind::Quote | Kind::Held);
+        let lazy = matches!(
+            kind,
+            Kind::Text | Kind::Lazy | Kind::Item | Kind::Quote | Kind::Held
+        );
         let lazy = std::mem::replace(&mut self.lazy, lazy);
         let within = self.within(indent);
         match kind {
@@ -633,7 +729,7 @@ impl Markdown {
                 }
                 return next;
             }
-            Kind::Text | Kind::Quote | Kind::Held if lazy => {}
+            Kind::Text | Kind::Lazy | Kind::Quote | Kind::Held if lazy => {}
             _ => self.lists.truncate(within),
         }
         if matches!(kind, Kind::Indented) {
@@ -651,20 +747,13 @@ impl Markdown {
         let text = self.pending.trim_start_matches(' ');
         let indent = self.pending.len() - text.len();
         let base = self.base;
-        let quoted = std::mem::take(&mut self.quoted);
-        let border = format!("{RESET}{base}{QUOTE_BORDER}│{RESET}{base}{QUOTE} ");
         match kind {
-            // As CommonMark's lazy lines, text goes on in the quotes of the text before it.
-            Kind::Text if quoted > 0 => {
-                if !self.lists.is_empty() {
-                    *out += &self.pending[..indent];
-                }
-                *out += &border.repeat(quoted);
+            Kind::Lazy => {
                 self.pending = text.to_owned();
-                self.quoted = quoted;
-                Line::Text(QUOTE.get())
+                self.quoting = true;
+                Line::Quote(false)
             }
-            Kind::Text => Line::Text(""),
+            Kind::Text => Line::Text(self.plain),
             Kind::Code => {
                 if let Some(fence) = self.block {
                     *out += &self.code_indent(fence);
@@ -706,26 +795,33 @@ impl Markdown {
                 self.pending = text[level..].trim_start().to_owned();
                 Line::Text(style)
             }
-            // As Scramjet's, a border for each level, the text in the quote's style.
+            // As Scramjet's, a border before each line, the text in the quote's style.
             Kind::Quote => {
-                if !self.lists.is_empty() {
-                    *out += &self.pending[..indent];
+                if self.quote.is_none() {
+                    let lead = match self.lists.is_empty() {
+                        true => "",
+                        false => &self.pending[..indent],
+                    };
+                    let width = match self.width {
+                        0 => 0,
+                        width => width.saturating_sub(lead.len() + 2).max(1),
+                    };
+                    let inner = Markdown {
+                        plain: QUOTE.get(),
+                        ..Markdown::new(true, base, width).marking(self.marked)
+                    };
+                    let border = format!("{RESET}{base}{QUOTE_BORDER}│{RESET}{base}{QUOTE} ");
+                    self.quote = Some(Box::new(Quote {
+                        inner,
+                        lead: lead.to_owned() + &border,
+                        owed: true,
+                    }));
                 }
-                let (mut rest, mut depth) = (text, 0);
-                while let Some(after) = rest.strip_prefix('>') {
-                    *out += &border;
-                    depth += 1;
-                    rest = after.strip_prefix(' ').unwrap_or(after);
-                    let next = rest.trim_start_matches(' ');
-                    if next.starts_with('>') {
-                        rest = next;
-                    }
-                }
-                if !rest.trim().is_empty() {
-                    self.quoted = depth;
-                }
-                self.pending = rest.to_owned();
-                Line::Text(QUOTE.get())
+                let rest = &text[1..];
+                let space = rest.is_empty();
+                self.pending = rest.strip_prefix(' ').unwrap_or(rest).to_owned();
+                self.quoting = true;
+                Line::Quote(space)
             }
             // As Scramjet's, bullets show as `-`, numbers end with `.`, and a task's box is part
             // of its marker.
@@ -743,9 +839,9 @@ impl Markdown {
                 if let Some(list) = self.lists.last_mut() {
                     list.shown = lead.len() + bullet.len() + 1;
                 }
-                *out += &format!("{lead}{LIST_BULLET}{bullet}{RESET}{base} ");
+                *out += &format!("{lead}{LIST_BULLET}{bullet}{RESET}{base}{} ", self.plain);
                 self.pending = content.to_owned();
-                Line::Text("")
+                Line::Text(self.plain)
             }
             Kind::Rule => {
                 let lead = if self.lists.is_empty() { 0 } else { indent };
@@ -1625,8 +1721,8 @@ mod tests {
         assert_eq!(
             rendered_alike(20, text),
             format!(
-                "{border}a \x1b[3mb\x1b[0m\x1b[2;3m\x1b[0m\n{border}{border}deep\x1b[0m\n\
-{border}\x1b[0m\n\n{rule}\n\n\x1b[36m-\x1b[0m one\n    \x1b[36m-\x1b[0m two\n\
+                "{border}a \x1b[3mb\x1b[0m\x1b[2;3m\x1b[0m\n{border}\x1b[0m\n{border}{border}deep\x1b[0m\n\
+\n{rule}\n\n\x1b[36m-\x1b[0m one\n    \x1b[36m-\x1b[0m two\n\
 \x1b[36m12.\x1b[0m three\n{rule}\n\n\x1b[36m- [x]\x1b[0m done"
             )
         );
@@ -1687,13 +1783,53 @@ mod tests {
                 "T\n\ntext\n- a\nU\n\n```\n  x\n```\n\n{rule}\n\n│ q\n│ lazy\n\nV\n\n┌───┐\n│ h │\n├───┤\n└───┘\n\n- b\n  ```\n    y\n  ```\nz\n| not |\nmore"
             )
         );
-        // A line of text goes on in the quotes of the text before it, in their style.
+        // A line of text goes on in the quotes of the text before it, in their style; a quote's
+        // last empty lines are not shown.
         let border = "\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ";
         assert_eq!(
             rendered_alike(80, "> > r\n lazy\n>\nnew"),
-            format!(
-                "{border}{border}r\x1b[0m\n{border}{border}lazy\x1b[0m\n{border}\x1b[0m\n\nnew"
-            )
+            format!("{border}{border}r\x1b[0m\n{border}{border}lazy\x1b[0m\n\nnew")
+        );
+    }
+
+    #[test]
+    fn a_quote_holds_blocks_of_its_own_as_in_scramjet() {
+        // Each checked against Scramjet's renderer: headings, lists, nested quotes, rules, code
+        // and tables inside, a blank line between blocks, lazy lines going on in the innermost
+        // paragraph or item.
+        let cases = [
+            ("> # Head\n> text", "│ Head\n│ \n│ text"),
+            (
+                "> - a\n> - b\n>   more\n> c",
+                "│ - a\n│ - b\n│   more\n│   c",
+            ),
+            ("> > n\n> back\n>\n> out", "│ │ n\n│ │ back\n│ \n│ out"),
+            ("> ---\n> x", &format!("│ {}\n│ \n│ x", "─".repeat(28))),
+            (
+                "> ```\n> code\n> ```\n> after",
+                "│ ```\n│   code\n│ ```\n│ \n│ after",
+            ),
+            ("p\n> 1. a\nlazy\n\n> b", "p\n\n│ 1. a\n│    lazy\n\n│ b"),
+            ("- i\n  > q\n  > - x\n- next", "- i\n  │ q\n  │ - x\n- next"),
+            (
+                "> | a |\n> |---|\n> | 1 |\n>\n\nz",
+                "│ ┌───┐\n│ │ a │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n\nz",
+            ),
+            ("> ```\n> open", "│ ```\n│   open\n│ ```"),
+            (
+                "> a\n| t |\n|-|\n|1|",
+                "│ a\n│ \n│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘",
+            ),
+            (">     code\n> x", "│ ```\n│   code\n│ ```\n│ \n│ x"),
+        ];
+        for (text, shown) in cases {
+            assert_eq!(plain(&rendered_alike(30, text)), shown, "{text:?}");
+        }
+        // Items and the text after a span keep the quote's style.
+        let (border, quote) = ("\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ", "\x1b[2;3m");
+        assert_eq!(
+            render(&["> - **a** b"]),
+            format!("{border}\x1b[36m-\x1b[0m{quote} \x1b[1ma\x1b[0m{quote} b\x1b[0m")
         );
     }
 

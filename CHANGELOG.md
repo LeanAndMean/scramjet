@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.5 — Blocks inside quotes
+
+### Fixed
+
+- A quote in a reply shows its headings, lists, nested quotes, rules, code blocks and tables as such, each line behind the quote's border, as Scramjet shows them; they showed as the quote's plain text. A line without `>` goes on in the paragraph or item it continues, nested quotes included, and a quote's last empty `>` lines are no longer shown.
+
 ## 0.95.4 — Table rows without bars
 
 ### Fixed
