@@ -944,4 +944,61 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert!(err.ends_with("scramjet-rs: git clone failed\n"), "{err}");
     assert_eq!(std::fs::read_dir(&clones).unwrap().count(), 0);
     assert_eq!(packages(), serde_json::json!([]));
+
+    // A local directory holding sets installs each by reference, as its clone would.
+    let command_sets = || {
+        let text = std::fs::read_to_string(&settings).unwrap();
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["commandSets"].clone()
+    };
+    let (ok, out, err) = run(&["install", work.to_str().unwrap()]);
+    assert!(ok, "{out}{err}");
+    assert_eq!(
+        out,
+        "Installed from ~/work:\n  mach12 (packages/kit/mach12): 2 commands, 0 agents\n  \
+providers (providers): 0 commands, 0 agents, and providers (models.json)\n"
+    );
+    assert_eq!(
+        command_sets(),
+        serde_json::json!(["~/work/packages/kit/mach12", "~/work/providers"])
+    );
+    let (ok, _, err) = run(&["install", work.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(
+        err.ends_with(&format!(
+            "the command sets in {} are already installed: mach12, providers\n",
+            work.display()
+        )),
+        "{err}"
+    );
+    // A set that appears later is added beside those installed before.
+    file("tools/commands/tools:x.md", "X\n");
+    let (ok, out, err) = run(&["install", work.to_str().unwrap()]);
+    assert!(ok, "{out}{err}");
+    assert_eq!(
+        out,
+        "Installed from ~/work:\n  tools (tools): 1 command, 0 agents\n"
+    );
+    let (ok, out, _) = run(&["list"]);
+    assert!(ok);
+    assert!(out.contains("~/work/packages/kit/mach12"), "{out}");
+    let (ok, out, err) = run(&["remove", work.to_str().unwrap()]);
+    assert!(ok, "{out}{err}");
+    assert_eq!(
+        out,
+        "Removed mach12, installed from ~/work/packages/kit/mach12\nRemoved providers, \
+installed from ~/work/providers\nRemoved tools, installed from ~/work/tools\n"
+    );
+    assert_eq!(command_sets(), serde_json::json!([]));
+    let notes = scratch.0.join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    let (ok, _, err) = run(&["install", notes.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(
+        err.ends_with(&format!(
+            "scramjet-rs: {} is not a command set: it has no commands or agents directory, nor \
+a models.json, and holds no set: none in its top directories, nor one with a set.yaml deeper\n",
+            notes.display()
+        )),
+        "{err}"
+    );
 }

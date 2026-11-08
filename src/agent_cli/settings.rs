@@ -694,11 +694,31 @@ impl Settings {
         scramjet_rs::os::join(directory.unwrap_or(Path::new("/")), entry)
     }
 
-    /// Adds the command set in `directory` to `commandSets`, by its absolute path, unless a set
-    /// of its name is there. Returns it.
-    pub(super) fn install_set(&mut self, directory: &Path) -> Result<Set, String> {
+    /// Adds to `commandSets` the command set in `directory`, else each set it holds as a
+    /// package's clone holds them (`sets_in`) but those already installed from there; none when a
+    /// set of one's name is installed from elsewhere. Each is written by its absolute path, with
+    /// `~` for the home directory so that the settings serve another machine's home too. Returns
+    /// those added.
+    pub(super) fn install_sets(&mut self, directory: &Path) -> Result<Vec<Set>, String> {
         let directory = std::path::absolute(directory).map_err(|e| e.to_string())?;
-        let set = Set::at(&directory, Origin::Installed)?;
+        let mut sets = match Set::at(&directory, Origin::Installed) {
+            Ok(set) => vec![set],
+            Err(why) => {
+                let held = sets_in(&directory);
+                if held.is_empty() {
+                    return Err(match directory.is_dir() {
+                        true => format!(
+                            "{why}, and holds no set: none in its top directories, nor one with a \
+                             set.yaml deeper"
+                        ),
+                        false => why,
+                    });
+                }
+                (held.iter())
+                    .map(|set| Set::at(set, Origin::Installed))
+                    .collect::<Result<_, _>>()?
+            }
+        };
         let path = self
             .path
             .clone()
@@ -710,24 +730,60 @@ impl Settings {
                 shown(&path)
             )
         })?;
-        let known = entries.iter().map(|entry| self.resolve(entry));
-        for known in known.chain(self.command_sets.iter().cloned()) {
-            if known.file_name() == directory.file_name() {
-                return Err(match same_directory(&known, &directory) {
-                    true => format!("{} is already installed", set.name),
-                    false => format!(
+        let known: Vec<PathBuf> = (entries.iter())
+            .map(|entry| self.resolve(entry))
+            .chain(self.command_sets.iter().cloned())
+            .collect();
+        let mut installed = Vec::new();
+        for set in &sets {
+            let Some(known) =
+                (known.iter()).find(|known| known.file_name() == set.directory.file_name())
+            else {
+                continue;
+            };
+            match same_directory(known, &set.directory) {
+                true => installed.push(set.directory.clone()),
+                false => {
+                    return Err(format!(
                         "a command set named {} is installed from {}; remove it first",
                         set.name,
                         known.display()
-                    ),
-                });
+                    ));
+                }
             }
         }
-        entries.push(directory.display().to_string());
+        if installed.len() == sets.len() {
+            return Err(match sets.as_slice() {
+                [set] => format!("{} is already installed", set.name),
+                _ => format!(
+                    "the command sets in {} are already installed: {}",
+                    directory.display(),
+                    (sets.iter().map(|set| set.name.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            });
+        }
+        sets.retain(|set| !installed.contains(&set.directory));
+        for (number, set) in sets.iter().enumerate() {
+            if let Some(other) = sets[..number].iter().find(|other| other.name == set.name) {
+                return Err(format!(
+                    "{} holds two command sets named {}: {} and {}",
+                    directory.display(),
+                    set.name,
+                    other.directory.display(),
+                    set.directory.display()
+                ));
+            }
+        }
+        entries.extend(
+            sets.iter()
+                .map(|set| scramjet_rs::os::tilde(&set.directory)),
+        );
         object.insert("commandSets".into(), json!(entries));
         write_object(&path, object)?;
-        self.command_sets.push(directory);
-        Ok(set)
+        (self.command_sets).extend(sets.iter().map(|set| set.directory.clone()));
+        Ok(sets)
     }
 
     /// Adds to `command_sets` the sets in each package's clone.
@@ -834,9 +890,9 @@ impl Settings {
         Ok(directory)
     }
 
-    /// Removes from `commandSets` the set named `reference`, or installed from that directory.
-    /// Returns the directory it was installed from.
-    pub(super) fn remove_set(&mut self, reference: &str) -> Result<PathBuf, String> {
+    /// Removes from `commandSets` the set named `reference`, or installed from that directory,
+    /// else those installed from inside it. Returns the directories they were installed from.
+    pub(super) fn remove_set(&mut self, reference: &str) -> Result<Vec<PathBuf>, String> {
         let path = self
             .path
             .clone()
@@ -856,15 +912,33 @@ impl Settings {
                     .as_deref()
                     .is_some_and(|given| same_directory(&known, given))
         });
-        let Some(position) = position else {
+        let removed: Vec<String> = match position {
+            Some(position) => vec![entries.remove(position)],
+            None => {
+                let holder = given
+                    .as_deref()
+                    .and_then(|given| std::fs::canonicalize(given).ok());
+                let held = |entry: &String| {
+                    let known = std::fs::canonicalize(self.resolve(entry));
+                    holder
+                        .as_deref()
+                        .zip(known.ok())
+                        .is_some_and(|(holder, known)| known.starts_with(holder) && known != holder)
+                };
+                let (held, kept) = entries.into_iter().partition(held);
+                entries = kept;
+                held
+            }
+        };
+        if removed.is_empty() {
             return Err(format!(
                 "no installed command set is named {reference} or installed from there"
             ));
-        };
-        let removed = self.resolve(&entries.remove(position));
+        }
+        let removed: Vec<PathBuf> = removed.iter().map(|entry| self.resolve(entry)).collect();
         object.insert("commandSets".into(), json!(entries));
         write_object(&path, object)?;
-        self.command_sets.retain(|directory| directory != &removed);
+        (self.command_sets).retain(|directory| !removed.contains(directory));
         Ok(removed)
     }
 
@@ -2086,7 +2160,9 @@ mod tests {
         let mut settings = Settings::read(Some(path.clone()));
         assert_eq!(settings.command_sets, [scratch.0.join("config/../rs")]);
 
-        let installed = settings.install_set(&mach12).unwrap();
+        let [installed] = &settings.install_sets(&mach12).unwrap()[..] else {
+            panic!("one set")
+        };
         assert_eq!(
             (installed.name.as_str(), &installed.directory),
             ("mach12", &mach12)
@@ -2103,19 +2179,20 @@ mod tests {
         );
         assert_eq!(
             settings
-                .install_set(&scratch.0.join("repo/./mach12"))
+                .install_sets(&scratch.0.join("repo/./mach12"))
                 .unwrap_err(),
             "mach12 is already installed"
         );
         assert_eq!(
-            settings.install_set(&other).unwrap_err(),
+            settings.install_sets(&other).unwrap_err(),
             format!("a command set named mach12 is installed from {absolute}; remove it first")
         );
         let plain = scratch.0.join("plain");
         assert_eq!(
-            settings.install_set(&plain).unwrap_err(),
+            settings.install_sets(&plain).unwrap_err(),
             format!(
-                "{} is not a command set: it has no commands or agents directory, nor a models.json",
+                "{} is not a command set: it has no commands or agents directory, nor a models.json, \
+                 and holds no set: none in its top directories, nor one with a set.yaml deeper",
                 plain.display()
             )
         );
@@ -2123,7 +2200,7 @@ mod tests {
         let package = scratch.0.join("package");
         std::fs::create_dir_all(&package).unwrap();
         std::fs::write(package.join("models.json"), "{}").unwrap();
-        assert_eq!(settings.install_set(&package).unwrap().name, "package");
+        assert_eq!(settings.install_sets(&package).unwrap()[0].name, "package");
         assert_eq!(
             settings.models_files().last(),
             Some(&package.join("models.json"))
@@ -2132,7 +2209,7 @@ mod tests {
 
         assert_eq!(
             settings.remove_set("rs").unwrap(),
-            scratch.0.join("config/../rs")
+            [scratch.0.join("config/../rs")]
         );
         assert_eq!(settings.command_sets, std::slice::from_ref(&mach12));
         let gone = rs.display().to_string();
@@ -2141,7 +2218,10 @@ mod tests {
             format!("no installed command set is named {gone} or installed from there")
         );
         assert!(settings.remove_set(&other.display().to_string()).is_err());
-        assert_eq!(settings.remove_set(&absolute).unwrap(), mach12);
+        assert_eq!(
+            settings.remove_set(&absolute).unwrap(),
+            std::slice::from_ref(&mach12)
+        );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved, json!({"theme": "x", "commandSets": []}));
 
@@ -2154,7 +2234,7 @@ mod tests {
                 shown(&path)
             )]
         );
-        assert!(wrong.install_set(&rs).is_err());
+        assert!(wrong.install_sets(&rs).is_err());
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             r#"{"commandSets": "../rs"}"#

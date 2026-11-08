@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.0 — Installing the sets a directory holds
+
+### Changed
+
+- `scramjet-rs install DIR` of a directory that is not a command set installs the sets it holds, found as in a git package's clone (`scramjet-rs install ~/repos/scramjet` installs Mach 12 and `scramjet`); run again, it adds sets that appeared since. `scramjet-rs remove DIR` removes the sets installed from inside it.
+- Installed sets in the home directory are written in the settings as `~/…`, so that the settings work on another machine with another home directory.
+
 ## 0.94.0 — Selecting the conversation without the mouse
 
 ### Changed

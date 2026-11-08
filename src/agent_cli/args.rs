@@ -193,7 +193,8 @@ As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)
 and the project's .scramjet. `scramjet-rs install DIR` installs the set in DIR by reference,
-recorded in the settings' commandSets; `remove NAME` takes it out and `list` shows the sets
+or the sets DIR holds as a package's clone holds them, recorded in the settings' commandSets
+(~ for the home directory); `remove NAME|DIR` takes them out and `list` shows the sets
 loaded in the current directory, what each brings and what was skipped. `install REPO` clones
 a package from git (git:github.com/USER/REPO[@REF], git:git@github.com:USER/REPO, or an
 https://, ssh://, git:// or file:// URL) into $XDG_DATA_HOME/scramjet-rs/git, recorded in the

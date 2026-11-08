@@ -30,17 +30,30 @@ pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), Stri
 
 fn install(directory: &Path) -> Result<(), String> {
     let mut settings = Settings::load();
-    let set = settings.install_set(directory)?;
+    let sets = settings.install_sets(directory)?;
     let found = here(&settings)?;
-    println!(
-        "Installed {} from {}: {}",
-        set.name,
-        shown(&set.directory),
-        contents(&found, &set)
-    );
-    let directory = set.directory.display().to_string();
+    let given = std::path::absolute(directory).map_err(|e| e.to_string())?;
+    match sets.as_slice() {
+        [set] if set.directory == given => println!(
+            "Installed {} from {}: {}",
+            set.name,
+            shown(&set.directory),
+            contents(&found, set)
+        ),
+        sets => {
+            println!("Installed from {}:", shown(&given));
+            for set in sets {
+                let path = set.directory.strip_prefix(&given).unwrap_or(&set.directory);
+                let (name, path) = (&set.name, path.display());
+                println!("  {name} ({path}): {}", contents(&found, set));
+            }
+        }
+    }
+    let directories: Vec<String> = (sets.iter())
+        .map(|set| set.directory.display().to_string())
+        .collect();
     let concerned: Vec<&Problem> = (found.warnings.iter())
-        .filter(|warning| warning.text.contains(&directory))
+        .filter(|warning| directories.iter().any(|d| warning.text.contains(d)))
         .collect();
     print_warnings(&concerned);
     Ok(())
@@ -217,9 +230,11 @@ fn remove(reference: &str) -> Result<(), String> {
         return Ok(());
     }
     match settings.remove_set(reference) {
-        Ok(directory) => {
-            let name = directory.file_name().unwrap_or_default().to_string_lossy();
-            println!("Removed {name}, installed from {}", shown(&directory));
+        Ok(directories) => {
+            for directory in directories {
+                let name = directory.file_name().unwrap_or_default().to_string_lossy();
+                println!("Removed {name}, installed from {}", shown(&directory));
+            }
             Ok(())
         }
         Err(error) => match settings.package(reference) {
