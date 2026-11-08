@@ -326,6 +326,9 @@ pub(super) struct Settings {
     pub(super) command_sets: Vec<PathBuf>,
     /// `packages`: the git repositories installed, as Scramjet's `packages` lists them.
     pub(super) packages: Vec<Source>,
+    /// `packages`' directories, as Pi takes a local path: each brings its sets and its `skills`
+    /// and `themes` directories, as a clone does.
+    pub(super) local_packages: Vec<PathBuf>,
     /// Where packages are cloned (`packages::clones`); `None`: nowhere.
     clones: Option<PathBuf>,
     /// Whether reading the file clones the packages missing, as a session's start does.
@@ -433,6 +436,7 @@ impl Settings {
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
             packages: Vec::new(),
+            local_packages: Vec::new(),
             clones: None,
             cloning: false,
             skills: Vec::new(),
@@ -625,17 +629,15 @@ impl Settings {
                 for entry in entries {
                     match Source::parse(&entry) {
                         Some(Ok(source)) => self.packages.push(source),
-                        Some(Err(why)) => (self.warnings)
-                            .push(format!("{path}: packages: {why}; ignored")),
-                        None => self.warnings.push(format!(
-                            "{path}: packages: {entry} is not a git repository (a directory goes in commandSets); ignored"
-                        )),
+                        Some(Err(why)) => {
+                            (self.warnings).push(format!("{path}: packages: {why}; ignored"))
+                        }
+                        None => self.local_packages.push(self.resolve(&entry)),
                     }
                 }
-                self.add_package_sets();
             }
             Err(()) => self.warnings.push(format!(
-                "{path}: packages must be a list of git repositories; ignored"
+                "{path}: packages must be a list of git repositories and directories; ignored"
             )),
         }
         match paths(object, "skills") {
@@ -654,6 +656,7 @@ impl Settings {
                 "{path}: themes must be a list of files and directories; ignored"
             )),
         }
+        self.add_packages();
         match paths(object, "enabledModels") {
             Ok(patterns) => self.enabled_models = patterns,
             Err(()) => self.warnings.push(format!(
@@ -694,77 +697,35 @@ impl Settings {
         scramjet_rs::os::join(directory.unwrap_or(Path::new("/")), entry)
     }
 
-    /// Adds to `commandSets` the command set in `directory`, else each set it holds as a
-    /// package's clone holds them (`sets_in`) but those already installed from there; none when a
-    /// set of one's name is installed from elsewhere. Each is written by its absolute path, with
-    /// `~` for the home directory so that the settings serve another machine's home too. Returns
-    /// those added.
-    pub(super) fn install_sets(&mut self, directory: &Path) -> Result<Vec<Set>, String> {
+    /// Installs `directory` by reference: a command set goes in `commandSets`; another directory
+    /// holding sets (as a package's clone holds them, `sets_in`), a `skills` or a `themes`
+    /// directory goes in `packages`, as Pi installs a local path, and its sets installed in
+    /// `commandSets` before move into it. Refused when a set of one's name is installed from
+    /// elsewhere. Each is written by its absolute path, with `~` for the home directory so that
+    /// the settings serve another machine's home too.
+    pub(super) fn install_directory(&mut self, directory: &Path) -> Result<Installed, String> {
         let directory = std::path::absolute(directory).map_err(|e| e.to_string())?;
-        let mut sets = match Set::at(&directory, Origin::Installed) {
-            Ok(set) => vec![set],
-            Err(why) => {
-                let held = sets_in(&directory);
-                if held.is_empty() {
-                    return Err(match directory.is_dir() {
-                        true => format!(
-                            "{why}, and holds no set: none in its top directories, nor one with a \
-                             set.yaml deeper"
-                        ),
-                        false => why,
-                    });
-                }
-                (held.iter())
-                    .map(|set| Set::at(set, Origin::Installed))
-                    .collect::<Result<_, _>>()?
-            }
+        let why = match Set::at(&directory, Origin::Installed) {
+            Ok(set) => return self.install_set(set).map(Installed::Set),
+            Err(why) => why,
         };
-        let path = self
-            .path
-            .clone()
-            .ok_or("no settings file: HOME is not set")?;
-        let mut object = read_object(&path)?;
-        let mut entries = command_sets(&object).map_err(|()| {
-            format!(
-                "{}: commandSets must be a list of directories",
-                shown(&path)
-            )
-        })?;
-        let known: Vec<PathBuf> = (entries.iter())
-            .map(|entry| self.resolve(entry))
-            .chain(self.command_sets.iter().cloned())
-            .collect();
-        let mut installed = Vec::new();
-        for set in &sets {
-            let Some(known) =
-                (known.iter()).find(|known| known.file_name() == set.directory.file_name())
-            else {
-                continue;
-            };
-            match same_directory(known, &set.directory) {
-                true => installed.push(set.directory.clone()),
-                false => {
-                    return Err(format!(
-                        "a command set named {} is installed from {}; remove it first",
-                        set.name,
-                        known.display()
-                    ));
-                }
-            }
-        }
-        if installed.len() == sets.len() {
-            return Err(match sets.as_slice() {
-                [set] => format!("{} is already installed", set.name),
-                _ => format!(
-                    "the command sets in {} are already installed: {}",
-                    directory.display(),
-                    (sets.iter().map(|set| set.name.as_str()))
-                        .collect::<Vec<_>>()
-                        .join(", ")
+        let held = sets_in(&directory);
+        let (skills, themes) = extras(&directory);
+        if held.is_empty() && skills.is_none() && themes.is_none() {
+            return Err(match directory.is_dir() {
+                true => format!(
+                    "{why}, and holds no set (none in its top directories, nor one with a \
+                     set.yaml deeper) and no skills or themes directory"
                 ),
+                false => why,
             });
         }
-        sets.retain(|set| !installed.contains(&set.directory));
+        if (self.local_packages.iter()).any(|known| same_directory(known, &directory)) {
+            return Err(format!("{} is already installed", shown(&directory)));
+        }
+        let sets: Vec<Set> = (held.iter())
+            .map(|set| Set::at(set, Origin::Installed))
+            .collect::<Result<_, _>>()?;
         for (number, set) in sets.iter().enumerate() {
             if let Some(other) = sets[..number].iter().find(|other| other.name == set.name) {
                 return Err(format!(
@@ -776,18 +737,104 @@ impl Settings {
                 ));
             }
         }
-        entries.extend(
-            sets.iter()
-                .map(|set| scramjet_rs::os::tilde(&set.directory)),
-        );
-        object.insert("commandSets".into(), json!(entries));
+        let path = self
+            .path
+            .clone()
+            .ok_or("no settings file: HOME is not set")?;
+        let mut object = read_object(&path)?;
+        let entries = command_sets(&object).map_err(|()| {
+            format!(
+                "{}: commandSets must be a list of directories",
+                shown(&path)
+            )
+        })?;
+        let mut packages = paths(&object, "packages").map_err(|()| {
+            format!(
+                "{}: packages must be a list of git repositories and directories",
+                shown(&path)
+            )
+        })?;
+        let brought = |known: &Path| (held.iter()).any(|set| same_directory(known, set));
+        let (moved, kept): (Vec<String>, Vec<String>) =
+            (entries.into_iter()).partition(|entry| brought(&self.resolve(entry)));
+        let moved: Vec<PathBuf> = moved.iter().map(|entry| self.resolve(entry)).collect();
+        let others = (self.command_sets.iter()).filter(|known| !moved.contains(known));
+        for set in &sets {
+            let name = set.directory.file_name();
+            if let Some(known) = others.clone().find(|known| known.file_name() == name) {
+                return Err(format!(
+                    "a command set named {} is installed from {}; remove it first",
+                    set.name,
+                    known.display()
+                ));
+            }
+        }
+        if !moved.is_empty() {
+            object.insert("commandSets".into(), json!(kept));
+        }
+        packages.push(scramjet_rs::os::tilde(&directory));
+        object.insert("packages".into(), json!(packages));
         write_object(&path, object)?;
+        self.command_sets.retain(|known| !moved.contains(known));
         (self.command_sets).extend(sets.iter().map(|set| set.directory.clone()));
-        Ok(sets)
+        self.skills.extend(skills.clone());
+        self.themes.extend(themes.clone());
+        self.local_packages.push(directory.clone());
+        let moved = (sets.iter())
+            .filter(|set| {
+                moved
+                    .iter()
+                    .any(|known| same_directory(known, &set.directory))
+            })
+            .map(|set| set.name.clone())
+            .collect();
+        Ok(Installed::Package {
+            directory,
+            sets,
+            moved,
+            skills,
+            themes,
+        })
     }
 
-    /// Adds to `command_sets` the sets in each package's clone.
-    fn add_package_sets(&mut self) {
+    /// Adds `set` to `commandSets`.
+    fn install_set(&mut self, set: Set) -> Result<Set, String> {
+        let path = self
+            .path
+            .clone()
+            .ok_or("no settings file: HOME is not set")?;
+        let mut object = read_object(&path)?;
+        let mut entries = command_sets(&object).map_err(|()| {
+            format!(
+                "{}: commandSets must be a list of directories",
+                shown(&path)
+            )
+        })?;
+        let known = (entries.iter())
+            .map(|entry| self.resolve(entry))
+            .chain(self.command_sets.iter().cloned())
+            .find(|known| known.file_name() == set.directory.file_name());
+        if let Some(known) = known {
+            return Err(match same_directory(&known, &set.directory) {
+                true => format!("{} is already installed", set.name),
+                false => format!(
+                    "a command set named {} is installed from {}; remove it first",
+                    set.name,
+                    known.display()
+                ),
+            });
+        }
+        entries.push(scramjet_rs::os::tilde(&set.directory));
+        object.insert("commandSets".into(), json!(entries));
+        write_object(&path, object)?;
+        self.command_sets.push(set.directory.clone());
+        Ok(set)
+    }
+
+    /// Adds to `command_sets` the sets in each package's clone and directory, and to `skills`
+    /// and `themes` its `skills` and `themes` directories.
+    fn add_packages(&mut self) {
+        let mut loaded = Vec::new();
         for source in &self.packages {
             let Some(root) = &self.clones else {
                 (self.warnings).push(format!(
@@ -802,7 +849,6 @@ impl Settings {
                 eprintln!("Cloning {} into {}…", source.written, shown(&directory));
                 failed = packages::clone(source, &directory, root).err();
             }
-            let sets = sets_in(&directory);
             match directory.is_dir() {
                 false => self.warnings.push(format!(
                     "{}: not cloned into {}{}; `scramjet-rs update` clones it",
@@ -810,14 +856,78 @@ impl Settings {
                     shown(&directory),
                     failed.map(|why| format!(" ({why})")).unwrap_or_default()
                 )),
-                true if sets.is_empty() => self.warnings.push(format!(
-                    "{}: {} holds no command set",
-                    source.written,
-                    shown(&directory)
-                )),
-                true => self.command_sets.extend(sets),
+                true => loaded.push((source.written.clone(), directory)),
             }
         }
+        for directory in &self.local_packages {
+            match directory.is_dir() {
+                false => self.warnings.push(format!(
+                    "{0}: not a directory; `scramjet-rs remove {0}` takes it out of packages",
+                    shown(directory)
+                )),
+                true => loaded.push((shown(directory), directory.clone())),
+            }
+        }
+        for (written, directory) in loaded {
+            let sets = sets_in(&directory);
+            let (skills, themes) = extras(&directory);
+            if sets.is_empty() && skills.is_none() && themes.is_none() {
+                self.warnings.push(format!(
+                    "{written}: {} holds no command set, skills or themes",
+                    shown(&directory)
+                ));
+            }
+            self.command_sets.extend(sets);
+            self.skills.extend(skills);
+            self.themes.extend(themes);
+        }
+    }
+
+    /// The package directory `reference` names, taken out of `packages` with what it brought.
+    /// `None` when it names none.
+    pub(super) fn remove_local_package(
+        &mut self,
+        reference: &str,
+    ) -> Result<Option<PathBuf>, String> {
+        let given = match scramjet_rs::os::after_tilde(reference).zip(std::env::home_dir()) {
+            Some((rest, home)) => scramjet_rs::os::join(&home, rest),
+            None => std::path::absolute(reference).map_err(|e| e.to_string())?,
+        };
+        let Some(directory) = (self.local_packages.iter())
+            .find(|known| same_directory(known, &given))
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let path = self
+            .path
+            .clone()
+            .ok_or("no settings file: HOME is not set")?;
+        let mut object = read_object(&path)?;
+        let mut entries = paths(&object, "packages").map_err(|()| {
+            format!(
+                "{}: packages must be a list of git repositories and directories",
+                shown(&path)
+            )
+        })?;
+        entries.retain(|entry| {
+            Source::parse(entry).is_some() || !same_directory(&self.resolve(entry), &directory)
+        });
+        object.insert("packages".into(), json!(entries));
+        write_object(&path, object)?;
+        self.local_packages.retain(|known| *known != directory);
+        self.command_sets.retain(|set| !set.starts_with(&directory));
+        let (skills, themes) = (directory.join("skills"), directory.join("themes"));
+        self.skills.retain(|known| *known != skills);
+        self.themes.retain(|known| *known != themes);
+        Ok(Some(directory))
+    }
+
+    /// The package directory that brings `set`.
+    pub(super) fn local_package(&self, set: &Path) -> Option<&Path> {
+        (self.local_packages.iter())
+            .map(PathBuf::as_path)
+            .find(|directory| set.starts_with(directory))
     }
 
     /// Where packages are cloned.
@@ -852,15 +962,18 @@ impl Settings {
         let mut object = read_object(&path)?;
         let mut entries = paths(&object, "packages").map_err(|()| {
             format!(
-                "{}: packages must be a list of git repositories",
+                "{}: packages must be a list of git repositories and directories",
                 shown(&path)
             )
         })?;
         entries.push(source.written.clone());
         object.insert("packages".into(), json!(entries));
         write_object(&path, object)?;
+        let (skills, themes) = extras(&source.clone_directory(self.clones()?));
         self.packages.push(source);
         self.command_sets.extend(sets);
+        self.skills.extend(skills);
+        self.themes.extend(themes);
         Ok(())
     }
 
@@ -875,7 +988,7 @@ impl Settings {
         let mut object = read_object(&path)?;
         let mut entries = paths(&object, "packages").map_err(|()| {
             format!(
-                "{}: packages must be a list of git repositories",
+                "{}: packages must be a list of git repositories and directories",
                 shown(&path)
             )
         })?;
@@ -887,6 +1000,8 @@ impl Settings {
         write_object(&path, object)?;
         self.packages.retain(|known| known.identity() != identity);
         self.command_sets.retain(|set| !set.starts_with(&directory));
+        self.skills.retain(|known| !known.starts_with(&directory));
+        self.themes.retain(|known| !known.starts_with(&directory));
         Ok(directory)
     }
 
@@ -1431,6 +1546,25 @@ fn paths(object: &Map<String, Value>, key: &str) -> Result<Vec<String>, ()> {
             .collect(),
         Some(_) => Err(()),
     }
+}
+
+/// What `install_directory` installed.
+pub(super) enum Installed {
+    Set(Set),
+    /// A package directory, with the names of its sets that were in `commandSets` before.
+    Package {
+        directory: PathBuf,
+        sets: Vec<Set>,
+        moved: Vec<String>,
+        skills: Option<PathBuf>,
+        themes: Option<PathBuf>,
+    },
+}
+
+/// A package's `skills` and `themes` directories, those it has.
+pub(super) fn extras(package: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+    let directory = |name| Some(package.join(name)).filter(|path| path.is_dir());
+    (directory("skills"), directory("themes"))
 }
 
 /// Whether `a` and `b` are the same directory, also through links.
@@ -2147,6 +2281,108 @@ mod tests {
         assert_eq!(settings.shown(Row::Tools), "none");
     }
 
+    fn install_set(settings: &mut Settings, directory: &Path) -> Result<Set, String> {
+        match settings.install_directory(directory)? {
+            Installed::Set(set) => Ok(set),
+            Installed::Package { directory, .. } => panic!("{} as a package", directory.display()),
+        }
+    }
+
+    #[test]
+    fn a_directory_holding_sets_skills_or_themes_is_installed_as_a_package() {
+        let scratch = Scratch::new("local-package");
+        let path = scratch.0.join("config/settings.json");
+        let package = scratch.0.join("kit");
+        for directory in ["mach12/commands", "scramjet/agents", "skills/a", "themes"] {
+            std::fs::create_dir_all(package.join(directory)).unwrap();
+        }
+        std::fs::write(package.join("mach12/commands/mach12:x.md"), "X\n").unwrap();
+        std::fs::write(package.join("scramjet/agents/scramjet:y.md"), "Y\n").unwrap();
+        let other = scratch.0.join("other/scramjet");
+        std::fs::create_dir_all(other.join("commands")).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mach12 = scramjet_rs::os::tilde(&package.join("mach12"));
+        let elsewhere = scramjet_rs::os::tilde(&other);
+        let settings_with = |sets: &[&str]| {
+            std::fs::write(&path, json!({"commandSets": sets}).to_string()).unwrap();
+            Settings::read(Some(path.clone()))
+        };
+
+        let mut settings = settings_with(&[&mach12, &elsewhere]);
+        assert_eq!(
+            settings.install_directory(&package).err().unwrap(),
+            format!(
+                "a command set named scramjet is installed from {}; remove it first",
+                other.display()
+            )
+        );
+        let mut settings = settings_with(&[&mach12]);
+        let Installed::Package {
+            sets,
+            moved,
+            skills,
+            themes,
+            ..
+        } = settings.install_directory(&package).unwrap()
+        else {
+            panic!("a package")
+        };
+        let names: Vec<&str> = sets.iter().map(|set| set.name.as_str()).collect();
+        assert_eq!(names, ["mach12", "scramjet"]);
+        assert_eq!(moved, ["mach12"]);
+        assert_eq!(
+            (skills, themes),
+            (Some(package.join("skills")), Some(package.join("themes")))
+        );
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let written = scramjet_rs::os::tilde(&package);
+        assert_eq!(saved, json!({"commandSets": [], "packages": [written]}));
+        let read = Settings::read(Some(path.clone()));
+        assert_eq!(
+            read.command_sets,
+            [package.join("mach12"), package.join("scramjet")]
+        );
+        assert_eq!(
+            (read.skills, read.themes),
+            (
+                [package.join("skills")].into(),
+                [package.join("themes")].into()
+            )
+        );
+        assert!(read.warnings.is_empty(), "{:?}", read.warnings);
+        assert_eq!(
+            settings.install_directory(&package).err().unwrap(),
+            format!("{} is already installed", shown(&package))
+        );
+
+        assert_eq!(settings.remove_local_package("mach12").unwrap(), None);
+        assert_eq!(
+            settings.remove_local_package(&written).unwrap(),
+            Some(package.clone())
+        );
+        assert!(settings.command_sets.is_empty() && settings.skills.is_empty());
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, json!({"commandSets": [], "packages": []}));
+
+        std::fs::write(&path, json!({"packages": [written]}).to_string()).unwrap();
+        std::fs::remove_dir_all(&package).unwrap();
+        assert_eq!(
+            Settings::read(Some(path.clone())).warnings,
+            [format!(
+                "{0}: not a directory; `scramjet-rs remove {0}` takes it out of packages",
+                shown(&package)
+            )]
+        );
+        std::fs::create_dir_all(&package).unwrap();
+        assert_eq!(
+            Settings::read(Some(path.clone())).warnings,
+            [format!(
+                "{0}: {0} holds no command set, skills or themes",
+                shown(&package)
+            )]
+        );
+    }
+
     #[test]
     fn command_sets_are_installed_and_removed_by_reference() {
         let scratch = Scratch::new("sets");
@@ -2164,9 +2400,7 @@ mod tests {
         let mut settings = Settings::read(Some(path.clone()));
         assert_eq!(settings.command_sets, [scratch.0.join("config/../rs")]);
 
-        let [installed] = &settings.install_sets(&mach12).unwrap()[..] else {
-            panic!("one set")
-        };
+        let installed = &install_set(&mut settings, &mach12).unwrap();
         assert_eq!(
             (installed.name.as_str(), &installed.directory),
             ("mach12", &mach12)
@@ -2183,13 +2417,11 @@ mod tests {
             settings.command_sets
         );
         assert_eq!(
-            settings
-                .install_sets(&scratch.0.join("repo/./mach12"))
-                .unwrap_err(),
+            install_set(&mut settings, &scratch.0.join("repo/./mach12")).unwrap_err(),
             "mach12 is already installed"
         );
         assert_eq!(
-            settings.install_sets(&other).unwrap_err(),
+            install_set(&mut settings, &other).unwrap_err(),
             format!(
                 "a command set named mach12 is installed from {}; remove it first",
                 mach12.display()
@@ -2197,10 +2429,11 @@ mod tests {
         );
         let plain = scratch.0.join("plain");
         assert_eq!(
-            settings.install_sets(&plain).unwrap_err(),
+            install_set(&mut settings, &plain).unwrap_err(),
             format!(
                 "{} is not a command set: it has no commands or agents directory, nor a models.json, \
-                 and holds no set: none in its top directories, nor one with a set.yaml deeper",
+                 and holds no set (none in its top directories, nor one with a set.yaml deeper) \
+                 and no skills or themes directory",
                 plain.display()
             )
         );
@@ -2208,7 +2441,10 @@ mod tests {
         let package = scratch.0.join("package");
         std::fs::create_dir_all(&package).unwrap();
         std::fs::write(package.join("models.json"), "{}").unwrap();
-        assert_eq!(settings.install_sets(&package).unwrap()[0].name, "package");
+        assert_eq!(
+            install_set(&mut settings, &package).unwrap().name,
+            "package"
+        );
         assert_eq!(
             settings.models_files().last(),
             Some(&package.join("models.json"))
@@ -2242,7 +2478,7 @@ mod tests {
                 shown(&path)
             )]
         );
-        assert!(wrong.install_sets(&rs).is_err());
+        assert!(install_set(&mut wrong, &rs).is_err());
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             r#"{"commandSets": "../rs"}"#

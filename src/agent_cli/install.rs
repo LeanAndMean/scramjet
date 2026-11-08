@@ -3,9 +3,10 @@
 //! and packages from git, cloned and recorded in `packages` (`super::packages`); `list` also
 //! shows the skills.
 use super::packages::{self, Source};
-use super::settings::Settings;
+use super::settings::{self, Installed, Settings};
+use super::theme;
 use scramjet_rs::agent::{Inventory, Problem, Set, inventory, sets_in, shortened};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) const USAGE: &str =
     "Usage: scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME] | list
@@ -30,33 +31,76 @@ pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), Stri
 
 fn install(directory: &Path) -> Result<(), String> {
     let mut settings = Settings::load();
-    let sets = settings.install_sets(directory)?;
+    let installed = settings.install_directory(directory)?;
     let found = here(&settings)?;
-    let given = std::path::absolute(directory).map_err(|e| e.to_string())?;
-    match sets.as_slice() {
-        [set] if set.directory == given => println!(
-            "Installed {} from {}: {}",
-            set.name,
-            shown(&set.directory),
-            contents(&found, set)
-        ),
-        sets => {
-            println!("Installed from {}:", shown(&given));
-            for set in sets {
-                let path = set.directory.strip_prefix(&given).unwrap_or(&set.directory);
+    let concerned = match installed {
+        Installed::Set(set) => {
+            println!(
+                "Installed {} from {}: {}",
+                set.name,
+                shown(&set.directory),
+                contents(&found, &set)
+            );
+            set.directory
+        }
+        Installed::Package {
+            directory,
+            sets,
+            moved,
+            skills,
+            themes,
+        } => {
+            println!("Installed the package in {}:", shown(&directory));
+            for set in &sets {
+                let path = set
+                    .directory
+                    .strip_prefix(&directory)
+                    .unwrap_or(&set.directory);
                 let (name, path) = (&set.name, path.display());
                 println!("  {name} ({path}): {}", contents(&found, set));
             }
+            print_extras(&found, skills, themes);
+            if !moved.is_empty() {
+                println!(
+                    "It now brings {}, taken out of commandSets.",
+                    moved.join(", ")
+                );
+            }
+            directory
         }
-    }
-    let directories: Vec<String> = (sets.iter())
-        .map(|set| set.directory.display().to_string())
-        .collect();
+    };
+    let concerned = concerned.display().to_string();
     let concerned: Vec<&Problem> = (found.warnings.iter())
-        .filter(|warning| directories.iter().any(|d| warning.text.contains(d)))
+        .chain(found.skills.warnings())
+        .filter(|warning| warning.text.contains(&concerned))
         .collect();
     print_warnings(&concerned);
     Ok(())
+}
+
+/// What a package's `skills` and `themes` directories bring.
+fn print_extras(found: &Inventory, skills: Option<PathBuf>, themes: Option<PathBuf>) {
+    if let Some(skills) = skills {
+        let names: Vec<&str> = (found.skills.list().iter())
+            .filter(|skill| skill.path.starts_with(&skills))
+            .map(|skill| skill.name.as_str())
+            .collect();
+        println!("  skills: {}", listing(&names, "skill"));
+    }
+    if let Some(themes) = themes {
+        let names = theme::names_in(&themes);
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        println!("  themes: {}", listing(&names, "theme"));
+    }
+}
+
+/// `names` counted, then listed: `2 skills (a, b)`.
+fn listing(names: &[&str], what: &str) -> String {
+    match names {
+        [] => format!("no {what}s"),
+        [name] => format!("1 {what} ({name})"),
+        names => format!("{} {what}s ({})", names.len(), names.join(", ")),
+    }
 }
 
 /// Clones `source` and adds it to the settings' `packages`, with what its sets bring and the
@@ -109,10 +153,11 @@ fn install_package(source: Source) -> Result<(), String> {
         error
     };
     let sets = sets_in(&directory);
-    if sets.is_empty() {
+    let (skills, themes) = settings::extras(&directory);
+    if sets.is_empty() && skills.is_none() && themes.is_none() {
         return Err(undo(format!(
-            "{} holds no command set: no commands, agents or models.json at its top or in its \
-             top directories, and no set.yaml deeper",
+            "{} holds no command set (no commands, agents or models.json at its top or in its \
+             top directories, and no set.yaml deeper) and no skills or themes directory",
             source.written
         )));
     }
@@ -154,6 +199,7 @@ fn install_package(source: Source) -> Result<(), String> {
             println!("  {}{path}: {}", set.name, contents(&found, set));
         }
     }
+    print_extras(&found, skills, themes);
     let programs: Vec<String> = sets
         .iter()
         .filter_map(|set| program(set, &directory))
@@ -229,6 +275,10 @@ fn remove(reference: &str) -> Result<(), String> {
         );
         return Ok(());
     }
+    if let Some(directory) = settings.remove_local_package(reference)? {
+        println!("Removed the package in {}", shown(&directory));
+        return Ok(());
+    }
     match settings.remove_set(reference) {
         Ok(directories) => {
             for directory in directories {
@@ -237,14 +287,20 @@ fn remove(reference: &str) -> Result<(), String> {
             }
             Ok(())
         }
-        Err(error) => match settings.package(reference) {
-            Some(package) => Err(format!(
-                "{reference} came with {0}; `scramjet-rs remove {0}` removes it with the \
-                 package's other command sets",
-                package.written
-            )),
-            None => Err(error),
-        },
+        Err(error) => {
+            let local = (settings.command_sets.iter())
+                .find(|set| set.file_name().is_some_and(|name| name == reference))
+                .and_then(|set| settings.local_package(set));
+            let package = match (settings.package(reference), local) {
+                (Some(package), _) => package.written.clone(),
+                (None, Some(directory)) => shown(directory),
+                (None, None) => return Err(error),
+            };
+            Err(format!(
+                "{reference} came with {package}; `scramjet-rs remove {package}` removes it with \
+                 the package's other command sets"
+            ))
+        }
     }
 }
 
@@ -377,10 +433,11 @@ fn origin(settings: &Settings, set: &Set) -> String {
         (settings.packages.iter())
             .find(|package| set.directory.starts_with(package.clone_directory(root)))
     });
-    package.map_or_else(
-        || set.origin.name().to_owned(),
-        |package| package.written.clone(),
-    )
+    match (package, settings.local_package(&set.directory)) {
+        (Some(package), _) => package.written.clone(),
+        (None, Some(directory)) => shown(directory),
+        (None, None) => set.origin.name().to_owned(),
+    }
 }
 
 /// What a session in the current directory would load.

@@ -76,9 +76,11 @@ impl Set {
 }
 
 /// The command sets in a package's directory `root`: `root` itself when it is one; else the
-/// sets at its top and, deeper, those holding Scramjet's `set.yaml`, as LeanAndMean/scramjet
-/// keeps Mach 12 in `packages/scramjet/mach12` beside test fixtures that look like sets. Hidden
-/// directories, `node_modules`, links and the inside of a set are not searched. In path order.
+/// sets at its top that have markdown in their `commands` or `agents`, a `models.json` or a
+/// `set.yaml` and, deeper, those holding Scramjet's `set.yaml`, as LeanAndMean/scramjet keeps
+/// Mach 12 in `packages/scramjet/mach12` beside test fixtures that look like sets and code in
+/// `src/commands`. Hidden directories, `node_modules`, links and the inside of a set are not
+/// searched. In path order.
 pub fn sets_in(root: &Path) -> Vec<PathBuf> {
     if Set::at(root, Origin::Installed).is_ok() {
         return vec![root.to_path_buf()];
@@ -96,7 +98,7 @@ pub fn sets_in(root: &Path) -> Vec<PathBuf> {
                 continue;
             }
             let path = entry.path();
-            let marked = depth == 0 || path.join("set.yaml").is_file();
+            let marked = path.join("set.yaml").is_file() || depth == 0 && has_markdown(&path);
             match marked && Set::at(&path, Origin::Installed).is_ok() {
                 true => found.push(path),
                 false => pending.push((path, depth + 1)),
@@ -105,6 +107,18 @@ pub fn sets_in(root: &Path) -> Vec<PathBuf> {
     }
     found.sort();
     found
+}
+
+/// Whether `set` has a `models.json`, or markdown files in its `commands` or `agents`.
+fn has_markdown(set: &Path) -> bool {
+    let markdown = |directory: &str| {
+        (fs::read_dir(set.join(directory))
+            .into_iter()
+            .flatten()
+            .flatten())
+        .any(|entry| entry.path().extension().is_some_and(|e| e == "md"))
+    };
+    set.join("models.json").is_file() || markdown("commands") || markdown("agents")
 }
 
 /// The command sets of a session, in the order their commands and agents are registered.
@@ -908,6 +922,10 @@ mod tests {
         let repo = scratch.0.join("repo");
         scratch.file("repo/README.md", "");
         scratch.file("repo/top/agents/top:a.md", "");
+        // Code in a `commands` directory, as Scramjet's `src/commands`, is no set.
+        scratch.file("repo/src/commands/index.ts", "");
+        scratch.file("repo/dist/agents/catalog.js", "");
+        scratch.file("repo/providers/models.json", "{}");
         scratch.file("repo/top/nested/set.yaml", "");
         scratch.file("repo/top/nested/commands/nested:x.md", "");
         scratch.file("repo/packages/kit/mach12/set.yaml", "name: mach12\n");
@@ -924,7 +942,13 @@ mod tests {
         std::os::unix::fs::symlink(repo.join("packages/kit"), repo.join("link")).unwrap();
         assert_eq!(
             sets_in(&repo),
-            ["packages/kit/mach12", "packages/kit/providers", "top"].map(|set| repo.join(set))
+            [
+                "packages/kit/mach12",
+                "packages/kit/providers",
+                "providers",
+                "top"
+            ]
+            .map(|set| repo.join(set))
         );
         assert!(sets_in(&scratch.0.join("missing")).is_empty());
     }

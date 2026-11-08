@@ -319,6 +319,8 @@ impl Themes {
         };
         let name = name.unwrap_or_else(stem);
         match self.listed.iter().find(|known| known.name == name) {
+            // The same theme again, as a package's copy of a built-in one, is no collision.
+            Some(known) if known.theme == theme => {}
             Some(known) => {
                 let from = match &known.file {
                     Some(path) => format!("loaded from {}", path.display()),
@@ -354,6 +356,28 @@ impl Themes {
         });
         missing.into_iter().chain(self.problems.clone()).collect()
     }
+}
+
+/// The names of the themes in `directory`'s files that read as themes.
+pub(super) fn names_in(directory: &Path) -> Vec<String> {
+    let mut themes = Themes {
+        listed: Vec::new(),
+        problems: Vec::new(),
+    };
+    let files = themes.files(directory).unwrap_or_default();
+    (files.iter())
+        .filter_map(|file| {
+            let text = std::fs::read_to_string(file).ok()?;
+            let (name, _) = Theme::parse_named(&text).ok()?;
+            let stem = || {
+                file.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into()
+            };
+            Some(name.unwrap_or_else(stem))
+        })
+        .collect()
 }
 
 fn is_json(path: &Path) -> bool {
@@ -912,7 +936,8 @@ mod tests {
         write(root.join("one.json"), &accented("File", ""));
         write(root.join("notes.txt"), "");
         write(given.join("c.json"), &accented("Given", "#010203"));
-        write(root.join("two.json"), &accented("Project", ""));
+        write(root.join("two.json"), &accented("Project", "#040506"));
+        write(root.join("same.json"), &accented("Project", ""));
         let settings = [
             listed,
             root.join("one.json"),
@@ -920,7 +945,12 @@ mod tests {
             root.join("gone"),
         ];
         let options = ThemeOptions {
-            paths: vec![given, root.join("two.json"), root.join("missing.json")],
+            paths: vec![
+                given,
+                root.join("two.json"),
+                root.join("same.json"),
+                root.join("missing.json"),
+            ],
             no_themes: false,
         };
         // Leaving out the user's own themes, in the agent directory.
@@ -982,7 +1012,8 @@ mod tests {
         };
         let themes = Themes::discover(root, &settings, &none);
         assert_eq!(names(&themes), ["Given", "Project"]);
-        assert_eq!(problems(&themes).len(), 1);
+        // `missing.json`, and `same.json`, which now differs from the `Project` loaded first.
+        assert_eq!(problems(&themes).len(), 2);
     }
 
     #[test]

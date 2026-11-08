@@ -4,6 +4,21 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.102.0 — Packages from a directory, with their skills and themes
+
+### Added
+
+- `scramjet-rs install DIR` of a directory that is not itself a command set installs it as a package, recorded in the settings' `packages` as Pi records a local path: its command sets, and its `skills` and `themes` directories, are loaded, and sets added to it later come at once. `install ~/repos/scramjet/packages/scramjet` brings Mach 12, `scramjet`, its skill and its theme; sets of it installed in `commandSets` before move into the package. `remove DIR` takes it out.
+- A package from git brings its `skills` and `themes` directories too.
+
+### Changed
+
+- A theme file with a built-in theme's name and the same colors is no longer reported as skipped.
+
+### Fixed
+
+- A package's top directories count as command sets only when their `commands` or `agents` hold markdown, or they have a `models.json` or `set.yaml`: Scramjet's `dist` and `src`, whose `commands` hold code, were installed as empty sets.
+
 ## 0.101.0 — Ctrl+Backspace in Windows Terminal
 
 ### Added

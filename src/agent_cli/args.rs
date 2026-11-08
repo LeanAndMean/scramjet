@@ -194,14 +194,16 @@ As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)
 and the project's .scramjet. `scramjet-rs install DIR` installs the set in DIR by reference,
-or the sets DIR holds as a package's clone holds them, recorded in the settings' commandSets
-(~ for the home directory); `remove NAME|DIR` takes them out and `list` shows the sets
-loaded in the current directory, what each brings and what was skipped. `install REPO` clones
-a package from git (git:github.com/USER/REPO[@REF], git:git@github.com:USER/REPO, or an
-https://, ssh://, git:// or file:// URL) into $XDG_DATA_HOME/scramjet-rs/git, recorded in the
-settings' packages: its sets are its top directory when that is a set, else the sets at its
-top and those with a set.yaml deeper. `update` pulls the packages not pinned to a REF, and
-`remove REPO` deletes the clone.
+recorded in the settings' commandSets (~ for the home directory), or, as Pi installs a local
+path, DIR as a package in the settings' packages: the sets it holds as a package's clone holds
+them, and its skills and themes directories; `remove NAME|DIR` takes them out and `list`
+shows the sets loaded in the current directory, what each brings and what was skipped.
+`install REPO` clones a package from git (git:github.com/USER/REPO[@REF],
+git:git@github.com:USER/REPO, or an https://, ssh://, git:// or file:// URL) into
+$XDG_DATA_HOME/scramjet-rs/git, recorded in the settings' packages: its sets are its top
+directory when that is a set, else the sets at its top and those with a set.yaml deeper, and
+its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
+and `remove REPO` deletes the clone.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window.
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),

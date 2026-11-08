@@ -937,7 +937,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     let plain = format!("file://{}", plain.display());
     let (ok, _, err) = run(&["install", &plain]);
     assert!(!ok);
-    assert!(err.ends_with(&format!("scramjet-rs: {plain} holds no command set: no commands, agents or models.json at its top or in its top directories, and no set.yaml deeper\n")), "{err}");
+    assert!(err.ends_with(&format!("scramjet-rs: {plain} holds no command set (no commands, agents or models.json at its top or in its top directories, and no set.yaml deeper) and no skills or themes directory\n")), "{err}");
     let missing = format!("file://{}", scratch.0.join("missing.git").display());
     let (ok, _, err) = run(&["install", &missing]);
     assert!(!ok);
@@ -945,50 +945,64 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert_eq!(std::fs::read_dir(&clones).unwrap().count(), 0);
     assert_eq!(packages(), serde_json::json!([]));
 
-    // A local directory holding sets installs each by reference, as its clone would.
+    // A local directory holding sets is a package, as Pi takes a local path: its sets, skills
+    // and themes, and sets installed from it before move into it.
     let command_sets = || {
         let text = std::fs::read_to_string(&settings).unwrap();
         serde_json::from_str::<serde_json::Value>(&text).unwrap()["commandSets"].clone()
     };
+    file(
+        "skills/greeting/SKILL.md",
+        "---\nname: greeting\ndescription: Greets.\n---\nSay hi.\n",
+    );
+    let dark = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/agent_cli/themes/scramjet-dark.json");
+    file(
+        "themes/scramjet-dark.json",
+        &std::fs::read_to_string(dark).unwrap(),
+    );
+    let providers = work.join("providers");
+    let (ok, _, err) = run(&["install", providers.to_str().unwrap()]);
+    assert!(ok, "{err}");
     let (ok, out, err) = run(&["install", work.to_str().unwrap()]);
     assert!(ok, "{out}{err}");
     assert_eq!(
         out,
-        "Installed from ~/work:\n  mach12 (packages/kit/mach12): 2 commands, 0 agents\n  \
-providers (providers): 0 commands, 0 agents, and providers (models.json)\n"
-    );
-    assert_eq!(
-        command_sets(),
-        serde_json::json!(["~/work/packages/kit/mach12", "~/work/providers"])
-    );
-    let (ok, _, err) = run(&["install", work.to_str().unwrap()]);
-    assert!(!ok);
-    assert!(
-        err.ends_with(&format!(
-            "the command sets in {} are already installed: mach12, providers\n",
-            work.display()
-        )),
-        "{err}"
-    );
-    // A set that appears later is added beside those installed before.
-    file("tools/commands/tools:x.md", "X\n");
-    let (ok, out, err) = run(&["install", work.to_str().unwrap()]);
-    assert!(ok, "{out}{err}");
-    assert_eq!(
-        out,
-        "Installed from ~/work:\n  tools (tools): 1 command, 0 agents\n"
-    );
-    let (ok, out, _) = run(&["list"]);
-    assert!(ok);
-    assert!(out.contains("~/work/packages/kit/mach12"), "{out}");
-    let (ok, out, err) = run(&["remove", work.to_str().unwrap()]);
-    assert!(ok, "{out}{err}");
-    assert_eq!(
-        out,
-        "Removed mach12, installed from ~/work/packages/kit/mach12\nRemoved providers, \
-installed from ~/work/providers\nRemoved tools, installed from ~/work/tools\n"
+        "Installed the package in ~/work:\n  mach12 (packages/kit/mach12): 2 commands, 0 agents\n  \
+providers (providers): 0 commands, 0 agents, and providers (models.json)\n  skills: 1 skill \
+(greeting)\n  themes: 1 theme (scramjet-dark)\nIt now brings providers, taken out of \
+commandSets.\n"
     );
     assert_eq!(command_sets(), serde_json::json!([]));
+    assert_eq!(packages(), serde_json::json!(["~/work"]));
+    let (ok, _, err) = run(&["install", work.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(err.ends_with("~/work is already installed\n"), "{err}");
+    // A set that appears later comes with it.
+    file("tools/commands/tools:x.md", "X\n");
+    let (ok, out, err) = run(&["list"]);
+    assert!(ok, "{err}");
+    assert!(out.contains("tools      ~/work  ~/work/tools"), "{out}");
+    assert!(
+        out.contains("greeting  ~/work/skills/greeting/SKILL.md"),
+        "{out}"
+    );
+    assert!(!out.contains("Warnings"), "{out}");
+    let (ok, _, err) = run(&["remove", "mach12"]);
+    assert!(!ok);
+    assert!(
+        err.ends_with(
+            "mach12 came with ~/work; `scramjet-rs remove ~/work` removes it with the package's \
+other command sets\n"
+        ),
+        "{err}"
+    );
+    let (ok, out, err) = run(&["remove", work.to_str().unwrap()]);
+    assert!(ok, "{out}{err}");
+    assert_eq!(out, "Removed the package in ~/work\n");
+    assert_eq!(packages(), serde_json::json!([]));
+    std::fs::remove_dir_all(work.join("skills")).unwrap();
+    std::fs::remove_dir_all(work.join("themes")).unwrap();
     let notes = scratch.0.join("notes");
     std::fs::create_dir_all(&notes).unwrap();
     let (ok, _, err) = run(&["install", notes.to_str().unwrap()]);
@@ -996,7 +1010,8 @@ installed from ~/work/providers\nRemoved tools, installed from ~/work/tools\n"
     assert!(
         err.ends_with(&format!(
             "scramjet-rs: {} is not a command set: it has no commands or agents directory, nor \
-a models.json, and holds no set: none in its top directories, nor one with a set.yaml deeper\n",
+a models.json, and holds no set (none in its top directories, nor one with a set.yaml deeper) \
+and no skills or themes directory\n",
             notes.display()
         )),
         "{err}"
