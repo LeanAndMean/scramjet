@@ -39,7 +39,7 @@ const NOT_HIDDEN: &str = "scramjet-rs has no sandbox on Windows yet, so it canno
 /// Credential stores in the home directory that subagents, and the main agent when its
 /// credentials are hidden, do not see, after an agent printed `~/.scramjet/agent/auth.json` to
 /// its provider: common ones, not every secret. Packages name their own (`credentialFiles`).
-const HIDDEN_FILES: [&str; 11] = [
+const HIDDEN_FILES: [&str; 17] = [
     ".scramjet/agent/auth.json",
     ".pi/agent/auth.json",
     ".netrc",
@@ -51,8 +51,14 @@ const HIDDEN_FILES: [&str; 11] = [
     ".pypirc",
     ".docker/config.json",
     ".vault-token",
+    ".cargo/credentials.toml",
+    ".cargo/credentials",
+    ".cache/huggingface/token",
+    ".cache/huggingface/stored_tokens",
+    ".gem/credentials",
+    ".terraform.d/credentials.tfrc.json",
 ];
-const HIDDEN_DIRECTORIES: [&str; 9] = [
+const HIDDEN_DIRECTORIES: [&str; 11] = [
     ".aws",
     ".ssh",
     ".gnupg",
@@ -62,7 +68,28 @@ const HIDDEN_DIRECTORIES: [&str; 9] = [
     ".azure",
     ".local/share/keyrings",
     ".password-store",
+    ".config/github-copilot",
+    ".config/glab-cli",
 ];
+
+/// Where Cargo's and Hugging Face's variables move their stores.
+fn relocated(variable: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    let set = |name| {
+        variable(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    let mut stores = Vec::new();
+    if let Some(cargo) = set("CARGO_HOME") {
+        stores.extend(["credentials.toml", "credentials"].map(|name| cargo.join(name)));
+    }
+    let cache = set("XDG_CACHE_HOME").map(|cache| cache.join("huggingface"));
+    if let Some(hf) = set("HF_HOME").or(cache) {
+        stores.extend(["token", "stored_tokens"].map(|name| hf.join(name)));
+    }
+    stores.extend(set("HF_TOKEN_PATH"));
+    stores
+}
 
 /// Words that mark an environment variable as holding a credential, at the end of its name or
 /// between underscores: `ANTHROPIC_API_KEY`, `HF_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `PGPASSWORD`.
@@ -337,6 +364,7 @@ impl Hidden {
             super::login::make(own);
         }
         let also = (auth.into_iter().chain(own))
+            .chain(relocated(|name| std::env::var_os(name)))
             .chain(named.iter().cloned())
             .collect();
         std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also))
@@ -1302,6 +1330,61 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             );
         }
         assert!(hidden.check(&root.join("a.txt")).is_ok());
+    }
+
+    #[test]
+    fn cargos_hugging_faces_and_copilots_stores_are_hidden_where_their_variables_put_them() {
+        let home = std::env::temp_dir().join(format!("scramjet-more-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        for directory in [
+            ".cargo",
+            ".cache/huggingface/hub",
+            ".config/github-copilot",
+            "hf",
+            "project",
+        ] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for (file, text) in [
+            (".cargo/credentials.toml", "SECRET-cargo\n"),
+            (".cache/huggingface/token", "SECRET-hf\n"),
+            (".cache/huggingface/hub/model", "plain\n"),
+            (".config/github-copilot/apps.json", "SECRET-copilot\n"),
+            ("hf/stored_tokens", "SECRET-moved\n"),
+        ] {
+            std::fs::write(home.join(file), text).unwrap();
+        }
+        let moved = |name: &str| (name == "HF_HOME").then(|| home.join("hf").into_os_string());
+        let hidden = super::Hidden::under(&home, super::relocated(moved));
+        let script = "cat ../.cache/huggingface/hub/model; grep -r SECRET ..; echo done";
+        let output = super::hiding(&home.join("project"), script, &hidden)
+            .unwrap()
+            .output()
+            .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "plain\ndone\n",
+            "{errors}"
+        );
+        let relocated = super::relocated(|name| match name {
+            "CARGO_HOME" => Some("/c".into()),
+            "XDG_CACHE_HOME" => Some("/x".into()),
+            "HF_TOKEN_PATH" => Some("/t".into()),
+            _ => None,
+        });
+        let expected = [
+            "/c/credentials.toml",
+            "/c/credentials",
+            "/x/huggingface/token",
+        ];
+        let expected = expected
+            .into_iter()
+            .chain(["/x/huggingface/stored_tokens", "/t"]);
+        assert_eq!(
+            relocated,
+            expected.map(std::path::PathBuf::from).collect::<Vec<_>>()
+        );
     }
 
     #[test]

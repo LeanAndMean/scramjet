@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.5 — More credential stores hidden
+
+### Fixed
+
+- Subagents, `--sandbox` and turns with the credential stores hidden now also hide Cargo's registry tokens (`~/.cargo/credentials.toml`), Hugging Face's (`~/.cache/huggingface/token` and `stored_tokens`), the GitHub Copilot editor plugins' (`~/.config/github-copilot`), glab's, RubyGems' and Terraform's, also where `CARGO_HOME`, `HF_HOME`, `XDG_CACHE_HOME` or `HF_TOKEN_PATH` put them.
+
 ## 0.98.4 — Typing on does not answer the agent's questions
 
 ### Fixed

@@ -14,8 +14,10 @@ if ! stores=$("$built" --list-credential-stores 2>/dev/null) || [ -z "$stores" ]
   stores=""
   for store in .scramjet/agent/auth.json .pi/agent/auth.json .netrc .git-credentials \
       .claude/.credentials.json .claude.json .codex/auth.json .npmrc .pypirc .docker/config.json \
-      .vault-token .aws .ssh .gnupg .config/gh .kube .config/gcloud .azure .local/share/keyrings \
-      .password-store; do
+      .vault-token .cargo/credentials.toml .cargo/credentials .cache/huggingface/token \
+      .cache/huggingface/stored_tokens .gem/credentials .terraform.d/credentials.tfrc.json .aws .ssh \
+      .gnupg .config/gh .kube .config/gcloud .azure .local/share/keyrings .password-store \
+      .config/github-copilot .config/glab-cli; do
     stores="$stores $HOME/$store"
   done
 fi
