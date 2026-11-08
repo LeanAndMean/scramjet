@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.4 — Table rows without bars
+
+### Fixed
+
+- A line right under a reply's table that starts no other block (a list, heading, quote, rule, fence or indented code) shows as the table's next row, as Scramjet shows it, even without `|`; it showed as text after the table.
+
 ## 0.95.3 — Indented code and line breaks in replies
 
 ### Fixed

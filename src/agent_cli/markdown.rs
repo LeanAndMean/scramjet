@@ -496,8 +496,10 @@ impl Markdown {
         }
         let item = self.lists[..self.within(indent)].last();
         let relative = indent - item.map_or(0, |list| list.written);
+        // As marked's tables, whose rows go on in any line that starts no other block.
+        let row = (self.table.as_ref()).is_some_and(|table| table.rows.is_some());
         // As CommonMark's indented code, which cannot go on with a paragraph's text.
-        if relative >= 4 && !self.lazy {
+        if relative >= 4 && (!self.lazy || row) {
             return Some(Kind::Indented);
         }
         if relative < 4 {
@@ -551,7 +553,7 @@ impl Markdown {
                 _ => {}
             }
         }
-        Some(Kind::Text)
+        Some(if row { Kind::Held } else { Kind::Text })
     }
 
     /// What a line in the code block under `fence` is: its closing fence, or code.
@@ -1742,10 +1744,38 @@ mod tests {
         assert_eq!(markdown.push("| a |\n|-|\n| 1 |"), "");
         assert_eq!(markdown.end_line(), "");
         assert_eq!(markdown.push("\n"), "");
+        assert_eq!(markdown.push("text"), "");
         assert_eq!(
-            markdown.push("text"),
-            "┌───┐\n│ \x1b[1ma\x1b[0m │\n├───┤\n│ 1 │\n└───┘\n\ntext"
+            markdown.push("\n\nafter"),
+            "┌──────┐\n│ \x1b[1ma\x1b[0m    │\n├──────┤\n│ 1    │\n├──────┤\n│ text │\n└──────┘\n\nafter"
         );
+    }
+
+    #[test]
+    fn a_table_goes_on_in_lines_that_start_no_other_block() {
+        let text = "| a | b |\n|---|---|\n1 | 2\n   x\n-|y|z\n#h";
+        assert_eq!(
+            rendered_alike(40, text),
+            "┌────┬───┐\n│ \x1b[1ma\x1b[0m  │ \x1b[1mb\x1b[0m │\n├────┼───┤\n│ 1  │ 2 │\n\
+├────┼───┤\n│ x  │   │\n├────┼───┤\n│ -  │ y │\n├────┼───┤\n│ #h │   │\n└────┴───┘"
+        );
+        let table = "┌───┐\n│ \x1b[1ma\x1b[0m │\n├───┤\n│ 1 │\n└───┘\n\n";
+        for (after, shown) in [
+            ("- i", "\x1b[36m-\x1b[0m i"),
+            ("1. i", "\x1b[36m1.\x1b[0m i"),
+            ("---", &format!("\x1b[2m{}\x1b[0m", "─".repeat(40))),
+            (
+                "    c",
+                "\x1b[2m```\x1b[0m\n  \x1b[32mc\x1b[0m\n\x1b[2m```\x1b[0m",
+            ),
+        ] {
+            let text = format!("|a|\n|-|\n|1|\n{after}");
+            assert_eq!(
+                render_in(40, &[&text]),
+                format!("{table}{shown}"),
+                "{after}"
+            );
+        }
     }
 
     #[test]
