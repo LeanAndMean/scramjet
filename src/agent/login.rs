@@ -2,8 +2,9 @@
 //! readable by its owner only and hidden from the agent's tools as other credential stores are
 //! (`sandbox::Hidden`). It is in Scramjet's format: an object of the providers logged in to,
 //! each `{"type": "oauth", "refresh", "access", "expires"}` (milliseconds since the epoch) with
-//! what else its login keeps, or `{"type": "api_key", "key"}` for a provider of the `models.json`
-//! files, whose requests carry that key in place of the one its entry gives. A process changes it holding a lock on `auth.json.lock`, so that
+//! what else its login keeps, or `{"type": "api_key", "key", "origins"}` for a provider of the
+//! `models.json` files, whose requests to those servers carry that key in place of the one its
+//! entry gives. A process changes it holding a lock on `auth.json.lock`, so that
 //! two refreshing a token at once do not undo each other's, and reads it holding the lock shared.
 //! It is written in place, as Scramjet writes its own: a sandbox hides it by mounting an empty
 //! file over it, and a file renamed over that path would show in every sandbox already running.
@@ -106,14 +107,33 @@ pub fn saved_keys(path: &Path) -> Result<Vec<String>, String> {
     Ok(keyed.cloned().collect())
 }
 
-/// The API key saved among `saved` for `provider`.
-pub(super) fn key<'a>(saved: &'a Map<String, Value>, provider: &str) -> Option<&'a str> {
+/// The API key saved among `saved` for `provider`, with the servers it was saved for
+/// (`providers::Origin`); none for one saved before keys named them.
+pub(super) fn key<'a>(
+    saved: &'a Map<String, Value>,
+    provider: &str,
+) -> Option<(&'a str, Vec<&'a str>)> {
     let credential = saved.get(provider).filter(|c| c["type"] == "api_key")?;
-    credential["key"].as_str()
+    let origins = credential["origins"].as_array().into_iter().flatten();
+    Some((
+        credential["key"].as_str()?,
+        origins.filter_map(Value::as_str).collect(),
+    ))
 }
 
-/// Saves `key`, trimmed, in `path` as the API key requests to `provider` carry.
-pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
+/// Saves `key`, trimmed, in `path` as the API key requests to `provider` carry, to the servers
+/// `origins` only: those its entry names now, none of them reached over `http://` but on this
+/// machine.
+pub fn save_key(path: &Path, provider: &str, key: &str, origins: &[String]) -> Result<(), String> {
+    if origins.is_empty() {
+        return Err(format!("{provider}'s entry names no server (baseUrl)"));
+    }
+    if let Some(open) = (origins.iter()).find(|origin| !super::providers::private_to(origin)) {
+        return Err(format!(
+            "{provider} is reached over http:// at {open}, which would send the key \
+             unencrypted; a saved key goes over http:// only to this machine"
+        ));
+    }
     let key = key.trim();
     if key.is_empty() {
         return Err("the key is empty".to_owned());
@@ -126,7 +146,7 @@ pub fn save_key(path: &Path, provider: &str, key: &str) -> Result<(), String> {
     if !key.chars().all(|ch| ch.is_ascii_graphic()) {
         return Err("an API key is letters, digits and punctuation, without spaces".to_owned());
     }
-    let credential = serde_json::json!({"type": "api_key", "key": key});
+    let credential = serde_json::json!({"type": "api_key", "key": key, "origins": origins});
     save(path, provider, credential)
 }
 
@@ -700,13 +720,15 @@ mod tests {
             json!({"type": "oauth", "access": "a"}),
         )
         .unwrap();
-        save_key(&path, "openrouter", "  sk-or-v1-abc\n").unwrap();
+        let server = ["https://openrouter.ai:443".to_owned()];
+        save_key(&path, "openrouter", "  sk-or-v1-abc\n", &server).unwrap();
         let saved = saved(&path).unwrap();
         assert_eq!(
             saved["openrouter"],
-            json!({"type": "api_key", "key": "sk-or-v1-abc"})
+            json!({"type": "api_key", "key": "sk-or-v1-abc", "origins": server})
         );
-        assert_eq!(key(&saved, "openrouter"), Some("sk-or-v1-abc"));
+        let only = Some(("sk-or-v1-abc", vec!["https://openrouter.ai:443"]));
+        assert_eq!(key(&saved, "openrouter"), only);
         assert_eq!(key(&saved, "github-copilot"), None);
         assert_eq!(saved_keys(&path).unwrap(), ["openrouter"]);
         assert_eq!(logged_in(&path).unwrap(), ["github-copilot", "openrouter"]);
@@ -717,24 +739,44 @@ mod tests {
             ("sk or", "without spaces"),
             ("sk-é", "without spaces"),
         ] {
-            let error = save_key(&path, "openrouter", refused).unwrap_err();
+            let error = save_key(&path, "openrouter", refused, &server).unwrap_err();
             assert!(error.contains(why), "{refused:?}: {error}");
         }
-        assert_eq!(
-            key(&super::saved(&path).unwrap(), "openrouter"),
-            Some("sk-or-v1-abc")
-        );
+        // Over plain http only to this machine, and only to a server the entry names.
+        for (servers, why) in [
+            (
+                &["https://a:443", "http://10.0.0.5:80"][..],
+                "at http://10.0.0.5:80, which",
+            ),
+            (
+                &["http://localhost.example:80"],
+                "at http://localhost.example:80",
+            ),
+            (&[], "names no server (baseUrl)"),
+        ] {
+            let servers: Vec<String> = servers.iter().map(|s| s.to_string()).collect();
+            let error = save_key(&path, "openrouter", "sk", &servers).unwrap_err();
+            assert!(error.contains(why), "{servers:?}: {error}");
+        }
+        let local = [
+            "http://localhost:80",
+            "http://127.0.0.2:8",
+            "http://[::1]:9",
+        ];
+        let local: Vec<String> = local.iter().map(|s| s.to_string()).collect();
+        save_key(&path, "local", "sk", &local).unwrap();
+        assert_eq!(key(&super::saved(&path).unwrap(), "openrouter"), only);
         let logins = Logins {
             auth: path.clone(),
             lists: scratch.0.join("logins"),
         };
         assert!(logout(&logins, "openrouter").unwrap());
-        assert!(saved_keys(&path).unwrap().is_empty());
+        assert_eq!(saved_keys(&path).unwrap(), ["local"]);
         // A name from a models.json file is not a file's: removing its key removes nothing else.
         std::fs::create_dir_all(&logins.lists).unwrap();
         let outside = scratch.0.join("models.json");
         std::fs::write(&outside, "{}").unwrap();
-        save_key(&path, "../models", "sk").unwrap();
+        save_key(&path, "../models", "sk", &server).unwrap();
         assert!(logout(&logins, "../models").unwrap());
         assert!(outside.exists());
     }

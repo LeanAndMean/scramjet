@@ -1312,7 +1312,9 @@ def logins(read, until, send, output):
     send(b'sk-test-123\r')
     on_screen('\u2713 Saved the API key for test in')
     on_screen(auth)
-    assert json.load(open(auth)) == {'test': {'type': 'api_key', 'key': 'sk-test-123'}}
+    # Tied to the server the entry names, as `http://127.0.0.1:PORT`.
+    saved_key = json.load(open(auth))
+    assert saved_key == {'test': {'type': 'api_key', 'key': 'sk-test-123', 'origins': [keyed_server_origin]}}, saved_key
     assert oct(os.stat(auth).st_mode & 0o777) == '0o600'
     send(b'hi\r')
     on_screen('Keyed reply.')
@@ -1481,6 +1483,7 @@ for name, script in [('xdg-open', 'printf "%s\\n" "$1" > "$OPENED"'), ('wl-copy'
 keyed_heads = []
 keyed_server = serve_replies([(['Keyed reply.'], 'Keyed reply.'), (['Unkeyed reply.'], 'Unkeyed reply.')],
                              heads=keyed_heads)
+keyed_server_origin = 'http://%s' % keyed_server
 run([], logins, keyed_server, variables={'XDG_CONFIG_HOME': login_home, 'PATH': login_bin + os.pathsep + env['PATH'],
                            'WAYLAND_DISPLAY': 'wayland-test', 'OPENED': opened_page, 'CLIPBOARD': login_clipboard},
     columns=80, rows=30)

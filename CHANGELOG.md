@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.0 — Credentials tied to their servers
+
+### Changed
+
+- A key `/login` saves is tied to the servers its provider's entry names then, and sent only to them: a package's entry of the same name, or an entry edited to another address, no longer receives it. A key saved before this version is not sent until saved again with `/login`, which says so. Keys are no longer saved for a server reached over plain `http://` other than this machine.
+- A login's token (ChatGPT, GitHub Copilot, a package's login) goes only to the servers its own login names, over `https://`, or to a server on this machine such as a local proxy; a `models.json` entry that names the login's provider with another address is refused, saying why.
+
 ## 0.97.10 — Publications shown as they will be sent
 
 ### Fixed

@@ -21,6 +21,7 @@ use super::pricing::Prices;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     io::Read,
     path::{Path, PathBuf},
@@ -201,6 +202,8 @@ pub struct Providers {
     models: Vec<Model>,
     /// The providers the files name that `/login` may save a key for, each once, in order.
     keyed: Vec<(String, KeyFrom)>,
+    /// `origins`, of each of `keyed`.
+    origins: HashMap<String, Vec<String>>,
     credential_files: Vec<PathBuf>,
     problems: Vec<String>,
     /// Where `/login` saves what it does.
@@ -287,6 +290,7 @@ impl Providers {
         reading.logins();
         self.models = reading.models;
         self.keyed = reading.keyed;
+        self.origins = reading.origins;
         self.listings = reading.listings;
         self.tried = reading.tried;
         self.programs = reading.programs;
@@ -343,6 +347,12 @@ impl Providers {
     /// from: those `/login` may save a key for.
     pub fn keyed(&self) -> &[(String, KeyFrom)] {
         &self.keyed
+    }
+
+    /// The servers (`scheme://host:port`) the entry of `provider`, one of `keyed`'s, sends
+    /// requests to: those a key `/login` saves for it is sent to.
+    pub fn origins(&self, provider: &str) -> &[String] {
+        self.origins.get(provider).map_or(&[], Vec::as_slice)
     }
 
     /// The logins the files' programs do, in their order.
@@ -452,9 +462,28 @@ struct Reading {
     /// `Providers::tried`.
     tried: HashMap<String, Result<Vec<Value>, String>>,
     programs: Vec<LoginProgram>,
+    /// `Providers::origins`.
+    origins: HashMap<String, Vec<String>>,
+    /// The servers each login's own entry names, as `login_origins` found them.
+    logged_in_origins: RefCell<HashMap<String, Vec<String>>>,
 }
 
 impl Reading {
+    /// The servers the login of provider `name` names itself, its token's only destinations.
+    fn login_origins(&self, name: &str) -> Vec<String> {
+        let mut found = self.logged_in_origins.borrow_mut();
+        let named = found.entry(name.to_owned()).or_insert_with(|| {
+            let Some(logins) = &self.logins else {
+                return Vec::new();
+            };
+            let credential = self.saved.get(name).unwrap_or(&Value::Null);
+            let listed = super::login::List::read(logins, name);
+            let listed = listed.map_or(Value::Null, |listed| listed.0);
+            (super::login::entry(name, credential, &listed).as_ref()).map_or_else(Vec::new, origins)
+        });
+        named.clone()
+    }
+
     /// Whether `/login` logs in to provider `name`, itself or by a package's program.
     fn logs_in(&self, name: &str) -> bool {
         super::login::LOGINS.iter().any(|(login, _)| *login == name)
@@ -604,6 +633,7 @@ impl Reading {
                     (None, _) => KeyFrom::Nowhere,
                 };
                 self.keyed.push((name.clone(), from));
+                self.origins.insert(name.clone(), origins(&entry));
             }
             self.provider(&name, &entry, &format!("{what}: provider {name}"));
         }
@@ -741,17 +771,26 @@ impl Reading {
             None => return Err(format!("{subject}: no api")),
         };
         let url = text("baseUrl")?.ok_or_else(|| format!("{subject}: no baseUrl"))?;
-        let BaseUrl {
-            tls,
-            host,
-            port,
-            authority,
-            path,
-        } = base_url(url).map_err(|problem| format!("{subject}: baseUrl {problem}"))?;
+        let base = base_url(url).map_err(|problem| format!("{subject}: baseUrl {problem}"))?;
+        let origin = base.origin();
         let mut headers = Vec::new();
-        // As Scramjet's, a key `/login` saved is sent in place of the entry's.
+        // As Scramjet's, a key `/login` saved is sent in place of the entry's, but only to the
+        // servers it was saved for: a package's entry of the same name may name another.
         let key = match super::login::key(&self.saved, name) {
-            Some(saved) => Some((saved, "the API key /login saved")),
+            Some((_, origins)) if origins.is_empty() => {
+                return Err(format!(
+                    "{subject}: the API key /login saved for {name} names no server, as keys \
+                     saved before 0.98.0 do; /login again to save it for {origin}"
+                ));
+            }
+            Some((_, origins)) if !origins.contains(&origin.as_str()) => {
+                return Err(format!(
+                    "{subject}: the API key /login saved for {name} is for {}, not {origin}; \
+                     /login again to send it there",
+                    origins.join(", ")
+                ));
+            }
+            Some((saved, _)) => Some((saved, "the API key /login saved")),
             None => text("apiKey")?.map(|key| (key, "apiKey")),
         };
         let login = match (&self.logins, key) {
@@ -764,6 +803,27 @@ impl Reading {
             }),
             _ => None,
         };
+        if login.is_some() {
+            if !base.private() {
+                return Err(format!(
+                    "{subject}: {name}'s login would go over http:// to {origin}, unencrypted; a \
+                     login's token goes over http:// only to this machine"
+                ));
+            }
+            // This machine too: a proxy there in front of the login's server, which a package
+            // able to run programs could not misuse further.
+            let origins = self.login_origins(name);
+            if !origins.contains(&origin) && !base.local() {
+                let named = match origins.is_empty() {
+                    true => "no server yet (/login)".to_owned(),
+                    false => origins.join(", "),
+                };
+                return Err(format!(
+                    "{subject}: {name}'s login is for {named}, not {origin}; its token goes only \
+                     to the servers its login names and to this machine"
+                ));
+            }
+        }
         if let Some((key, what)) = key {
             let key = resolve(key).map_err(|problem| format!("{subject}: {what} {problem}"))?;
             if protocol == Protocol::Messages {
@@ -796,6 +856,13 @@ impl Reading {
                 ));
             }
         }
+        let BaseUrl {
+            tls,
+            host,
+            port,
+            authority,
+            path,
+        } = base;
         let route = Route {
             provider: name.to_owned(),
             tls,
@@ -920,6 +987,48 @@ pub(super) struct BaseUrl {
     pub authority: String,
     /// Without a trailing `/`.
     pub path: String,
+}
+
+impl BaseUrl {
+    /// The server credentials are tied to: `scheme://host:port`, the host in lower case.
+    pub fn origin(&self) -> String {
+        let host = self.host.to_ascii_lowercase();
+        let host = match host.contains(':') {
+            true => format!("[{host}]"),
+            false => host,
+        };
+        let scheme = if self.tls { "https" } else { "http" };
+        format!("{scheme}://{host}:{}", self.port)
+    }
+
+    /// Whether it is on this machine.
+    fn local(&self) -> bool {
+        let host = self.host.to_ascii_lowercase();
+        host == "localhost" || (host.parse::<std::net::IpAddr>()).is_ok_and(|ip| ip.is_loopback())
+    }
+
+    /// Whether what is sent there stays private: over TLS, or to this machine.
+    fn private(&self) -> bool {
+        self.tls || self.local()
+    }
+}
+
+/// Whether what is sent to the server `origin` stays private (`BaseUrl::private`).
+pub(super) fn private_to(origin: &str) -> bool {
+    base_url(origin).is_ok_and(|url| url.private())
+}
+
+/// The servers a provider's `entry` sends requests to: its `baseUrl` and its models', each once.
+fn origins(entry: &Value) -> Vec<String> {
+    let models = entry["models"].as_array().into_iter().flatten();
+    let urls = std::iter::once(&entry["baseUrl"]).chain(models.map(|model| &model["baseUrl"]));
+    let mut origins: Vec<String> = (urls.filter_map(Value::as_str))
+        .filter_map(|url| base_url(url).ok())
+        .map(|url| url.origin())
+        .collect();
+    origins.sort();
+    origins.dedup();
+    origins
 }
 
 /// An `http://` or `https://` URL's parts.
@@ -1374,17 +1483,32 @@ mod tests {
         let grok = route(&providers, "grok-4.6");
         assert_eq!((grok.tls, grok.authority.as_str()), (true, "api.x.example"));
         assert_eq!(grok.login.unwrap().file, auth);
-        // A file that names the provider replaces the login's list, and takes its key.
-        let named = json!({"providers": {"github-copilot": {"baseUrl": "http://127.0.0.1:9",
-            "api": "openai-completions", "models": [{"id": "kimi-k3"}]}}});
+        // A file that names the provider replaces the login's list, and takes its token to the
+        // login's own server only.
+        let named = json!({"providers": {"github-copilot": {"baseUrl": "https://API.x.example",
+            "api": "openai-completions", "models": [{"id": "kimi-k3"},
+                {"id": "local", "baseUrl": "http://127.0.0.1:9"},
+                {"id": "proxied", "baseUrl": "https://proxy.x.example"},
+                {"id": "open", "baseUrl": "http://api.x.example:443"}]}}});
         let providers = Providers::given_logged_in(named, logins.clone());
         let ids: Vec<&str> = providers
             .models()
             .iter()
             .map(|model| model.id.as_str())
             .collect();
-        assert_eq!((ids, providers.problems().len()), (vec!["kimi-k3"], 0));
+        assert_eq!(ids, ["kimi-k3", "local"]);
         assert!(route(&providers, "kimi-k3").login.is_some());
+        assert_eq!(
+            providers.problems(),
+            [
+                "models: provider github-copilot: model proxied: github-copilot's login is for \
+                 https://api.x.example:443, not https://proxy.x.example:443; its token goes only \
+                 to the servers its login names and to this machine",
+                "models: provider github-copilot: model open: github-copilot's login would go \
+                 over http:// to http://api.x.example:443, unencrypted; a login's token goes \
+                 over http:// only to this machine"
+            ]
+        );
         // Logged out, the login's models go.
         super::super::login::logout(&logins, "github-copilot").unwrap();
         assert!(!logins.listed("github-copilot").exists());
@@ -1493,7 +1617,8 @@ mod tests {
         // A key saved, or logged out of, has what its provider lists asked for again.
         let saved = logins.provided("anthropic");
         assert!(saved.exists());
-        super::super::login::save_key(&logins.auth, "anthropic", "k").unwrap();
+        let origins = moved.origins("anthropic");
+        super::super::login::save_key(&logins.auth, "anthropic", "k", origins).unwrap();
         super::super::login::logout(&logins, "anthropic").unwrap();
         assert!(!saved.exists());
     }
@@ -1542,12 +1667,16 @@ mod tests {
             headers(&providers, "anthropic/m-anthropic-messages"),
             [pair("x-api-key", "literal")]
         );
-        let login = super::super::login::save_key;
-        login(&logins.auth, "openrouter", "sk-or").unwrap();
-        login(&logins.auth, "anthropic", "sk-ant").unwrap();
+        assert_eq!(providers.origins("openrouter"), ["http://127.0.0.1:9"]);
+        let login = |name: &str, key: &str| {
+            let origins = providers.origins(name);
+            super::super::login::save_key(&logins.auth, name, key, origins).unwrap()
+        };
+        login("openrouter", "sk-or");
+        login("anthropic", "sk-ant");
         // A saved key that names a variable is read from it, as the entry's is.
-        login(&logins.auth, "named", "SCRAMJET_RS_PROVIDERS_KEYED_TEST").unwrap();
-        let providers = Providers::given_logged_in(document, logins.clone());
+        login("named", "SCRAMJET_RS_PROVIDERS_KEYED_TEST");
+        let providers = Providers::given_logged_in(document.clone(), logins.clone());
         let saved: Vec<KeyFrom> = providers
             .keyed()
             .iter()
@@ -1566,10 +1695,40 @@ mod tests {
             headers(&providers, "named/m-openai-responses"),
             [pair("authorization", "Bearer from-variable")]
         );
-        // A provider `/login` logs in to keeps its login.
+        // A provider `/login` logs in to keeps its login: this machine may take its token.
         let copilot = route(&providers, "github-copilot/m-openai-responses");
         assert!(copilot.headers.is_empty() && copilot.login.is_some());
         assert_eq!(providers.problems(), [] as [String; 0]);
+        // A saved key goes only to the servers it was saved for; one saved before keys named
+        // them goes nowhere until saved again.
+        let mut moved = document.clone();
+        moved["providers"]["openrouter"]["baseUrl"] = "http://127.0.0.1:10".into();
+        moved["providers"]["openrouter"]["models"][0]["baseUrl"] = "http://127.0.0.1:9/v2".into();
+        let models = moved["providers"]["openrouter"]["models"]
+            .as_array_mut()
+            .unwrap();
+        models.push(json!({"id": "elsewhere"}));
+        let old = json!({"type": "api_key", "key": "sk-ant"});
+        super::super::login::save(&logins.auth, "anthropic", old).unwrap();
+        let providers = Providers::given_logged_in(moved, logins.clone());
+        assert_eq!(
+            headers(&providers, "openrouter/m-openai-completions"),
+            [pair("authorization", "Bearer sk-or")]
+        );
+        assert!(providers.find("openrouter/elsewhere").is_none());
+        let problems = providers.problems();
+        assert_eq!(
+            [&problems[0], &problems[1]],
+            [
+                "models: provider anthropic: model m-anthropic-messages: the API key /login saved \
+                 for anthropic names no server, as keys saved before 0.98.0 do; /login again to \
+                 save it for http://127.0.0.1:9",
+                "models: provider openrouter: model elsewhere: the API key /login saved for \
+                 openrouter is for http://127.0.0.1:9, not http://127.0.0.1:10; /login again to \
+                 send it there"
+            ]
+        );
+        assert_eq!(problems.len(), 2);
     }
 
     #[test]

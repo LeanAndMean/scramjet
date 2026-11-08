@@ -212,7 +212,8 @@ impl Interactive {
             _ => return,
         };
         let shown = visible(provider);
-        match login::save_key(&logins.auth, provider, &typed) {
+        let origins = self.agent.providers().origins(provider).to_vec();
+        match login::save_key(&logins.auth, provider, &typed, &origins) {
             Ok(()) => {
                 self.agent.forget_list(provider);
                 self.logins_changed();
