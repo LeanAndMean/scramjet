@@ -5,8 +5,9 @@
 use super::{console, screen};
 use std::{
     io::{self, PipeWriter, Read, Write},
+    path::PathBuf,
     sync::{
-        OnceLock,
+        Mutex, OnceLock, PoisonError,
         atomic::{AtomicI32, Ordering},
     },
 };
@@ -15,6 +16,67 @@ use std::{
 static SIGNAL: AtomicI32 = AtomicI32::new(0);
 /// The pipe that wakes the thread that exits.
 static WAKE: OnceLock<PipeWriter> = OnceLock::new();
+/// The process id of the external editor that has the terminal, or 0.
+#[cfg(unix)]
+static EDITOR: AtomicI32 = AtomicI32::new(0);
+/// The temporary file of the prompt the editor has, removed by an exit as by the edit's end.
+static PROMPT: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Records the temporary file the prompt is edited in, or `None` once it is removed.
+pub(super) fn prompt_file(path: Option<PathBuf>) {
+    *PROMPT.lock().unwrap_or_else(PoisonError::into_inner) = path;
+}
+
+/// Records that the external editor `pid` has the terminal, so that an exit stops it first;
+/// one that started as the exit began gets the signal at once.
+#[cfg(unix)]
+pub(super) fn editing(pid: u32) {
+    let pid = pid as i32;
+    EDITOR.store(pid, Ordering::SeqCst);
+    let signal = SIGNAL.load(Ordering::SeqCst);
+    if signal != 0 {
+        // SAFETY: a plain kill(2) of the editor this process started and has not reaped.
+        unsafe { libc::kill(pid, signal) };
+    }
+}
+
+/// Records that the editor was reaped. During an exit the caller never returns, so that it does
+/// not draw the screen again while the exit gives the terminal back.
+#[cfg(unix)]
+pub(super) fn edited() {
+    EDITOR.store(0, Ordering::SeqCst);
+    while SIGNAL.load(Ordering::SeqCst) != 0 {
+        std::thread::park();
+    }
+}
+
+/// Passes the exit's signal on to the external editor and waits for it to end, as it then saves
+/// its state and gives the terminal back itself; one still running after 5 seconds is killed.
+/// Left running, it would stop at its next read once the shell took the terminal back.
+#[cfg(unix)]
+fn stop_editor() {
+    let gone = |seconds: u64| {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while EDITOR.load(Ordering::SeqCst) != 0 {
+            if std::time::Instant::now() > end {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        true
+    };
+    for (signal, seconds) in [(SIGNAL.load(Ordering::SeqCst), 5), (libc::SIGKILL, 1)] {
+        let pid = EDITOR.load(Ordering::SeqCst);
+        if pid == 0 {
+            return;
+        }
+        // SAFETY: a plain kill(2); the editor is unreaped while `EDITOR` names it.
+        unsafe { libc::kill(pid, signal) };
+        if gone(seconds) {
+            return;
+        }
+    }
+}
 
 /// Makes SIGTERM and SIGHUP, and `on_signal`, exit with `startup` the terminal mode the agent
 /// started in.
@@ -57,6 +119,11 @@ pub(super) fn on_signal(signal: i32) {
 /// The screen is left only while shown, not while an external editor has the terminal. After a
 /// hangup the terminal's calls fail at once.
 fn exit(startup: Option<&console::Mode>) -> ! {
+    #[cfg(unix)]
+    stop_editor();
+    if let Some(prompt) = PROMPT.lock().unwrap_or_else(PoisonError::into_inner).take() {
+        let _ = std::fs::remove_file(prompt);
+    }
     scramjet_rs::agent::end();
     let mut stderr = io::stderr().lock();
     if let Some(leave) = screen::leave_on_exit() {

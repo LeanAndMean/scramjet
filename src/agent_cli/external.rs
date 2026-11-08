@@ -40,8 +40,12 @@ fn editor_command() -> Option<String> {
 fn run_on(command: &str, file: &Path) -> Result<std::process::ExitStatus, String> {
     let mut parts = command.split(' ').filter(|part| !part.is_empty());
     let program = parts.next().ok_or_else(|| NO_EDITOR.to_owned())?;
-    (Command::new(program).args(parts).arg(file).status())
-        .map_err(|error| format!("cannot start {program}: {error}"))
+    let mut editor = (Command::new(program).args(parts).arg(file).spawn())
+        .map_err(|error| format!("cannot start {program}: {error}"))?;
+    super::exit::editing(editor.id());
+    let status = editor.wait();
+    super::exit::edited();
+    status.map_err(|error| format!("{program}: {error}"))
 }
 
 /// Runs the editor `command` on `file` through `cmd.exe`, as Scramjet's `shell: true` does there,
@@ -72,6 +76,7 @@ fn run_editor(command: &str, text: &str) -> Result<Option<String>, String> {
         .map_err(|error| error.to_string())
         .and_then(|()| {
             drop(file);
+            super::exit::prompt_file(Some(path.clone()));
             let status = run_on(command, &path)?;
             if !status.success() {
                 return Ok(None);
@@ -81,6 +86,7 @@ fn run_editor(command: &str, text: &str) -> Result<Option<String>, String> {
                 .map_err(|error| error.to_string())
         });
     let _ = fs::remove_file(&path);
+    super::exit::prompt_file(None);
     outcome.map(|edited| edited.map(taken))
 }
 

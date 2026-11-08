@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.99.2 — SIGTERM no longer leaves the editor behind
+
+### Fixed
+
+- SIGTERM while `$VISUAL` or `$EDITOR` has the terminal (Ctrl+G, or a `/settings` row) passes on to the editor and waits up to 5 seconds for it to end before exiting, so it can save and give the terminal back itself, rather than being left to stop in the background at its next read. The prompt's temporary file is removed, as after an edit.
+
 ## 0.99.1 — A full disk no longer empties a hard-linked file
 
 ### Fixed

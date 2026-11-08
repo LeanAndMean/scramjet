@@ -391,6 +391,12 @@ failing_script = os.path.join(work, 'fail.sh')
 with open(failing_script, 'w') as script_file:
     script_file.write('#!/bin/sh\nprintf lost > "$1"\nexit 1\n')
 os.chmod(failing_script, 0o755)
+# Waits until it gets SIGTERM, which it notes.
+waiting_script = os.path.join(work, 'wait.sh')
+with open(waiting_script, 'w') as script_file:
+    script_file.write('#!/bin/sh\ntrap \'echo term > "$1.term"; kill $!; exit 0\' TERM\necho $$ > "$1.pid"\n'
+                      'sleep 60 & wait\n')
+os.chmod(waiting_script, 0o755)
 
 
 def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, rows=24, forget_models=True,
@@ -1772,6 +1778,18 @@ def edited_in_editor(read, until, send, output):
     send(b'\x04')
 
 
+def terminated_in_editor(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'draft')
+    on_screen('> draft')
+    send(b'\x07')
+    end = time.monotonic() + 10
+    while not glob.glob(os.path.join(scratch, '*.pid')):
+        assert time.monotonic() < end, os.listdir(scratch)
+        read(.05)
+
+
 def kept_when_editor_fails(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2069,6 +2087,17 @@ prompts = [item['content'] for item in map(json.loads, open(edited)) if item.get
 assert prompts == ['edited\nline two'], prompts
 assert os.listdir(scratch) == [], os.listdir(scratch)
 run([], kept_when_editor_fails, variables={'EDITOR': failing_script, 'TMPDIR': scratch})
+# SIGTERM while the editor has the terminal passes on to it and waits for it, rather than leaving
+# it to stop in the background at its next read; its prompt's file is removed, as after an edit.
+run([], terminated_in_editor, variables={'VISUAL': waiting_script, 'TMPDIR': scratch}, status=143,
+    signal=signal.SIGTERM)
+(pid_file,) = glob.glob(os.path.join(scratch, '*.pid'))
+prompt_file = pid_file[:-len('.pid')]
+assert open(prompt_file + '.term').read() == 'term\n', os.listdir(scratch)
+assert not os.path.exists(prompt_file), os.listdir(scratch)
+assert not os.path.exists('/proc/' + open(pid_file).read().strip()), 'the editor still runs'
+for left in (pid_file, prompt_file + '.term'):
+    os.remove(left)
 run([], editor_cannot_start, variables={'VISUAL': '/nonexistent/scramjet-editor', 'TMPDIR': scratch})
 run([], no_editor_configured)
 assert os.listdir(scratch) == [], os.listdir(scratch)
