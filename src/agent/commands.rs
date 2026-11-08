@@ -485,6 +485,20 @@ impl Commands {
         self.get(name)
     }
 
+    /// Takes the command `prompt` names again from its file, so that one edited since start or
+    /// `/reload` runs as edited, its `next:` block included; one whose file no longer reads as
+    /// that command stays as found.
+    pub(super) fn refresh(&mut self, prompt: &str) {
+        let Some(found) = self.named(prompt) else {
+            return;
+        };
+        let name = found.name.clone();
+        if let Some(current) = found.current() {
+            let at = self.list.iter().position(|command| command.name == name);
+            self.list[at.expect("named")] = current;
+        }
+    }
+
     /// The text a prompt sends when it runs a command, `None` when it runs none: `/<name> args`
     /// names a command, whose body takes the arguments.
     pub fn expand(&self, prompt: &str) -> Option<String> {
@@ -498,6 +512,19 @@ impl Commands {
 }
 
 impl Command {
+    /// The command as its file says now, `None` when the file cannot be read or no longer
+    /// parses as this command.
+    pub(super) fn current(&self) -> Option<Command> {
+        let content = fs::read_to_string(&self.path).ok()?;
+        let (set, _) = self.name.split_once(':')?;
+        let file = self.path.file_name()?.to_str()?;
+        let command = parse(set, file, &content, &mut Vec::new()).ok()?;
+        (command.name == self.name).then(|| Command {
+            path: self.path.clone(),
+            ..command
+        })
+    }
+
     /// Its body with `args` split as Scramjet splits them and substituted.
     pub(super) fn body_with(&self, args: &str) -> String {
         substitute(&self.body, &split_args(args))
@@ -1244,6 +1271,48 @@ auto-approve\n    add_issue_comment: require-approval\n",
             commands.expand("/rs:only"),
             Some("<scramjet-command name=\"rs:only\">\nOnly\n\n</scramjet-command>".into())
         );
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
+    fn a_command_edited_since_discovery_runs_as_edited() {
+        let scratch = Scratch::new("edited");
+        scratch.file("project/rs/commands/rs:loop.md", "Old\n");
+        let mut commands = Commands::discover(&project_sets(&scratch.0.join("project")));
+        let framed = |body: &str| {
+            format!("<scramjet-command name=\"rs:loop\">\n{body}\n</scramjet-command>")
+        };
+        scratch.file(
+            "project/rs/commands/rs:loop.md",
+            "---\nnext:\n  mode: forced\n  target: rs:loop\n---\nNew $1\n",
+        );
+        let delegated = super::super::delegate::run(
+            &serde_json::json!({"command": "rs:loop", "args": "x"}),
+            &commands,
+            None,
+            &mut Vec::new(),
+        );
+        assert_eq!(delegated.text, framed("New x"));
+        commands.refresh("/rs:loop y");
+        assert_eq!(commands.expand("/rs:loop y"), Some(framed("New y")));
+        let forced = Policy::Forced {
+            target: "rs:loop".into(),
+        };
+        assert_eq!(commands.get("rs:loop").unwrap().next, Some(forced.clone()));
+
+        // A file that no longer reads as the command leaves it as last found.
+        scratch.file(
+            "project/rs/commands/rs:loop.md",
+            "---\nnext: [\n---\nBroken\n",
+        );
+        commands.refresh("/rs:loop");
+        std::fs::remove_file(scratch.0.join("project/rs/commands/rs:loop.md")).unwrap();
+        commands.refresh("/rs:loop");
+        assert_eq!(commands.expand("/rs:loop"), Some(framed("New ")));
+        assert_eq!(commands.get("rs:loop").unwrap().next, Some(forced));
     }
 
     #[test]

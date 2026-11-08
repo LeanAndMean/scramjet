@@ -1467,7 +1467,8 @@ impl Agent {
     }
 
     /// The text `prompt` sends when it runs a command or a skill, `None` when it is sent as typed.
-    pub fn expand(&self, prompt: &str) -> Option<String> {
+    pub fn expand(&mut self, prompt: &str) -> Option<String> {
+        self.commands.refresh(prompt);
         (self.commands.expand(prompt)).or_else(|| self.skills.expand(prompt)?.ok())
     }
 

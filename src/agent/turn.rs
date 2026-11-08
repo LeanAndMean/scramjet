@@ -55,6 +55,7 @@ impl Agent {
     /// prompt as typed is kept for recall and display. A skill whose file cannot be read now is
     /// said so, and the prompt sent as typed, as Pi does.
     fn user_message(&mut self, prompt: &str, ui: &mut dyn AgentUi) -> Value {
+        self.commands.refresh(prompt);
         let command = (self.commands.named(prompt)).map(|command| command.name.clone());
         let skill = command
             .is_none()

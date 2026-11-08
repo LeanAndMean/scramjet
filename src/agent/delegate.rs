@@ -92,6 +92,8 @@ these arguments in this turn. Refusing to recurse; its instructions are in that 
         ));
     }
     delegated.push((name.to_owned(), args.to_owned()));
+    let current = command.current();
+    let command = current.as_ref().unwrap_or(command);
     let caller = active.and_then(|active| commands.get(active));
     let scopes = (caller.and_then(|caller| caller.allowed_tools.as_ref()))
         .zip(command.allowed_tools.as_ref());

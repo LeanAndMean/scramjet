@@ -122,6 +122,7 @@ Not scheduled; fix them when they matter.
 - `agent::tests::a_fork_continues_from_before_a_prompt_in_a_new_session` failed once under the full run's load at `src/agent/tests.rs:1321` (the fork left before a prompt still existed) and passed alone three times (2026-11-06, 0.51.0). Not looked into; session files are named by millisecond and process id.
 - `agent::tools::tests::a_symlink_swapped_in_alongside_never_leads_a_tool_into_a_store` failed once under the full run's load (`ran > 0`: none of its 3000 rounds read the file between swaps) and passed alone three times (2026-11-07, 0.80.0). Not looked into.
 - `agent::mcp::tests::a_session_the_server_forgot_is_started_again` failed once under the full run's load (`src/agent/mcp/tests.rs:970`: the Python HTTP server's first line, its port, was empty) and passed alone three times (2026-11-08, 0.97.8). Not looked into.
+- Reproducing the four flakes above failed (2026-11-08): 18 runs of the library's tests, six copies at once on 48 cores, all passed. Look for them in a failing run's output rather than by rerunning.
 
 ## Open questions
 

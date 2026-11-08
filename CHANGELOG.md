@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.114.0 — An edited command runs as edited
+
+### Changed
+
+- A command runs as its file says at that moment, when typed, taken as a next step or delegated, rather than as it was when scramjet-rs started or last ran `/reload`. A long-running session that edits its own commands (or chains through fresh sessions) no longer sends their old text. A file that no longer reads as that command leaves the last version found.
+
 ## 0.113.0 — The conversation stays in the terminal after exit
 
 ### Added
