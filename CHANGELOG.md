@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.7 — MCP calls' arguments shown in full before approval
+
+### Fixed
+
+- With `--ask`, an MCP call whose arguments are too long for its call line (over 200 characters) now shows them in full above the approval question, so nothing past the cut is approved unseen.
+
 ## 0.98.6 — Invisible characters shown
 
 ### Fixed

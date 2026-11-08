@@ -649,6 +649,26 @@ fn direct_names_read_back_their_server_and_tool() {
 }
 
 #[test]
+fn an_approval_shows_the_arguments_a_call_line_cuts() {
+    let call = |text: &str| json!({"server":"test","tool":"echo","arguments":{"text":text}});
+    let short = call(&"a".repeat(180));
+    assert!(!summary_line(CALL, &short).ends_with('…'));
+    assert_eq!(unseen_arguments(&short), None);
+    assert_eq!(
+        unseen_arguments(&json!({"server":"test","tool":"echo"})),
+        None
+    );
+    let long = call(&format!("{} then rm -rf ~", "a".repeat(200)));
+    assert!(!summary_line(CALL, &long).contains("rm -rf"));
+    let shown = unseen_arguments(&long).unwrap();
+    assert!(
+        shown.starts_with("The call's arguments in full:\n\n```json\n{\n  \"text\": \"aaa"),
+        "{shown}"
+    );
+    assert!(shown.ends_with(" then rm -rf ~\"\n}\n```"), "{shown}");
+}
+
+#[test]
 fn without_servers_the_model_has_no_mcp_tools_and_none_start() {
     let (endpoint, _server) = serve(Vec::new());
     let (mut agent, _scratch) = agent(endpoint, "no-mcp");

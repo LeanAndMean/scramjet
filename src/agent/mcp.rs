@@ -1262,14 +1262,33 @@ pub(super) fn summary_line(name: &str, arguments: &Value) -> String {
             server => format!("\"{}\" in {server}", text("query")),
         },
         _ => {
-            let given = match &arguments["arguments"] {
-                Value::Null => String::new(),
-                Value::Object(object) if object.is_empty() => String::new(),
-                given => format!(" {given}"),
-            };
-            format!("{}/{}{}", text("server"), text("tool"), cut(&given, 200))
+            let given = given(arguments);
+            format!(
+                "{}/{}{}",
+                text("server"),
+                text("tool"),
+                cut(&given, SHOWN_CHARS)
+            )
         }
     }
+}
+
+/// How much of a call's arguments its call line shows.
+const SHOWN_CHARS: usize = 200;
+
+fn given(arguments: &Value) -> String {
+    match &arguments["arguments"] {
+        Value::Null => String::new(),
+        Value::Object(object) if object.is_empty() => String::new(),
+        given => format!(" {given}"),
+    }
+}
+
+/// A call's arguments in full, for its approval, when its call line shows only their start.
+pub(super) fn unseen_arguments(arguments: &Value) -> Option<String> {
+    let cut = given(arguments).chars().nth(SHOWN_CHARS).is_some();
+    let pretty = serde_json::to_string_pretty(&arguments["arguments"]).ok()?;
+    cut.then(|| format!("The call's arguments in full:\n\n```json\n{pretty}\n```"))
 }
 
 #[cfg(test)]

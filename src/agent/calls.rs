@@ -461,7 +461,15 @@ impl Agent {
             return Called::Done(output, ends);
         }
         let answer = match call.approval(&self.config.root) {
-            Approval::Ask(question) if self.config.ask => ui.approve(&question, cancel),
+            Approval::Ask(question) if self.config.ask => {
+                if let Some(arguments) = (call.name == mcp::CALL)
+                    .then(|| mcp::unseen_arguments(&call.arguments))
+                    .flatten()
+                {
+                    ui.question(&arguments);
+                }
+                ui.approve(&question, cancel)
+            }
             _ => Answer::Allow,
         };
         if answer == Answer::AllowAll {
