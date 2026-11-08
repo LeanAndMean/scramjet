@@ -699,6 +699,7 @@ impl Markdown {
         );
         let lazy = std::mem::replace(&mut self.lazy, lazy);
         let within = self.within(indent);
+        let relative = indent - self.lists[..within].last().map_or(0, |list| list.written);
         match kind {
             Kind::Item => {
                 let (marker, number, length) = marker(text);
@@ -735,8 +736,15 @@ impl Markdown {
         if matches!(kind, Kind::Indented) {
             return false;
         }
+        // As marked's, which keeps a text line's columns past its item's indent, but for four
+        // it takes as indented code going on with the text.
+        let kept = match (kind, relative) {
+            (Kind::Text, 4..) => relative - 4,
+            (Kind::Text, _) => relative,
+            _ => 0,
+        };
         if let Some(list) = self.lists.last() {
-            self.pending = " ".repeat(list.shown) + &self.pending[indent..];
+            self.pending = " ".repeat(list.shown + kept) + &self.pending[indent..];
         }
         false
     }
@@ -1666,10 +1674,10 @@ mod tests {
             rendered_alike(80, "# T\n    c\nnext"),
             format!("\x1b[1;4;33mT\x1b[0m\n\n{fence}\n  {code}c\x1b[0m\n{fence}\n\nnext")
         );
-        // In a list, four columns past its item's text.
+        // In a list, four columns past its item's text; text after it keeps its own two.
         assert_eq!(
             rendered_alike(80, "- a\n\n        c\n\n    text"),
-            format!("\x1b[36m-\x1b[0m a\n\n  {fence}\n    {code}  c\x1b[0m\n  {fence}\n\n  text")
+            format!("\x1b[36m-\x1b[0m a\n\n  {fence}\n    {code}  c\x1b[0m\n  {fence}\n\n    text")
         );
         assert_eq!(render(&["text\n    more"]), "text\n    more");
         assert_eq!(
@@ -1769,6 +1777,22 @@ mod tests {
         assert_eq!(markdown.push("- a\n\n"), format!("{}a\n", bullet("-")));
         assert_eq!(markdown.push("- b"), format!("{}b", bullet("-")));
         assert_eq!(markdown.push("\n\n") + &markdown.finish(), "\n\n");
+    }
+
+    #[test]
+    fn an_items_lines_keep_the_columns_past_its_text_as_in_scramjet() {
+        // As marked's: all of them on a lazy line, four fewer from four on, which it takes as
+        // indented code going on with the text.
+        let text = "- a\n    b\n      c\n- d\n b\n  - e\n         f\n1. g\n       h\n    i\n\n   j";
+        let bullet = |marker: &str| format!("\x1b[36m{marker}\x1b[0m ");
+        assert_eq!(
+            rendered_alike(80, text),
+            format!(
+                "{0}a\n    b\n  c\n{0}d\n   b\n    {0}e\n       f\n{1}g\n   h\n    i\n\n   j",
+                bullet("-"),
+                bullet("1."),
+            )
+        );
     }
 
     #[test]

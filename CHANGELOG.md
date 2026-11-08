@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.6 — Indented lines in list items
+
+### Fixed
+
+- A line of a reply's list item indented past the item's text keeps the extra columns, as Scramjet shows it (four fewer from four on); it showed under the item's text.
+
 ## 0.95.5 — Blocks inside quotes
 
 ### Fixed
