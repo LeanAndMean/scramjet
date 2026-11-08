@@ -1,9 +1,7 @@
 //! Scrolling and the mouse: the wheel and the scrollbar, selecting text, copying it and pasting.
 
 use super::transcript::Place;
-use super::{
-    App, CLICKS, DRAG, LEFT, Open, RIGHT, Shown, WHEEL, WHEEL_DOWN, WHEEL_UP, to_terminal,
-};
+use super::{App, CLICKS, DRAG, LEFT, Open, RIGHT, Shown, WHEEL_DOWN, WHEEL_UP, to_terminal};
 use crate::agent_cli::editor::{Draft, Editor, Note};
 use crate::agent_cli::keys::{Key, Mouse};
 use crate::agent_cli::selection;
@@ -305,7 +303,8 @@ impl App {
         }
         match button {
             WHEEL_UP | WHEEL_DOWN => {
-                self.navigate(if button == WHEEL_UP { -WHEEL } else { WHEEL });
+                let step = self.layout.wheel_step as isize;
+                self.navigate(if button == WHEEL_UP { -step } else { step });
                 let head = self.mark(column, row, self.reaches_dock());
                 if let Some(selection) = &mut self.selection
                     && selection.held

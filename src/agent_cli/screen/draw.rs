@@ -3,12 +3,12 @@
 //! the footer.
 
 use super::transcript::Look;
-use super::{ALLOW, App, EDITOR_SHARE, Open, Shown};
+use super::{ALLOW, App, Open, Shown};
 use crate::agent_cli::editor::{Draft, Note, terminal_size};
 use crate::agent_cli::keymap::{self, Binding};
 use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
-use crate::agent_cli::settings::scramjet_level;
+use crate::agent_cli::settings::{Layout, scramjet_level};
 use crate::agent_cli::style::{self, Band};
 use crate::agent_cli::terminal::{
     COMMAND_LINES, Terminal, elapsed, retrying, spinner, waiting_for,
@@ -120,21 +120,24 @@ impl Activity {
     }
 }
 
-/// Adds the prompt's rows to `rows`, at most a share of `room` around the cursor, then its
-/// completion list; returns where the cursor is. With `spelled`, misspelled words are marked.
+/// Adds the prompt's rows to `rows`, at most the `layout`'s share of `room` around the cursor,
+/// then its completion list; returns where the cursor is. With `spelled`, misspelled words are
+/// marked.
 fn prompt_rows(
     draft: &Draft,
     rows: &mut Vec<Line>,
-    width: usize,
-    room: usize,
+    (width, room): (usize, usize),
+    layout: Layout,
     spelled: bool,
 ) -> Option<(usize, usize)> {
     let (text, row, column) = draft.rows(width, spelled);
-    let shown = (room * EDITOR_SHARE / 100).max(1).min(text.len());
+    let shown = (room * layout.editor_share / 100).max(1).min(text.len());
     let top = (row + 1).saturating_sub(shown).min(text.len() - shown);
     let start = rows.len();
     rows.extend(selection::rows(&text[top..top + shown]));
-    rows.extend(selection::rows(&draft.completion_rows(width)));
+    rows.extend(selection::rows(
+        &draft.completion_rows(width, layout.completion_rows),
+    ));
     Some((start + row - top, column))
 }
 
@@ -363,7 +366,7 @@ impl App {
                     style::RESET
                 );
                 rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
-                prompt_rows(&text.draft, &mut rows, width, room, false)
+                prompt_rows(&text.draft, &mut rows, (width, room), self.layout, false)
             }
             Some(Open {
                 shown: Shown::Press(title, note) | Shown::Wait(title, note),
@@ -401,7 +404,7 @@ impl App {
                     style::RESET
                 ));
                 rows.push(rule.clone());
-                let cursor = prompt_rows(&self.draft, &mut rows, width, room, true);
+                let cursor = prompt_rows(&self.draft, &mut rows, (width, room), self.layout, true);
                 rows.push(rule);
                 cursor
             }

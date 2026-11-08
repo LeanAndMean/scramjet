@@ -1073,11 +1073,11 @@ impl Draft {
         self.note = Some((note, Instant::now()));
     }
 
-    /// The completion list's rows, if one is open.
-    pub(super) fn completion_rows(&self, width: usize) -> Vec<String> {
+    /// The completion list's rows, at most `most` of its entries, if one is open.
+    pub(super) fn completion_rows(&self, width: usize, most: usize) -> Vec<String> {
         self.completion
             .as_ref()
-            .map_or_else(Vec::new, |list| list.rows(width))
+            .map_or_else(Vec::new, |list| list.rows(width, most))
     }
 
     /// The prompt's rows at `width`, marked for a copy (`text::FROM`), and the row and column of

@@ -37,6 +37,64 @@ pub(super) fn card_level(level: &str) -> Option<&str> {
     }
 }
 
+/// Scramjet's layout preferences the full screen follows as they change.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Layout {
+    /// `scrollWheelStep`: the lines a notch of the mouse wheel scrolls.
+    pub(super) wheel_step: usize,
+    /// `editorMaxHeightPercent`: the share of the screen's rows the prompt's text takes at most.
+    pub(super) editor_share: usize,
+    /// `autocompleteMaxVisible`: the most entries a completion list shows at once.
+    pub(super) completion_rows: usize,
+}
+
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            wheel_step: 3,
+            editor_share: 30,
+            completion_rows: 5,
+        }
+    }
+}
+
+/// Each layout key, its range as Scramjet keeps it, and the values `/settings` cycles through.
+const LAYOUT_KEYS: [(Row, &str, u64, u64, &[usize]); 3] = [
+    (
+        Row::WheelStep,
+        "scrollWheelStep",
+        1,
+        20,
+        &[
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ],
+    ),
+    (
+        Row::PromptHeight,
+        "editorMaxHeightPercent",
+        10,
+        50,
+        &[10, 15, 20, 25, 30, 35, 40, 45, 50],
+    ),
+    (
+        Row::CompletionRows,
+        "autocompleteMaxVisible",
+        3,
+        20,
+        &[3, 5, 7, 10, 15, 20],
+    ),
+];
+
+impl Layout {
+    fn slot(&mut self, row: Row) -> &mut usize {
+        match row {
+            Row::WheelStep => &mut self.wheel_step,
+            Row::PromptHeight => &mut self.editor_share,
+            _ => &mut self.completion_rows,
+        }
+    }
+}
+
 /// What Escape twice on an empty prompt opens (`doubleEscapeAction`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum DoubleEscape {
@@ -103,6 +161,9 @@ pub(super) enum Row {
     FollowUp,
     DoubleEscape,
     CopyOnSelect,
+    WheelStep,
+    PromptHeight,
+    CompletionRows,
     SpellCheck,
     AutoCompact,
     BranchSummary,
@@ -115,7 +176,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 21] = [
+pub(super) const ROWS: [Row; 24] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -127,6 +188,9 @@ pub(super) const ROWS: [Row; 21] = [
     Row::FollowUp,
     Row::DoubleEscape,
     Row::CopyOnSelect,
+    Row::WheelStep,
+    Row::PromptHeight,
+    Row::CompletionRows,
     Row::SpellCheck,
     Row::AutoCompact,
     Row::BranchSummary,
@@ -153,6 +217,9 @@ impl Row {
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
             Self::CopyOnSelect => "Copy on select",
+            Self::WheelStep => "Wheel scrolls",
+            Self::PromptHeight => "Prompt height",
+            Self::CompletionRows => "Completion rows",
             Self::SpellCheck => "Spelling",
             Self::AutoCompact => "Auto-compact",
             Self::BranchSummary => "Leaving a branch",
@@ -236,6 +303,15 @@ impl Row {
                      either way."
                 );
             }
+            Self::WheelStep => "The lines of the conversation a notch of the mouse wheel scrolls.",
+            Self::PromptHeight => {
+                "The most rows the prompt's text takes, as a share of the screen's; a longer \
+                 prompt scrolls within them."
+            }
+            Self::CompletionRows => {
+                "The most entries a completion list under the prompt shows at once (commands, \
+                 files, arguments)."
+            }
             Self::SpellCheck => {
                 return format!(
                     "Words in the prompt the dictionary lacks are underlined. Words of your own, \
@@ -296,6 +372,7 @@ pub(super) struct Settings {
     pub(super) copy_on_select: bool,
     /// `spellCheck`: misspelled words in the prompt are underlined.
     pub(super) spell_check: bool,
+    pub(super) layout: Layout,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
@@ -439,6 +516,7 @@ impl Settings {
             double_escape: DoubleEscape::Tree,
             copy_on_select: cfg!(target_os = "macos"),
             spell_check: true,
+            layout: Layout::default(),
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             resume_chains: Chains::Flat,
@@ -504,6 +582,16 @@ impl Settings {
             None => {}
             Some(Value::Bool(check)) => self.spell_check = *check,
             Some(_) => wrong("spellCheck", "true or false"),
+        }
+        // As Scramjet's, a number outside its range is taken as its nearest end.
+        for (row, key, low, high, _) in LAYOUT_KEYS {
+            match object.get(key).map(Value::as_f64) {
+                None => {}
+                Some(Some(number)) if number.is_finite() => {
+                    *self.layout.slot(row) = number.floor().clamp(low as f64, high as f64) as usize
+                }
+                Some(_) => wrong(key, &format!("a number from {low} to {high}")),
+            }
         }
         match object
             .get("branchSummary")
@@ -1414,6 +1502,12 @@ impl Settings {
             .into(),
             Row::CopyOnSelect if self.copy_on_select => "on".into(),
             Row::CopyOnSelect => "off".into(),
+            Row::WheelStep => match self.layout.wheel_step {
+                1 => "1 line".into(),
+                lines => format!("{lines} lines"),
+            },
+            Row::PromptHeight => format!("{}% of the screen", self.layout.editor_share),
+            Row::CompletionRows => self.layout.completion_rows.to_string(),
             Row::SpellCheck if self.spell_check => "on".into(),
             Row::SpellCheck => "off".into(),
             Row::AutoCompact if self.compacting.automatic => "on".into(),
@@ -1511,6 +1605,19 @@ impl Settings {
             Row::SpellCheck => {
                 self.spell_check = !self.spell_check;
                 self.save("spellCheck", json!(self.spell_check))
+            }
+            Row::WheelStep | Row::PromptHeight | Row::CompletionRows => {
+                let Some((_, key, _, _, values)) =
+                    LAYOUT_KEYS.into_iter().find(|entry| entry.0 == row)
+                else {
+                    return Ok(());
+                };
+                let slot = self.layout.slot(row);
+                *slot = (values.iter().copied())
+                    .find(|value| value > slot)
+                    .unwrap_or(values[0]);
+                let value = *slot;
+                self.save(key, json!(value))
             }
             Row::AutoCompact => {
                 self.compacting.automatic = !self.compacting.automatic;
@@ -1686,10 +1793,10 @@ fn command_sets(object: &Map<String, Value>) -> Result<Vec<String>, ()> {
     paths(object, "commandSets")
 }
 
-/// The entries of the list of paths `key`; an error when it is not a list of strings.
 /// What a token count in the settings must be.
 const TOKENS: &str = "a whole number of tokens";
 
+/// The entries of the list of paths `key`; an error when it is not a list of strings.
 fn paths(object: &Map<String, Value>, key: &str) -> Result<Vec<String>, ()> {
     match object.get(key) {
         None => Ok(Vec::new()),
@@ -1921,6 +2028,49 @@ mod tests {
         assert_eq!(
             not_object.warnings,
             [format!("{path}: compaction must be an object; ignored")]
+        );
+    }
+
+    #[test]
+    fn layout_takes_scramjets_keys_within_their_ranges() {
+        let scratch = Scratch::new("layout");
+        assert_eq!(settings_with(&scratch, "{}").layout, Layout::default());
+        let settings = settings_with(
+            &scratch,
+            r#"{"scrollWheelStep": 7.9, "editorMaxHeightPercent": 50, "autocompleteMaxVisible": 12}"#,
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        let expected = Layout {
+            wheel_step: 7,
+            editor_share: 50,
+            completion_rows: 12,
+        };
+        assert_eq!(settings.layout, expected);
+        // As Scramjet's, numbers past either end are taken as that end.
+        let outside = settings_with(
+            &scratch,
+            r#"{"scrollWheelStep": 0, "editorMaxHeightPercent": 90, "autocompleteMaxVisible": -4}"#,
+        );
+        assert!(outside.warnings.is_empty(), "{:?}", outside.warnings);
+        let ends = Layout {
+            wheel_step: 1,
+            editor_share: 50,
+            completion_rows: 3,
+        };
+        assert_eq!(outside.layout, ends);
+        let wrong = settings_with(
+            &scratch,
+            r#"{"scrollWheelStep": "3", "editorMaxHeightPercent": null, "autocompleteMaxVisible": [5]}"#,
+        );
+        assert_eq!(wrong.layout, Layout::default());
+        let path = shown(&scratch.0.join("settings.json"));
+        assert_eq!(
+            wrong.warnings,
+            [
+                format!("{path}: scrollWheelStep must be a number from 1 to 20; ignored"),
+                format!("{path}: editorMaxHeightPercent must be a number from 10 to 50; ignored"),
+                format!("{path}: autocompleteMaxVisible must be a number from 3 to 20; ignored"),
+            ]
         );
     }
 
@@ -2492,6 +2642,27 @@ mod tests {
         );
         assert_eq!(settings.compacting.branch_reserve, 1);
         assert_eq!(
+            seen(Row::WheelStep, &mut settings),
+            ["3 lines", "4 lines", "5 lines", "6 lines"]
+        );
+        assert_eq!(
+            seen(Row::PromptHeight, &mut settings),
+            [
+                "30% of the screen",
+                "35% of the screen",
+                "40% of the screen",
+                "45% of the screen"
+            ]
+        );
+        assert_eq!(
+            seen(Row::CompletionRows, &mut settings),
+            ["5", "7", "10", "15"]
+        );
+        // The last value goes round to the first.
+        settings.cycle(Row::CompletionRows).unwrap();
+        settings.cycle(Row::CompletionRows).unwrap();
+        assert_eq!(settings.shown(Row::CompletionRows), "3");
+        assert_eq!(
             seen(Row::MarkdownReads, &mut settings),
             ["rendered", "source", "rendered", "source"]
         );
@@ -2526,6 +2697,9 @@ mod tests {
                 "hideThinkingBlock": true,
                 "copyOnSelect": !cfg!(target_os = "macos"),
                 "spellCheck": false,
+                "scrollWheelStep": 6,
+                "editorMaxHeightPercent": 45,
+                "autocompleteMaxVisible": 3,
                 "treeFilterMode": "all",
                 "followUpMode": "all",
                 "tools": ["read", "ls"],

@@ -89,9 +89,6 @@ fn scoped_models() -> Option<String> {
         .map(|key| format!("Enable/disable models for {key} cycling"))
 }
 
-/// Rows of the completion list, as Scramjet's autocomplete shows at most.
-const COMPLETION_ROWS: usize = 5;
-
 /// What the loaded settings add to the completions: the commands and skills the `/` list shows
 /// after the built-in ones (names and descriptions), and the MCP servers `/mcp reconnect`, `enable` and `disable` name.
 #[derive(Default)]
@@ -392,12 +389,13 @@ impl Completion {
     }
 
     /// The rows under the prompt, as Scramjet's select list draws them: the selected one
-    /// highlighted with `→ `, descriptions in a column, and the position when some are hidden.
-    pub(super) fn rows(&self, width: usize) -> Vec<String> {
+    /// highlighted with `→ `, descriptions in a column, at most `most` entries, and the position
+    /// when some are hidden.
+    pub(super) fn rows(&self, width: usize, most: usize) -> Vec<String> {
         use super::style::{COMPLETION_SELECTED, MUTED, RESET};
         let width = width.saturating_sub(1);
         let count = self.items.len();
-        let visible = count.min(COMPLETION_ROWS);
+        let visible = count.min(most);
         let top = self
             .selected
             .saturating_sub(visible / 2)
@@ -463,7 +461,7 @@ mod tests {
         let loaded = [("z\x1b[2J".to_owned(), "clears\x1b]0;title\x07".to_owned())];
         let list = Completion::slash("/z", &loaded).unwrap();
         assert_eq!(
-            plain(list.rows(60)),
+            plain(list.rows(60, 5)),
             ["→ /z\\u{1b}[2J  clears\\u{1b}]0;title\\u{7}"]
         );
     }
@@ -515,7 +513,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            plain(list.rows(60)),
+            plain(list.rows(60, 5)),
             [
                 "→ /settings       Open settings menu",
                 "  /model          Select model (opens selector UI)",
@@ -531,7 +529,7 @@ mod tests {
             list.select(false);
         }
         assert_eq!(
-            plain(list.rows(24)),
+            plain(list.rows(24, 5)),
             [
                 "  /rename",
                 "  /status",
@@ -610,7 +608,7 @@ mod tests {
             ["gpt-6-luna", "claude-haiku-5-5", "gpt-6.1-sol"]
         );
         assert_eq!(
-            plain(list.rows(60))[..2],
+            plain(list.rows(60, 5))[..2],
             [
                 format!("→ gpt-6-luna{}openai", " ".repeat(22)),
                 format!("  claude-haiku-5-5{}anthropic", " ".repeat(16))
@@ -691,6 +689,25 @@ mod tests {
     }
 
     #[test]
+    fn a_list_shows_as_many_entries_as_it_is_given() {
+        let models: Vec<String> = (1..=9).map(|n| format!("model-{n}")).collect();
+        let mut editor = Editor::new(
+            Vec::new(),
+            Arc::default(),
+            PathBuf::new(),
+            Completions::default(),
+            models,
+            false,
+        );
+        let mut draft = editor.draft("/model".into());
+        editor.key(&mut draft, Key::Text(" ".into()), false);
+        let shown = |most| plain(draft.completion_rows(40, most));
+        assert_eq!(shown(3), ["→ model-1", "  model-2", "  model-3", "  (1/9)"]);
+        assert_eq!(shown(7).len(), 8);
+        assert_eq!(shown(20).len(), 9, "all nine, without a position");
+    }
+
+    #[test]
     fn enter_puts_in_an_argument_without_sending_it() {
         let models = vec!["claude-haiku-5-5".to_owned(), "gpt-6-luna".to_owned()];
         let mut editor = Editor::new(
@@ -706,7 +723,7 @@ mod tests {
             let key = Key::Text(text.into());
             assert_eq!(editor.key(&mut draft, key, false), Action::Edited(true));
         }
-        assert_eq!(plain(draft.completion_rows(40)), ["→ gpt-6-luna"]);
+        assert_eq!(plain(draft.completion_rows(40, 5)), ["→ gpt-6-luna"]);
         assert_eq!(
             editor.key(&mut draft, key("enter"), false),
             Action::Edited(true)
@@ -723,7 +740,7 @@ mod tests {
             editor.key(&mut draft, Key::Text("n".into()), false),
             Action::Edited(true)
         );
-        assert_eq!(plain(draft.completion_rows(40)), ["→ on"]);
+        assert_eq!(plain(draft.completion_rows(40, 5)), ["→ on"]);
         assert_eq!(
             editor.key(&mut draft, key("enter"), false),
             Action::Submit("/autopilot on".into())
@@ -748,7 +765,7 @@ mod tests {
         assert_eq!(labels(&list), ["/rs:loop", "/rs:review"]);
         list.select(false);
         assert_eq!(
-            plain(list.rows(60)),
+            plain(list.rows(60, 5)),
             [
                 "  /rs:loop    [focus] — Build one increment",
                 "→ /rs:review  Review",
@@ -769,10 +786,13 @@ mod tests {
         )];
         let list = Completion::slash("/skill:", &long).unwrap();
         assert_eq!(
-            plain(list.rows(80)),
+            plain(list.rows(80, 5)),
             ["→ /skill:writing-scramjet-comma…  Use when creating commands"]
         );
-        assert_eq!(plain(list.rows(40)), ["→ /skill:writing-scramjet-commands"]);
+        assert_eq!(
+            plain(list.rows(40, 5)),
+            ["→ /skill:writing-scramjet-commands"]
+        );
     }
 
     #[test]
@@ -795,7 +815,7 @@ mod tests {
         // Directories first, then by name ignoring case.
         let list = Completion::path("see AL", &root).unwrap();
         assert_eq!(labels(&list), ["Alpha-dir/", "alpine.txt", "also.txt"]);
-        assert_eq!(plain(list.rows(40))[0], "→ Alpha-dir/");
+        assert_eq!(plain(list.rows(40, 5))[0], "→ Alpha-dir/");
         let mut buffer = Buffer {
             text: "see AL".into(),
             cursor: 6,
@@ -938,7 +958,7 @@ mod tests {
         let list = Completion::found(0, items(), &buffer).unwrap();
         assert_eq!(list.selected, 1);
         assert_eq!(
-            plain(list.rows(60)),
+            plain(list.rows(60, 5)),
             [
                 "  edit.rs                         lib/edit.rs",
                 "→ editor.rs                       src/editor.rs",

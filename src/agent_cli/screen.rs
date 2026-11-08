@@ -18,7 +18,7 @@ use super::keys::{self, Key, Press, RawMode, read_key};
 use super::record::{self, Event};
 use super::select::{Act, Picker, Routed, Spot, Toggle};
 use super::selection::Line;
-use super::settings::MarkdownReads;
+use super::settings::{Layout, MarkdownReads};
 use super::slash::{self, Builtin};
 use super::terminal::next_spin;
 use super::theme::Watched;
@@ -54,11 +54,6 @@ use transcript::{Place, Transcript};
 const TICK: Duration = Duration::from_millis(200);
 /// The shortest time between two frames, so that a fast stream does not redraw for each delta.
 const FRAME: Duration = Duration::from_millis(16);
-/// The share of the screen's rows the prompt's text takes at most, as Scramjet's default
-/// `editorMaxHeightPercent`.
-const EDITOR_SHARE: usize = 30;
-/// The lines a notch of the mouse wheel scrolls, Scramjet's default `wheel step`.
-const WHEEL: isize = 3;
 /// How often a selection dragged to the top or bottom edge scrolls on, as in Scramjet.
 const EDGE: Duration = Duration::from_millis(80);
 /// The longest time from a click's press to the next one's that counts them as a double or
@@ -102,6 +97,7 @@ enum ToScreen {
         double_escape: bool,
         markdown_reads: MarkdownReads,
         copy_on_select: bool,
+        layout: Layout,
         design: Design,
         banner: Banner,
     },
@@ -333,6 +329,8 @@ struct App {
     banner: Banner,
     /// A completed mouse selection is copied (`copyOnSelect`).
     copy_on_select: bool,
+    /// The wheel's step, the prompt's height and the completion list's rows.
+    layout: Layout,
     selection: Option<Selection>,
     /// The selections made so far, which tells a copy's from those made after it.
     selections: u64,
@@ -395,6 +393,7 @@ impl App {
             design: Design::Classic,
             banner: Banner::Plain,
             copy_on_select: false,
+            layout: Layout::default(),
             selection: None,
             selections: 0,
             edge: None,
@@ -634,12 +633,14 @@ impl App {
                 double_escape,
                 markdown_reads,
                 copy_on_select,
+                layout,
                 design,
                 banner,
             } => {
                 self.editor.reloaded(completions, double_escape);
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
+                self.layout = layout;
                 self.design = design;
                 self.banner = banner;
             }

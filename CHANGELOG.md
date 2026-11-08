@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.109.0 — Wheel, prompt height and completion rows as you set them
+
+### Added
+
+- Scramjet's layout settings: `scrollWheelStep` (3 lines a notch of the mouse wheel), `editorMaxHeightPercent` (30: the most rows the prompt's text takes, as a share of the screen's) and `autocompleteMaxVisible` (5 entries in a completion list), each kept within Scramjet's range. `/settings` has a row for each (Wheel scrolls, Prompt height, Completion rows), applied at once.
+
 ## 0.108.2 — Models no longer claim the next-step record
 
 ### Fixed

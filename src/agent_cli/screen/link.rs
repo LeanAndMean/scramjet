@@ -182,6 +182,7 @@ impl Link {
             double_escape: settings.double_escape != DoubleEscape::Nothing,
             markdown_reads: settings.markdown_reads,
             copy_on_select: settings.copy_on_select,
+            layout: settings.layout,
             design: settings.look,
             banner: settings.banner,
         });
@@ -340,6 +341,7 @@ impl Handle {
         let modes = (settings.steering_mode, settings.follow_up_mode);
         spelling::configure(settings.spell_check, settings.words().as_deref());
         let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
+        let layout = settings.layout;
         let (design, banner) = (settings.look, settings.banner);
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
@@ -362,6 +364,7 @@ impl Handle {
                 let app = App {
                     markdown_reads,
                     copy_on_select,
+                    layout,
                     design,
                     banner,
                     ..app
