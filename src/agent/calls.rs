@@ -1093,6 +1093,88 @@ the tool call it was making did not run"
     }
 
     #[test]
+    fn children_of_calls_running_together_stay_within_the_process_bound() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::sync::atomic::AtomicUsize;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let tasks: Vec<Value> = (0..4)
+            .map(|n| json!({"agent":"a","task":format!("t{n}")}))
+            .collect();
+        let fan_out = (subagent::NAME, json!({ "tasks": tasks }));
+        let first = tool_calls(&[fan_out.clone(), fan_out.clone(), fan_out]);
+        let (running, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let parents = Arc::new(AtomicUsize::new(0));
+        let server = {
+            let (running, most) = (running.clone(), most.clone());
+            std::thread::spawn(move || {
+                for connection in listener.incoming().take(14) {
+                    let mut reader = BufReader::new(connection.unwrap());
+                    let (running, most, parents) = (running.clone(), most.clone(), parents.clone());
+                    let first = first.clone();
+                    std::thread::spawn(move || {
+                        let mut length = 0;
+                        loop {
+                            let mut line = String::new();
+                            reader.read_line(&mut line).unwrap();
+                            let lower = line.to_lowercase();
+                            if let Some(value) = lower.strip_prefix("content-length:") {
+                                length = value.trim().parse().unwrap();
+                            }
+                            if line == "\r\n" {
+                                break;
+                            }
+                        }
+                        let mut body = vec![0; length];
+                        reader.read_exact(&mut body).unwrap();
+                        let body: Value = serde_json::from_slice(&body).unwrap();
+                        let instructions = body["instructions"].as_str().unwrap();
+                        let reply =
+                            |text| stream(&fixture::text_events(text, fixture::known_usage()));
+                        let response = if instructions.starts_with("You are a subagent") {
+                            most.fetch_max(
+                                running.fetch_add(1, Ordering::SeqCst) + 1,
+                                Ordering::SeqCst,
+                            );
+                            std::thread::sleep(Duration::from_millis(300));
+                            running.fetch_sub(1, Ordering::SeqCst);
+                            reply("done")
+                        } else if parents.fetch_add(1, Ordering::SeqCst) == 0 {
+                            first
+                        } else {
+                            reply("ok")
+                        };
+                        reader.get_mut().write_all(&response).unwrap();
+                    });
+                }
+            })
+        };
+        let (mut agent, _scratch) = agent(endpoint, "subagents-bound");
+        let agents = agent.root().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let file = "---\nname: a\ndescription: Agent a\ntools: read\n---\n";
+        std::fs::write(agents.join("a.md"), file).unwrap();
+        agent.agents_directory = Some(agents);
+        let mut ui = Recorder {
+            together: true,
+            ..Recorder::default()
+        };
+        agent
+            .turn("fan out", &mut ui, &AtomicBool::new(false))
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(agent.usage.requests, 14);
+        let results = ui
+            .shown
+            .iter()
+            .filter(|shown| shown.starts_with("result subagent Parallel: 4/4 succeeded"));
+        assert_eq!(results.count(), 3, "{:?}", ui.shown);
+        // Each call alone allows 4 at once; three together, 12 were in flight.
+        let most = most.load(Ordering::SeqCst);
+        assert!((1..=8).contains(&most), "{most} children at once");
+    }
+
+    #[test]
     fn parallel_and_chained_subagents_share_out_tasks_at_most_at_the_parents_effort() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let mut parent_requests = 0;

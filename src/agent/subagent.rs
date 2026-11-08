@@ -27,6 +27,8 @@ use std::{
 };
 use yaml_rust2::Yaml;
 
+mod slots;
+
 pub const NAME: &str = "subagent";
 
 /// Scramjet's `promptSnippet`, listed under the available tools.
@@ -38,6 +40,8 @@ analysis. Capped at your current session level.";
 
 const MAX_PARALLEL_TASKS: usize = 8;
 const MAX_CONCURRENCY: usize = 4;
+/// Children running at once in this process, whatever calls and threads started them.
+static CHILDREN: slots::Slots = slots::Slots::new(8);
 /// Scramjet's thinking levels, lowest first.
 const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 /// The tools a child can have; none of them changes a file.
@@ -1028,9 +1032,9 @@ enum Event {
     Done(Run),
 }
 
-/// Runs `jobs`, at most `MAX_CONCURRENCY` at a time, each on a thread of its own; this thread
-/// adds them to `shown` and shows what they do. A job not started before a cancellation is
-/// reported aborted.
+/// Runs `jobs`, at most `MAX_CONCURRENCY` at a time and within the process's `CHILDREN`, each
+/// on a thread of its own; this thread adds them to `shown` and shows what they do. A job not
+/// started before a cancellation is reported aborted.
 fn run_jobs(
     jobs: &[Job],
     parent: &Parent,
@@ -1056,9 +1060,14 @@ fn run_jobs(
                     }
                     let job = &jobs[index];
                     let run = match job.agent {
-                        Some(agent) => run_child(job, agent, parent, cancel, &mut |event| {
-                            let _ = sender.send((index, event));
-                        }),
+                        Some(agent) => {
+                            let Some(_slot) = CHILDREN.take(cancel) else {
+                                break;
+                            };
+                            run_child(job, agent, parent, cancel, &mut |event| {
+                                let _ = sender.send((index, event));
+                            })
+                        }
                         None => Run::failed(job.name, None, unknown(job.name)),
                     };
                     let _ = sender.send((index, Event::Done(run)));

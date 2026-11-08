@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.117.0 — At most 8 subagents at once
+
+### Changed
+
+- At most 8 subagents run at once in a scramjet-rs process, whatever calls and conversations started them; the others wait their turn in the order they were asked for, and Escape stops those waiting. Several `subagent` calls in one reply used to run up to 4 children each, so three of them ran 12.
+
 ## 0.116.1 — `/status`, `/hotkeys`, `/mcp` and `/usage` follow a theme change
 
 ### Fixed
