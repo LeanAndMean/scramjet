@@ -70,6 +70,9 @@ const DRAG: u16 = 32;
 const WHEEL_UP: u16 = 64;
 const WHEEL_DOWN: u16 = 65;
 const ALLOW: &str = "Allow? [y/N, a = allow all until exit]";
+/// A pause in typing this long ends the keys meant for the prompt: until then, the agent's
+/// question that appeared meanwhile takes none of them.
+const TYPING: Duration = Duration::from_millis(500);
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
 const MCP_BUSY: &str = "Wait for the current response to finish before changing MCP servers.";
@@ -272,6 +275,8 @@ struct Open {
     reply: mpsc::Sender<Answer>,
     /// A held list was answered: it shows, taking no keys, until the session replaces it.
     answered: bool,
+    /// Before then, keys are typing that began before an agent's question showed, not answers.
+    armed: Instant,
 }
 
 /// What runs the `!` commands typed during a turn.
@@ -309,6 +314,8 @@ struct App {
     /// Keys typed while an answered held list waits for the session's next, which then takes
     /// them, or the prompt does.
     held_keys: Vec<(Key, bool)>,
+    /// When the last key was typed (`TYPING`).
+    typed: Option<Instant>,
     footer: Footer,
     theme: Option<Watched>,
     /// The theme follows the terminal's background (`theme::following`).
@@ -374,6 +381,7 @@ impl App {
             handed: None,
             dialog: None,
             held_keys: Vec::new(),
+            typed: None,
             theme: None,
             following: false,
             top: None,
@@ -660,10 +668,16 @@ impl App {
                     }
                     Dialog::Usage(view) => Shown::Usage(view),
                 };
+                let now = Instant::now();
+                let armed = match self.typed {
+                    Some(typed) if asks => (typed + TYPING).max(now),
+                    _ => now,
+                };
                 self.dialog = Some(Open {
                     shown,
                     reply,
                     answered: false,
+                    armed,
                 });
                 self.top = None;
                 if let Some(activity) = &mut self.activity

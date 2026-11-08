@@ -795,7 +795,7 @@ def escape_after_approval(read, until, send, output):
     on_screen('Allow? [y/N, a = allow all until exit]')
     # Typed while the question shows, a key other than the answers does nothing.
     send(b'x')
-    read(.3)
+    read(.6)
     assert 'approved-42' not in '\n'.join(shown()), shown()
     send(b'y')
     rows = on_screen('approved-42')
@@ -810,6 +810,7 @@ def approval_keeps_the_prompt(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('Allow? [y/N, a = allow all until exit]')
+    read(.6)
     send(b'y')
     on_screen('Running 1s')
     send(b'kept')
@@ -822,6 +823,36 @@ def approval_keeps_the_prompt(read, until, send, output):
     send(b'\x1b')
     rows = on_screen('(cancelled)')
     assert rows[-1] == '> kept', rows
+    send(b'\x03\x04')
+
+
+def typing_through_an_approval(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    asked = ['Allow? [y/N, a = allow all until exit]']
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen(asked[0])
+    read(.6)
+    send(b'y')
+    on_screen('Running 1s')
+    # Typing on as the next question appears: none of the keys answers it, `a` included.
+    end = time.monotonic() + 10
+    while Screen(output, 60, 24).rows()[-1:] != asked:
+        assert time.monotonic() < end, shown()
+        send(b'a')
+        read(.1)
+    for _ in range(5):
+        send(b'a\r')
+        read(.1)
+    rows = shown()
+    assert rows[-1:] == asked and 'The user denied' not in '\n'.join(rows), rows
+    # Once typing pauses, the question takes its answer.
+    read(.6)
+    send(b'n')
+    on_screen('The user denied this tool call.')
+    ending(read, output, asked)
+    send(b'\x03')
+    on_screen('(cancelled)')
     send(b'\x03\x04')
 
 
@@ -845,6 +876,7 @@ def approval_shows_hidden_characters(read, until, send, output):
     assert b'\x1b[2Kecho hello' not in output, 'a command escape sequence reached the terminal'
     assert ' bash  rm -rf scratch\\r\\u{1b}[2Kecho hello' in '\n'.join(rows), rows
     # Escape declines.
+    read(.6)
     send(b'\x1b')
     on_screen('The user denied this tool call.')
     on_screen('Allow? [y/N, a = allow all until exit]')
@@ -876,6 +908,7 @@ run([], cancel_retry)
 run([], escape_cancels_command)
 run(['--ask'], escape_after_approval, approved)
 run(['--ask'], approval_keeps_the_prompt, pausing)
+run(['--ask'], typing_through_an_approval, pausing)
 known = set(session_files())
 run(['--ask'], cancel_at_approval, calling)
 (cancelled,) = set(session_files()) - known
@@ -3277,6 +3310,7 @@ def questions(read, until, send, output):
     on_screen('> later')
     question_gate.set()
     rows = on_screen('Which one?')
+    read(.6)
     text = '\n'.join(rows)
     assert '\u2192 Beta' in text and 'the second' in text, text
     send(b'\x1b[A')
@@ -3287,6 +3321,7 @@ def questions(read, until, send, output):
     ending(read, output, ['> later'])
     send(b'\x7f' * 5 + b'go\r')
     on_screen('Commit now?')
+    read(.6)
     send(b'\x1b')
     # The turn ends without another request; the server has no response for one.
     on_screen('Cancelled')
@@ -3311,6 +3346,7 @@ def next_steps(read, until, send, output):
     on_screen(' report_scramjet_command_status  completed')
     # The steps the model offered, the recommended one selected, each reason under it.
     rows = on_screen('Select next step')
+    read(.6)
     text = '\n'.join(rows)
     for expected in ['\u2192 0: /flow:step two', 'Do the second.', '1: /flow:done',
                      'model: GPT-6 Luna (test/gpt-6-luna) \u00b7 \u2190\u2192 change',
@@ -3339,6 +3375,7 @@ def next_steps(read, until, send, output):
     assert text.index('\u2192 /flow:done \u2014 Finish.') < text.index(' \u203a /flow:done') < text.index('All done.'), text
     send(b'/flow:step three\r')
     on_screen('Select next step')
+    read(.6)
     send(b'\x1b')
     rows = on_screen('Cancelled')
     assert '- /flow:step four \u2014 Again.' in rows, rows
@@ -3371,11 +3408,13 @@ def suggested_steps(read, until, send, output):
     send(b'what next?\r')
     # Once the turn ends, the steps the agent suggested, with the effort they run with.
     rows = on_screen('Agent suggests a next step')
+    read(.6)
     text = '\n'.join(rows)
     for expected in ['Pick one.', '\u2192 0: /flow:step two', '[recommended] Go on.',
                      'effort: medium \u00b7 Shift+Tab cycle']:
         assert expected in text, (expected, text)
     assert text.index('Pick one.') < text.index('Agent suggests a next step'), text
+    read(.6)
     send(b'\r')
     # Run as if typed, after the record of the choice.
     rows = on_screen(' \u203a /flow:step two')
@@ -3384,6 +3423,7 @@ def suggested_steps(read, until, send, output):
     on_screen(' report_scramjet_command_status  completed')
     send(b'again\r')
     on_screen('Agent suggests a next step')
+    read(.6)
     # A text step goes into the editor, to send or change.
     send(b'\x1b[B\r')
     rows = on_screen('> Explain more')
@@ -3391,6 +3431,7 @@ def suggested_steps(read, until, send, output):
     send(b'\r')
     on_screen('Last one.')
     on_screen('Agent suggests a next step')
+    read(.6)
     send(b'\x1b')
     rows = on_screen('Cancelled')
     assert '- /flow:done \u2014 Finish.' in rows, rows
@@ -3427,6 +3468,7 @@ def parked_question_resumed(read, until, send, output):
     on_screen('Used blue.')
     on_screen(' report_scramjet_command_status  completed')
     rows = on_screen('Select next step')
+    read(.6)
     assert '\u2192 0: /flow:step again' in rows, rows
     send(b'\x1b')
     rows = on_screen('Cancelled')
@@ -3440,6 +3482,7 @@ def abandoned_command(read, until, send, output):
     send(b'/flow:step x\r')
     # The model's summary, then the choice, Keep working selected: Enter keeps the command.
     rows = on_screen('\u2192 Keep working')
+    read(.6)
     text = '\n'.join(rows)
     for expected in ['Abandon /flow:step?', 'Half done: the parser is in, its tests are not.',
                      'No next step will run.', '  Abandon']:
@@ -3447,6 +3490,7 @@ def abandoned_command(read, until, send, output):
     send(b'\r')
     on_screen('keep /flow:step running')
     on_screen('\u2192 Keep working')
+    read(.6)
     send(b'\x1b[A\r')
     on_screen('The user confirmed: /flow:step is abandoned')
     rows = ended(read, output)
@@ -3463,6 +3507,7 @@ def credentials_hidden_when_unattended(read, until, send, output):
     send(b'/flow:step one\r')
     # Typed, and then chosen from the steps offered: the user's turns see the credential stores.
     rows = on_screen('Select next step')
+    read(.6)
     assert ' FAKE-netrc-secret' in rows and '\u2192 0: /flow:step two' in rows, rows
     send(b'\r')
     on_screen(' \u203a /flow:step two')
@@ -3582,6 +3627,7 @@ def next_step_settings(read, until, send, output):
     rows = on_screen('Chained.')
     assert ' \u203a /flow:step two' in rows, rows
     rows = on_screen('Select next step')
+    read(.6)
     assert 'auto-selects' not in '\n'.join(rows), rows
     send(b'\x1b')
     on_screen('Cancelled')
@@ -3938,6 +3984,7 @@ def publications(read, until, send, output):
     send(b'file it\r')
     # Asked first: the exact payload, then the choice, Approve selected.
     rows = on_screen('\u2192 Approve publication')
+    read(.6)
     text = '\n'.join(rows)
     for expected in [' create_issue  Fix the parser', 'Provider: github', 'Repository: o/r',
                      'Consequence: publish a new issue', 'It **breaks** on tabs.', 'Create issue in o/r',
@@ -3987,6 +4034,7 @@ def publications(read, until, send, output):
     # Escape cancels; nothing is written, and the turn goes on.
     send(b'chime in\r')
     rows = on_screen('\u2192 Approve publication')
+    read(.6)
     assert 'publish a comment on issue #41' in '\n'.join(rows), rows
     send(b'\x1b')
     rows = on_screen('Left it.')
@@ -4124,6 +4172,7 @@ def fullscreen_lists(read, until, send, output):
     on_screen('\u2713 Model set to gpt-6-terra')
     send(b'pick\r')
     on_screen('\u2192 Beta')
+    read(.6)
     send(b'\x1b[A\r')
     on_screen('Chose alpha.')
     send(b'\x03')

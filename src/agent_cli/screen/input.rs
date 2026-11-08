@@ -1,6 +1,8 @@
 //! The keys the screen takes, from the terminal's input and the session's wake-ups.
 
-use super::{Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Optional, Shown};
+use super::{
+    Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Optional, Shown, TYPING,
+};
 use crate::agent_cli::background::{self, Asked};
 use crate::agent_cli::editor::{Action, Note};
 use crate::agent_cli::interactive::effort_note;
@@ -17,7 +19,7 @@ use scramjet_rs::agent;
 use std::{
     io::{self, PipeReader, Read},
     sync::atomic::Ordering,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 /// The terminal's input, and the pipe the session writes to so that the screen looks at what it
@@ -88,6 +90,9 @@ impl App {
         }
         if self.exiting {
             return Flow::Go;
+        }
+        if matches!(key, Key::Text(_) | Key::Paste(_) | Key::Press(_)) {
+            self.typed = Some(Instant::now());
         }
         if key != Key::Idle
             && let Some(Open {
@@ -318,6 +323,15 @@ impl App {
             self.dialog = None;
             self.after_dialog();
             return Flow::Go;
+        }
+        // A key typed on from before the agent's question showed was meant for the prompt: a
+        // `y`, `a` or Enter there must not answer it.
+        if let Some(open) = &mut self.dialog {
+            let now = Instant::now();
+            if now < open.armed {
+                open.armed = now + TYPING;
+                return Flow::Go;
+            }
         }
         if let Some(Open {
             shown: Shown::Theme(editor),

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.4 — Typing on does not answer the agent's questions
+
+### Fixed
+
+- On the full screen, a question of the agent's (an `--ask` approval, project agents, a publication, a next step or `get_scramjet_user_input`) that appears while you are typing takes none of those keys: a `y`, an `a` or an Enter meant for your message used to answer it at once. It takes keys once typing has paused for half a second.
+
 ## 0.98.3 — Project agents always ask
 
 ### Fixed
