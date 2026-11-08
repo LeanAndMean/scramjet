@@ -247,7 +247,7 @@ mod tests {
         configure(true, Some(&file));
         ready(text, &["héllo"]);
         configure(false, Some(&file));
-        assert_eq!(misspelled(text), []);
+        assert!(misspelled(text).is_empty());
         configure(true, Some(&file));
         ready(text, &["héllo"]);
         std::fs::remove_dir_all(&directory).unwrap();

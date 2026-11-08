@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.100.0 — Regular expressions in `/resume`'s search
+
+### Added
+
+- A search starting `re:` in `/resume` (and in `/model` and the other searched lists) is a case-insensitive regular expression, as in Scramjet's session search: `re:v\d+\.\d+` finds the sessions naming a version. Matches starting earlier come first; an empty or invalid one matches nothing.
+
 ## 0.99.3 — Thinking levels a model's map renames are sent as named
 
 ### Fixed

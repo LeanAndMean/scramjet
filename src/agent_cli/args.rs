@@ -151,8 +151,9 @@ summarize that branch, also with your own instructions, for the conversation to 
 with; Shift+L there labels the selected entry. Escape twice on an empty prompt opens /tree too.
 The lists of /resume, /fork, /tree and /model show in the prompt's place and take Up/Down,
 Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; typed text filters the /resume
-and /model lists, best match first (a \"quoted phrase\" matches as written). With piped input
-they are printed numbered instead, for /resume N, /fork N, /tree N and /model ID.
+and /model lists, best match first (a \"quoted phrase\" matches as written, and re:PATTERN is a
+case-insensitive regular expression). With piped input they are printed numbered instead, for
+/resume N, /fork N, /tree N and /model ID.
 In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it with what was
 deleted before; Ctrl+- undoes; Ctrl+] then a character jumps to it, Ctrl+Alt+] backward.
 Ctrl+Home and Ctrl+End scroll to the conversation's start and end.

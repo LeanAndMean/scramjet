@@ -3,6 +3,7 @@
 
 /// A row's text to search, lowercased once.
 pub(super) struct Haystack {
+    lower: String,
     chars: Vec<char>,
     /// Lowercased with whitespace runs as one space, for phrases.
     collapsed: String,
@@ -22,22 +23,49 @@ impl Haystack {
         Self {
             collapsed: collapse(&lower),
             chars: lower.chars().collect(),
+            lower,
             tie: rank,
         }
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub(super) enum Token {
     /// Lowercased characters that must appear in order.
     Fuzzy(Vec<char>),
     /// Lowercased with collapsed whitespace, matched as a substring.
     Phrase(String),
+    /// A case-insensitive regular expression; one that is empty or invalid matches nothing.
+    Regex(Option<regex::Regex>),
+}
+
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Fuzzy(a), Self::Fuzzy(b)) => a == b,
+            (Self::Phrase(a), Self::Phrase(b)) => a == b,
+            (Self::Regex(a), Self::Regex(b)) => {
+                a.as_ref().map(regex::Regex::as_str) == b.as_ref().map(regex::Regex::as_str)
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Whitespace-separated tokens, a `"quoted phrase"` being one; with an unclosed quote every
-/// whitespace-separated word is a fuzzy token, quotes included.
+/// whitespace-separated word is a fuzzy token, quotes included. A query starting `re:` is one
+/// regular expression, as in Scramjet's session search.
 pub(super) fn parse(query: &str) -> Vec<Token> {
+    if let Some(pattern) = query.trim().strip_prefix("re:") {
+        let pattern = pattern.trim();
+        let built = (!pattern.is_empty()).then(|| {
+            regex::RegexBuilder::new(pattern)
+                .case_insensitive(true)
+                .build()
+                .ok()
+        });
+        return vec![Token::Regex(built.flatten())];
+    }
     let query = query.trim().to_lowercase();
     let fuzzy = |word: &str| Token::Fuzzy(word.chars().collect());
     let mut tokens = Vec::new();
@@ -98,6 +126,10 @@ fn score(token: &Token, row: &Haystack) -> Option<i64> {
             .collapsed
             .find(phrase.as_str())
             .map(|at| row.collapsed[..at].chars().count() as i64),
+        Token::Regex(regex) => regex
+            .as_ref()?
+            .find(&row.lower)
+            .map(|found| row.lower[..found.start()].chars().count() as i64),
         Token::Fuzzy(query) => fuzzy(query, &row.chars).or_else(|| {
             let swapped = swapped(query)?;
             fuzzy(&swapped, &row.chars).map(|score| score + 50)
@@ -248,5 +280,26 @@ mod tests {
             .collect();
         assert_eq!(filter(&parse("fix"), &ranked), [2, 1, 0]);
         assert_eq!(filter(&parse(r#""fix""#), &ranked), [1, 2, 0]);
+    }
+
+    #[test]
+    fn a_query_starting_re_is_a_case_insensitive_regular_expression() {
+        let rows: Vec<_> = [
+            "Fix the parser and its tests",
+            "Write the haiku",
+            "Now run all the PARSER tests",
+            "release v0.99.3",
+        ]
+        .iter()
+        .map(|text| Haystack::new(text))
+        .collect();
+        // Earlier matches come first, as Scramjet scores a match by where it starts.
+        assert_eq!(filter(&parse("re:Parser\\s+(and|tests)"), &rows), [0, 2]);
+        assert_eq!(filter(&parse("  re: ^write  "), &rows), [1]);
+        assert_eq!(filter(&parse(r"re:v\d+\.\d+"), &rows), [3]);
+        // Empty or invalid, it matches nothing; `RE:` is not the prefix.
+        assert!(filter(&parse("re:"), &rows).is_empty());
+        assert!(filter(&parse("re:(parser"), &rows).is_empty());
+        assert_eq!(parse("RE:x"), [Token::Fuzzy("re:x".chars().collect())]);
     }
 }
