@@ -14,7 +14,7 @@ use super::design::Design;
 use super::editor::{Draft, Editor, Note, RESIZE_CHECK};
 use super::footer::{self, Footer};
 use super::keymap::{self, Binding};
-use super::keys::{Key, Press, RawMode, read_key};
+use super::keys::{self, Key, Press, RawMode, read_key};
 use super::record::{self, Event};
 use super::select::{Act, Picker, Routed, Spot, Toggle};
 use super::selection::Line;
@@ -418,6 +418,7 @@ impl App {
         // Dropped before `raw`, which gives the terminal its mode back.
         let mut screen = Screen::enter();
         let mut source = Source::new(woken);
+        let windows_terminal = keys::windows_terminal();
         let mut closed = false;
         loop {
             loop {
@@ -518,7 +519,7 @@ impl App {
                 std::thread::sleep(wait);
                 continue;
             }
-            let key = match read_key(&mut source, Some(wait)) {
+            let key = match read_key(&mut source, Some(wait), windows_terminal) {
                 Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
                     closed = true;
                     self.exit();

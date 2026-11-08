@@ -286,7 +286,7 @@ fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String
     Ok(path)
 }
 
-fn remote() -> bool {
+pub(super) fn remote() -> bool {
     ["SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION"]
         .into_iter()
         .any(set)

@@ -741,7 +741,12 @@ impl Picker {
             {
                 return Some(Picked::Toggle(toggle, self.spot()));
             }
-            _ if self.acts && key.is(Binding::SessionDelete) => {
+            _ if self.acts
+                && (key.is(Binding::SessionDelete)
+                    || key.is(Binding::SessionDeleteNoninvasive)
+                        && (self.list.search.as_ref())
+                            .is_none_or(|search| search.query.is_empty())) =>
+            {
                 let current = match &self.shape {
                     Shape::Rows { current, .. } => *current,
                     Shape::Question { .. } | Shape::Tree(..) => None,
@@ -1027,6 +1032,15 @@ impl List {
                     true
                 }
                 _ if key.is(Binding::DeleteCharBackward) => search.query.pop().is_some(),
+                _ if key.is(Binding::DeleteWordBackward) => {
+                    let kept = search
+                        .query
+                        .trim_end()
+                        .trim_end_matches(|c: char| !c.is_whitespace());
+                    let cut = kept.len() < search.query.len();
+                    search.query.truncate(kept.len());
+                    cut
+                }
                 _ => false,
             };
             if edited {
@@ -1997,6 +2011,31 @@ mod tests {
         let mut plain_list = Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row);
         assert_eq!(plain_list.key(&key("ctrl+r")), None);
         assert_eq!(plain_list.key(&key("ctrl+d")), None);
+        assert_eq!(plain_list.key(&key("enter")), Some(Picked::Row(Some(0))));
+    }
+
+    #[test]
+    fn ctrl_backspace_deletes_a_word_of_the_query_else_the_session() {
+        let texts = ["root parser", "fork parser", "other"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let mut list =
+            Picker::search("Resume", 10, haystacks(&texts), 0, Some(2), "None", row).acting();
+        let shown = |picker: &Picker| plain(picker.lines((60, 24)));
+        for key in [Key::Text("fork  pars".into()), key("ctrl+backspace")] {
+            assert_eq!(list.key(&key), None);
+        }
+        assert_eq!(shown(&list)[1], "> fork   ");
+        for key in [key("ctrl+backspace"), key("ctrl+backspace")] {
+            assert_eq!(list.key(&key), None);
+        }
+        assert_eq!(shown(&list)[1], ">  ");
+        assert_eq!(list.key(&key("ctrl+backspace")), None);
+        assert_eq!(
+            shown(&list)[0],
+            "Resume  Delete session? Enter confirm · Esc cancel"
+        );
+        let mut plain_list = Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row);
+        assert_eq!(plain_list.key(&key("ctrl+backspace")), None);
         assert_eq!(plain_list.key(&key("enter")), Some(Picked::Row(Some(0))));
     }
 

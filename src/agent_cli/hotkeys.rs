@@ -303,12 +303,20 @@ impl Interactive {
 fn printed(ui: &Terminal, settings: Option<&Path>) -> String {
     let mut text = format!("{}\n", ui.styled(style::INFO_HEADING, "Keyboard Shortcuts"));
     for (section, keys) in keymap::listing() {
-        let width = (keys.iter()).map(|row| row.keys.width()).max().unwrap_or(0);
+        let widest = (keys.iter()).map(|row| row.keys.width()).max().unwrap_or(0);
+        let what = (keys.iter()).map(|row| row.what.width()).max().unwrap_or(0);
+        // Keys that would push a row past 80 columns wrap at their ` / `.
+        let width = widest.min(76usize.saturating_sub(what)).max(1);
         text += &format!("\n{}\n", ui.styled(style::INFO_HEADING, section));
         for row in keys {
-            let pad = " ".repeat(width - row.keys.width());
-            let what = row.what;
-            text += &format!("  {}{pad}  {what}\n", ui.styled(style::CODE, &row.keys));
+            let mut what = row.what;
+            for line in wrapped(&row.keys, width) {
+                let pad = " ".repeat(width.saturating_sub(line.width()));
+                let line = ui.styled(style::CODE, &line);
+                text += format!("  {line}{pad}  {what}").trim_end();
+                text.push('\n');
+                what = "";
+            }
         }
     }
     if let Some(settings) = settings {
@@ -319,6 +327,24 @@ fn printed(ui: &Terminal, settings: Option<&Path>) -> String {
         );
     }
     text
+}
+
+/// `keys` in lines of at most `width` columns, broken after a ` /`; a single key wider stays whole.
+fn wrapped(keys: &str, width: usize) -> Vec<String> {
+    let mut lines = vec![String::new()];
+    for (index, key) in keys.split(" / ").enumerate() {
+        let line = lines.last_mut().expect("one line at least");
+        if index > 0 && line.width() + 3 + key.width() > width {
+            line.push_str(" /");
+            lines.push(key.to_owned());
+        } else {
+            if index > 0 {
+                line.push_str(" / ");
+            }
+            line.push_str(key);
+        }
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -357,7 +383,30 @@ mod tests {
         }
         let rows: Vec<_> = lines.iter().filter(|line| line.starts_with("  ")).collect();
         let listed: usize = keymap::listing().iter().map(|(_, rows)| rows.len()).sum();
-        assert_eq!(rows.len(), listed);
+        let wrapped = (rows.iter())
+            .filter(|row| !row.trim_start().contains("  "))
+            .count();
+        assert_eq!(rows.len() - wrapped, listed);
+        let at = |start: &str| {
+            lines
+                .iter()
+                .position(|line| line.starts_with(start))
+                .unwrap()
+        };
+        let word = at("  Ctrl+W / Alt+Backspace /");
+        assert_eq!(
+            lines[word],
+            row(32, "Ctrl+W / Alt+Backspace /", "Delete word backwards")
+        );
+        assert_eq!(lines[word + 1], "  Ctrl+Backspace");
+        assert_eq!(
+            lines[word + 2],
+            row(
+                32,
+                "Alt+D / Alt+Delete / Ctrl+Delete",
+                "Delete word forwards"
+            )
+        );
         for row in rows {
             assert!(row.width() <= 80, "{row}");
         }

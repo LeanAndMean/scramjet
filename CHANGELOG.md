@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.101.0 — Ctrl+Backspace in Windows Terminal
+
+### Added
+
+- In Windows Terminal, Ctrl+Backspace deletes the word before the cursor in the prompt and in lists' searches, where it deleted one character; in `/resume` with an empty search it deletes the selected session, once confirmed, as in Scramjet (`app.session.deleteNoninvasive`). Ctrl+W and Alt+Backspace now delete a word in lists' searches too.
+
 ## 0.100.0 — Regular expressions in `/resume`'s search
 
 ### Added

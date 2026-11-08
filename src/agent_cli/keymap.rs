@@ -76,6 +76,7 @@ pub(super) enum Binding {
     SelectCancel,
     SessionRename,
     SessionDelete,
+    SessionDeleteNoninvasive,
     SessionToggleSort,
     SessionToggleNamedFilter,
     SessionTogglePath,
@@ -171,7 +172,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 93] = [
+const DEFINITIONS: [Definition; 94] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -198,7 +199,7 @@ const DEFINITIONS: [Definition; 93] = [
     define(B::NewLine, "tui.input.newLine", &["shift+enter", "ctrl+j"], S::Editing, "New line (also a trailing \\ and Enter)"),
     define(B::DeleteCharBackward, "tui.editor.deleteCharBackward", &["backspace"], S::Editing, "Delete character backwards"),
     define(B::DeleteCharForward, "tui.editor.deleteCharForward", &["delete", "ctrl+d"], S::Editing, "Delete character forwards"),
-    define(B::DeleteWordBackward, "tui.editor.deleteWordBackward", &["ctrl+w", "alt+backspace"], S::Editing, "Delete word backwards"),
+    define(B::DeleteWordBackward, "tui.editor.deleteWordBackward", &["ctrl+w", "alt+backspace", "ctrl+backspace"], S::Editing, "Delete word backwards"),
     define(B::DeleteWordForward, "tui.editor.deleteWordForward", &["alt+d", "alt+delete", "ctrl+delete"], S::Editing, "Delete word forwards"),
     define(B::DeleteToLineStart, "tui.editor.deleteToLineStart", &["ctrl+u"], S::Editing, "Delete to start of line"),
     define(B::DeleteToLineEnd, "tui.editor.deleteToLineEnd", &["ctrl+k"], S::Editing, "Delete to end of line"),
@@ -231,6 +232,7 @@ const DEFINITIONS: [Definition; 93] = [
     define(B::SelectCancel, "tui.select.cancel", &["escape", "ctrl+c"], S::Lists, "Cancel"),
     define(B::SessionRename, "app.session.rename", &["ctrl+r"], S::Resume, "Rename the session"),
     define(B::SessionDelete, "app.session.delete", &["ctrl+d"], S::Resume, "Delete the session, once confirmed"),
+    define(B::SessionDeleteNoninvasive, "app.session.deleteNoninvasive", &["ctrl+backspace"], S::Resume, "Delete the session when the query is empty"),
     define(B::SessionToggleSort, "app.session.toggleSort", &["ctrl+s"], S::Resume, "Cycle the order"),
     define(B::SessionToggleNamedFilter, "app.session.toggleNamedFilter", &["ctrl+n"], S::Resume, "Show only named sessions, or all"),
     define(B::SessionTogglePath, "app.session.togglePath", &["ctrl+p"], S::Resume, "Show or hide the session files' paths"),

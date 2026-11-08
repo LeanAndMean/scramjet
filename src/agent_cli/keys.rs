@@ -4,7 +4,7 @@
 
 use super::keymap::{self, Binding};
 use super::palette::Rgb;
-use super::{background, console};
+use super::{background, clipboard, console};
 use std::{
     io::{self, Write},
     time::Duration,
@@ -112,12 +112,24 @@ pub(super) trait ByteSource {
     fn byte(&mut self, wait: Option<Duration>) -> io::Result<Option<u8>>;
 }
 
-pub(super) fn read_key(source: &mut impl ByteSource, wait: Option<Duration>) -> io::Result<Key> {
+/// Whether the terminal is Windows Terminal, which sends Ctrl+Backspace as a lone `0x08` that
+/// other terminals send for Backspace; not over ssh, where the variable may be stale, as Scramjet.
+pub(super) fn windows_terminal() -> bool {
+    std::env::var_os("WT_SESSION").is_some_and(|value| !value.is_empty()) && !clipboard::remote()
+}
+
+/// The next key; `windows_terminal` reads a lone `0x08` as Ctrl+Backspace (`windows_terminal()`).
+pub(super) fn read_key(
+    source: &mut impl ByteSource,
+    wait: Option<Duration>,
+    windows_terminal: bool,
+) -> io::Result<Key> {
     let Some(byte) = source.byte(wait)? else {
         return Ok(Key::Idle);
     };
     Ok(match byte {
         0x1b => escape(source)?,
+        8 if windows_terminal => Key::Press(Press::new(Code::Backspace, CTRL)),
         0x20..=0x7e => Key::Text(char::from(byte).to_string()),
         0xc2..=0xf4 => {
             let length = match byte {
@@ -434,10 +446,14 @@ pub(super) mod tests {
     }
 
     pub(in crate::agent_cli) fn keys(bytes: &[u8]) -> Vec<Key> {
+        read(bytes, false)
+    }
+
+    fn read(bytes: &[u8], windows_terminal: bool) -> Vec<Key> {
         let mut source: VecDeque<u8> = bytes.iter().copied().collect();
         let mut keys = Vec::new();
         loop {
-            match read_key(&mut source, None).unwrap() {
+            match read_key(&mut source, None, windows_terminal).unwrap() {
                 Key::Idle => return keys,
                 key => keys.push(key),
             }
@@ -675,6 +691,13 @@ pub(super) mod tests {
             assert!(key.is(binding), "{bytes:?} {binding:?}");
         }
         assert!(!Key::Text("l".into()).is(Binding::TreeEditLabel));
+        let [ctrl_backspace] = &read(b"\x08", true)[..] else {
+            panic!("one key");
+        };
+        assert!(ctrl_backspace.is(Binding::DeleteWordBackward));
+        assert!(ctrl_backspace.is(Binding::SessionDeleteNoninvasive));
+        assert!(!ctrl_backspace.is(Binding::DeleteCharBackward));
+        assert!(key("backspace").is(Binding::DeleteCharBackward));
         assert!(!key("ctrl+up").is(Binding::CursorUp));
         assert!(!Key::Idle.is(Binding::Interrupt));
     }
