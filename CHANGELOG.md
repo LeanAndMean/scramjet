@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.6 — Replies cannot drive the terminal
+
+### Fixed
+
+- A reply or reasoning shown on a terminal (`-p`, line mode, the full screen) shows control characters as escapes such as `\u{1b}]52;…`, as tool output already did, so a model's text can no longer set the clipboard, change the title or clear the screen. Replies piped or written to a file stay exact.
+
 ## 0.97.5 — Session files private
 
 ### Fixed

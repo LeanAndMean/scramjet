@@ -17,6 +17,7 @@ use scramjet_rs::agent::{
     StreamProgress, ToolDetail, UserCommand, publication_choices, read_line_too_long,
 };
 use std::{
+    borrow::Cow,
     collections::VecDeque,
     io::{BufRead, IsTerminal, Write},
     sync::{
@@ -631,6 +632,19 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         block += &pad;
         self.err(&block);
     }
+    /// The model's `text` as it may go where `kind` goes: on a terminal, its control characters
+    /// as escapes, so that a reply cannot set the clipboard (OSC 52) or rewrite the screen; to a
+    /// pipe or file, exact.
+    fn shown<'a>(&self, kind: Streaming, text: &'a str) -> Cow<'a, str> {
+        let terminal = match kind {
+            Streaming::Text => self.styled_replies(),
+            _ => self.color,
+        };
+        match terminal {
+            true => Cow::Owned(visible(text)),
+            false => Cow::Borrowed(text),
+        }
+    }
     fn styled_replies(&self) -> bool {
         self.capture.is_some() || std::io::stdout().is_terminal()
     }
@@ -792,14 +806,15 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             let reopen = self.markdown.reopen();
             self.print_streamed(&reopen);
         }
-        let body = delta.trim_end_matches('\n');
-        if !body.is_empty() {
-            let text = "\n".repeat(std::mem::take(&mut self.held_newlines)) + body;
+        let trimmed = delta.trim_end_matches('\n');
+        if !trimmed.is_empty() {
+            let body = self.shown(kind, trimmed);
+            let text = "\n".repeat(std::mem::take(&mut self.held_newlines)) + &body;
             let text = self.wrap.push(&self.markdown.push(&text));
             self.print_streamed(&text);
             self.printed_newlines = 0;
         }
-        self.held_newlines += delta.len() - body.len();
+        self.held_newlines += delta.len() - trimmed.len();
         if self.held_newlines == 0 {
             return;
         }
@@ -996,7 +1011,8 @@ impl AgentUi for Terminal {
                 (true, None) => self.width(),
             };
             let mut markdown = self.markdown(width > 0, "", width);
-            let text = markdown.push(text.trim_end()) + &markdown.finish();
+            let text = self.shown(Streaming::Text, text.trim_end());
+            let text = markdown.push(&text) + &markdown.finish();
             let mut wrap = self.markdown_wrapper(width);
             let text = wrap.push(&text) + &wrap.finish();
             let text = match lead {
@@ -2377,6 +2393,30 @@ expand)\n\n"
 breaks\\u{{1b}}[2J.\n\n{result}\n"
             )
         );
+    }
+
+    #[test]
+    fn replies_and_reasoning_on_a_terminal_show_control_characters_as_escapes() {
+        let reply = "a\x1b]52;c;aGk=\x07b \x1b[2J\r\n";
+        let mut ui = Terminal::capture(40, Arc::new(AtomicBool::new(false)));
+        ui.waiting(Purpose::Reply);
+        ui.progress(&StreamProgress::Reasoning("think\x1b]0;T\x07\n\n".into()));
+        ui.progress(&StreamProgress::Text(reply.into()));
+        ui.assistant(reply);
+        ui.waiting(Purpose::Reply);
+        ui.assistant("only\x1b[2Jfinal");
+        let shown = ui.captured();
+        assert!(
+            !shown.contains('\x07') && !shown.contains('\r'),
+            "{shown:?}"
+        );
+        for escaped in [
+            "think\\u{1b}]0;T\\u{7}",
+            "a\\u{1b}]52;c;aGk=\\u{7}b \\u{1b}[2J\\r",
+            "only\\u{1b}[2Jfinal",
+        ] {
+            assert!(shown.contains(escaped), "{escaped} in {shown:?}");
+        }
     }
 
     #[test]
