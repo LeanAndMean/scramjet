@@ -512,6 +512,100 @@ fn a_chains_session_resumed_without_a_terminal_shows_the_earlier_ones_first() {
 }
 
 #[test]
+fn session_dir_saves_and_finds_sessions_there_whatever_their_project() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-session-dir-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    provide(&config, "127.0.0.1:9");
+    let run_all = |arguments: &[&str]| {
+        let output = Command::new(binary)
+            .args(["--retries", "0"])
+            .args(arguments)
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let run = |arguments: &[&str]| {
+        run_all(arguments)
+            .lines()
+            .last()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let sessions = |directory: &std::path::Path| -> Vec<std::path::PathBuf> {
+        let listed = std::fs::read_dir(directory).into_iter().flatten().flatten();
+        (listed.map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|e| e == "jsonl"))
+            .collect()
+    };
+    let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap();
+    let refused = "scramjet-rs: provider: cannot connect to 127.0.0.1:9";
+    let projects = scratch.0.join("state/scramjet-rs/sessions");
+
+    // Relative to the current directory, as Scramjet's.
+    let custom = project.join("custom");
+    assert!(run(&["--session-dir", "custom", "-p", "first"]).starts_with(refused));
+    let [saved] = sessions(&custom).try_into().unwrap();
+    assert!(read(&saved).contains("\"content\":\"first\""));
+    assert!(!projects.exists());
+    assert!(run(&["--session-dir", "custom", "-c", "-p", "again"]).starts_with(refused));
+    assert_eq!(sessions(&custom), std::slice::from_ref(&saved));
+    assert!(read(&saved).contains("\"content\":\"again\""));
+
+    // Another project's session there is this one's to resume, not to fork.
+    let theirs = custom.join("1700000000000-7.jsonl");
+    std::fs::write(
+        &theirs,
+        "{\"type\":\"session\",\"version\":1,\"root\":\"/work/other\"}\n\
+{\"role\":\"user\",\"content\":\"one\"}\n",
+    )
+    .unwrap();
+    assert!(
+        run(&["--session-dir", "custom", "--session", "1700", "-p", "more"]).starts_with(refused)
+    );
+    assert!(read(&theirs).contains("\"content\":\"more\""));
+    assert_eq!(sessions(&custom).len(), 2);
+
+    // The settings' sessionDir, which the option replaces.
+    let settings = config.join("scramjet-rs/settings.json");
+    let elsewhere = scratch.0.join("elsewhere");
+    let setting = serde_json::json!({"sessionDir": elsewhere});
+    std::fs::write(&settings, setting.to_string()).unwrap();
+    assert!(run(&["-p", "set"]).starts_with(refused));
+    let [set] = sessions(&elsewhere).try_into().unwrap();
+    assert!(read(&set).contains("\"content\":\"set\""));
+    assert!(run(&["--session-dir", "custom", "-p", "option"]).starts_with(refused));
+    assert_eq!(sessions(&elsewhere).len(), 1);
+    assert_eq!(sessions(&custom).len(), 3);
+    // Found elsewhere, in the projects' directories, a session is another project's.
+    let other = projects.join("work-other").join("1800000000000-7.jsonl");
+    std::fs::create_dir_all(other.parent().unwrap()).unwrap();
+    std::fs::copy(&theirs, &other).unwrap();
+    assert_eq!(
+        run(&["--session", "1800", "-p", "hi"]),
+        "scramjet-rs: session \"1800\" belongs to another project, /work/other; --fork \"1800\" \
+continues it in a new session of this one"
+    );
+    std::fs::write(&settings, r#"{"sessionDir": 7}"#).unwrap();
+    let output = run_all(&["-p", "wrong"]);
+    assert!(
+        output.contains("sessionDir must be a directory; ignored"),
+        "{output}"
+    );
+    assert_eq!(sessions(&elsewhere).len(), 1);
+}
+
+#[test]
 fn no_session_saves_none_and_its_directory_goes_at_exit() {
     let binary = &binary();
     let scratch =

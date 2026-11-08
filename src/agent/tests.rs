@@ -522,6 +522,7 @@ pub(super) fn config(endpoint: SocketAddr, root: &Path) -> AgentConfig {
         mcp_servers: Vec::new(),
         mcp_disabled: Vec::new(),
         sandbox: None,
+        session_dir: None,
     }
 }
 
@@ -1012,7 +1013,7 @@ fn a_session_is_found_by_the_start_of_its_id_here_before_elsewhere() {
     save(&other.join("3000-2.jsonl"), Some("/work/other"), ago(5));
     std::fs::write(sessions.0.join("2000-7.jsonl"), "").unwrap();
 
-    let find = |prefix| Session::find(&here, prefix).unwrap();
+    let find = |prefix| Session::find(&here, &sessions.0, prefix).unwrap();
     assert_eq!(find("100"), Some(Found::Here(here.join("1001-1.jsonl"))));
     assert_eq!(find("1000"), Some(Found::Here(here.join("1000-1.jsonl"))));
     assert_eq!(find("1000-1"), Some(Found::Here(here.join("1000-1.jsonl"))));
@@ -1037,7 +1038,7 @@ fn a_session_is_found_by_the_start_of_its_id_here_before_elsewhere() {
     // A project without sessions yet.
     let new = sessions.0.join("new");
     assert_eq!(
-        Session::find(&new, "3000").unwrap(),
+        Session::find(&new, &sessions.0, "3000").unwrap(),
         Some(Found::Elsewhere {
             path: other.join("3000-2.jsonl"),
             root: PathBuf::from("/work/other")
@@ -1261,6 +1262,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         mcp_servers: Vec::new(),
         mcp_disabled: Vec::new(),
         sandbox: None,
+        session_dir: None,
     };
     let resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
     assert_eq!(resumed.session_name(), Some("Parser work"));

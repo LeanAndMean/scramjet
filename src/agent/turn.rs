@@ -860,6 +860,7 @@ mod tests {
             mcp_servers: Vec::new(),
             mcp_disabled: Vec::new(),
             sandbox: None,
+            session_dir: None,
         };
         let mut agent = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         agent.instructions = instructions::agent(
@@ -1086,6 +1087,7 @@ scramjet-rs\n",
                 mcp_servers: Vec::new(),
                 mcp_disabled: Vec::new(),
                 sandbox: None,
+                session_dir: None,
             };
             let path = agent.session_path().to_owned();
             drop(agent);

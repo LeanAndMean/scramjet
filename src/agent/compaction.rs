@@ -1338,6 +1338,7 @@ mod tests {
             mcp_servers: Vec::new(),
             mcp_disabled: Vec::new(),
             sandbox: None,
+            session_dir: None,
         };
         let mut resumed = Agent::start(config, SessionChoice::Open(path.clone())).unwrap();
         assert_eq!(resumed.usage.context_tokens, Some(29_000));

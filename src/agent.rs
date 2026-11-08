@@ -65,7 +65,7 @@ pub use question::Choice;
 pub use sandbox::{Sandbox, SandboxMode};
 pub use session::{
     Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,
-    read_branch, state_directory,
+    projects_directory, read_branch, state_directory,
 };
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};
@@ -215,6 +215,9 @@ pub struct AgentConfig {
     /// How the coding tools and the MCP servers that run as programs are confined; `None`
     /// leaves them as `Agent::set_hide_credentials` says.
     pub sandbox: Option<Sandbox>,
+    /// `--session-dir` or the settings' `sessionDir`: where this run's sessions are saved and
+    /// found, in place of the project's directory under `session::projects_directory`.
+    pub session_dir: Option<PathBuf>,
 }
 
 /// What the command line changes in the agent's instructions, as Scramjet's options do. A text
@@ -657,7 +660,10 @@ pub struct Inventory {
 impl Agent {
     pub fn start(mut config: AgentConfig, choice: SessionChoice) -> Result<Self, AgentError> {
         config.model = config.providers.reference(&config.model);
-        let directory = || session::directory(&config.root);
+        let directory = || match &config.session_dir {
+            Some(directory) => Ok(directory.clone()),
+            None => session::directory(&config.root),
+        };
         // Before a session is opened, which may be one they belong to.
         let (kept_notes, kept_waiting) = kept_notes(session::write_kept(), true);
         let mut unsaved = None;
@@ -934,8 +940,12 @@ impl Agent {
     pub fn all_sessions(&self) -> Result<Vec<SessionInfo>, AgentError> {
         let mut sessions = self.sessions()?;
         let here = self.session_directory();
-        // A saved session's directory is one of the projects'; an unsaved run's is elsewhere.
-        let projects = match (self.unsaved.is_none(), here.parent()) {
+        // A saved session's directory is one of the projects'; an unsaved run's, or one
+        // `session_dir` names, is elsewhere.
+        let projects = match (
+            self.unsaved.is_none() && self.config.session_dir.is_none(),
+            here.parent(),
+        ) {
             (true, Some(projects)) => Ok(projects.to_owned()),
             _ => session::projects_directory(),
         };

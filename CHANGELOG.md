@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.104.0 — Sessions in a directory of your choice
+
+### Added
+
+- `--session-dir DIR` and the `sessionDir` setting save and find sessions in DIR rather than in the project's directory under `~/.local/state/scramjet-rs/sessions`, as in Scramjet; a relative DIR is from the current directory. `-c`, `-r`, `/resume` and `--session ID` look there, whatever project a session there was of; `/resume`'s Tab still lists every project's, and `/usage` counts the sessions there.
+
 ## 0.103.1 — A key command's children end with it on Windows
 
 ### Fixed

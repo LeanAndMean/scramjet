@@ -130,13 +130,16 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
     let root = project_root(options.project.take())?;
-    let Some(choice) = session_choice(std::mem::replace(&mut options.start, Start::New), &root)?
-    else {
+    let mut settings = Settings::load_cloning();
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let session_dir = (options.session_dir.as_deref())
+        .or(settings.session_dir.as_deref())
+        .map(|directory| given_path(directory, &cwd));
+    let first = std::mem::replace(&mut options.start, Start::New);
+    let Some(choice) = session_choice(first, &root, session_dir.as_deref())? else {
         eprintln!("Aborted.");
         return Ok(());
     };
-    let mut settings = Settings::load_cloning();
-    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let theme_options = theme::ThemeOptions {
         paths: (options.themes.iter())
             .map(|path| given_path(path, &cwd))
@@ -149,7 +152,13 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         Some(patterns) => (patterns, "--models"),
         None => (settings.enabled_models.clone(), "settings: enabledModels"),
     };
-    let (mut agent, scope_warnings) = start(options, root, choice, &settings, (&patterns, source))?;
+    let (mut agent, scope_warnings) = start(
+        options,
+        (root, session_dir),
+        choice,
+        &settings,
+        (&patterns, source),
+    )?;
     let cancel = Arc::new(AtomicBool::new(false));
     let hide_thinking = Arc::new(AtomicBool::new(settings.hide_thinking_block));
     handle_signals(&cancel, &hide_thinking)?;
@@ -214,14 +223,22 @@ fn project_root(project: Option<PathBuf>) -> Result<PathBuf, String> {
 
 /// The session the agent starts in for the project `root`, the one `--session` or `--fork` names
 /// found as Scramjet finds it; `None` when the user declines to fork one of another project here.
-fn session_choice(start: Start, root: &Path) -> Result<Option<SessionChoice>, String> {
+fn session_choice(
+    start: Start,
+    root: &Path,
+    session_dir: Option<&Path>,
+) -> Result<Option<SessionChoice>, String> {
     let find = |named: &str| -> Result<Found, String> {
         // As Scramjet's, a word that looks like a path is a session file, wherever it is.
         if named.contains(['/', '\\']) || named.ends_with(".jsonl") {
             return Ok(Found::Here(PathBuf::from(named)));
         }
-        let directory = agent::session_directory(root).map_err(|e| e.to_string())?;
-        Session::find(&directory, named)
+        let projects = agent::projects_directory().map_err(|e| e.to_string())?;
+        let directory = match session_dir {
+            Some(directory) => directory.to_owned(),
+            None => agent::session_directory(root).map_err(|e| e.to_string())?,
+        };
+        Session::find(&directory, &projects, named)
             .map_err(|error| format!("{}: {error}", directory.display()))?
             .ok_or_else(|| format!("no session found matching {named:?}"))
     };
@@ -270,7 +287,7 @@ a new session of this one",
 /// wrong in the providers' files.
 fn start(
     options: Options,
-    root: PathBuf,
+    (root, session_dir): (PathBuf, Option<PathBuf>),
     choice: SessionChoice,
     settings: &Settings,
     (patterns, source): (&[String], &str),
@@ -331,6 +348,7 @@ fn start(
         mcp_servers: settings.mcp_servers.clone(),
         mcp_disabled: settings.disabled_mcp_servers.clone(),
         sandbox,
+        session_dir,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
     if let Some(skipped) = interactive::skipped_lines(&agent) {

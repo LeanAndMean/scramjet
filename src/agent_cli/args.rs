@@ -6,7 +6,8 @@ use std::{ffi::OsString, path::PathBuf};
 pub(super) const USAGE: &str =
     "Usage: scramjet-rs [--project DIR] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N]
-[-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--system-prompt TEXT]
+[-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
+[--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-s MODE] [-p]
 [@FILE...] [MESSAGE...]
@@ -54,6 +55,10 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
   --no-session           save no session, as Scramjet's: those of this run (/clear, /fork,
                          /branch and /import too) are kept in a private temporary directory
                          removed at exit, and /resume lists only them
+  --session-dir DIR      save and find sessions in DIR, in place of the project's directory
+                         under ~/.local/state/scramjet-rs/sessions, as Scramjet's (default:
+                         the settings' sessionDir); -c, -r, /resume and --session ID look
+                         there, whatever project a session there was of
   --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
                          or the contents of the file it names (default: the project's
                          .scramjet/SYSTEM.md, else ~/.scramjet/agent/SYSTEM.md, else
@@ -242,6 +247,8 @@ pub(super) struct Options {
     pub(super) effort: Option<String>,
     pub(super) max_output_tokens: Option<u64>,
     pub(super) start: Start,
+    /// `--session-dir`: as typed, resolved once the session starts.
+    pub(super) session_dir: Option<String>,
     pub(super) prompt: SystemPrompt,
     /// `--skill`: as typed, resolved once the session starts.
     pub(super) skills: Vec<String>,
@@ -281,6 +288,7 @@ impl Options {
             effort: None,
             max_output_tokens: None,
             start: Start::New,
+            session_dir: None,
             prompt: SystemPrompt::default(),
             skills: Vec::new(),
             no_skills: false,
@@ -354,6 +362,7 @@ impl Options {
                 }
                 Some("--fork") => fork = Some(value()?),
                 Some("--no-session") => no_session = true,
+                Some("--session-dir") => options.session_dir = Some(value()?),
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,

@@ -337,6 +337,9 @@ pub(super) struct Settings {
     pub(super) skills: Vec<PathBuf>,
     /// `themes`: theme files and directories besides those found by default, as `skills`.
     pub(super) themes: Vec<PathBuf>,
+    /// `sessionDir`: where sessions are saved and found, as typed: as Scramjet's, a relative one
+    /// is from the current directory, which `--session-dir` replaces.
+    pub(super) session_dir: Option<String>,
     /// `enabledModels`: the patterns of the models Ctrl+P cycles through (`scope::resolve`);
     /// empty: all.
     pub(super) enabled_models: Vec<String>,
@@ -441,6 +444,7 @@ impl Settings {
             cloning: false,
             skills: Vec::new(),
             themes: Vec::new(),
+            session_dir: None,
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
             disabled_mcp_servers: Vec::new(),
@@ -657,6 +661,15 @@ impl Settings {
             )),
         }
         self.add_packages();
+        match object.get("sessionDir") {
+            None => {}
+            Some(Value::String(directory)) if !directory.trim().is_empty() => {
+                self.session_dir = Some(directory.clone())
+            }
+            Some(_) => {
+                (self.warnings).push(format!("{path}: sessionDir must be a directory; ignored"))
+            }
+        }
         match paths(object, "enabledModels") {
             Ok(patterns) => self.enabled_models = patterns,
             Err(()) => self.warnings.push(format!(

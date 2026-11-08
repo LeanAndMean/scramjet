@@ -65,24 +65,31 @@ pub struct History {
 }
 
 impl History {
-    /// The responses of every session under `sessions` (one directory per project) and of
-    /// `current`, wherever it is. A line a fork, `/clone` or `/import` copied into another
-    /// session counts once, for the session it was first written in.
+    /// The responses of every session under `sessions` (one directory per project) and of those
+    /// beside `current`, wherever it is (`--session-dir`). A line a fork, `/clone` or `/import`
+    /// copied into another session counts once, for the session it was first written in.
     pub fn read(sessions: &Path, current: &Path) -> Self {
+        let mut directories: Vec<PathBuf> = match std::fs::read_dir(sessions) {
+            Ok(projects) => projects.flatten().map(|project| project.path()).collect(),
+            Err(_) => Vec::new(),
+        };
+        if let Some(beside) = current.parent()
+            && !directories.iter().any(|directory| directory == beside)
+        {
+            directories.push(beside.to_owned());
+        }
         let mut files = Vec::new();
-        if let Ok(projects) = std::fs::read_dir(sessions) {
-            for project in projects.flatten() {
-                let Ok(entries) = std::fs::read_dir(project.path()) else {
-                    continue;
-                };
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path
-                        .extension()
-                        .is_some_and(|extension| extension == "jsonl")
-                    {
-                        files.push(path);
-                    }
+        for directory in directories {
+            let Ok(entries) = std::fs::read_dir(directory) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "jsonl")
+                {
+                    files.push(path);
                 }
             }
         }

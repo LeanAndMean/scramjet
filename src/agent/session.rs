@@ -767,6 +767,13 @@ impl Unsaved {
     pub fn path(&self) -> &Path {
         &self.0
     }
+
+    /// Whether `path` is in the directory of a run that saves no session.
+    pub(super) fn holds(path: &Path) -> bool {
+        let unsaved = UNSAVED.lock();
+        let unsaved = unsaved.unwrap_or_else(std::sync::PoisonError::into_inner);
+        unsaved.iter().any(|directory| path.starts_with(directory))
+    }
 }
 
 impl Drop for Unsaved {
@@ -846,13 +853,13 @@ impl Session {
 
     /// The saved session whose id starts with `prefix`, as Scramjet's `--session` and `--fork`
     /// find one by part of its id: the newest of the project's, in `directory`, else the newest
-    /// of the other projects', in the directories next to it. Sessions without a conversation
+    /// of the other projects', in the directories of `projects`. Sessions without a conversation
     /// (one another process just started) are left out, as Scramjet writes none.
-    pub fn find(directory: &Path, prefix: &str) -> io::Result<Option<Found>> {
+    pub fn find(directory: &Path, projects: &Path, prefix: &str) -> io::Result<Option<Found>> {
         if let Some((_, path, _)) = matching(directory, prefix)?.into_iter().next() {
             return Ok(Some(Found::Here(path)));
         }
-        let Some(listed) = (directory.parent()).and_then(|all| std::fs::read_dir(all).ok()) else {
+        let Ok(listed) = std::fs::read_dir(projects) else {
             return Ok(None);
         };
         let mut found = Vec::new();

@@ -51,11 +51,9 @@ pub(in crate::agent) fn keep_in(directory: &Path) {
 /// Where the session saved at `session` copies its kept lines: only a saved session's, not one
 /// of a `--no-session` run, which goes with its directory.
 pub(super) fn directory_for(session: &Path) -> Option<PathBuf> {
-    #[cfg(not(test))]
-    if !super::projects_directory().is_ok_and(|projects| session.starts_with(projects)) {
+    if super::Unsaved::holds(session) {
         return None;
     }
-    let _ = session;
     directory()
 }
 
