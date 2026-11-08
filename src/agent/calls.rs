@@ -1209,7 +1209,7 @@ Unknown agent: \"nope\". Available agents: \"a\", \"b\".\n\n[b] completed: Task:
             tool_call(
                 "call_3",
                 subagent::NAME,
-                json!({"agent":"p","task":"go","agentScope":"both"}),
+                json!({"agent":"p","task":"go","agentScope":"both","confirmProjectAgents":false}),
             ),
             reply("done"),
         ]);

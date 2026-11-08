@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.3 — Project agents always ask
+
+### Fixed
+
+- The `subagent` tool no longer offers `confirmProjectAgents`, and ignores it when a model passes it, so a model cannot skip your approval before project-local agents run.
+
 ## 0.98.2 — `--ask` sees through symlinks
 
 ### Fixed

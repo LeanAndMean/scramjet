@@ -72,8 +72,6 @@ applies.",
                 "description":"Which loose agent directories to use. Default: \"user\". Use \
 \"both\" to include project-local loose agents. Registered command-set agents remain available \
 under every scope."},
-            "confirmProjectAgents":{"type":"boolean","default":true,
-                "description":"Prompt before running project-local agents. Default: true."},
             "cwd":{"type":"string","description":"Working directory for the agent process (single mode)"},
             "effort":effort}}})
 }
@@ -430,7 +428,6 @@ struct Arguments {
     /// `None` when the call gives no mode, or more than one.
     mode: Option<Mode>,
     scope: Scope,
-    confirm: bool,
 }
 
 /// What is wrong with a call's arguments, in the form of Pi's validation errors.
@@ -517,15 +514,6 @@ fn arguments(arguments: &Value) -> Result<Arguments, Vec<String>> {
             Scope::User
         }
     };
-    let confirm = match &arguments["confirmProjectAgents"] {
-        Value::Null => true,
-        Value::Bool(confirm) => *confirm,
-        _ => {
-            let error = "  - confirmProjectAgents: must be boolean";
-            checked.errors.push(error.into());
-            true
-        }
-    };
     if !checked.errors.is_empty() {
         return Err(checked.errors);
     }
@@ -548,11 +536,7 @@ fn arguments(arguments: &Value) -> Result<Arguments, Vec<String>> {
         None if !tasks.is_empty() => Some(Mode::Parallel(tasks)),
         None => Some(Mode::Chain(chain)),
     };
-    Ok(Arguments {
-        mode,
-        scope,
-        confirm,
-    })
+    Ok(Arguments { mode, scope })
 }
 
 /// The call line's text, as Scramjet's `renderCall` while the call runs: the agents, the scope
@@ -840,62 +824,61 @@ pub(super) fn run(
         return (plain(text, false), Usage::default());
     };
     let find = |name: &str| discovery.agents.iter().find(|agent| agent.name == name);
-    // Unlike Scramjet, approval is remembered for the project's agents as they are then.
-    if given.confirm {
-        let (mut names, mut directories): (Vec<&str>, Vec<String>) = (Vec::new(), Vec::new());
-        for task in mode.tasks() {
-            let Some(agent) = find(&task.agent).filter(|agent| agent.source == "project") else {
-                continue;
-            };
-            if !names.contains(&agent.name.as_str()) {
-                names.push(&agent.name);
-            }
-            let directory = agent
-                .path
-                .parent()
-                .unwrap_or(Path::new(""))
-                .display()
-                .to_string();
-            if !directories.contains(&directory) {
-                directories.push(directory);
-            }
+    // Unlike Scramjet, approval is remembered for the project's agents as they are then, and the
+    // model cannot skip it (Scramjet's `confirmProjectAgents` is not offered and is ignored).
+    let (mut names, mut directories): (Vec<&str>, Vec<String>) = (Vec::new(), Vec::new());
+    for task in mode.tasks() {
+        let Some(agent) = find(&task.agent).filter(|agent| agent.source == "project") else {
+            continue;
+        };
+        if !names.contains(&agent.name.as_str()) {
+            names.push(&agent.name);
         }
-        let project: Vec<&Definition> = (discovery.agents.iter())
-            .filter(|agent| agent.source == "project")
-            .collect();
-        let approved = Approvals::read(parent.approvals.filter(|_| !names.is_empty()));
-        let unapproved: Vec<&str> = (project.iter())
-            .filter(|agent| !approved.approved(agent))
-            .map(|agent| agent.name.as_str())
-            .collect();
-        if !names.is_empty() && !unapproved.is_empty() {
-            let changed = match project.iter().any(|agent| approved.known(agent)) {
-                true => format!(
-                    "\nAdded or changed since you approved them: {}",
-                    unapproved.join(", ")
-                ),
-                false => String::new(),
-            };
-            ui.question(&format!(
-                "Agents: {}\nSource: {}{changed}\n\nProject agents are repo-controlled. Only \
+        let directory = agent
+            .path
+            .parent()
+            .unwrap_or(Path::new(""))
+            .display()
+            .to_string();
+        if !directories.contains(&directory) {
+            directories.push(directory);
+        }
+    }
+    let project: Vec<&Definition> = (discovery.agents.iter())
+        .filter(|agent| agent.source == "project")
+        .collect();
+    let approved = Approvals::read(parent.approvals.filter(|_| !names.is_empty()));
+    let unapproved: Vec<&str> = (project.iter())
+        .filter(|agent| !approved.approved(agent))
+        .map(|agent| agent.name.as_str())
+        .collect();
+    if !names.is_empty() && !unapproved.is_empty() {
+        let changed = match project.iter().any(|agent| approved.known(agent)) {
+            true => format!(
+                "\nAdded or changed since you approved them: {}",
+                unapproved.join(", ")
+            ),
+            false => String::new(),
+        };
+        ui.question(&format!(
+            "Agents: {}\nSource: {}{changed}\n\nProject agents are repo-controlled. Only \
 continue for trusted repositories. Yes is remembered for this project until one of its agent files \
 is added or changed.",
-                names.join(", "),
-                directories.join(", ")
+            names.join(", "),
+            directories.join(", ")
+        ));
+        let options = ["Yes", "No"].map(super::Choice::plain);
+        if ui.choose("Run project-local agents?", &options, None) != Some(0) {
+            let text = "Canceled: project-local agents not approved.".to_owned();
+            return (plain(text, false), Usage::default());
+        }
+        if let Some(path) = parent.approvals
+            && let Err(error) = approvals::remember(path, &project)
+        {
+            ui.notice(&format!(
+                "The approval is not remembered: {}: {error}",
+                path.display()
             ));
-            let options = ["Yes", "No"].map(super::Choice::plain);
-            if ui.choose("Run project-local agents?", &options, None) != Some(0) {
-                let text = "Canceled: project-local agents not approved.".to_owned();
-                return (plain(text, false), Usage::default());
-            }
-            if let Some(path) = parent.approvals
-                && let Err(error) = approvals::remember(path, &project)
-            {
-                ui.notice(&format!(
-                    "The approval is not remembered: {}: {error}",
-                    path.display()
-                ));
-            }
         }
     }
     if let Mode::Parallel(tasks) = &mode
