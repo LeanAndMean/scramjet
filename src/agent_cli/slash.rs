@@ -5,7 +5,7 @@
 //! `scope.rs`; `/login` and `/logout` in `login.rs`.
 use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::record::Event;
-use super::terminal::{self, Terminal};
+use super::terminal;
 use super::text::{clip, visible};
 use super::{clipboard, completion, export, keymap, style};
 use scramjet_rs::agent::{Agent, AgentError, McpState, Providers};
@@ -132,7 +132,7 @@ impl Interactive {
                 }
             }
             Some(Builtin::Rename(name)) => self.name(name),
-            Some(Builtin::Status) => self.say(session_info(&self.agent, &self.ui).trim_end()),
+            Some(Builtin::Status) => self.say(session_info(&self.agent).trim_end()),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::ReleaseNotes) => self.release_notes(),
             Some(Builtin::Hotkeys) => self.hotkeys(),
@@ -316,14 +316,13 @@ impl Interactive {
             .map_or(0, |since| since.as_millis() as u64);
         let model = self.agent.model();
         if let Some(screen) = &self.screen {
-            let view = super::usage::UsageView::new(
-                &history, &sessions, current, model, now, details, &self.ui,
-            );
+            let view =
+                super::usage::UsageView::new(&history, &sessions, current, model, now, details);
             return screen.show_usage(view);
         }
         let report = match details {
-            true => super::usage::details(&history, &sessions, current, model, now, None, &self.ui),
-            false => super::usage::summary(&history, current, model, now, None, &self.ui),
+            true => super::usage::details(&history, &sessions, current, model, now, None),
+            false => super::usage::summary(&history, current, model, now, None),
         };
         self.say(report.trim_end());
     }
@@ -360,10 +359,15 @@ impl Interactive {
                 ),
             };
         }
-        let ui = &self.ui;
         // What a server wrote or says of itself is shown as text, its control characters escaped.
-        let row = |label: &str, value: &str| format!("  {} {}\n", ui.dim(label), visible(value));
-        let mut info = format!("{}\n", ui.styled(style::INFO_HEADING, "MCP Servers"));
+        let row = |label: &str, value: &str| {
+            format!(
+                "  {} {}\n",
+                style::mark(style::MUTED, label),
+                visible(value)
+            )
+        };
+        let mut info = format!("{}\n", style::mark(style::INFO_HEADING, "MCP Servers"));
         for (server, state) in servers {
             info += "\n";
             let said = match &state {
@@ -373,7 +377,10 @@ impl Interactive {
                 McpState::Failed(_) => "not available".to_owned(),
             };
             let name = visible(&server.name);
-            info += &format!("{name} {}\n", ui.dim(&format!("· {said}")));
+            info += &format!(
+                "{name} {}\n",
+                style::mark(style::MUTED, &format!("· {said}"))
+            );
             let (label, address) = server.address();
             info += &row(label, &address);
             match &state {
@@ -402,7 +409,11 @@ impl Interactive {
             }
         }
         for server in disabled {
-            info += &format!("\n{} {}\n", visible(&server.name), ui.dim("· disabled"));
+            info += &format!(
+                "\n{} {}\n",
+                visible(&server.name),
+                style::mark(style::MUTED, "· disabled")
+            );
             let (label, address) = server.address();
             info += &row(label, &address);
         }
@@ -602,10 +613,11 @@ pub(super) fn mcp_command(argument: &str) -> Option<McpCommand<'_>> {
 /// `/session`: the session's name, file and id, its messages, token usage and cost over the
 /// current conversation (subagents' too, in the cost), as Scramjet's `/session` shows them. Ends
 /// with a newline.
-fn session_info(agent: &Agent, ui: &Terminal) -> String {
+fn session_info(agent: &Agent) -> String {
     let stats = agent.stats();
-    let row = |label: &str, value: String| format!("{} {value}\n", ui.dim(label));
-    let heading = |text: &str| format!("{}\n", ui.styled(style::INFO_HEADING, text));
+    let row =
+        |label: &str, value: String| format!("{} {value}\n", style::mark(style::MUTED, label));
+    let heading = |text: &str| format!("{}\n", style::mark(style::INFO_HEADING, text));
     let mut info = heading("Session Info") + "\n";
     if let Some(name) = agent.session_name() {
         info += &row("Name:", name.to_owned());
@@ -652,7 +664,7 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
     let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
         .map_or(0, |since| since.as_millis() as u64);
     let quotas = scramjet_rs::agent::quota::read();
-    if let Some(quota) = super::usage::status_quota(&quotas, agent.model(), now, ui) {
+    if let Some(quota) = super::usage::status_quota(&quotas, agent.model(), now) {
         info += "\n";
         info += &quota;
     }

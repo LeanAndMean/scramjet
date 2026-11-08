@@ -794,7 +794,7 @@ impl Interactive {
     pub(super) fn say(&self, text: &str) {
         match &self.screen {
             Some(screen) => screen.say(text),
-            None => eprintln!("{text}"),
+            None => eprintln!("{}", self.ui.themed(text)),
         }
     }
 

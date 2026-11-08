@@ -784,6 +784,10 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     pub(super) fn dim(&self, text: &str) -> String {
         self.styled(style::MUTED, text)
     }
+    /// `text`'s `style::mark`ed spans in the theme in use.
+    pub(super) fn themed(&self, text: &str) -> String {
+        style::themed(text, self.color)
+    }
     pub(super) fn styled(&self, style: Style, text: &str) -> String {
         if self.color {
             format!("{style}{text}{}", style::RESET)
@@ -1344,7 +1348,7 @@ impl Terminal {
     }
     pub(super) fn said(&mut self, text: &str) {
         self.clear();
-        let text = self.wrapped(text);
+        let text = self.wrapped(&self.themed(text));
         self.err(&format!("{text}\n\n"));
     }
     /// The banner a session starts with, every key and what was loaded when results are shown

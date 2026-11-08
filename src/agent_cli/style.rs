@@ -242,6 +242,41 @@ impl Style {
     }
 }
 
+/// Starts and ends a `mark`ed span; the start is followed by the style's id.
+const MARK: char = '\u{1}';
+const MARK_END: char = '\u{2}';
+
+/// `text` to show in `style` in the theme in use when it is shown (`themed`), rather than in
+/// the one in use now, for text kept to show again, such as `/hotkeys`' in the conversation.
+pub fn mark(style: Style, text: &str) -> String {
+    format!("{MARK}{}{text}{MARK_END}", char::from(style.0))
+}
+
+/// `text` with its `mark`ed spans in the theme in use, or plain without `color`.
+pub fn themed(text: &str, color: bool) -> String {
+    if !text.contains([MARK, MARK_END]) {
+        return text.to_owned();
+    }
+    let mut shown = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(char) = chars.next() {
+        match char {
+            MARK => {
+                let id = chars.next().and_then(|id| u8::try_from(id).ok());
+                if let Some(id) = id.filter(|id| usize::from(*id) < SPECS.len())
+                    && color
+                {
+                    shown += Style(id).get();
+                }
+            }
+            MARK_END if color => shown += RESET,
+            MARK_END => {}
+            char => shown.push(char),
+        }
+    }
+    shown
+}
+
 /// The escape sequence that starts the full screen's base in the theme in use: its background
 /// and text colors when it colors the background, else empty, the terminal's own.
 pub(super) fn base() -> &'static str {
@@ -392,6 +427,15 @@ mod tests {
         assert_eq!(shown(SELECTION), "\x1b[7m");
         assert_eq!(shown(NONE), "");
         assert_eq!(STATUS.get(), "\x1b[2m");
+    }
+
+    #[test]
+    fn marked_text_is_painted_when_shown() {
+        let text = format!("{} of {}", mark(TITLE, "Keys"), mark(MUTED, "these"));
+        let painted_now = format!("{TITLE}Keys{RESET} of {MUTED}these{RESET}");
+        assert_eq!(themed(&text, true), painted_now);
+        assert_eq!(themed(&text, false), "Keys of these");
+        assert_eq!(themed("plain", true), "plain");
     }
 
     #[test]

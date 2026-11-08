@@ -7,7 +7,6 @@ use super::interactive::Interactive;
 use super::keymap::{self, Binding, shown_keys};
 use super::keys::Press;
 use super::select::{self, Picker, Spot};
-use super::terminal::Terminal;
 use super::text::clip;
 use super::{editor, style};
 use scramjet_rs::agent::{shortened, write_replacing};
@@ -97,7 +96,7 @@ impl Interactive {
     pub(super) fn hotkeys(&mut self) {
         let settings = self.settings.path().map(Path::to_path_buf);
         let (Some(_), Some(settings)) = (&self.screen, settings) else {
-            let text = printed(&self.ui, self.settings.path());
+            let text = printed(self.settings.path());
             return self.say(text.trim_end());
         };
         let mut place: Option<(Spot, usize)> = None;
@@ -300,19 +299,22 @@ impl Interactive {
 
 /// `/hotkeys` printed, as Scramjet's: the keys by section, in two columns, and the file that
 /// changes them beside the `settings` file.
-fn printed(ui: &Terminal, settings: Option<&Path>) -> String {
-    let mut text = format!("{}\n", ui.styled(style::INFO_HEADING, "Keyboard Shortcuts"));
+fn printed(settings: Option<&Path>) -> String {
+    let mut text = format!(
+        "{}\n",
+        style::mark(style::INFO_HEADING, "Keyboard Shortcuts")
+    );
     for (section, keys) in keymap::listing() {
         let widest = (keys.iter()).map(|row| row.keys.width()).max().unwrap_or(0);
         let what = (keys.iter()).map(|row| row.what.width()).max().unwrap_or(0);
         // Keys that would push a row past 80 columns wrap at their ` / `.
         let width = widest.min(76usize.saturating_sub(what)).max(1);
-        text += &format!("\n{}\n", ui.styled(style::INFO_HEADING, section));
+        text += &format!("\n{}\n", style::mark(style::INFO_HEADING, section));
         for row in keys {
             let mut what = row.what;
             for line in wrapped(&row.keys, width) {
                 let pad = " ".repeat(width.saturating_sub(line.width()));
-                let line = ui.styled(style::CODE, &line);
+                let line = style::mark(style::CODE, &line);
                 text += format!("  {line}{pad}  {what}").trim_end();
                 text.push('\n');
                 what = "";
@@ -353,12 +355,8 @@ mod tests {
 
     #[test]
     fn printed_hotkeys_list_every_action_with_its_keys_in_columns_within_80() {
-        let ui = Terminal::new(std::sync::Arc::default(), false);
         let settings = Path::new("/config/scramjet-rs/settings.json");
-        let text = printed(&ui, Some(settings));
-        let text = [style::CODE.get(), style::INFO_HEADING.get(), style::RESET]
-            .iter()
-            .fold(text, |text, code| text.replace(code, ""));
+        let text = style::themed(&printed(Some(settings)), false);
         let lines: Vec<_> = text.lines().collect();
         assert_eq!(lines[..3], ["Keyboard Shortcuts", "", "Navigation"]);
         // Each section's actions start in one column, after its widest keys.

@@ -7,7 +7,7 @@ use super::keymap::{self, Binding};
 use super::keys::Key;
 use super::slash::grouped;
 use super::style;
-use super::terminal::{self, Terminal};
+use super::terminal;
 use super::tree::local;
 use scramjet_rs::agent::quota::{Credits, Quota, Window};
 use scramjet_rs::agent::usage::{History, Response, civil_days};
@@ -145,7 +145,7 @@ const SHADES: [char; 4] = ['█', '▓', '▒', '░'];
 
 /// The last days' and weeks' rows, each with a bar split by provider (`by_provider`) or by
 /// model, measuring cost, or tokens where nothing shown has a price.
-fn charts(responses: &[&Response], now: u64, by_provider: bool, ui: &Terminal) -> String {
+fn charts(responses: &[&Response], now: u64, by_provider: bool) -> String {
     let group = |response: &Response| match (by_provider, response.model.as_str()) {
         (true, model) => provider(model).to_owned(),
         (false, "") => "unknown".to_owned(),
@@ -214,20 +214,20 @@ fn charts(responses: &[&Response], now: u64, by_provider: bool, ui: &Terminal) -
             let totals = Totals::of(span.iter().copied());
             text += &format!(
                 "{}{:>11}{:>10} {}\n",
-                ui.dim(&format!("{:<8}", day_label(*from, now))),
+                style::mark(style::MUTED, &format!("{:<8}", day_label(*from, now))),
                 totals.cost(),
                 grouped(totals.requests),
-                ui.styled(style::USAGE_BAR, &bar),
+                style::mark(style::USAGE_BAR, &bar),
             );
         }
         if rows.is_empty() {
-            text += &ui.dim("No responses.");
+            text += &style::mark(style::MUTED, "No responses.");
             text.push('\n');
         }
         text
     };
 
-    let heading = |text: &str| format!("\n{}\n", ui.styled(style::INFO_HEADING, text));
+    let heading = |text: &str| format!("\n{}\n", style::mark(style::INFO_HEADING, text));
     let mut text = heading(&format!("Last {DAYS} days"));
     text += &rows(
         ((today - (DAYS - 1))..=today)
@@ -242,8 +242,8 @@ fn charts(responses: &[&Response], now: u64, by_provider: bool, ui: &Terminal) -
         let legend: Vec<String> = (SHADES.iter().zip(named.iter().map(String::as_str)))
             .chain(others)
             .map(|(shade, name)| {
-                let shade = ui.styled(style::USAGE_BAR, &shade.to_string());
-                format!("{shade} {}", ui.dim(name))
+                let shade = style::mark(style::USAGE_BAR, &shade.to_string());
+                format!("{shade} {}", style::mark(style::MUTED, name))
             })
             .collect();
         let measure = match by_cost {
@@ -254,7 +254,7 @@ fn charts(responses: &[&Response], now: u64, by_provider: bool, ui: &Terminal) -
             true => "provider",
             false => "model",
         };
-        text += &ui.dim(&format!("Bars: {measure} by {split}: "));
+        text += &style::mark(style::MUTED, &format!("Bars: {measure} by {split}: "));
         text += &legend.join("  ");
         text.push('\n');
     }
@@ -379,7 +379,7 @@ const STALE: u64 = 15 * 60 * 1000;
 
 /// The quota of `only`, or of every provider, the current one (`current`) first, each as its
 /// latest response reported it: a bar for each window, each provider named when all are shown.
-fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &Terminal) -> String {
+fn quotas(history: &History, only: Option<&str>, current: &str, now: u64) -> String {
     let mut shown: Vec<&(String, Quota)> = (history.quotas.iter())
         .filter(|(provider, _)| only.is_none_or(|only| provider == only))
         .collect();
@@ -392,13 +392,15 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
         };
         match (only, seen) {
             (None, seen) => {
-                let seen = seen.map_or(String::new(), |seen| ui.dim(&format!(" · {seen}")));
-                text += &format!("  {}{seen}\n", ui.styled(style::INFO_HEADING, provider));
+                let seen = seen.map_or(String::new(), |seen| {
+                    style::mark(style::MUTED, &format!(" · {seen}"))
+                });
+                text += &format!("  {}{seen}\n", style::mark(style::INFO_HEADING, provider));
             }
-            (Some(_), Some(seen)) => text += &format!("  {}\n", ui.dim(&seen)),
+            (Some(_), Some(seen)) => text += &format!("  {}\n", style::mark(style::MUTED, &seen)),
             (Some(_), None) => {}
         }
-        text += &quota_rows(quota, now, ui);
+        text += &quota_rows(quota, now);
         text.push('\n');
     }
     text
@@ -406,20 +408,15 @@ fn quotas(history: &History, only: Option<&str>, current: &str, now: u64, ui: &T
 
 /// The quota of `model`'s provider for `/status`, as its latest response reported it: a heading,
 /// then `/usage`'s rows; none when no response of it reported one.
-pub(super) fn status_quota(
-    quotas: &[(String, Quota)],
-    model: &str,
-    now: u64,
-    ui: &Terminal,
-) -> Option<String> {
+pub(super) fn status_quota(quotas: &[(String, Quota)], model: &str, now: u64) -> Option<String> {
     let (_, quota) = quotas.iter().find(|(name, _)| name == provider(model))?;
     let title = format!("Quota, as of {}", clock(quota.observed_at, now));
-    Some(format!("{}\n", ui.styled(style::INFO_HEADING, &title)) + &quota_rows(quota, now, ui))
+    Some(format!("{}\n", style::mark(style::INFO_HEADING, &title)) + &quota_rows(quota, now))
 }
 
 /// A quota's rows, each window with its bar, how much of it is used, when it resets and whether
 /// it lasts at its pace, then its credits.
-fn quota_rows(quota: &Quota, now: u64, ui: &Terminal) -> String {
+fn quota_rows(quota: &Quota, now: u64) -> String {
     let mut text = String::new();
     let labels: Vec<String> = (quota.windows.iter())
         .map(|window| (window.name.clone()).unwrap_or_else(|| window_label(window.window_minutes)))
@@ -431,8 +428,8 @@ fn quota_rows(quota: &Quota, now: u64, ui: &Terminal) -> String {
     for (window, label) in quota.windows.iter().zip(labels) {
         let used = window.used_percent.clamp(0.0, 100.0);
         let filled = ((used / 100.0 * QUOTA_BAR as f64).round() as usize).min(QUOTA_BAR);
-        let bar = ui.styled(style::USAGE_BAR, &"█".repeat(filled))
-            + &ui.dim(&"░".repeat(QUOTA_BAR - filled));
+        let bar = style::mark(style::USAGE_BAR, &"█".repeat(filled))
+            + &style::mark(style::MUTED, &"░".repeat(QUOTA_BAR - filled));
         let count = match (window.allowed, window.over) {
             (Some(allowed), over) => {
                 let made = (allowed as f64 * used / 100.0).round();
@@ -446,33 +443,39 @@ fn quota_rows(quota: &Quota, now: u64, ui: &Terminal) -> String {
         let mut said: Vec<String> = window.limit.iter().cloned().collect();
         match window.resets_at.map(|at| at.max(0) as u64 * 1000) {
             // What was used then no longer counts.
-            Some(at) if at <= now => said.push(ui.dim(&format!("reset since {}", clock(at, now)))),
+            Some(at) if at <= now => said.push(style::mark(
+                style::MUTED,
+                &format!("reset since {}", clock(at, now)),
+            )),
             Some(at) => said.push(format!("resets {}", until(at, now))),
             None => {}
         }
         match pace(window, quota.observed_at) {
             Some(Pace::RunsOut(out)) if out > now => {
                 let text = format!("runs out {} at this pace", until(out, now));
-                said.push(ui.styled(style::WARNING, &text));
+                said.push(style::mark(style::WARNING, &text));
             }
             Some(Pace::Lasts) if window.resets_at.is_some_and(|at| at as u64 * 1000 > now) => {
-                said.push(ui.dim(&format!("on pace to last {}", span(&label))));
+                said.push(style::mark(
+                    style::MUTED,
+                    &format!("on pace to last {}", span(&label)),
+                ));
             }
             _ => {}
         }
         let said = match said.is_empty() {
             true => String::new(),
-            false => format!("   {}", said.join(&ui.dim(" · "))),
+            false => format!("   {}", said.join(&style::mark(style::MUTED, " · "))),
         };
         text += &format!(
             "  {}  {bar}  {used:>3.0}%{count}{said}\n",
-            ui.dim(&format!("{label:<width$}")),
+            style::mark(style::MUTED, &format!("{label:<width$}")),
         );
     }
     if let Some(credits) = &quota.credits {
         text += &format!(
             "  {}  {}\n",
-            ui.dim(&format!("{:<width$}", "Credits")),
+            style::mark(style::MUTED, &format!("{:<width$}", "Credits")),
             credits_text(credits)
         );
     }
@@ -539,7 +542,7 @@ const SIZES: [(u64, &str); 5] = [
 
 /// How many of `sessions` used how many tokens, a row for each size from the smallest to the
 /// largest used, with their cost and a bar of their count.
-fn sizes(sessions: &[(String, Totals)], ui: &Terminal) -> String {
+fn sizes(sessions: &[(String, Totals)]) -> String {
     let mut rows: Vec<(u64, Totals)> = SIZES.iter().map(|_| (0, Totals::default())).collect();
     for (_, totals) in sessions {
         let size = (SIZES.iter())
@@ -558,17 +561,20 @@ fn sizes(sessions: &[(String, Totals)], ui: &Terminal) -> String {
         .max()
         .unwrap_or(0)
         .max(1);
-    let mut text = ui.dim(&format!("{:<14}{:>10}{:>11}", "Tokens", "Sessions", "Cost"));
+    let mut text = style::mark(
+        style::MUTED,
+        &format!("{:<14}{:>10}{:>11}", "Tokens", "Sessions", "Cost"),
+    );
     text.push('\n');
     for ((_, label), (count, totals)) in SIZES.iter().zip(&rows).take(last + 1).skip(first) {
         let width = match *count {
             0 => 0,
             count => ((count * BAR as u64) as f64 / most as f64).round().max(1.0) as usize,
         };
-        let bar = ui.styled(style::USAGE_BAR, &"█".repeat(width));
+        let bar = style::mark(style::USAGE_BAR, &"█".repeat(width));
         text += &format!(
             "{}{:>10}{:>11} {bar}\n",
-            ui.dim(&format!("{label:<14}")),
+            style::mark(style::MUTED, &format!("{label:<14}")),
             grouped(*count),
             totals.cost(),
         );
@@ -606,16 +612,18 @@ pub(super) fn summary(
     model: &str,
     now: u64,
     only: Option<&str>,
-    ui: &Terminal,
 ) -> String {
     let title = format!("Usage · {}", only.unwrap_or("All"));
-    let mut text = format!("{}\n\n", ui.styled(style::INFO_HEADING, &title));
-    text += &quotas(history, only, provider(model), now, ui);
+    let mut text = format!("{}\n\n", style::mark(style::INFO_HEADING, &title));
+    text += &quotas(history, only, provider(model), now);
     let responses: Vec<&Response> = (history.responses.iter())
         .filter(|r| only.is_none_or(|only| provider(&r.model) == only))
         .collect();
     if responses.is_empty() {
-        text += &format!("  {}\n", ui.dim("No responses saved yet."));
+        text += &format!(
+            "  {}\n",
+            style::mark(style::MUTED, "No responses saved yet.")
+        );
         return text;
     }
     let priced = (responses.iter()).any(|r| r.cost.is_some_and(|cost| cost > 0.0));
@@ -651,7 +659,7 @@ pub(super) fn summary(
                 up if up > 0.0 => format!("up {up:.0}% on the 30 before"),
                 down => format!("down {:.0}% on the 30 before", -down),
             };
-            ui.dim(&format!("   ({said})"))
+            style::mark(style::MUTED, &format!("   ({said})"))
         }
     };
     let spent = [
@@ -659,10 +667,10 @@ pub(super) fn summary(
         ("This week", &week),
         ("Last 30 days", &month),
     ]
-    .map(|(label, totals)| format!("{} {}", ui.dim(label), amount(totals)));
+    .map(|(label, totals)| format!("{} {}", style::mark(style::MUTED, label), amount(totals)));
     text += &format!("  {}{change}\n\n", spent.join("   "));
 
-    let label = |label: &str| ui.dim(&format!("{label:<21}"));
+    let label = |label: &str| style::mark(style::MUTED, &format!("{label:<21}"));
     let recent: Vec<&Response> = (responses.iter().copied())
         .filter(|r| r.at >= month_from)
         .collect();
@@ -683,7 +691,7 @@ pub(super) fn summary(
         .filter(|(_, size, _)| all > 0.0 && size / all >= 0.01)
         .take(TOP_MODELS)
         .map(|(name, size, totals)| {
-            let share = ui.dim(&format!("({:.0}%)", size / all * 100.0));
+            let share = style::mark(style::MUTED, &format!("({:.0}%)", size / all * 100.0));
             format!("{name}  {} {share}", amount(totals))
         })
         .collect();
@@ -723,7 +731,7 @@ pub(super) fn summary(
         let summary = history.summaries.get(*index);
         let name = match summary.and_then(|summary| summary.title.as_deref()) {
             Some(title) => format!("\"{}\"", super::text::clip(title, TITLE_WIDTH)),
-            None => ui.dim("(no prompt)"),
+            None => style::mark(style::MUTED, "(no prompt)"),
         };
         let root = summary.and_then(|summary| summary.root.as_deref());
         let place = match root
@@ -755,23 +763,22 @@ pub(super) fn details(
     model: &str,
     now: u64,
     only: Option<&str>,
-    ui: &Terminal,
 ) -> String {
-    let heading = |text: &str| format!("{}\n", ui.styled(style::INFO_HEADING, text));
+    let heading = |text: &str| format!("{}\n", style::mark(style::INFO_HEADING, text));
     let responses: Vec<&Response> = (history.responses.iter())
         .filter(|r| only.is_none_or(|only| provider(&r.model) == only))
         .collect();
     let title = format!("Usage · {} · details", only.unwrap_or("All"));
     let mut text = heading(&title) + "\n";
     if responses.is_empty() {
-        text += &ui.dim("No responses saved yet.");
+        text += &style::mark(style::MUTED, "No responses saved yet.");
         text.push('\n');
         return text;
     }
     let row = |label: &str, totals: &Totals| {
         format!(
             "{}{:>10}{:>9}{:>9}{:>8}{:>11}\n",
-            ui.dim(&format!("{label:<14}")),
+            style::mark(style::MUTED, &format!("{label:<14}")),
             grouped(totals.requests),
             terminal::tokens(totals.input),
             terminal::tokens(totals.output),
@@ -779,10 +786,13 @@ pub(super) fn details(
             totals.cost(),
         )
     };
-    text += &ui.dim(&format!(
-        "{:<14}{:>10}{:>9}{:>9}{:>8}{:>11}",
-        "", "Requests", "Input", "Output", "Cached", "Cost"
-    ));
+    text += &style::mark(
+        style::MUTED,
+        &format!(
+            "{:<14}{:>10}{:>9}{:>9}{:>8}{:>11}",
+            "", "Requests", "Input", "Output", "Cached", "Cost"
+        ),
+    );
     text.push('\n');
     let session = history.session(current);
     let this = Totals::of(
@@ -806,7 +816,7 @@ pub(super) fn details(
     }
     text += &row("All", &Totals::of(responses.iter().copied()));
 
-    text += &charts(&responses, now, only.is_none(), ui);
+    text += &charts(&responses, now, only.is_none());
 
     let since = now.saturating_sub(30 * DAY);
     let recent = || responses.iter().copied().filter(|r| r.at >= since);
@@ -816,10 +826,13 @@ pub(super) fn details(
             .max()
             .unwrap_or(0)
             .min(MODEL_WIDTH);
-        let mut text = ui.dim(&format!(
-            "{label:<width$}{:>10}{:>9}{:>9}{:>8}{:>11}",
-            "Requests", "Input", "Output", "Cached", "Cost"
-        ));
+        let mut text = style::mark(
+            style::MUTED,
+            &format!(
+                "{label:<width$}{:>10}{:>9}{:>9}{:>8}{:>11}",
+                "Requests", "Input", "Output", "Cached", "Cost"
+            ),
+        );
         text.push('\n');
         for (name, totals) in rows {
             text += &format!(
@@ -833,7 +846,7 @@ pub(super) fn details(
             );
         }
         if rows.is_empty() {
-            text += &ui.dim("No responses.");
+            text += &style::mark(style::MUTED, "No responses.");
             text.push('\n');
         }
         text
@@ -867,10 +880,13 @@ pub(super) fn details(
             .max()
             .unwrap_or(0)
             .clamp(5, MODEL_WIDTH);
-        text += &ui.dim(&format!(
-            "{:<width$}{:>8} {:>12}{:>8} {:>12}{:>12}",
-            "Model", "Timed", "First output", "p90", "Rate", "p10"
-        ));
+        text += &style::mark(
+            style::MUTED,
+            &format!(
+                "{:<width$}{:>8} {:>12}{:>8} {:>12}{:>12}",
+                "Model", "Timed", "First output", "p90", "Rate", "p10"
+            ),
+        );
         text.push('\n');
         for (name, totals) in &mut models {
             let mut first =
@@ -892,16 +908,19 @@ pub(super) fn details(
     if !costliest.is_empty() {
         text += "\n";
         text += &heading("Sessions by tokens, last 30 days");
-        text += &sizes(&costliest, ui);
+        text += &sizes(&costliest);
     }
     costliest.truncate(SESSIONS);
     if !costliest.is_empty() {
         text += "\n";
         text += &heading("Costliest sessions, last 30 days");
-        text += &ui.dim(&format!(
-            "{:<8}{:>10}{:>9}{:>11}  {:<PROJECT_WIDTH$}  Session",
-            "Started", "Requests", "Tokens", "Cost", "Project"
-        ));
+        text += &style::mark(
+            style::MUTED,
+            &format!(
+                "{:<8}{:>10}{:>9}{:>11}  {:<PROJECT_WIDTH$}  Session",
+                "Started", "Requests", "Tokens", "Cost", "Project"
+            ),
+        );
         text.push('\n');
         for (index, totals) in &costliest {
             let index: usize = index.parse().unwrap_or(usize::MAX);
@@ -917,10 +936,10 @@ pub(super) fn details(
             let project = super::text::clip(&project, PROJECT_WIDTH);
             let title = match summary.and_then(|summary| summary.title.as_deref()) {
                 Some(title) => super::text::clip(title, TITLE_WIDTH),
-                None => ui.dim("(no prompt)"),
+                None => style::mark(style::MUTED, "(no prompt)"),
             };
             let mark = match Some(index) == session {
-                true => ui.dim(" (this one)"),
+                true => style::mark(style::MUTED, " (this one)"),
                 false => String::new(),
             };
             text += &format!(
@@ -949,7 +968,7 @@ the slowest tenth's (p90 and p10); cost is $? where the provider gives no price.
     if !history.unreadable.is_empty() {
         said += &format!(" {} could not be read.", history.unreadable.len());
     }
-    text += &ui.dim(&said);
+    text += &style::mark(style::MUTED, &said);
     text.push('\n');
     text
 }
@@ -992,7 +1011,6 @@ impl UsageView {
         model: &str,
         now: u64,
         details: bool,
-        ui: &Terminal,
     ) -> Self {
         let this = provider(model);
         let mut names = vec![None, Some(this.to_owned())];
@@ -1005,8 +1023,8 @@ impl UsageView {
             .map(|name| {
                 let only = name.as_deref();
                 Tab {
-                    summary: summary(history, current, model, now, only, ui),
-                    details: self::details(history, sessions, current, model, now, only, ui),
+                    summary: summary(history, current, model, now, only),
+                    details: self::details(history, sessions, current, model, now, only),
                     name: name.unwrap_or_else(|| "All".to_owned()),
                 }
             })
@@ -1079,7 +1097,6 @@ mod tests {
     use super::*;
     use crate::agent_cli::keys::{Code, Press};
     use scramjet_rs::agent::usage::Summary;
-    use std::sync::{Arc, atomic::AtomicBool};
 
     fn response(at: u64, model: &str, cost: Option<f64>, session: usize) -> Response {
         Response {
@@ -1128,13 +1145,13 @@ mod tests {
         }
     }
 
-    fn ui() -> Terminal {
-        Terminal::new(Arc::new(AtomicBool::new(false)), false)
+    fn plain(text: &str) -> String {
+        super::super::text::plain(&style::themed(text, false))
     }
 
     #[test]
     fn the_details_add_up_sessions_days_and_models() {
-        let (now, history, ui) = (NOW, history(), ui());
+        let (now, history) = (NOW, history());
         let report = details(
             &history,
             Path::new("/s"),
@@ -1142,9 +1159,8 @@ mod tests {
             "b/new",
             now,
             None,
-            &ui,
         );
-        let report = super::super::text::plain(&report);
+        let report = plain(&report);
         let lines: Vec<&str> = report.lines().map(str::trim_end).collect();
         let day = |back: u64| date(now - back * DAY, now);
         assert_eq!(
@@ -1260,7 +1276,7 @@ mod tests {
         .enumerate()
         .map(|(index, (tokens, cost))| (index.to_string(), session(tokens, cost)))
         .collect();
-        let text = super::super::text::plain(&sizes(&sessions, &ui()));
+        let text = plain(&sizes(&sessions));
         let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
         assert_eq!(
             lines,
@@ -1273,7 +1289,7 @@ mod tests {
         );
 
         let one = [("0".to_owned(), session(10_000_000, Some(1.0)))];
-        let text = super::super::text::plain(&sizes(&one, &ui()));
+        let text = plain(&sizes(&one));
         assert!(
             text.ends_with("10M and more           1      $1.00 ████████████████████\n"),
             "{text}"
@@ -1295,7 +1311,6 @@ mod tests {
 
     #[test]
     fn bars_split_by_model_and_count_tokens_where_nothing_is_priced() {
-        let ui = ui();
         let today = local_day(NOW).unwrap();
         let week_ago = NOW - 7 * DAY;
         let mut responses: Vec<Response> = (1..=5)
@@ -1303,7 +1318,7 @@ mod tests {
             .collect();
         responses.push(response(week_ago, "a/m5", Some(15.0), 0));
         let all: Vec<&Response> = responses.iter().collect();
-        let text = super::super::text::plain(&charts(&all, NOW, false, &ui));
+        let text = plain(&charts(&all, NOW, false));
         let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
         let earlier = day_label(local_day(week_ago).unwrap(), NOW);
         let this_week = day_label(monday(today), NOW);
@@ -1334,7 +1349,7 @@ mod tests {
             },
         ];
         let all: Vec<&Response> = unpriced.iter().collect();
-        let text = super::super::text::plain(&charts(&all, NOW, false, &ui));
+        let text = plain(&charts(&all, NOW, false));
         let half = "█".repeat(15) + &"▓".repeat(5);
         assert!(text.contains(&format!("$?         2 {half}\n")), "{text}");
         assert!(
@@ -1345,18 +1360,10 @@ mod tests {
 
     #[test]
     fn a_providers_details_count_only_its_responses() {
-        let (now, history, ui) = (NOW, history(), ui());
+        let (now, history) = (NOW, history());
         let current = Path::new("/s/p/2.jsonl");
-        let report = details(
-            &history,
-            Path::new("/s"),
-            current,
-            "a/one",
-            now,
-            Some("a"),
-            &ui,
-        );
-        let report = super::super::text::plain(&report);
+        let report = details(&history, Path::new("/s"), current, "a/one", now, Some("a"));
+        let report = plain(&report);
         let lines: Vec<&str> = report.lines().map(str::trim_end).collect();
         assert_eq!(
             lines[..10],
@@ -1386,7 +1393,7 @@ mod tests {
     }
 
     fn lines(text: &str) -> Vec<String> {
-        let text = super::super::text::plain(text);
+        let text = plain(text);
         text.lines()
             .map(|line| line.trim_end().to_owned())
             .collect()
@@ -1394,7 +1401,7 @@ mod tests {
 
     #[test]
     fn the_summary_says_what_was_spent_and_what_drove_it() {
-        let (now, mut history, ui) = (NOW, history(), ui());
+        let (now, mut history) = (NOW, history());
         let current = Path::new("/s/p/2.jsonl");
         let three_days = now - 3 * DAY;
         let this_week = local_day(three_days).unwrap() >= monday(local_day(now).unwrap());
@@ -1403,7 +1410,7 @@ mod tests {
             false => without.to_owned(),
         };
         assert_eq!(
-            lines(&summary(&history, current, "b/new", now, None, &ui)),
+            lines(&summary(&history, current, "b/new", now, None)),
             [
                 "Usage · All".to_owned(),
                 String::new(),
@@ -1420,7 +1427,7 @@ mod tests {
         history
             .responses
             .push(response(three_days, "a/one", Some(5.0), 0));
-        let a = lines(&summary(&history, current, "a/one", now, Some("a"), &ui));
+        let a = lines(&summary(&history, current, "a/one", now, Some("a")));
         assert_eq!(a[0], "Usage · a");
         assert_eq!(
             a[2],
@@ -1439,14 +1446,7 @@ mod tests {
         );
         // Nothing priced: tokens.
         assert_eq!(
-            lines(&summary(
-                &history,
-                current,
-                "b/new",
-                now,
-                Some("unknown"),
-                &ui
-            ))[2..],
+            lines(&summary(&history, current, "b/new", now, Some("unknown")))[2..],
             [
                 "  Today 450 tokens   This week 450 tokens   Last 30 days 450 tokens",
                 "",
@@ -1455,7 +1455,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            lines(&summary(&history, current, "b/new", now, Some("b"), &ui)),
+            lines(&summary(&history, current, "b/new", now, Some("b"))),
             ["Usage · b", "", "  No responses saved yet."]
         );
         assert_eq!(day_said(now, now), "today");
@@ -1465,7 +1465,7 @@ mod tests {
 
     #[test]
     fn each_quota_window_is_a_bar_with_its_reset_and_pace() {
-        let (now, mut history, ui) = (NOW, history(), ui());
+        let (now, mut history) = (NOW, history());
         let window = |used, minutes, resets_at| Window {
             used_percent: used,
             window_minutes: Some(minutes),
@@ -1497,8 +1497,7 @@ mod tests {
             ("c".into(), quota(vec![premium])),
         ];
         let current = Path::new("/s/p/2.jsonl");
-        let text =
-            |history: &History, only| lines(&summary(history, current, "b/new", now, only, &ui));
+        let text = |history: &History, only| lines(&summary(history, current, "b/new", now, only));
         let bar = |filled: usize| "█".repeat(filled) + &"░".repeat(QUOTA_BAR - filled);
         let reset = clock((now / 1000 - 60) * 1000, now);
         let a = text(&history, Some("a"));
@@ -1555,13 +1554,13 @@ mod tests {
             [&[format!("  as of {seen}")], &rows[..]].concat()
         );
         // `/status` shows the current model's provider's, with the same rows.
-        let status = status_quota(&history.quotas, "c/gpt-sonic", now, &ui).unwrap();
+        let status = status_quota(&history.quotas, "c/gpt-sonic", now).unwrap();
         assert_eq!(
             lines(&status),
             [&[format!("Quota, as of {seen}")], &rows[..]].concat()
         );
-        assert_eq!(status_quota(&history.quotas, "b/new", now, &ui), None);
-        assert_eq!(status_quota(&history.quotas, "unsaved", now, &ui), None);
+        assert_eq!(status_quota(&history.quotas, "b/new", now), None);
+        assert_eq!(status_quota(&history.quotas, "unsaved", now), None);
         let unlimited = Credits {
             unlimited: true,
             balance: None,
@@ -1595,7 +1594,7 @@ mod tests {
 
     #[test]
     fn a_window_used_faster_than_it_lasts_says_when_it_runs_out() {
-        let (now, mut history, ui) = (NOW, history(), ui());
+        let (now, mut history) = (NOW, history());
         let seconds = |ms: u64| Some((ms / 1000) as i64);
         // Three hours of five gone, 80% used: at that pace 100% after 3h45m.
         let fast = Window {
@@ -1655,7 +1654,7 @@ mod tests {
         };
         let current = Path::new("/s/p/2.jsonl");
         let row = |history: &History| {
-            let text = summary(history, current, "b/new", now, Some("a"), &ui);
+            let text = summary(history, current, "b/new", now, Some("a"));
             lines(&text)
                 .into_iter()
                 .find(|line| line.contains("5-hour"))
@@ -1673,17 +1672,17 @@ mod tests {
 
     #[test]
     fn the_view_opens_on_the_current_provider_and_tabs_through_the_others() {
-        let (now, history, ui) = (NOW, history(), ui());
+        let (now, history) = (NOW, history());
         let current = Path::new("/s/p/2.jsonl");
-        let mut view = UsageView::new(&history, Path::new("/s"), current, "b/new", now, false, &ui);
+        let mut view = UsageView::new(&history, Path::new("/s"), current, "b/new", now, false);
         let names: Vec<&str> = view.tabs.iter().map(|tab| tab.name.as_str()).collect();
         assert_eq!(names, ["All", "b", "a", "unknown"]);
         assert_eq!(
             lines(view.report()),
             ["Usage · b", "", "  No responses saved yet."]
         );
-        let tabs = |view: &UsageView| super::super::text::plain(&view.lines(80)[1]);
-        let keys = |view: &UsageView| super::super::text::plain(&view.lines(80)[0]);
+        let tabs = |view: &UsageView| plain(&view.lines(80)[1]);
+        let keys = |view: &UsageView| plain(&view.lines(80)[0]);
         assert_eq!(tabs(&view), " All   b   a   unknown ");
         assert!(
             keys(&view).starts_with("Usage  d details · "),
@@ -1713,7 +1712,7 @@ mod tests {
         assert_eq!(view.key(&Key::Text("x".into())), Took::Nothing);
         let escape = Key::Press(Press::new(Code::Escape, 0));
         assert_eq!(view.key(&escape), Took::Closed);
-        let opened = UsageView::new(&history, Path::new("/s"), current, "b/new", now, true, &ui);
+        let opened = UsageView::new(&history, Path::new("/s"), current, "b/new", now, true);
         assert_eq!(shown(&opened), "Usage · b · details");
     }
 }

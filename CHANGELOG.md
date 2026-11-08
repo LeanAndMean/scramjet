@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.116.1 — `/status`, `/hotkeys`, `/mcp` and `/usage` follow a theme change
+
+### Fixed
+
+- What `/status`, `/session`, `/hotkeys`, `/mcp` and `/usage` showed in the conversation kept the colors of the theme in use when they ran; it now takes a new theme with the rest of the screen.
+
 ## 0.116.0 — `!` commands that end during a turn join the conversation
 
 ### Changed
