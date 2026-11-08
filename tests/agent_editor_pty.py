@@ -1086,8 +1086,7 @@ def remapped_keys(read, until, send, output):
     # The hints name the keys in use.
     send(b'/resume\r')
     on_screen('Resume session (threaded)  Tab all folders \u00b7 Ctrl+S sort \u00b7 Ctrl+N named \u00b7 '
-              'Ctrl+P path \u00b7 Ctrl+R ren')
-    # The hint is cut before the delete key at this width; F4 asks.
+              'Ctrl+P path\n  Ctrl+R rename \u00b7 F4 delete\n')
     send(b'\x1bOS')
     on_screen('Resume session (threaded)  Delete session? F6 confirm \u00b7 Esc cancel')
     send(b'\x1b')
@@ -2781,7 +2780,7 @@ def manage_sessions(read, until, send, output):
     on_screen('Mango reply.')
     send(b'/resume\r')
     on_screen('Resume session (threaded)  Tab all folders \u00b7 Ctrl+S sort \u00b7 Ctrl+N named \u00b7 '
-              'Ctrl+P path \u00b7 Ctrl+R ren')
+              'Ctrl+P path\n  Ctrl+R rename \u00b7 Ctrl+D delete\n')
     send(b'kiwi')
     on_screen('\u203a kiwi first (2 items, now)')
     # Ctrl+R renames the selected session; the list comes back with its query.
@@ -2826,11 +2825,14 @@ def manage_sessions(read, until, send, output):
     send(b'\r')
     on_screen('Session moved to trash')
     on_screen('No matching sessions')
+    # As in Scramjet, the note goes by itself after 2 seconds.
+    on_screen('Session moved to trash', gone=True)
     # The current session cannot be deleted.
     send(b'\x7f' * 4 + b'mango')
     on_screen('\u203a mango second (2 items, now) \u2713')
     send(b'\x04')
     on_screen('Cannot delete the currently active session')
+    on_screen('Cannot delete the currently active session', gone=True)
     send(b'\x1b')
     ending(read, output, ['\u2500' * 99, '>'], columns=100)
     send(b'\x04')

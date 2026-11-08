@@ -306,7 +306,16 @@ pub(super) struct Picker {
     /// Said in place of the keys' hint until the next key: what a key did, or why it could not
     /// (`true`: a warning).
     status: Option<(String, bool)>,
+    /// When `at` showed `status`, which on the session list (`acting`) goes after a while.
+    status_at: Option<Instant>,
 }
+
+/// How long the session list's status shows without a key, as in Scramjet's session selector:
+/// an info, then a warning.
+const STATUS_SHOWN: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(3)];
+
+/// The most lines a list's title and hint take.
+const HINT_LINES: usize = 3;
 
 enum Shape {
     /// A selector's rows, given at the width they take on the terminal when the list opens.
@@ -387,6 +396,7 @@ impl Picker {
             places: false,
             folds: Vec::new(),
             status: None,
+            status_at: None,
         }
     }
 
@@ -406,6 +416,7 @@ impl Picker {
             places: false,
             folds: Vec::new(),
             status: None,
+            status_at: None,
         }
     }
 
@@ -439,7 +450,7 @@ impl Picker {
                 view.set_label(entry, label);
                 reselect(view, &mut self.list, last, selected.or(*last));
             }
-            self.status = status;
+            self.say(status);
         }
     }
 
@@ -565,8 +576,28 @@ impl Picker {
         let last = self.list.rows.len().saturating_sub(1);
         self.list.selected = spot.position.min(last);
         self.list.settle(true);
-        self.status = status;
+        self.say(status);
         self
+    }
+
+    /// Says `status` in place of the keys' hint, from now.
+    fn say(&mut self, status: Option<(String, bool)>) {
+        self.status = status;
+        self.status_at = Some(Instant::now());
+    }
+
+    /// When the status shown goes by itself, if it does.
+    fn status_ends(&self) -> Option<Instant> {
+        let (_, warning) = self.status.as_ref().filter(|_| self.acts)?;
+        Some(self.status_at? + STATUS_SHOWN[usize::from(*warning)])
+    }
+
+    /// The status shown in place of the keys' hint, if one is and has not gone.
+    fn status(&self) -> Option<&(String, bool)> {
+        match self.status_ends() {
+            Some(end) if Instant::now() >= end => None,
+            _ => self.status.as_ref(),
+        }
     }
 
     /// Chooses the recommended option of a question after `wait`, unless `stop` is called first,
@@ -620,14 +651,21 @@ impl Picker {
 
     /// How long until the countdown shows another second or ends, if it runs.
     pub(super) fn next_change(&self) -> Option<Duration> {
-        let left = self.deadline?.saturating_duration_since(Instant::now());
+        let now = Instant::now();
+        let status = (self.status_ends()).filter(|&end| end > now);
+        let status = status.map(|end| end - now + Duration::from_millis(1));
+        let Some(deadline) = self.deadline else {
+            return status;
+        };
+        let left = deadline.saturating_duration_since(now);
         let within = (left.as_nanos() % 1_000_000_000) as u64;
         let wait = match within {
             0 => Duration::from_secs(1).min(left),
             within => Duration::from_nanos(within),
         };
         // A poll's milliseconds would otherwise wake it just before.
-        Some(wait + Duration::from_millis(1))
+        let wait = wait + Duration::from_millis(1);
+        Some(status.map_or(wait, |status| status.min(wait)))
     }
 
     fn rows(
@@ -658,6 +696,7 @@ impl Picker {
             places: false,
             folds: Vec::new(),
             status: None,
+            status_at: None,
         }
     }
 
@@ -753,7 +792,7 @@ impl Picker {
                 };
                 if row.is_some() && row == current {
                     let why = "Cannot delete the currently active session";
-                    self.status = Some((why.to_owned(), true));
+                    self.say(Some((why.to_owned(), true)));
                 } else {
                     self.list.warned = row.is_some();
                 }
@@ -810,7 +849,7 @@ impl Picker {
                     false => threaded,
                 };
                 let confirm;
-                let header = match &self.status {
+                let header = match self.status() {
                     _ if self.list.warned => {
                         confirm = confirm_delete();
                         (title.as_str(), confirm.as_str(), style::SELECTOR_WARNING)
@@ -836,7 +875,7 @@ impl Picker {
             }
             Shape::Tree(view, _) => {
                 let tree_hint = tree_hint();
-                let header = match &self.status {
+                let header = match self.status() {
                     Some((status, true)) => {
                         ("Session Tree", status.as_str(), style::SELECTOR_WARNING)
                     }
@@ -1122,6 +1161,35 @@ impl List {
     }
 }
 
+/// The hint's lines beside and under `title` in `width` columns, at most `most`: what does not
+/// fit beside it goes on under it, broken between its parts, as Scramjet's session selector
+/// shows its keys on two lines.
+fn header_lines(title: &str, hint: &str, width: usize, most: usize) -> Vec<String> {
+    const SEPARATOR: &str = " · ";
+    let beside = width.saturating_sub(title.width() + 2);
+    let under = width.saturating_sub(2);
+    let mut lines = vec![String::new()];
+    for part in hint.split(SEPARATOR) {
+        let (room, more) = (
+            if lines.len() == 1 { beside } else { under },
+            lines.len() < most,
+        );
+        let line = lines.last_mut().expect("one line at least");
+        let wanted = line.width() + SEPARATOR.width() + part.width();
+        if line.is_empty() {
+            line.push_str(part);
+        } else if wanted > room && more {
+            lines.push(part.to_owned());
+        } else {
+            line.push_str(SEPARATOR);
+            line.push_str(part);
+        }
+    }
+    (lines.iter().enumerate())
+        .map(|(at, line)| text::clip(line, if at == 0 { beside } else { under }))
+        .collect()
+}
+
 /// The selector's lines for a terminal of `(width, height)`: the title with the hint in its
 /// style, the `query` being typed (with no row matching it, `none`), the rows around the selected
 /// one, the `current` row marked and the selected one on the `band`, if any, and, when some are
@@ -1141,20 +1209,25 @@ fn lines(
     let width = width.saturating_sub(1).max(8);
     let shown = list.rows.len();
     let search_rows = usize::from(search.is_some());
+    let wanted = list.visible.min(shown);
+    let spare = height.saturating_sub(3 + search_rows + wanted);
+    let header = header_lines(title, hint, width, 1 + spare.min(HINT_LINES - 1));
     let visible = list
         .visible
         .min(shown)
-        .min(height.saturating_sub(3 + search_rows).max(1));
+        .min(height.saturating_sub(2 + header.len() + search_rows).max(1));
     // As in Scramjet, the selected row stays in the middle where it can.
     let top = list
         .selected
         .saturating_sub(visible / 2)
         .min(shown - visible);
-    let hint_room = width.saturating_sub(title.width() + 2);
-    let hint = text::clip(hint, hint_room);
-    let mut lines = vec![format!(
-        "{SELECTOR_TITLE}{title}{RESET}  {hint_style}{hint}{RESET}"
-    )];
+    let mut lines = vec![];
+    for (at, part) in header.iter().enumerate() {
+        lines.push(match at {
+            0 => format!("{SELECTOR_TITLE}{title}{RESET}  {hint_style}{part}{RESET}"),
+            _ => format!("  {hint_style}{part}{RESET}"),
+        });
+    }
     if let Some((query, none)) = search {
         let query = tail(query, width - 3);
         lines.push(format!("> {query}{SEARCH_CURSOR} {RESET}"));
@@ -1415,7 +1488,8 @@ mod tests {
         assert_eq!(
             shown(&list),
             [
-                "Pick  ↑↓ move · Enter select · Esc can…",
+                "Pick  ↑↓ move · Enter select",
+                "  Esc cancel",
                 "> gpt ",
                 "  ",
                 "› gpt-5 one",
@@ -1473,10 +1547,10 @@ mod tests {
         );
         let (bold, end) = ("\x1b[1m", "\x1b[0m");
         assert_eq!(
-            shown[1],
+            shown[3],
             format!("\x1b[36m›{end} {bold}\x1b[36muser: {end}{bold}he…{end}{bold}{end}")
         );
-        assert_eq!(shown[2], format!("  \x1b[36muser: {end}he…{end}"));
+        assert_eq!(shown[4], format!("  \x1b[36muser: {end}he…{end}"));
     }
 
     #[test]
@@ -1607,7 +1681,8 @@ mod tests {
                 &row
             )),
             [
-                "Pick  ↑↓ move · Enter select · Esc can…",
+                "Pick  ↑↓ move · Enter select",
+                "  Esc cancel",
                 "  After 1",
                 "›   row 1.2",
                 "    row 1.3",
@@ -1671,6 +1746,72 @@ mod tests {
                 "     change now",
                 "  (1/3)"
             ]
+        );
+    }
+
+    #[test]
+    fn a_hint_too_long_beside_the_title_goes_on_under_it_between_its_parts() {
+        let hint = "Tab all folders · Ctrl+S sort · Ctrl+N named · Ctrl+D delete";
+        assert_eq!(header_lines("Resume", hint, 80, 3), [hint]);
+        assert_eq!(
+            header_lines("Resume", hint, 40, 3),
+            [
+                "Tab all folders · Ctrl+S sort",
+                "Ctrl+N named · Ctrl+D delete"
+            ]
+        );
+        let three = header_lines("Resume", hint, 24, 3);
+        assert_eq!(three[..2], ["Tab all folders", "Ctrl+S sort"]);
+        assert_eq!(three.len(), HINT_LINES);
+        assert!(three[2].starts_with("Ctrl+N named ·") && three[2].ends_with('…'));
+        let list = List::new(4, 0, 8);
+        let lines = plain(lines(
+            ("Resume", hint, style::MUTED),
+            &list,
+            None,
+            None,
+            (None, None),
+            (41, 8),
+            &|index, _| format!("row {index}"),
+        ));
+        assert_eq!(lines[0], "Resume  Tab all folders · Ctrl+S sort");
+        assert_eq!(lines[1], "  Ctrl+N named · Ctrl+D delete");
+        assert_eq!(lines.len(), 6, "{lines:#?}");
+        let short = header_lines("Resume", hint, 40, 1);
+        assert_eq!(short, ["Tab all folders · Ctrl+S sort ·…"]);
+    }
+
+    #[test]
+    fn the_session_lists_status_goes_after_a_while_and_other_lists_keep_theirs() {
+        let spot = || Spot {
+            query: String::new(),
+            position: 0,
+            shown: vec![0, 1],
+        };
+        let picker = |acting: bool, warning: bool| {
+            let picker = Picker::select("Resume", 8, 2, 0, None, |index, _| index.to_string());
+            let picker = if acting { picker.acting() } else { picker };
+            picker.at(spot(), Some(("Session deleted".into(), warning)))
+        };
+        let header = |picker: &Picker| plain(picker.lines((80, 24)))[0].clone();
+        let mut deleted = picker(true, false);
+        assert_eq!(header(&deleted), "Resume  Session deleted");
+        let wait = deleted.next_change().unwrap();
+        assert!(wait > Duration::from_millis(1900) && wait <= Duration::from_millis(2001));
+        deleted.status_at = Some(Instant::now() - Duration::from_millis(2100));
+        assert_eq!(
+            header(&deleted),
+            "Resume  ↑↓ move · Enter select · Esc cancel"
+        );
+        assert_eq!(deleted.next_change(), None);
+        let mut failed = picker(true, true);
+        failed.status_at = Some(Instant::now() - Duration::from_millis(2100));
+        assert_eq!(header(&failed), "Resume  Session deleted");
+        let mut kept = picker(false, false);
+        kept.status_at = Some(Instant::now() - Duration::from_secs(60));
+        assert_eq!(
+            (header(&kept), kept.next_change()),
+            ("Resume  Session deleted".into(), None)
         );
     }
 
@@ -1886,7 +2027,7 @@ mod tests {
         assert_eq!(plain_list.key(&key("enter")), Some(Picked::Row(Some(0))));
         // A list shown again selects the row acted on, where it is now.
         let again = picker().scoping().on_row(2);
-        assert_eq!(plain(again.lines((40, 24)))[4], "› claude-haiku-5-5");
+        assert_eq!(plain(again.lines((40, 24)))[5], "› claude-haiku-5-5");
     }
 
     #[test]
@@ -1929,7 +2070,7 @@ mod tests {
         assert_eq!((spot.query.as_str(), spot.position), ("gpt", 1));
         let again = picker().at(spot, None).on_row(1);
         let lines = plain(again.lines((40, 24)));
-        assert_eq!(lines[1..], ["> gpt ", "  gpt-6-luna", "› gpt-6-terra"]);
+        assert_eq!(lines[2..], ["> gpt ", "  gpt-6-luna", "› gpt-6-terra"]);
         // Cancelling is still cancelling.
         let mut list = picker().placing();
         assert_eq!(list.key(&key("escape")), Some(Picked::Row(None)));
@@ -2171,8 +2312,8 @@ mod tests {
         assert!(asked[3].starts_with(mark) && asked[3].contains("other"));
         let view = View::new(super::super::tree::sample(), false, Filter::Default);
         let tree = Picker::tree(view, 4, Some(6)).lines((80, 24));
-        assert_eq!(banded(tree.clone()), [4]);
-        assert!(text::printable(&tree[4]).starts_with("› │     • assistant"));
+        assert_eq!(banded(tree.clone()), [5]);
+        assert!(text::printable(&tree[5]).starts_with("› │     • assistant"));
     }
 
     #[test]
@@ -2183,11 +2324,11 @@ mod tests {
         let keys = "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label · \
             Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel";
         assert_eq!(tree_hint(), keys);
-        let hint = format!("Session Tree  {}", text::clip(keys, 79 - 14));
         assert_eq!(
             text(&picker),
             [
-                hint.as_str(),
+                "Session Tree  ↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label",
+                "  Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel",
                 ">  ",
                 "  ├⊟ • user: add tests",
                 "  │     • [bash: cargo test]",
@@ -2199,7 +2340,7 @@ mod tests {
         assert!(picker.takes(&key("ctrl+o")) && picker.takes(&key("ctrl+t")));
         assert_eq!(picker.key(&key("ctrl+u")), None);
         assert_eq!(
-            text(&picker)[2..],
+            text(&picker)[3..],
             [
                 "  • user: fix the bug",
                 "› ├─ • user: add tests",
@@ -2210,7 +2351,7 @@ mod tests {
         // Through the labeled entries, none here, the selection stays on its entry.
         assert_eq!(picker.key(&key("ctrl+o")), None);
         assert_eq!(
-            text(&picker)[1..],
+            text(&picker)[2..],
             [">  ", "  No entries found", "  (0/0) [labeled]"]
         );
         assert_eq!(picker.key(&key("enter")), None);
@@ -2221,12 +2362,12 @@ mod tests {
             assert_eq!(picker.key(&Key::Text(key.into())), None);
         }
         assert_eq!(
-            text(&picker)[1..],
+            text(&picker)[2..],
             ["> oth ", "› user: other way", "  (1/1)"]
         );
         // Escape clears the query, keeping the row; again, it cancels.
         assert_eq!(picker.key(&key("escape")), None);
-        assert_eq!(text(&picker)[1], ">  ");
+        assert_eq!(text(&picker)[2], ">  ");
         assert_eq!(picker.key(&key("enter")), Some(Picked::Row(Some(7))));
         assert_eq!(picker.key(&key("alt+left")), None);
         assert_eq!(text(&picker).last().unwrap(), "  (7/7)");
@@ -2242,7 +2383,7 @@ mod tests {
             empty.key(&Key::Text(key.into()));
         }
         assert_eq!(
-            text(&empty)[1..],
+            text(&empty)[2..],
             ["> zz ", "  No entries found", "  (0/0)"]
         );
         assert_eq!(empty.key(&key("enter")), None);
@@ -2261,11 +2402,11 @@ mod tests {
         };
         picker.relabel(6, Some(Some(label)), None);
         assert_eq!(picker.tree_label(6), Some("green"));
-        assert_eq!(text(&picker)[4], "› │     • [green] assistant: tests pass");
+        assert_eq!(text(&picker)[5], "› │     • [green] assistant: tests pass");
         // Ctrl+L shows the labeled entries, and again the others.
         assert_eq!(picker.key(&key("ctrl+l")), None);
         assert_eq!(
-            text(&picker)[1..],
+            text(&picker)[2..],
             [
                 ">  ",
                 "› • [green] assistant: tests pass",
@@ -2273,16 +2414,16 @@ mod tests {
             ]
         );
         assert_eq!(picker.key(&Key::Text("T".into())), None);
-        assert_eq!(text(&picker)[3], "  (1/1) [labeled] [+label time]");
+        assert_eq!(text(&picker)[4], "  (1/1) [labeled] [+label time]");
         assert_eq!(picker.key(&key("ctrl+l")), None);
-        assert_eq!(text(&picker)[6], "  (6/8) [+label time]");
+        assert_eq!(text(&picker)[7], "  (6/8) [+label time]");
         // Taken away while the labeled entries show, the selection goes back to its entry after.
         picker.key(&key("ctrl+l"));
         picker.relabel(6, Some(None), None);
-        assert_eq!(text(&picker)[3], "  (0/0) [labeled] [+label time]");
+        assert_eq!(text(&picker)[4], "  (0/0) [labeled] [+label time]");
         assert_eq!(picker.key(&Key::Text("L".into())), None);
         picker.key(&key("ctrl+l"));
-        assert_eq!(text(&picker)[6], "  (6/8) [+label time]");
+        assert_eq!(text(&picker)[7], "  (6/8) [+label time]");
         // A label that could not be saved is not shown; why shows until the next key.
         picker.relabel(
             6,
@@ -2298,7 +2439,7 @@ mod tests {
         assert!(text(&picker)[0].starts_with("Session Tree  ↑↓ move"));
         // Lowercase is text, as in Scramjet.
         assert_eq!(picker.key(&Key::Text("l".into())), None);
-        assert_eq!(text(&picker)[1], "> l ");
+        assert_eq!(text(&picker)[2], "> l ");
     }
 
     #[test]
@@ -2367,6 +2508,6 @@ mod tests {
             (12, 24),
             &row,
         ));
-        assert_eq!(narrow[1], "> ng query ");
+        assert_eq!(narrow[3], "> ng query ");
     }
 }

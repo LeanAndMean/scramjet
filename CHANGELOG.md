@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.111.0 — Lists' keys on narrow terminals, and /resume's notes that go
+
+### Changed
+
+- A list's keys that do not fit beside its title go on under it, on up to two more lines where the screen has room, rather than being cut off: `/resume`'s delete and rename keys now show below about 100 columns, and `/tree`'s filter keys at 80.
+- `/resume`'s notes after a key (`Session deleted`, `Failed to rename: …`) go by themselves after 2 seconds, 3 for a failure, as in Scramjet, rather than staying until the next key.
+
 ## 0.110.0 — Images sent as they are, or not at all
 
 ### Added
