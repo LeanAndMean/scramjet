@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.115.0 — `/resume` continues a session in its own folder
+
+### Changed
+
+- A session of another folder chosen in `/resume` (Tab) now continues in that folder, as in Scramjet: tools run there, and that project's `AGENTS.md`, command sets, skills, themes and MCP servers apply; the footer shows its folder. A session whose folder no longer exists is still forked into this project, saying so.
+
 ## 0.114.2 — A stopped command's note follows the stop
 
 ### Fixed

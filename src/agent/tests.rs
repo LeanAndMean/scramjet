@@ -1198,6 +1198,36 @@ fn every_projects_sessions_are_listed_and_another_projects_is_forked_here() {
 }
 
 #[test]
+fn another_projects_session_resumed_in_its_folder_moves_the_agent_there() {
+    let scratch = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-moved-{}", std::process::id())),
+    );
+    let (here, there) = (scratch.0.join("here"), scratch.0.join("there"));
+    let sessions = scratch.0.join("sessions");
+    for directory in [&here, &there, &sessions] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::write(there.join("AGENTS.md"), "Their rules.\n").unwrap();
+    let theirs = sessions.join("1000-2.jsonl");
+    let header = json!({"type":"session","version":1,"root":there});
+    let prompt = json!({"role":"user","content":"theirs"});
+    write_session(&theirs, &[header, prompt], std::time::SystemTime::now());
+    let current = here.join("1001-1.jsonl");
+    std::fs::write(&current, "{\"type\":\"session\",\"version\":1}\n").unwrap();
+    let endpoint = "127.0.0.1:9".parse().unwrap();
+    let mut agent = Agent::start(config(endpoint, &here), SessionChoice::Open(current)).unwrap();
+    assert!(agent.installed().context_files.is_empty());
+
+    agent.resume_session_in(&theirs, &there).unwrap();
+    assert!(agent.is_session(&theirs));
+    assert_eq!(agent.root(), there.as_path());
+    assert_eq!(agent.installed().context_files, [there.join("AGENTS.md")]);
+    // A new session is one of that project's, next to the one resumed.
+    agent.new_session().unwrap();
+    assert_eq!(agent.session_path().parent(), Some(sessions.as_path()));
+}
+
+#[test]
 fn a_session_name_and_stats_stay_out_of_the_conversation() {
     let (endpoint, server) = serve(vec![
         stream(&fixture::call_events("{}", fixture::known_usage())),

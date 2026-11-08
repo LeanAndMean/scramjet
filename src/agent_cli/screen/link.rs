@@ -189,6 +189,9 @@ impl Link {
             banner: settings.banner,
         });
     }
+    pub(in crate::agent_cli) fn moved(&self, root: PathBuf) {
+        self.send(ToScreen::Moved(root));
+    }
     /// The file of the theme in use, to read again when it changes; none for a built-in one.
     pub(in crate::agent_cli) fn watch_theme(&self, watched: Option<Watched>, following: bool) {
         self.send(ToScreen::Theme(watched, following));

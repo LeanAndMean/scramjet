@@ -1033,7 +1033,8 @@ impl Agent {
     }
 
     /// Whether the saved session `path` is one `sessions` lists, which `resume_session` continues
-    /// in; another project's is forked here (`fork_session_file`).
+    /// in; another project's continues in its folder (`resume_session_in`), or is forked here
+    /// (`fork_session_file`).
     pub fn session_here(&self, path: &Path) -> bool {
         path.parent() == Some(self.session_directory())
     }
@@ -1192,6 +1193,29 @@ impl Agent {
     /// `--session` does; on a failure to open it nothing changes. Approvals given with `a` still
     /// apply. A session left here that still holds lines in memory is taken back with them.
     pub fn resume_session(&mut self, path: &Path) -> Result<(), AgentError> {
+        let opened = self.reopened(path)?;
+        self.switch_session(opened)
+    }
+
+    /// Continues in the saved session `path` as `resume_session` does, with the project `root`
+    /// the session was in: the coding tools work there, and the command sets, skills, context
+    /// files and MCP servers are those of `root` from then on, as Scramjet's `/resume` moves to
+    /// a session's folder. The process's own directory stays.
+    pub fn resume_session_in(&mut self, path: &Path, root: &Path) -> Result<(), AgentError> {
+        let opened = self.reopened(path)?;
+        if root != self.config.root {
+            self.config.root = root.to_owned();
+            self.autonomy_diagnostics.clear();
+            self.load();
+            // Servers started as programs run in the project's directory.
+            self.mcp = None;
+            self.start_mcp();
+        }
+        self.switch_session(opened)
+    }
+
+    /// The saved session `path`, opened to continue in, or taken back from those left here.
+    fn reopened(&mut self, path: &Path) -> Result<session::Opened, AgentError> {
         if self.session.is_file(path) {
             return Err(AgentError::Session(std::io::Error::other(
                 "that is the current session",
@@ -1201,9 +1225,9 @@ impl Agent {
         if let Some(index) = left {
             let (conversation, prompts) = self.left[index].resumed()?;
             let session = self.left.remove(index);
-            return self.switch_session((session, conversation, prompts));
+            return Ok((session, conversation, prompts));
         }
-        self.switch_session(Session::open(path)?)
+        Ok(Session::open(path)?)
     }
 
     /// The current session's name, as `/name` sets it.

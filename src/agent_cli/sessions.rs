@@ -84,10 +84,28 @@ impl Interactive {
             return false;
         };
         let path = &session.path;
-        let done = match self.agent.session_here(path) {
-            true => (self.agent.resume_session(path)).map(|()| "Resumed session".to_owned()),
-            false => (self.agent.fork_session_file(path))
-                .map(|()| format!("Forked session from {} into this project", folder(&session))),
+        // As in Scramjet, a session continues in its own folder; one whose folder is gone is
+        // forked into this project.
+        let root = (session.root.as_deref()).filter(|root| root.is_dir());
+        let here = self.agent.session_here(path);
+        let moved = root.filter(|root| *root != self.agent.root() || !here);
+        let done = match (moved, here) {
+            (Some(root), _) => (self.agent.resume_session_in(path, root))
+                .map(|()| format!("Resumed session in {}", folder(&session))),
+            (None, true) => {
+                (self.agent.resume_session(path)).map(|()| "Resumed session".to_owned())
+            }
+            (None, false) => (self.agent.fork_session_file(path)).map(|()| {
+                let gone = if session.root.is_some() {
+                    ", as that folder is gone"
+                } else {
+                    ""
+                };
+                format!(
+                    "Forked session from {} into this project{gone}",
+                    folder(&session)
+                )
+            }),
         };
         match done {
             Ok(done) => {
@@ -98,6 +116,9 @@ impl Interactive {
                     model_line(&self.agent),
                     saved_line(&self.agent),
                 ));
+                if moved.is_some() {
+                    self.moved();
+                }
                 true
             }
             Err(error) => {

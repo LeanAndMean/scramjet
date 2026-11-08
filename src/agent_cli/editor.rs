@@ -556,6 +556,11 @@ impl Editor {
         self.models = models;
     }
 
+    /// Completes `@` mentions and paths under `root` from then on.
+    pub fn set_root(&mut self, root: PathBuf) {
+        self.root = root;
+    }
+
     /// Completes what `completions` lists, and makes Escape twice on an empty prompt return
     /// `Action::DoubleEscape` when `double_escape`.
     pub fn reloaded(&mut self, completions: Completions, double_escape: bool) {

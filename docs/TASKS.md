@@ -76,7 +76,7 @@ Not scheduled; fix them when they matter.
 - `bg` after Ctrl-Z during a turn stops the agent again at once (the SIGTSTP handler restores the turn's terminal mode). In `-p` output on a terminal, a reply rewritten in place after a lossy stream (`text_rows`) counts rows from before a stop.
 - The terminal's answers to the full screen's color questions (OSC 11, 10, 4) arrive as typed text in whatever reads the terminal next when the screen is left within a slow link's round trip (ssh). Not seen locally.
 - A SIGKILL leaves a `--no-session` run's directory (`scramjet-rs-unsaved-PID-N`) in the temporary directory. Removing those of dead runs at start would need a lock held per run, as `kept.rs` does, and is a destructive operation to review.
-- `/resume`'s Tab lists every folder's sessions, and one of another folder is forked into this project, where Scramjet moves the agent to the session's folder. On a screen too short for a second line, list keys are cut at the end.
+- On a screen too short for a second line, `/resume`'s list keys are cut at the end.
 - The GPT overflow wording through Proxy is unverified (needs over 1.05M tokens). deepseek-v4.1-flash's gateway answers an overflow with HTTP 400 `This model's maximum context length is 327680 tokens…` (its card says 320000).
 - ChatGPT's requests reported no cached input in the live check of 2026-11-05 (same `prompt_cache_key` and `session_id` as Scramjet). Compare with Scramjet's usage there before changing anything.
 - ChatGPT's models list an `ultra` effort, not offered; their cost shows `$?` (no prices in a subscription's list).
@@ -95,7 +95,7 @@ Not scheduled; fix them when they matter.
 - The cost leaves out compactions, branch summaries and failed attempts. Cache writes are priced at the card's one rate, though the Messages route asks for 1-hour caching (believed 2× input, not the cards' 1.25×; unchecked for Bedrock).
 - `/status` and `/hotkeys` output already shown keeps its colors after a theme change (stored styled, `Event::Text`).
 - Without `--sandbox`, MCP servers run as the user with the whole environment, also in unattended turns (as Claude Code). A tool result with several images sends only the first.
-- Four tests failed once each under the full run's load and passed alone: `agent::mcp::tests::http_servers_that_cannot_be_reached_or_refuse_say_why`, `agent::tests::a_fork_continues_from_before_a_prompt_in_a_new_session`, `agent::tools::tests::a_symlink_swapped_in_alongside_never_leads_a_tool_into_a_store`, `agent::mcp::tests::a_session_the_server_forgot_is_started_again`. 18 runs, six at once, did not reproduce them (2026-11-08); look in a failing run's output rather than by rerunning.
+- Five tests failed once each under the full run's load and passed alone: `agent::turn::tests::what_a_paused_turn_left_running_shows_from_another_thread_meanwhile` (2026-11-08, at `turn.rs:672`, its outputs' assertion), `agent::mcp::tests::http_servers_that_cannot_be_reached_or_refuse_say_why`, `agent::tests::a_fork_continues_from_before_a_prompt_in_a_new_session`, `agent::tools::tests::a_symlink_swapped_in_alongside_never_leads_a_tool_into_a_store`, `agent::mcp::tests::a_session_the_server_forgot_is_started_again`. 18 runs, six at once, did not reproduce them (2026-11-08); look in a failing run's output rather than by rerunning.
 
 ## Open questions
 

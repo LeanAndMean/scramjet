@@ -103,6 +103,9 @@ enum ToScreen {
         design: Design,
         banner: Banner,
     },
+    /// `/resume` moved to another project's session: the project's directory, where `@`
+    /// completes paths and `!` commands run, and whose branch the footer shows.
+    Moved(PathBuf),
     /// The file of the theme in use, read again as it changes, and whether the theme follows
     /// the terminal's background, as no setting names one.
     Theme(Option<Watched>, bool),
@@ -668,6 +671,13 @@ impl App {
                 self.terminal_progress = terminal_progress;
                 self.design = design;
                 self.banner = banner;
+            }
+            ToScreen::Moved(root) => {
+                self.editor.set_root(root.clone());
+                let shown = std::mem::take(&mut self.footer.shown);
+                self.footer = Footer::new(&root);
+                self.footer.shown = shown;
+                self.sides.root = root;
             }
             ToScreen::Theme(watched, following) => {
                 self.theme = watched;

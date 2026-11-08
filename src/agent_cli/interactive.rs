@@ -713,6 +713,20 @@ impl Interactive {
             .collect()
     }
 
+    /// After `/resume` moved the agent to another project: that project's themes, the screen's
+    /// directory, what the editor completes, and what is wrong in what was found there.
+    pub(super) fn moved(&mut self) {
+        self.discover_themes();
+        self.use_theme();
+        if let Some(screen) = &mut self.screen {
+            (screen.link).moved(self.agent.root().to_path_buf());
+            (screen.link).reloaded(completions(&self.agent), &self.settings);
+        }
+        for notice in self.problem_notices() {
+            self.ui().notice(&notice);
+        }
+    }
+
     /// What to say about the problems at start and after `/reload`: on the full screen one line
     /// at most (`installed::attention`), else each problem.
     pub(super) fn problem_notices(&self) -> Vec<String> {
