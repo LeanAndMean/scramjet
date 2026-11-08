@@ -514,6 +514,9 @@ impl Markdown {
                 }
                 out += if newline { "\n" } else { "" };
             }
+            // As marked's indented code, which takes the blank lines after it: an item shows
+            // none before its next line, where the top level and a quote separate the blocks.
+            let mut code_in_item = None;
             if let Some(fence) = self.block.filter(|fence| fence.indented) {
                 match kind {
                     Kind::Code => out += &"\n".repeat(std::mem::take(&mut self.blanks)),
@@ -521,6 +524,7 @@ impl Markdown {
                         out += &self.fence(fence, "");
                         out.push('\n');
                         self.block = None;
+                        code_in_item = Some(self.lists.len()).filter(|&depth| depth > 0);
                     }
                 }
             }
@@ -530,7 +534,10 @@ impl Markdown {
             let listed = !self.lists.is_empty();
             let block = self.block_of(&kind);
             let next_item = self.place(&kind);
-            let blanks = std::mem::take(&mut self.blanks);
+            let mut blanks = std::mem::take(&mut self.blanks);
+            if code_in_item.is_some_and(|depth| self.lists.len() >= depth) {
+                blanks = 0;
+            }
             self.separable = blanks == 0 && !listed;
             match blanks {
                 0 if !listed && block.is_some_and(|b| separated(self.previous, b)) => {
@@ -1684,10 +1691,31 @@ mod tests {
             rendered_alike(80, "# T\n    c\nnext"),
             format!("\x1b[1;4;33mT\x1b[0m\n\n{fence}\n  {code}c\x1b[0m\n{fence}\n\nnext")
         );
-        // In a list, four columns past its item's text; text after it keeps its own two.
+        // In a list, four columns past its item's text; text after it keeps its own two. As
+        // marked's, the code takes the blank lines after it while its item or list goes on.
+        let bullet = "\x1b[36m-\x1b[0m";
         assert_eq!(
             rendered_alike(80, "- a\n\n        c\n\n    text"),
-            format!("\x1b[36m-\x1b[0m a\n\n  {fence}\n    {code}  c\x1b[0m\n  {fence}\n\n    text")
+            format!("{bullet} a\n\n  {fence}\n    {code}  c\x1b[0m\n  {fence}\n    text")
+        );
+        let block = format!("\n\n  {fence}\n    {code}c\x1b[0m\n  {fence}\n");
+        for (text, after) in [
+            ("- a\n\n      c\n\n\n  text", "  text".to_owned()),
+            ("- a\n\n      c\n\n\n- b", format!("{bullet} b")),
+            ("- a\n\n      c\n\n  - b", format!("    {bullet} b")),
+            ("- a\n\n      c\n\nAfter.", "\nAfter.".to_owned()),
+        ] {
+            assert_eq!(
+                rendered_alike(80, text),
+                format!("{bullet} a{block}{after}"),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            render(&["- a\n  - b\n\n        c\n\n  text"]),
+            format!(
+                "{bullet} a\n    {bullet} b\n\n      {fence}\n        {code}c\x1b[0m\n      {fence}\n\n  text"
+            )
         );
         assert_eq!(render(&["text\n    more"]), "text\n    more");
         assert_eq!(

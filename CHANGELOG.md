@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.8 — Code in list items
+
+### Fixed
+
+- A reply's list item shows no blank line between an indented code block and the item's next line, as Scramjet shows it; a blank line showed there.
+
 ## 0.95.7 — Wrapping indented lines
 
 ### Fixed
