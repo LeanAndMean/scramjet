@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.9 — Times of calls run together
+
+### Fixed
+
+- In printed output (`-p`, piped input), a call that ran beside a slower one before it shows how long it took, not how long until it was printed.
+
 ## 0.95.8 — Code in list items
 
 ### Fixed

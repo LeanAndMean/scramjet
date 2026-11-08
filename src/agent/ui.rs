@@ -49,6 +49,17 @@ pub trait AgentUi {
     fn images(&mut self, _urls: &[&str]) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
+    /// `tool_result` for a result that came `at`, shown later.
+    fn tool_result_at(
+        &mut self,
+        name: &str,
+        output: &str,
+        detail: Option<&ToolDetail>,
+        failed: bool,
+        _at: Instant,
+    ) {
+        self.tool_result(name, output, detail, failed);
+    }
     /// `count` calls of a reply start running at the same time: whether this interface shows
     /// each in its place as it runs, `of_call` saying whose the display calls that follow are.
     /// Otherwise each call's display waits until the calls before it have ended.

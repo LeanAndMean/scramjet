@@ -449,14 +449,18 @@ impl AgentUi for Link {
         self.event(Event::Subagents(shown.clone()));
     }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
+        self.tool_result_at(name, output, detail, failed, Instant::now());
+    }
+    fn tool_result_at(
+        &mut self,
+        name: &str,
+        output: &str,
+        detail: Option<&ToolDetail>,
+        failed: bool,
+        at: Instant,
+    ) {
         let (name, output, detail) = (name.to_owned(), output.to_owned(), detail.cloned());
-        self.event(Event::ToolResult(
-            name,
-            output,
-            detail,
-            failed,
-            Instant::now(),
-        ));
+        self.event(Event::ToolResult(name, output, detail, failed, at));
     }
     /// As Scramjet's, each call's rows show in its place while it runs.
     fn running_calls(&mut self, count: usize) -> bool {

@@ -286,7 +286,8 @@ impl AgentUi for Relay {
     }
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         let (name, output, detail) = (name.to_owned(), output.to_owned(), detail.cloned());
-        self.show(move |ui| ui.tool_result(&name, &output, detail.as_ref(), failed));
+        let at = Instant::now();
+        self.show(move |ui| ui.tool_result_at(&name, &output, detail.as_ref(), failed, at));
     }
     fn question(&mut self, message: &str) {
         let message = message.to_owned();
@@ -329,7 +330,7 @@ impl AgentUi for Relay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::tests::Watching;
+    use crate::agent::tests::{Recorder, Watching};
     use serde_json::json;
 
     #[test]
@@ -381,5 +382,43 @@ mod tests {
             let waited: Vec<_> = seen.try_iter().collect();
             assert!(waited.contains(&"asked go?".to_owned()), "{waited:?}");
         }
+    }
+
+    #[test]
+    fn a_result_shown_after_the_calls_before_it_keeps_the_time_it_came() {
+        let call = |id: &str, wait: u64| {
+            let arguments = json!({"label": id, "wait": wait}).to_string();
+            json!({"type":"function_call","call_id":id,"name":"bash","arguments":arguments})
+        };
+        let run: Run = Arc::new(|call: &Call, ui: &mut dyn AgentUi, _: &AtomicBool| {
+            let wait = call.arguments["wait"].as_u64().unwrap();
+            std::thread::sleep(Duration::from_millis(wait));
+            ui.tool_result(
+                call.arguments["label"].as_str().unwrap(),
+                "done",
+                None,
+                false,
+            );
+            let output = Output {
+                failed: false,
+                ..Output::failure("done".into())
+            };
+            (output, Usage::default())
+        });
+        let calls = vec![call("slow", 600), call("quick", 50)];
+        let mut batch = Batch::start(calls, Path::new("/"), run, false);
+        let mut ui = Recorder::default();
+        let Waited::Ended(_) = batch.wait(&mut ui, &AtomicBool::new(false)) else {
+            panic!("paused");
+        };
+        let ended = &ui.ended;
+        assert!(
+            ended[0].0 == "slow" && ended[0].1 < Duration::from_millis(300),
+            "{ended:?}"
+        );
+        assert!(
+            ended[1].0 == "quick" && ended[1].1 >= Duration::from_millis(300),
+            "{ended:?}"
+        );
     }
 }

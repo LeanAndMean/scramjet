@@ -33,6 +33,8 @@ pub(super) struct Recorder {
     pub(super) children: Vec<Children>,
     /// The details of the results shown.
     pub(super) details: Vec<ToolDetail>,
+    /// The results shown after they came (`tool_result_at`), with how long after.
+    pub(super) ended: Vec<(String, Duration)>,
     /// Each `usage` call's session tokens and context, and the model's output rate.
     pub(super) usage: Vec<(Tokens, Option<u64>)>,
     pub(super) rates: Vec<Option<f64>>,
@@ -89,6 +91,17 @@ impl AgentUi for Recorder {
             .unwrap_or_default();
         self.shown
             .push(format!("result {name} {output}{failed}{detail}"));
+    }
+    fn tool_result_at(
+        &mut self,
+        name: &str,
+        output: &str,
+        detail: Option<&ToolDetail>,
+        failed: bool,
+        at: std::time::Instant,
+    ) {
+        self.ended.push((name.to_owned(), at.elapsed()));
+        self.tool_result(name, output, detail, failed);
     }
     fn command_started(&mut self, command: &str, include: bool) {
         self.shown.push(format!("started {command} {include}"));

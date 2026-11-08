@@ -1079,6 +1079,16 @@ impl AgentUi for Terminal {
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
         self.tool_ended(name, output, detail, failed, Instant::now());
     }
+    fn tool_result_at(
+        &mut self,
+        name: &str,
+        output: &str,
+        detail: Option<&ToolDetail>,
+        failed: bool,
+        at: Instant,
+    ) {
+        self.tool_ended(name, output, detail, failed, at);
+    }
     fn command_started(&mut self, command: &str, include: bool) {
         self.command = Some((command.to_owned(), include));
         self.show("Running".into(), false);
