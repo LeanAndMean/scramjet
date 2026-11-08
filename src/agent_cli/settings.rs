@@ -162,6 +162,7 @@ pub(super) enum Row {
     DoubleEscape,
     CopyOnSelect,
     WheelStep,
+    RetainTranscript,
     PromptHeight,
     CompletionRows,
     TerminalProgress,
@@ -179,7 +180,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 27] = [
+pub(super) const ROWS: [Row; 28] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -192,6 +193,7 @@ pub(super) const ROWS: [Row; 27] = [
     Row::DoubleEscape,
     Row::CopyOnSelect,
     Row::WheelStep,
+    Row::RetainTranscript,
     Row::PromptHeight,
     Row::CompletionRows,
     Row::TerminalProgress,
@@ -224,6 +226,7 @@ impl Row {
             Self::DoubleEscape => "Escape twice",
             Self::CopyOnSelect => "Copy on select",
             Self::WheelStep => "Wheel scrolls",
+            Self::RetainTranscript => "Retain transcript",
             Self::PromptHeight => "Prompt height",
             Self::CompletionRows => "Completion rows",
             Self::TerminalProgress => "Terminal progress",
@@ -313,6 +316,10 @@ impl Row {
                 );
             }
             Self::WheelStep => "The lines of the conversation a notch of the mouse wheel scrolls.",
+            Self::RetainTranscript => {
+                "On exit, the whole conversation, the prompt and the footer stay in the \
+                 terminal's scrollback, as they were on the screen."
+            }
             Self::PromptHeight => {
                 "The most rows the prompt's text takes, as a share of the screen's; a longer \
                  prompt scrolls within them."
@@ -398,6 +405,9 @@ pub(super) struct Settings {
     /// `images.blockImages`: no image is sent to any model, as Scramjet's.
     pub(super) block_images: bool,
     pub(super) layout: Layout,
+    /// `retainTranscriptOnExit`: leaving the full screen for good writes the conversation into
+    /// the terminal's scrollback, as Scramjet's.
+    pub(super) retain_transcript: bool,
     /// `terminal.showTerminalProgress`: the full screen tells the terminal it is busy while a
     /// turn runs (OSC 9;4), as Scramjet's.
     pub(super) terminal_progress: bool,
@@ -547,6 +557,7 @@ impl Settings {
             resize_images: true,
             block_images: false,
             layout: Layout::default(),
+            retain_transcript: false,
             terminal_progress: false,
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
@@ -608,6 +619,11 @@ impl Settings {
             None => {}
             Some(Value::Bool(copy)) => self.copy_on_select = *copy,
             Some(_) => wrong("copyOnSelect", "true or false"),
+        }
+        match object.get("retainTranscriptOnExit") {
+            None => {}
+            Some(Value::Bool(retain)) => self.retain_transcript = *retain,
+            Some(_) => wrong("retainTranscriptOnExit", "true or false"),
         }
         match object.get("spellCheck") {
             None => {}
@@ -1563,6 +1579,8 @@ impl Settings {
             },
             Row::PromptHeight => format!("{}% of the screen", self.layout.editor_share),
             Row::CompletionRows => self.layout.completion_rows.to_string(),
+            Row::RetainTranscript if self.retain_transcript => "on".into(),
+            Row::RetainTranscript => "off".into(),
             Row::TerminalProgress if self.terminal_progress => "on".into(),
             Row::TerminalProgress => "off".into(),
             Row::SpellCheck if self.spell_check => "on".into(),
@@ -1662,6 +1680,10 @@ impl Settings {
             Row::CopyOnSelect => {
                 self.copy_on_select = !self.copy_on_select;
                 self.save("copyOnSelect", json!(self.copy_on_select))
+            }
+            Row::RetainTranscript => {
+                self.retain_transcript = !self.retain_transcript;
+                self.save("retainTranscriptOnExit", json!(self.retain_transcript))
             }
             Row::TerminalProgress => {
                 self.terminal_progress = !self.terminal_progress;
@@ -2103,6 +2125,24 @@ mod tests {
         assert_eq!(
             wrong.warnings,
             [format!("{path}: images must be an object; ignored")]
+        );
+    }
+
+    #[test]
+    fn retaining_the_transcript_takes_scramjets_key() {
+        let scratch = Scratch::new("retain-transcript");
+        assert!(!settings_with(&scratch, "{}").retain_transcript);
+        let settings = settings_with(&scratch, r#"{"retainTranscriptOnExit": true}"#);
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        assert!(settings.retain_transcript);
+        let path = shown(&scratch.0.join("settings.json"));
+        let wrong = settings_with(&scratch, r#"{"retainTranscriptOnExit": "yes"}"#);
+        assert!(!wrong.retain_transcript);
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                "{path}: retainTranscriptOnExit must be true or false; ignored"
+            )]
         );
     }
 
@@ -2816,6 +2856,10 @@ mod tests {
         settings.cycle(Row::CompletionRows).unwrap();
         assert_eq!(settings.shown(Row::CompletionRows), "3");
         assert_eq!(
+            seen(Row::RetainTranscript, &mut settings),
+            ["off", "on", "off", "on"]
+        );
+        assert_eq!(
             seen(Row::TerminalProgress, &mut settings),
             ["off", "on", "off", "on"]
         );
@@ -2858,6 +2902,7 @@ mod tests {
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,
                 "autocompleteMaxVisible": 3,
+                "retainTranscriptOnExit": true,
                 "terminal": {"showTerminalProgress": true},
                 "treeFilterMode": "all",
                 "followUpMode": "all",

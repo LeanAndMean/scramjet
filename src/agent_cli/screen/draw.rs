@@ -433,6 +433,37 @@ impl App {
         (rows, cursor)
     }
 
+    /// How the conversation looks on a screen `width` columns wide. As Scramjet's, the last
+    /// column is the scrollbar's, whether it shows or not, so that the conversation does not
+    /// wrap again when it grows taller than the screen.
+    fn look(&self, width: usize) -> Look {
+        Look {
+            width: width.saturating_sub(1).max(1),
+            hide_thinking: self.hide_thinking.load(Ordering::Relaxed),
+            whole: self.whole,
+            markdown_reads: self.markdown_reads,
+            theme: style::generation(),
+            design: self.design,
+            banner: self.banner,
+        }
+    }
+
+    /// The whole conversation and the dock under it, each row ended, for the terminal's own
+    /// screen once the full screen is left for good, as Scramjet's `retainTranscriptOnExit`
+    /// leaves them.
+    pub(super) fn retained(&mut self) -> String {
+        self.preview();
+        let (width, height) = terminal_size();
+        let (dock, _) = self.dock((width, height));
+        self.transcript
+            .render(self.look(width), &self.hide_thinking);
+        let base = style::base();
+        let rows = self.transcript.window(0, self.transcript.len());
+        (rows.iter().chain(&dock))
+            .map(|line| painted(&line.shown, line.band.map_or(base, Band::get)) + "\r\n")
+            .collect()
+    }
+
     pub(super) fn draw(&mut self) -> io::Result<()> {
         self.preview();
         let (width, height) = terminal_size();
@@ -458,18 +489,8 @@ impl App {
         }
         let (dock, cursor) = self.dock((width, height));
         let rows = height.saturating_sub(dock.len()).max(1);
-        // As Scramjet's, the last column is the scrollbar's, whether it shows or not, so that
-        // the conversation does not wrap again when it grows taller than the screen.
-        let look = Look {
-            width: width.saturating_sub(1).max(1),
-            hide_thinking: self.hide_thinking.load(Ordering::Relaxed),
-            whole: self.whole,
-            markdown_reads: self.markdown_reads,
-            theme: style::generation(),
-            design: self.design,
-            banner: self.banner,
-        };
-        self.transcript.render(look, &self.hide_thinking);
+        self.transcript
+            .render(self.look(width), &self.hide_thinking);
         let last = self.transcript.len().saturating_sub(rows);
         (self.rows, self.last) = (rows, last);
         let top = self.shown_top();
@@ -503,14 +524,8 @@ impl App {
         let length = self.transcript.len();
         frame.extend((self.docked.iter().zip(length..)).map(|(line, at)| shown(line, at)));
         frame.truncate(height);
-        // Erased first: without autowrap, a row as wide as the screen leaves the cursor on its
-        // last cell, which erasing after it would take. Erasing fills the row with the
-        // background it is painted on.
         let frame: Vec<String> = (frame.into_iter())
-            .map(|(row, base)| {
-                let (row, reset) = (style::painted(&row, base), style::RESET);
-                format!("{base}\x1b[2K{row}{reset}")
-            })
+            .map(|(row, base)| painted(&row, base))
             .collect();
         let cursor = cursor.map(|(row, column)| (rows + row, column));
         if frame == self.drawn && cursor == self.cursor && !titled {
@@ -533,6 +548,13 @@ impl App {
         self.drawn_at = Instant::now();
         Ok(())
     }
+}
+
+/// `row` painted on `base`, erased first: without autowrap, a row as wide as the screen leaves
+/// the cursor on its last cell, which erasing after it would take. Erasing fills the row with
+/// the background it is painted on.
+fn painted(row: &str, base: &str) -> String {
+    format!("{base}\x1b[2K{}{}", style::painted(row, base), style::RESET)
 }
 
 #[cfg(test)]

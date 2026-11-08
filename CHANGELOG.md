@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.113.0 — The conversation stays in the terminal after exit
+
+### Added
+
+- Scramjet's `retainTranscriptOnExit` setting (Retain transcript in `/settings`, off by default): on exit, the full screen writes the whole conversation, the prompt and the footer into the terminal's scrollback, as they were on the screen, rather than leaving nothing behind.
+
 ## 0.112.0 — The terminal's tab shows the agent working
 
 ### Added

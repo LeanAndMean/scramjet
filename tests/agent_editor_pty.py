@@ -1687,6 +1687,34 @@ run([], progress_told, serve_items(sleeping), variables={'XDG_CONFIG_HOME': prog
 assert b'\x1b]9;4' not in run([], progress_quiet, serve_items(sleeping))
 
 
+def reply_then_exit(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('line 40')
+    ended(read, output)
+    send(b'\x04')
+
+
+def after_screen(output):
+    """What reaches the terminal's own screen after the full screen is left, without styles."""
+    rest = bytes(output[output.rfind(b'\x1b[?1049l'):]).decode()
+    return re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07', '', rest)
+
+
+long_reply = '\n\n'.join('line %d' % number for number in range(1, 41))
+retain_home = config_home('retain', '{"retainTranscriptOnExit": true}')
+retained = after_screen(run([], reply_then_exit, serve_replies([([long_reply], long_reply)]),
+                            variables={'XDG_CONFIG_HOME': retain_home}))
+# The whole conversation, its start long scrolled off the screen, then the prompt's rule.
+rows = [row.strip() for row in retained.split('\r\n')]
+order = [rows.index(text) for text in ('\u203a go', 'line 1', 'line 40')]
+assert order == sorted(order), rows
+assert any(re.fullmatch('\u2500{20,}', row) for row in rows[order[-1]:]), rows
+assert retained.endswith('\r\n'), retained
+assert 'line 1' not in after_screen(run([], reply_then_exit, serve_replies([([long_reply], long_reply)])))
+
+
 def new_session(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2431,7 +2459,7 @@ def settings_menu(read, until, send, output):
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B' * 14 + b'\r')
+    send(b'\x1b[B' * 15 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [ ] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -2449,7 +2477,7 @@ def settings_menu(read, until, send, output):
     assert 'Command: ' not in '\n'.join(rows), rows
     # A list the user opened leaves the status row on what the turn does.
     assert any(' Running ' in row for row in rows), rows
-    send(b'\x1b[B' * 21 + b'\r')
+    send(b'\x1b[B' * 22 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))

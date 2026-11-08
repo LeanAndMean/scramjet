@@ -98,6 +98,7 @@ enum ToScreen {
         markdown_reads: MarkdownReads,
         copy_on_select: bool,
         layout: Layout,
+        retain_transcript: bool,
         terminal_progress: bool,
         design: Design,
         banner: Banner,
@@ -332,6 +333,9 @@ struct App {
     copy_on_select: bool,
     /// The wheel's step, the prompt's height and the completion list's rows.
     layout: Layout,
+    /// Leaving for good writes the conversation into the terminal's scrollback
+    /// (`retainTranscriptOnExit`).
+    retain_transcript: bool,
     /// The terminal is told it is busy while a turn runs (`terminal.showTerminalProgress`).
     terminal_progress: bool,
     /// When the terminal was last told so.
@@ -399,6 +403,7 @@ impl App {
             banner: Banner::Plain,
             copy_on_select: false,
             layout: Layout::default(),
+            retain_transcript: false,
             terminal_progress: false,
             busy_told: None,
             selection: None,
@@ -437,6 +442,14 @@ impl App {
                 match messages.try_recv() {
                     Ok(ToScreen::Quit) | Err(TryRecvError::Disconnected) => {
                         self.stop_shells();
+                        let retained = self.retain_transcript.then(|| self.retained());
+                        drop(screen);
+                        drop(raw);
+                        if let Some(retained) = retained {
+                            let mut stderr = io::stderr().lock();
+                            stderr.write_all(retained.as_bytes())?;
+                            stderr.flush()?;
+                        }
                         return Ok(());
                     }
                     Ok(ToScreen::Terminal(sequence)) => to_terminal(&sequence)?,
@@ -642,6 +655,7 @@ impl App {
                 markdown_reads,
                 copy_on_select,
                 layout,
+                retain_transcript,
                 terminal_progress,
                 design,
                 banner,
@@ -650,6 +664,7 @@ impl App {
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
                 self.layout = layout;
+                self.retain_transcript = retain_transcript;
                 self.terminal_progress = terminal_progress;
                 self.design = design;
                 self.banner = banner;
