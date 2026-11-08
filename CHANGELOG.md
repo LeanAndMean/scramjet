@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.107.0 — Retries as you set them
+
+### Added
+
+- The `retry` setting, in Scramjet's format: `enabled`, `maxRetries` (3), `baseDelayMs` (2000, doubled at each retry) and `provider.maxRetryDelayMs` (60000; 0 for no limit) say how a request that failed transiently is sent again. `/reload` applies them, and `--retries N` still overrides the number for the run.
+
 ## 0.106.0 — The session in the terminal's title
 
 ### Added

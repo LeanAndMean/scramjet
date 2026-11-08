@@ -9,14 +9,15 @@ use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, SandboxMode, Set, offline,
-    sets_in, shortened, state_directory, unavailable, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Retries, SandboxMode, Set,
+    offline, sets_in, shortened, state_directory, unavailable, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
     fs::File,
     io,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 /// Scramjet's thinking levels; its `off` is the `none` requests send.
@@ -344,6 +345,10 @@ pub(super) struct Settings {
     pub(super) shell_path: Option<PathBuf>,
     /// `shellCommandPrefix`: lines run before each command, as Scramjet's.
     pub(super) shell_command_prefix: Option<String>,
+    /// `retry`: how a request that failed transiently is sent again.
+    retry: Retries,
+    /// `--retries`: the number of retries for the run, over the settings' and kept at `/reload`.
+    pub(super) retries_given: Option<u32>,
     /// `enabledModels`: the patterns of the models Ctrl+P cycles through (`scope::resolve`);
     /// empty: all.
     pub(super) enabled_models: Vec<String>,
@@ -408,8 +413,10 @@ impl Settings {
         match read_object(path) {
             Ok(object) => {
                 let (recall, clones) = (self.recall.take(), self.clones.take());
+                let retries_given = self.retries_given;
                 *self = Self::defaults(self.path.take());
                 (self.recall, self.clones) = (recall, clones);
+                self.retries_given = retries_given;
                 self.apply(&object);
             }
             Err(error) => self.warnings = vec![format!("{error}; kept as they were")],
@@ -451,6 +458,8 @@ impl Settings {
             session_dir: None,
             shell_path: None,
             shell_command_prefix: None,
+            retry: Retries::default(),
+            retries_given: None,
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
             disabled_mcp_servers: Vec::new(),
@@ -692,6 +701,11 @@ impl Settings {
                 (self.warnings).push(format!("{path}: shellCommandPrefix must be text; ignored"))
             }
         }
+        match object.get("retry") {
+            None => {}
+            Some(Value::Object(retry)) => self.apply_retry(&path, retry),
+            Some(_) => (self.warnings).push(format!("{path}: retry must be an object; ignored")),
+        }
         match paths(object, "enabledModels") {
             Ok(patterns) => self.enabled_models = patterns,
             Err(()) => self.warnings.push(format!(
@@ -718,6 +732,59 @@ impl Settings {
             Err(()) => self.warnings.push(format!(
                 "{path}: disabledMcpServers must be a list of server names; ignored"
             )),
+        }
+    }
+
+    /// Scramjet's `retry` keys, each wrong one named and left at its default.
+    fn apply_retry(&mut self, path: &str, retry: &Map<String, Value>) {
+        const MAX_MS: u64 = 2_147_483_647;
+        let mut wrong = Vec::new();
+        let mut number = |object: &Map<String, Value>, key: &str, max: u64| {
+            let value = object.get(key.rsplit('.').next().unwrap_or(key))?;
+            let number = value.as_u64().filter(|n| *n <= max);
+            if number.is_none() {
+                wrong.push((key.to_owned(), format!("a whole number from 0 to {max}")));
+            }
+            number
+        };
+        if let Some(retries) = number(retry, "maxRetries", u64::from(u32::MAX)) {
+            self.retry.attempts = retries as u32;
+        }
+        if let Some(ms) = number(retry, "baseDelayMs", MAX_MS) {
+            self.retry.delay = Duration::from_millis(ms);
+        }
+        let provider = retry.get("provider");
+        // Scramjet's older `retry.maxDelayMs`, which it moves to `provider.maxRetryDelayMs`.
+        let max_wait = match provider.and_then(Value::as_object) {
+            Some(provider) if provider.contains_key("maxRetryDelayMs") => {
+                number(provider, "provider.maxRetryDelayMs", MAX_MS)
+            }
+            _ => number(retry, "maxDelayMs", MAX_MS),
+        };
+        if let Some(ms) = max_wait {
+            self.retry.max_wait = (ms > 0).then(|| Duration::from_millis(ms));
+        }
+        if provider.is_some_and(|provider| !provider.is_object()) {
+            wrong.push(("provider".to_owned(), "an object".to_owned()));
+        }
+        match retry.get("enabled") {
+            None | Some(Value::Bool(true)) => {}
+            Some(Value::Bool(false)) => self.retry.attempts = 0,
+            Some(_) => wrong.push(("enabled".to_owned(), "true or false".to_owned())),
+        }
+        for (key, expected) in wrong {
+            (self.warnings).push(format!("{path}: retry.{key} must be {expected}; ignored"));
+        }
+    }
+
+    /// How the run's requests are retried: the settings' `retry`, with `--retries` over it.
+    pub(super) fn retries(&self) -> Retries {
+        match self.retries_given {
+            Some(attempts) => Retries {
+                attempts,
+                ..self.retry
+            },
+            None => self.retry,
         }
     }
 
@@ -1701,6 +1768,66 @@ mod tests {
         let wrong = settings_with(&scratch, r#"{"sandbox": true, "sandboxNetwork": "no"}"#);
         assert_eq!((wrong.sandbox, wrong.sandbox_network), (None, true));
         assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);
+    }
+
+    #[test]
+    fn retry_takes_scramjets_keys_and_retries_given_stay_over_them() {
+        let scratch = Scratch::new("retry");
+        let defaults = settings_with(&scratch, "{}");
+        assert_eq!(defaults.retries(), Retries::default());
+        let mut settings = settings_with(
+            &scratch,
+            r#"{"retry": {"maxRetries": 5, "baseDelayMs": 500,
+                "provider": {"maxRetryDelayMs": 0, "timeoutMs": 9}}}"#,
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        let expected = Retries {
+            attempts: 5,
+            delay: Duration::from_millis(500),
+            max_wait: None,
+        };
+        assert_eq!(settings.retries(), expected);
+        settings.retries_given = Some(1);
+        let given = Retries {
+            attempts: 1,
+            ..expected
+        };
+        assert_eq!(settings.retries(), given);
+        settings.reload();
+        assert_eq!(settings.retries(), given);
+        let older = settings_with(
+            &scratch,
+            r#"{"retry": {"enabled": false, "maxDelayMs": 9000}}"#,
+        );
+        let older = older.retries();
+        assert_eq!(
+            (older.attempts, older.max_wait),
+            (0, Some(Duration::from_secs(9)))
+        );
+        let wrong = settings_with(
+            &scratch,
+            r#"{"retry": {"enabled": 1, "maxRetries": -1, "baseDelayMs": 2147483648,
+                "provider": {"maxRetryDelayMs": "1"}}}"#,
+        );
+        assert_eq!(wrong.retries(), Retries::default());
+        let path = shown(&scratch.0.join("settings.json"));
+        let number = |key: &str, max: u64| {
+            format!("{path}: retry.{key} must be a whole number from 0 to {max}; ignored")
+        };
+        assert_eq!(
+            wrong.warnings,
+            [
+                number("maxRetries", u32::MAX.into()),
+                number("baseDelayMs", 2_147_483_647),
+                number("provider.maxRetryDelayMs", 2_147_483_647),
+                format!("{path}: retry.enabled must be true or false; ignored"),
+            ]
+        );
+        let not_object = settings_with(&scratch, r#"{"retry": 3}"#);
+        assert_eq!(
+            not_object.warnings,
+            [format!("{path}: retry must be an object; ignored")]
+        );
     }
 
     #[test]

@@ -4,7 +4,8 @@ use super::client::{self, ClientError, Protocol};
 use super::completions;
 use super::providers::{Login, ModelInfo};
 use super::{
-    Agent, AgentError, AgentUi, PRODUCER, Purpose, StreamProgress, messages, rates, sent, tools,
+    Agent, AgentError, AgentUi, PRODUCER, Purpose, Retries, StreamProgress, messages, rates, sent,
+    tools,
 };
 use serde_json::{Value, json};
 use std::{
@@ -16,11 +17,6 @@ use std::{
     },
     time::{Duration, Instant, SystemTime},
 };
-
-/// Scramjet's retry backoff: 2s, 4s, 8s, ...
-const RETRY_DELAY: Duration = Duration::from_secs(2);
-/// Like Scramjet, a longer wait (backoff or the provider's Retry-After) fails the request instead.
-const MAX_RETRY_WAIT: Duration = Duration::from_secs(60);
 
 impl Agent {
     pub(super) fn request(&self) -> Value {
@@ -180,7 +176,7 @@ impl Agent {
                 Ok(Streamed::Sent) => self.usage.requests += 1,
                 Ok(Streamed::Progress(update)) => ui.progress(&update),
                 Ok(Streamed::Retrying(error, attempt, delay)) => {
-                    ui.retrying(&error, attempt, self.config.retries, delay)
+                    ui.retrying(&error, attempt, self.config.retries.attempts, delay)
                 }
                 Ok(Streamed::Ended(ended)) => {
                     let reply = (*ended)?;
@@ -220,7 +216,7 @@ impl Agent {
                 Sending::Progress(update) if purpose == Purpose::Reply => ui.progress(update),
                 Sending::Progress(_) => {}
                 Sending::Retrying(error, attempt, delay) => {
-                    ui.retrying(error, attempt, retries, delay)
+                    ui.retrying(error, attempt, retries.attempts, delay)
                 }
             },
         )?;
@@ -352,7 +348,7 @@ fn body(request: &Value, info: &ModelInfo) -> Result<(Vec<u8>, Headers), AgentEr
 pub(super) fn send(
     executor: &tokio::runtime::Runtime,
     info: &ModelInfo,
-    retries: u32,
+    retries: Retries,
     request: &Value,
     replying: bool,
     cancel: &AtomicBool,
@@ -454,12 +450,12 @@ pub(super) fn send(
                     .collect(),
             });
         }
-        let backoff = RETRY_DELAY * 2u32.pow(attempt.min(5));
-        let delay = backoff
-            .min(MAX_RETRY_WAIT)
-            .max(failure.wait.unwrap_or_default());
+        let max_wait = retries.max_wait.unwrap_or(Duration::MAX);
+        let backoff = retries.delay.saturating_mul(2u32.pow(attempt.min(5)));
+        let delay = backoff.min(max_wait).max(failure.wait.unwrap_or_default());
+        let too_long = delay > max_wait || failure.wait == Some(Duration::MAX);
         // A context overflow is not retried as is: only compaction can let the request through.
-        if !failure.transient || failure.overflow || attempt == retries || delay > MAX_RETRY_WAIT {
+        if !failure.transient || failure.overflow || attempt >= retries.attempts || too_long {
             let message = match attempt {
                 0 => failure.message,
                 n => format!("{} (after {n} retries)", failure.message),
@@ -632,7 +628,10 @@ response is incomplete; retry the request."});
         assert_eq!(bodies[0], bodies[1]);
         assert_eq!(ui.retries.len(), 1);
         assert!(ui.retries[0].0.contains("retry the request"));
-        assert_eq!((ui.retries[0].1, ui.retries[0].2), (1, RETRY_DELAY));
+        assert_eq!(
+            (ui.retries[0].1, ui.retries[0].2),
+            (1, Retries::default().delay)
+        );
         assert_eq!(ui.replies, ["done"]);
         assert!(ui.calls.is_empty());
         assert_eq!(agent.usage.requests, 2);
@@ -657,7 +656,10 @@ response is incomplete; retry the request."});
         assert!(timing["failed"].get(1).is_none());
         let ms = |value: &Value| value.as_u64().unwrap();
         let waited = ms(&timing["started"]) - ms(&failed["started"]);
-        assert!(waited >= RETRY_DELAY.as_millis() as u64, "{timing}");
+        assert!(
+            waited >= Retries::default().delay.as_millis() as u64,
+            "{timing}"
+        );
         let (headers, first) = (ms(&timing["headers_ms"]), ms(&timing["first_output_ms"]));
         assert!(
             headers <= first && first <= ms(&timing["duration_ms"]),
@@ -690,6 +692,36 @@ response is incomplete; retry the request."});
         );
         assert!(ui.retries.is_empty());
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_retry_settings_bound_the_attempts_their_waits_and_the_providers_wait() {
+        let busy = |after: u32| {
+            format!("HTTP/1.1 503 Service Unavailable\r\nretry-after: {after}\r\ncontent-length: 4\r\n\r\nbusy")
+                .into_bytes()
+        };
+        let (endpoint, server) = serve(vec![busy(0), busy(0), busy(2)]);
+        let (mut agent, _scratch) = agent(endpoint, "retry-settings");
+        agent.set_retries(Retries {
+            attempts: 1,
+            delay: Duration::ZERO,
+            max_wait: Some(Duration::from_secs(1)),
+        });
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let mut error = || match agent.turn("hi", &mut ui, &cancel) {
+            Err(AgentError::Provider(message)) => message,
+            other => panic!("{:?}", other.err()),
+        };
+        assert_eq!(
+            error(),
+            "HTTP 503 Service Unavailable: busy (after 1 retries)"
+        );
+        // A provider asking for a longer wait than `max_wait` fails it at once.
+        assert_eq!(error(), "HTTP 503 Service Unavailable: busy");
+        assert_eq!(ui.retries.len(), 1);
+        assert_eq!((ui.retries[0].1, ui.retries[0].2), (1, Duration::ZERO));
+        assert_eq!(server.join().unwrap().len(), 3);
     }
 
     #[test]
@@ -790,7 +822,7 @@ response is incomplete; retry the request."});
             effort: None,
             max_output_tokens: None,
             ask: false,
-            retries: 3,
+            retries: Default::default(),
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             only_tools: None,
             command_sets: Vec::new(),
@@ -1346,7 +1378,10 @@ response is incomplete; retry the request."});
             send(
                 &agent.executor,
                 &agent.info,
-                2,
+                Retries {
+                    attempts: 2,
+                    ..Default::default()
+                },
                 &request,
                 true,
                 cancel,
@@ -1673,7 +1708,7 @@ reached the output token limit (max_output_tokens)"),
             effort: None,
             max_output_tokens: None,
             ask: false,
-            retries: 3,
+            retries: Default::default(),
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             only_tools: None,
             command_sets: Vec::new(),

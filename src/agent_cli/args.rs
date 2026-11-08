@@ -43,7 +43,8 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
                          one --model's :LEVEL sets, else the one a resumed session last used,
                          else the settings' defaultThinkingLevel, else medium)
   --max-output-tokens N  the most tokens a reply may have (default: the model's limit)
-  --retries N            resend a request that failed transiently up to N times (default 3)
+  --retries N            resend a request that failed transiently up to N times (default:
+                         the settings' retry.maxRetries, else 3)
   -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
   --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
@@ -221,7 +222,9 @@ default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cy
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
 list and the agent save; and startupModel: per-directory (new sessions start with the model
 chosen last in their project, kept in $XDG_STATE_HOME/scramjet-rs/last-used-models.json) or
-global.";
+global; retry: enabled, maxRetries (3), baseDelayMs (2000, doubled at each retry) and
+provider.maxRetryDelayMs (60000: a longer wait, the provider's or the backoff's, fails the
+request; 0 for no limit).";
 
 /// The session the agent starts in.
 pub(super) enum Start {
@@ -263,7 +266,8 @@ pub(super) struct Options {
     pub(super) ask: bool,
     /// `--sandbox`: `Some(None)` for `danger-full-access`.
     pub(super) sandbox: Option<Option<SandboxMode>>,
-    pub(super) retries: u32,
+    /// `--retries`, over the settings' `retry.maxRetries`.
+    pub(super) retries: Option<u32>,
     /// `-p`: run the messages and exit.
     pub(super) print: bool,
     /// `@FILE` arguments, without the `@`: sent with the first message.
@@ -297,7 +301,7 @@ impl Options {
             only_tools: None,
             ask: false,
             sandbox: None,
-            retries: 3,
+            retries: None,
             print: false,
             files: Vec::new(),
             messages: Vec::new(),
@@ -346,7 +350,7 @@ impl Options {
                     )
                 }
                 Some("--retries") => {
-                    options.retries = value()?.parse().map_err(|_| "invalid --retries")?
+                    options.retries = Some(value()?.parse().map_err(|_| "invalid --retries")?)
                 }
                 Some("-c" | "--continue") => {
                     chosen.push("--continue");

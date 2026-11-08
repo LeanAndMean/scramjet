@@ -92,6 +92,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 /// Guards against a model that never stops calling tools.
@@ -184,6 +185,28 @@ pub fn credential_stores(providers: &Providers) -> Vec<PathBuf> {
     sandbox::Hidden::listed(providers.credential_files())
 }
 
+/// How a model request that failed transiently is sent again: Scramjet's `retry` settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retries {
+    /// How many more times it is sent (`maxRetries`); none when `enabled` is false.
+    pub attempts: u32,
+    /// The first wait, doubled at each further one (`baseDelayMs`).
+    pub delay: Duration,
+    /// A longer wait, backoff or the provider's Retry-After, fails the request instead
+    /// (`provider.maxRetryDelayMs`); `None` for no limit (0 there).
+    pub max_wait: Option<Duration>,
+}
+
+impl Default for Retries {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            delay: Duration::from_secs(2),
+            max_wait: Some(Duration::from_secs(60)),
+        }
+    }
+}
+
 pub struct AgentConfig {
     /// The providers requests go to, by their models.
     pub providers: Providers,
@@ -194,8 +217,8 @@ pub struct AgentConfig {
     pub max_output_tokens: Option<u64>,
     /// Ask before each bash command and each write or edit outside the project.
     pub ask: bool,
-    /// Extra attempts for a model request that failed transiently (rate limit, overload, network).
-    pub retries: u32,
+    /// How a model request that failed transiently (rate limit, overload, network) is sent again.
+    pub retries: Retries,
     /// The coding tools the model has, among `CODING_TOOLS`: the settings' `tools`.
     pub tools: Vec<String>,
     /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools the model has in this run,
@@ -763,6 +786,11 @@ impl Agent {
         self.autonomy_diagnostics.clear();
         self.load();
         self.start_mcp();
+    }
+
+    /// The retry settings, read again at `/reload`; a request already waiting keeps its own.
+    pub fn set_retries(&mut self, retries: Retries) {
+        self.config.retries = retries;
     }
 
     /// Starts the MCP servers when the model is offered their tools; servers already running as

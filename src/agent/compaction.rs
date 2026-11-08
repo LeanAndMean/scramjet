@@ -1328,7 +1328,7 @@ mod tests {
             effort: None,
             max_output_tokens: None,
             ask: false,
-            retries: 3,
+            retries: Default::default(),
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             only_tools: None,
             command_sets: Vec::new(),

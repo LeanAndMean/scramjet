@@ -601,7 +601,7 @@ pub(super) fn summary(arguments: &Value) -> String {
 /// What children share with the agent that starts them.
 pub(super) struct Parent<'a> {
     pub providers: &'a Providers,
-    pub retries: u32,
+    pub retries: super::Retries,
     pub model: &'a str,
     pub info: &'a ModelInfo,
     /// The level the agent's own requests ask for.

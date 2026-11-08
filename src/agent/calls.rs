@@ -498,7 +498,7 @@ impl Agent {
 /// What the agent's coding tools and subagents take from it, theirs while they run.
 struct Kit {
     providers: Providers,
-    retries: u32,
+    retries: super::Retries,
     model: String,
     info: ModelInfo,
     effort: Option<String>,

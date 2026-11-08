@@ -131,6 +131,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
+    settings.retries_given = options.retries;
     scramjet_rs::agent::set_shell(
         settings.shell_path.clone(),
         settings.shell_command_prefix.clone(),
@@ -342,7 +343,7 @@ fn start(
         effort: chosen_effort.clone(),
         max_output_tokens: options.max_output_tokens,
         ask: options.ask,
-        retries: options.retries,
+        retries: settings.retries(),
         tools: settings.tools.clone(),
         only_tools: options.only_tools,
         command_sets: settings.command_sets.clone(),

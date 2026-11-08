@@ -516,6 +516,7 @@ impl Interactive {
             settings.mcp_servers.clone(),
             settings.disabled_mcp_servers.clone(),
         );
+        self.agent.set_retries(settings.retries());
         self.agent.set_providers(Providers::read(
             settings.models_files(),
             scramjet_rs::agent::login::Logins::user(),
