@@ -849,7 +849,14 @@ async fn run(
         Some((sandbox, named)) => {
             sandbox::server(&root, program, &Hidden::current(named), *sandbox)?.into()
         }
-        None => tokio::process::Command::new(program),
+        None => {
+            let path = env
+                .iter()
+                .rev()
+                .find(|(key, _)| key.eq_ignore_ascii_case("PATH"));
+            let path = path.map(|(_, path)| std::ffi::OsStr::new(path));
+            tokio::process::Command::new(crate::os::program(program, path))
+        }
     };
     command
         .args(args)

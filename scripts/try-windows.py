@@ -20,7 +20,7 @@ reply as in scripts/screens.py, and "steps", each one of {"text": typed}, {"keys
 names]}, {"resize": [columns, rows]}, {"host": [a WSL command run in the project]} and
 {"shot": label, "wait": seconds}.
 """
-import argparse, json, os, shutil, subprocess, sys, time
+import argparse, json, os, shlex, shutil, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
@@ -73,7 +73,7 @@ if not options.screen:
     sys.exit(ran.returncode)
 
 tmux = ['tmux', '-L', 'scramjet-rs-try-windows']
-command = ' '.join('%s=%s' % pair for pair in env.items()) + ' ' + ' '.join(args)
+command = ' '.join('%s=%s' % (name, shlex.quote(value)) for name, value in env.items()) + ' ' + shlex.join(args)
 subprocess.run(tmux + ['kill-server'], stderr=subprocess.DEVNULL)
 subprocess.run(tmux + ['new-session', '-d', '-x', '100', '-y', '30', '-c', project, command], check=True)
 

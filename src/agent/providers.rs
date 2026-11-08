@@ -1000,7 +1000,7 @@ pub(super) fn program_path(program: &str, directory: &Path) -> PathBuf {
     match crate::os::after_tilde(program).zip(std::env::home_dir()) {
         Some((rest, home)) => crate::os::join(&home, rest),
         None if program.contains(std::path::is_separator) => crate::os::join(directory, program),
-        None => PathBuf::from(program),
+        None => crate::os::program(program, None),
     }
 }
 

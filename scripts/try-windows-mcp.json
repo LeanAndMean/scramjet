@@ -1,0 +1,104 @@
+{
+  "files": {
+    "README.md": "Project\n",
+    "bin/mcp-echo.cmd": "@powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0mcp-echo.ps1\"\r\n",
+    "bin/mcp-echo.ps1": "$ErrorActionPreference = 'Stop'\n[Console]::Error.WriteLine('echo server starting')\n$in = [Console]::In\nwhile ($null -ne ($line = $in.ReadLine())) {\n    $message = $line | ConvertFrom-Json\n    if ($null -eq $message.method -or $null -eq $message.id) { continue }\n    $answer = @{ jsonrpc = '2.0'; id = $message.id }\n    switch ($message.method) {\n        'initialize' { $answer.result = @{ protocolVersion = '2025-11-25'; capabilities = @{ tools = @{} }; serverInfo = @{ name = 'echo'; version = '1.0.0' } } }\n        'tools/list' { $answer.result = @{ tools = @(@{ name = 'echo'; description = 'Repeat the text it is given.'; inputSchema = @{ type = 'object'; properties = @{ text = @{ type = 'string' } } } }) } }\n        'tools/call' { $answer.result = @{ content = @(@{ type = 'text'; text = 'echo from Windows: ' + $message.params.arguments.text }) } }\n        'ping' { $answer.result = @{} }\n        default { $answer.error = @{ code = -32601; message = 'Method not found: ' + $message.method } }\n    }\n    [Console]::Out.WriteLine(($answer | ConvertTo-Json -Depth 10 -Compress))\n    [Console]::Out.Flush()\n}\n"
+  },
+  "path": [
+    "work/proj/bin"
+  ],
+  "settings": {
+    "mcpServers": {
+      "echo": {
+        "command": "mcp-echo"
+      },
+      "broken": {
+        "command": "mcp-missing"
+      }
+    }
+  },
+  "prompt": "Echo hello through MCP",
+  "replies": [
+    [
+      {
+        "call": "mcp_call",
+        "arguments": {
+          "server": "echo",
+          "tool": "echo",
+          "arguments": {
+            "text": "hello"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "text": "It echoed hello."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "shot": "started",
+      "wait": 6
+    },
+    {
+      "text": "/mcp"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "/mcp",
+      "wait": 3
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "closed",
+      "wait": 1
+    },
+    {
+      "text": "Echo hello through MCP"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "replied",
+      "wait": 6
+    },
+    {
+      "host": [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*mcp-echo.ps1*' }).Count"
+      ]
+    },
+    {
+      "keys": [
+        "C-d"
+      ]
+    },
+    {
+      "shot": "after Ctrl+D",
+      "wait": 4
+    },
+    {
+      "host": [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*mcp-echo.ps1*' }).Count"
+      ]
+    }
+  ]
+}

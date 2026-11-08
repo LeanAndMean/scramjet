@@ -285,6 +285,39 @@ fn windows_bash(programs: &[PathBuf], path: &[PathBuf], windows: Option<&Path>) 
         .find(|bash| bash.is_file())
 }
 
+/// The program `name` runs: on Windows, a bare name is looked for in the directories of `path`
+/// (else the `PATH`) with each of `PATHEXT`'s extensions, as `cmd.exe` and Codex find `npx.cmd`,
+/// which `Command` misses (it looks only for `.exe`). Otherwise, or when none is there, `name`.
+pub fn program(name: &str, path: Option<&std::ffi::OsStr>) -> PathBuf {
+    if !cfg!(windows) || name.contains(std::path::is_separator) || name.contains(':') {
+        return PathBuf::from(name);
+    }
+    let path = path
+        .map(ToOwned::to_owned)
+        .or_else(|| std::env::var_os("PATH"));
+    let directories: Vec<PathBuf> = path
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    let extensions: Vec<&str> = extensions.split(';').filter(|e| !e.is_empty()).collect();
+    windows_program(name, &directories, &extensions).unwrap_or_else(|| PathBuf::from(name))
+}
+
+fn windows_program(name: &str, path: &[PathBuf], extensions: &[&str]) -> Option<PathBuf> {
+    let as_given = Path::new(name).extension().map(|_| name.to_owned());
+    let names: Vec<String> = as_given
+        .into_iter()
+        .chain(
+            extensions
+                .iter()
+                .map(|extension| format!("{name}{extension}")),
+        )
+        .collect();
+    path.iter()
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .find(|program| program.is_file())
+}
+
 /// Starts `command` in a process group of its own, which `kill_group` and `end_group` reach.
 pub fn own_group(command: &mut Command) -> &mut Command {
     #[cfg(unix)]
@@ -432,6 +465,28 @@ mod tests {
         let only_wsl = [wsl.parent().unwrap().to_owned()];
         assert_eq!(windows_bash(&[], &only_wsl, Some(&windows)), None);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn windows_programs_are_found_with_their_extension_in_path_order() {
+        let root = std::env::temp_dir().join(format!("scramjet-rs-program-{}", std::process::id()));
+        let (node, tools) = (root.join("node"), root.join("tools"));
+        std::fs::create_dir_all(&node).unwrap();
+        std::fs::create_dir_all(&tools).unwrap();
+        let extensions = [".com", ".exe", ".bat", ".cmd"];
+        let path = [node.clone(), tools.clone()];
+        let found = |name: &str| windows_program(name, &path, &extensions);
+        assert_eq!(found("npx"), None);
+        std::fs::write(tools.join("npx.exe"), "").unwrap();
+        std::fs::write(node.join("npx.cmd"), "").unwrap();
+        assert_eq!(found("npx"), Some(node.join("npx.cmd")));
+        std::fs::write(node.join("npx.bat"), "").unwrap();
+        assert_eq!(found("npx"), Some(node.join("npx.bat")));
+        assert_eq!(found("npx.exe"), Some(tools.join("npx.exe")));
+        std::fs::create_dir(node.join("uvx.cmd")).unwrap();
+        assert_eq!(found("uvx"), None);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(program("a/b", None), PathBuf::from("a/b"));
     }
 
     #[test]

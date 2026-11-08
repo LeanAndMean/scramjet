@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.89.3 — MCP servers started through .cmd launchers on Windows
+
+### Fixed
+
+- On Windows, an MCP server's `command` named without an extension is found with `PATHEXT`'s, so `npx` runs `npx.cmd` rather than failing with `program not found`; so are the programs a `models.json` names (`providersCommand`, `logins`).
+
 ## 0.89.2 — Unzipping under a path with a space on Windows
 
 ### Fixed
