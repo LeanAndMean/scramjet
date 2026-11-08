@@ -1654,6 +1654,39 @@ run([], calls_running_together_show_at_once, serve_items([
 run_in_shell(suspend_in_shell, talking)
 
 
+BUSY, IDLE = b'\x1b]9;4;3\x07', b'\x1b]9;4;0;\x07'
+
+
+def progress_told(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('Slept.')
+    ended(read, output)
+    # Told again each second of the 2.5 s call, then cleared once the turn ended.
+    assert output.count(BUSY) >= 3, output.count(BUSY)
+    assert output.rfind(IDLE) > output.rfind(BUSY), bytes(output[-300:])
+    send(b'x')
+    read(1.5)
+    assert output.rfind(IDLE) > output.rfind(BUSY), 'told busy with no turn'
+    send(b'\x7f\x04')
+
+
+def progress_quiet(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('Slept.')
+    ended(read, output)
+    send(b'\x04')
+
+
+sleeping = [[tool_call('call_1', 'bash', {'command': 'sleep 2.5'})], [message('Slept.')]]
+progress_home = config_home('progress', '{"terminal": {"showTerminalProgress": true}}')
+run([], progress_told, serve_items(sleeping), variables={'XDG_CONFIG_HOME': progress_home})
+assert b'\x1b]9;4' not in run([], progress_quiet, serve_items(sleeping))
+
+
 def new_session(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -2398,7 +2431,7 @@ def settings_menu(read, until, send, output):
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B' * 13 + b'\r')
+    send(b'\x1b[B' * 14 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [ ] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -2416,7 +2449,7 @@ def settings_menu(read, until, send, output):
     assert 'Command: ' not in '\n'.join(rows), rows
     # A list the user opened leaves the status row on what the turn does.
     assert any(' Running ' in row for row in rows), rows
-    send(b'\x1b[B' * 20 + b'\r')
+    send(b'\x1b[B' * 21 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))

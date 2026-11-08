@@ -164,6 +164,7 @@ pub(super) enum Row {
     WheelStep,
     PromptHeight,
     CompletionRows,
+    TerminalProgress,
     SpellCheck,
     AutoCompact,
     ResizeImages,
@@ -178,7 +179,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 26] = [
+pub(super) const ROWS: [Row; 27] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -193,6 +194,7 @@ pub(super) const ROWS: [Row; 26] = [
     Row::WheelStep,
     Row::PromptHeight,
     Row::CompletionRows,
+    Row::TerminalProgress,
     Row::SpellCheck,
     Row::AutoCompact,
     Row::ResizeImages,
@@ -224,6 +226,7 @@ impl Row {
             Self::WheelStep => "Wheel scrolls",
             Self::PromptHeight => "Prompt height",
             Self::CompletionRows => "Completion rows",
+            Self::TerminalProgress => "Terminal progress",
             Self::SpellCheck => "Spelling",
             Self::AutoCompact => "Auto-compact",
             Self::ResizeImages => "Resize images",
@@ -318,6 +321,10 @@ impl Row {
                 "The most entries a completion list under the prompt shows at once (commands, \
                  files, arguments)."
             }
+            Self::TerminalProgress => {
+                "While the agent works, the terminal's tab and taskbar show it busy, in terminals \
+                 that show progress (OSC 9;4), such as Windows Terminal."
+            }
             Self::SpellCheck => {
                 return format!(
                     "Words in the prompt the dictionary lacks are underlined. Words of your own, \
@@ -391,6 +398,9 @@ pub(super) struct Settings {
     /// `images.blockImages`: no image is sent to any model, as Scramjet's.
     pub(super) block_images: bool,
     pub(super) layout: Layout,
+    /// `terminal.showTerminalProgress`: the full screen tells the terminal it is busy while a
+    /// turn runs (OSC 9;4), as Scramjet's.
+    pub(super) terminal_progress: bool,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
@@ -537,6 +547,7 @@ impl Settings {
             resize_images: true,
             block_images: false,
             layout: Layout::default(),
+            terminal_progress: false,
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             resume_chains: Chains::Flat,
@@ -616,6 +627,16 @@ impl Settings {
                 }
             }
             Some(_) => wrong("images", "an object"),
+        }
+        // Scramjet's other `terminal` keys are for images, which are not shown here.
+        match object.get("terminal") {
+            None => {}
+            Some(Value::Object(terminal)) => match terminal.get("showTerminalProgress") {
+                None => {}
+                Some(Value::Bool(on)) => self.terminal_progress = *on,
+                Some(_) => wrong("terminal.showTerminalProgress", "true or false"),
+            },
+            Some(_) => wrong("terminal", "an object"),
         }
         // As Scramjet's, a number outside its range is taken as its nearest end.
         for (row, key, low, high, _) in LAYOUT_KEYS {
@@ -1542,6 +1563,8 @@ impl Settings {
             },
             Row::PromptHeight => format!("{}% of the screen", self.layout.editor_share),
             Row::CompletionRows => self.layout.completion_rows.to_string(),
+            Row::TerminalProgress if self.terminal_progress => "on".into(),
+            Row::TerminalProgress => "off".into(),
             Row::SpellCheck if self.spell_check => "on".into(),
             Row::SpellCheck => "off".into(),
             Row::AutoCompact if self.compacting.automatic => "on".into(),
@@ -1639,6 +1662,14 @@ impl Settings {
             Row::CopyOnSelect => {
                 self.copy_on_select = !self.copy_on_select;
                 self.save("copyOnSelect", json!(self.copy_on_select))
+            }
+            Row::TerminalProgress => {
+                self.terminal_progress = !self.terminal_progress;
+                self.save_in(
+                    "terminal",
+                    "showTerminalProgress",
+                    json!(self.terminal_progress),
+                )
             }
             Row::SpellCheck => {
                 self.spell_check = !self.spell_check;
@@ -2072,6 +2103,32 @@ mod tests {
         assert_eq!(
             wrong.warnings,
             [format!("{path}: images must be an object; ignored")]
+        );
+    }
+
+    #[test]
+    fn terminal_progress_takes_scramjets_key_beside_its_image_ones() {
+        let scratch = Scratch::new("terminal-progress");
+        assert!(!settings_with(&scratch, "{}").terminal_progress);
+        let settings = settings_with(
+            &scratch,
+            r#"{"terminal": {"showTerminalProgress": true, "showImages": false, "imageWidthCells": 40}}"#,
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        assert!(settings.terminal_progress);
+        let path = shown(&scratch.0.join("settings.json"));
+        let wrong = settings_with(&scratch, r#"{"terminal": {"showTerminalProgress": "on"}}"#);
+        assert!(!wrong.terminal_progress);
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                "{path}: terminal.showTerminalProgress must be true or false; ignored"
+            )]
+        );
+        let wrong = settings_with(&scratch, r#"{"terminal": true}"#);
+        assert_eq!(
+            wrong.warnings,
+            [format!("{path}: terminal must be an object; ignored")]
         );
     }
 
@@ -2759,6 +2816,10 @@ mod tests {
         settings.cycle(Row::CompletionRows).unwrap();
         assert_eq!(settings.shown(Row::CompletionRows), "3");
         assert_eq!(
+            seen(Row::TerminalProgress, &mut settings),
+            ["off", "on", "off", "on"]
+        );
+        assert_eq!(
             seen(Row::MarkdownReads, &mut settings),
             ["rendered", "source", "rendered", "source"]
         );
@@ -2797,6 +2858,7 @@ mod tests {
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,
                 "autocompleteMaxVisible": 3,
+                "terminal": {"showTerminalProgress": true},
                 "treeFilterMode": "all",
                 "followUpMode": "all",
                 "tools": ["read", "ls"],

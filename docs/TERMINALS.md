@@ -15,6 +15,7 @@ Checked against version 1.24.12741: its `defaults.json` and the settings file it
 - **Ctrl+Backspace:** it sends `0x08` (Backspace sends `0x7f`), which other terminals send for Backspace, so scramjet-rs reads a lone `0x08` as Ctrl+Backspace only where `WT_SESSION` is set and not over ssh, as Scramjet does (its `keys.ts`, read 2026-11-08); the byte Windows Terminal sends was not checked by pressing the key. Inside tmux in Windows Terminal the variable is kept, and tmux 3.0a passed `0x08` and `0x7f` to the program unchanged (`send-keys -H`, checked 2026-11-08).
 - **Clipboard:** under WSL, scramjet-rs reads and writes Windows' clipboard through a PowerShell process it keeps running, not through the terminal. In a remote session it copies with OSC 52.
 - **Colors:** the full screen asks for its background, text color and 16 colors with OSC 11, 10 and 4 (for the theme editor). `Microsoft.Terminal.Control.dll` holds the answers' formats, `{};rgb:{:04x}/{:04x}/{:04x}` and `4;{};rgb:{:04x}/{:04x}/{:04x}` (read 2026-11-06), so it answers with its scheme's colors; the answers themselves were checked only from a scripted terminal sending those formats, not from Windows Terminal.
+- **Progress:** with `terminal.showTerminalProgress` (Terminal progress in `/settings`), the full screen sends OSC 9;4 while a turn runs, which Windows Terminal 1.6 and later shows as a ring in the tab and progress on the taskbar (Microsoft's "progress bar sequences" page, read 2026-11-08). Not yet seen in Windows Terminal itself, only in the bytes sent.
 
 ## tmux
 
@@ -24,6 +25,7 @@ Checked against tmux 3.0a and its manual page, 2026-11-04.
 - The outer terminal's paste key still works: a bracketed paste sent to tmux 3.0a reached the program inside it unchanged (checked 2026-11-04).
 - Shift+arrows, Shift+Home and End, and Ctrl+Shift+arrows, Home and End reach the program inside unchanged (xterm's `CSI 1;2` and `CSI 1;6` forms, sent to tmux 3.0a in a pty with an empty configuration; checked 2026-11-08).
 - It leaves the questions about the terminal's colors unanswered, and shows nothing of them: a program in a tmux 3.0a pane got nothing back in 0.5 s for OSC 11 and in 1 s for OSC 11, 10 and 4 (checked 2026-11-06). scramjet-rs then goes by `COLORFGBG`, which tmux does not set, else takes the background as unknown, and the theme editor offers only its own dark and light ones and no new theme from terminal-colors.
+- It drops OSC 9;4, so Terminal progress shows nothing in the outer terminal: the text around it reached tmux 3.0a's output, the sequence did not (a pty with an empty configuration, checked 2026-11-08).
 
 ## xterm
 

@@ -231,7 +231,8 @@ branchSummary.reserveTokens (16384); images: autoResize (true: images over 2000x
 4.5 MB are scaled down before they are sent) and blockImages (false; true: no image is sent);
 and the full screen's scrollWheelStep (3 lines a notch,
 1-20), editorMaxHeightPercent (30: the prompt's most rows as a share of the screen's, 10-50) and
-autocompleteMaxVisible (5 completion entries shown at once, 3-20).";
+autocompleteMaxVisible (5 completion entries shown at once, 3-20), and
+terminal.showTerminalProgress (false; true: the terminal's tab shows the agent busy, OSC 9;4).";
 
 /// The session the agent starts in.
 pub(super) enum Start {

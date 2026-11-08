@@ -98,6 +98,7 @@ enum ToScreen {
         markdown_reads: MarkdownReads,
         copy_on_select: bool,
         layout: Layout,
+        terminal_progress: bool,
         design: Design,
         banner: Banner,
     },
@@ -331,6 +332,10 @@ struct App {
     copy_on_select: bool,
     /// The wheel's step, the prompt's height and the completion list's rows.
     layout: Layout,
+    /// The terminal is told it is busy while a turn runs (`terminal.showTerminalProgress`).
+    terminal_progress: bool,
+    /// When the terminal was last told so.
+    busy_told: Option<Instant>,
     selection: Option<Selection>,
     /// The selections made so far, which tells a copy's from those made after it.
     selections: u64,
@@ -394,6 +399,8 @@ impl App {
             banner: Banner::Plain,
             copy_on_select: false,
             layout: Layout::default(),
+            terminal_progress: false,
+            busy_told: None,
             selection: None,
             selections: 0,
             edge: None,
@@ -483,6 +490,7 @@ impl App {
             }
             self.footer.check_branch();
             self.check_theme();
+            self.tell_progress()?;
             if self
                 .edge
                 .as_ref()
@@ -634,6 +642,7 @@ impl App {
                 markdown_reads,
                 copy_on_select,
                 layout,
+                terminal_progress,
                 design,
                 banner,
             } => {
@@ -641,6 +650,7 @@ impl App {
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
                 self.layout = layout;
+                self.terminal_progress = terminal_progress;
                 self.design = design;
                 self.banner = banner;
             }
@@ -1037,6 +1047,26 @@ impl App {
         true
     }
 
+    /// Tells the terminal that a turn runs, again each `PROGRESS_AGAIN` as Scramjet does, and
+    /// that it no longer does.
+    fn tell_progress(&mut self) -> io::Result<()> {
+        let busy = self.terminal_progress && self.activity.is_some() && !self.exiting;
+        if !busy {
+            if PROGRESS_SHOWN.swap(false, Ordering::SeqCst) {
+                to_terminal(PROGRESS_CLEAR)?;
+            }
+            self.busy_told = None;
+            return Ok(());
+        }
+        let due = (self.busy_told).is_none_or(|told| told.elapsed() >= PROGRESS_AGAIN);
+        if due || !PROGRESS_SHOWN.load(Ordering::SeqCst) {
+            to_terminal(PROGRESS_BUSY)?;
+            PROGRESS_SHOWN.store(true, Ordering::SeqCst);
+            self.busy_told = Some(Instant::now());
+        }
+        Ok(())
+    }
+
     /// Stops the `!` commands that still run, and waits for them to end.
     fn stop_shells(&mut self) {
         for side in &self.queue().shells {
@@ -1075,6 +1105,22 @@ struct Screen;
 /// Set while a `Screen` is shown, from before it is entered until after it is left.
 static SHOWN: AtomicBool = AtomicBool::new(false);
 const LEAVE: &str = "\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b]0;\x07";
+/// OSC 9;4's indeterminate progress and its end, Scramjet's sequences; Windows Terminal, among
+/// others, shows them in the tab and the taskbar.
+const PROGRESS_BUSY: &str = "\x1b]9;4;3\x07";
+const PROGRESS_CLEAR: &str = "\x1b]9;4;0;\x07";
+/// Scramjet repeats the busy sequence each second.
+const PROGRESS_AGAIN: Duration = Duration::from_secs(1);
+/// The terminal was told the agent is busy and not yet that it ended.
+static PROGRESS_SHOWN: AtomicBool = AtomicBool::new(false);
+
+/// The end of the progress the terminal shows, when it shows some, which leaving takes with it.
+fn progress_cleared() -> &'static str {
+    match PROGRESS_SHOWN.swap(false, Ordering::SeqCst) {
+        true => PROGRESS_CLEAR,
+        false => "",
+    }
+}
 
 impl Screen {
     /// Shown, and the terminal asked for its background, which may have changed meanwhile.
@@ -1090,7 +1136,7 @@ impl Screen {
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        eprint!("{LEAVE}");
+        eprint!("{}{LEAVE}", progress_cleared());
         let _ = io::stderr().flush();
         SHOWN.store(false, Ordering::SeqCst);
     }
@@ -1107,5 +1153,6 @@ fn usage_shown(view: &UsageView) -> Transcript {
 /// dropping it: the end of a frame being drawn, bracketed paste off, as `RawMode` turns it off,
 /// and the screen left. Read it holding stderr's lock, so that no frame follows it.
 pub(super) fn leave_on_exit() -> Option<String> {
-    (SHOWN.load(Ordering::SeqCst)).then(|| format!("\x1b[?2026l\x1b[?2004l{LEAVE}"))
+    (SHOWN.load(Ordering::SeqCst))
+        .then(|| format!("\x1b[?2026l\x1b[?2004l{}{LEAVE}", progress_cleared()))
 }

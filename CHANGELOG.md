@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.112.0 — The terminal's tab shows the agent working
+
+### Added
+
+- Scramjet's `terminal.showTerminalProgress` setting (Terminal progress in `/settings`, off by default): while a turn, a compaction or a `!` command runs, the full screen tells the terminal it is busy (OSC 9;4), which Windows Terminal shows as a ring in the tab and progress on the taskbar, and clears it when the work ends or the screen is left. tmux does not pass it on.
+
 ## 0.111.0 — Lists' keys on narrow terminals, and /resume's notes that go
 
 ### Changed

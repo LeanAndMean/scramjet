@@ -183,6 +183,7 @@ impl Link {
             markdown_reads: settings.markdown_reads,
             copy_on_select: settings.copy_on_select,
             layout: settings.layout,
+            terminal_progress: settings.terminal_progress,
             design: settings.look,
             banner: settings.banner,
         });
@@ -341,7 +342,7 @@ impl Handle {
         let modes = (settings.steering_mode, settings.follow_up_mode);
         spelling::configure(settings.spell_check, settings.words().as_deref());
         let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
-        let layout = settings.layout;
+        let (layout, terminal_progress) = (settings.layout, settings.terminal_progress);
         let (design, banner) = (settings.look, settings.banner);
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
@@ -365,6 +366,7 @@ impl Handle {
                     markdown_reads,
                     copy_on_select,
                     layout,
+                    terminal_progress,
                     design,
                     banner,
                     ..app
