@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.119.0 — Other scramjet-rs processes wait out a provider's Retry-After too
+
+### Changed
+
+- A provider's Retry-After now also holds the user's other scramjet-rs processes, other sessions and `-p` runs, sending to the same model there: they wait until then and start a quarter of a second apart, rather than each being refused in turn. The waits are kept in `$XDG_RUNTIME_DIR/scramjet-rs-cooldown` (else a private directory in the temporary directory).
+
 ## 0.118.1 — Requests held by a Retry-After start one after another
 
 ### Fixed

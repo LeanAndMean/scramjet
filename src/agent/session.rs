@@ -640,7 +640,7 @@ fn new_name(directory: &Path) -> (PathBuf, u128) {
 /// Creates a session directory, private to the user, and its parents. One already there must be
 /// the user's own directory, not a link: an `Unsaved` directory a full disk kept from being made at
 /// start is made in the shared temporary directory, where another user could have made its name.
-fn make_directory(directory: &Path) -> io::Result<()> {
+pub(in crate::agent) fn make_directory(directory: &Path) -> io::Result<()> {
     if let Some(parent) = directory.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
