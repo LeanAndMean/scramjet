@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.106.0 — The session in the terminal's title
+
+### Added
+
+- The full screen titles the terminal's tab or window `scramjet-rs - NAME - FOLDER` (the session's name once it has one, and the project's folder), as Scramjet does, and clears the title when it leaves the screen, at the exit and while the external editor runs.
+
 ## 0.105.0 — Your own shell and lines before each command
 
 ### Added

@@ -347,6 +347,8 @@ struct App {
     size: (usize, usize),
     base: &'static str,
     drawn: Vec<String>,
+    /// The terminal's title, as last given with a frame.
+    title: String,
     /// The dock's rows drawn last.
     docked: Vec<Line>,
     cursor: Option<(usize, usize)>,
@@ -404,6 +406,7 @@ impl App {
             size: (0, 0),
             base: "",
             drawn: Vec::new(),
+            title: String::new(),
             docked: Vec::new(),
             cursor: None,
             rows: 1,
@@ -1064,12 +1067,13 @@ fn restored(count: usize) -> String {
 }
 
 /// The alternate screen, lines cut at the edge rather than wrapped, and the mouse's buttons,
-/// drags and wheel reported (SGR), until dropped.
+/// drags and wheel reported (SGR), until dropped, the title it gave the terminal then cleared, as
+/// Codex and Claude Code clear theirs.
 struct Screen;
 
 /// Set while a `Screen` is shown, from before it is entered until after it is left.
 static SHOWN: AtomicBool = AtomicBool::new(false);
-const LEAVE: &str = "\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l";
+const LEAVE: &str = "\x1b[?1002l\x1b[?1006l\x1b[?7h\x1b[?25h\x1b[?1049l\x1b]0;\x07";
 
 impl Screen {
     /// Shown, and the terminal asked for its background, which may have changed meanwhile.

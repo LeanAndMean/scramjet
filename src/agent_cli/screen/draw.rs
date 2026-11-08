@@ -446,6 +446,13 @@ impl App {
             self.base = base;
             self.drawn.clear();
         }
+        // Given again with a whole frame, as after the screen was left, which clears it.
+        let title = self.footer.title();
+        let titled = self.drawn.is_empty() || title != self.title;
+        if titled {
+            write!(out, "\x1b]0;{title}\x07").unwrap();
+            self.title = title;
+        }
         let (dock, cursor) = self.dock((width, height));
         let rows = height.saturating_sub(dock.len()).max(1);
         // As Scramjet's, the last column is the scrollbar's, whether it shows or not, so that
@@ -503,7 +510,7 @@ impl App {
             })
             .collect();
         let cursor = cursor.map(|(row, column)| (rows + row, column));
-        if frame == self.drawn && cursor == self.cursor {
+        if frame == self.drawn && cursor == self.cursor && !titled {
             return Ok(());
         }
         for (index, row) in frame.iter().enumerate() {

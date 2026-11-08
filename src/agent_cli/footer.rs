@@ -58,6 +58,8 @@ impl Shown {
 pub(super) struct Footer {
     /// The project's directory, with `~` for the home directory.
     directory: String,
+    /// The project directory's own name, or `directory` where it has none (`/`).
+    folder: String,
     head: Option<Head>,
     branch: Option<String>,
     checked: Instant,
@@ -72,8 +74,12 @@ impl Footer {
     pub(super) fn new(root: &Path) -> Self {
         let directory = scramjet_rs::os::tilde(root);
         let head = head(root);
+        let folder = (root.file_name()).map_or(directory.clone(), |name| {
+            name.to_string_lossy().into_owned()
+        });
         Self {
             directory,
+            folder,
             branch: head.as_ref().and_then(Head::branch),
             head,
             checked: Instant::now(),
@@ -120,6 +126,16 @@ impl Footer {
             self.branch = head.branch();
             self.checked = Instant::now();
         }
+    }
+
+    /// The terminal's title, as Scramjet's: the program, the session's name if it has one and
+    /// the project's folder, on one line with control characters escaped.
+    pub(super) fn title(&self) -> String {
+        let title = match &self.shown.name {
+            Some(name) => format!("scramjet-rs - {name} - {}", self.folder),
+            None => format!("scramjet-rs - {}", self.folder),
+        };
+        visible(&one_line(&title))
     }
 
     /// The footer's lines on a screen `width` wide, each in at most `width - 1` columns, as the
@@ -295,6 +311,7 @@ mod tests {
     fn footer(shown: Shown) -> Footer {
         Footer {
             directory: "~/repos/project".into(),
+            folder: "project".into(),
             head: None,
             branch: Some("main".into()),
             checked: Instant::now(),
@@ -541,6 +558,27 @@ mod tests {
             place,
             "~/repos/project (main) • two lines \\u{202e}reversed"
         );
+    }
+
+    #[test]
+    fn the_title_names_the_session_and_the_folder_as_scramjets() {
+        assert_eq!(footer(opus()).title(), "scramjet-rs - Refactor - project");
+        let unnamed = Shown {
+            name: None,
+            ..opus()
+        };
+        assert_eq!(footer(unnamed).title(), "scramjet-rs - project");
+        // Nothing in a name ends the title's sequence or starts another.
+        let named = Shown {
+            name: Some("a\x07b\x1b]0;c\u{202e}".into()),
+            ..opus()
+        };
+        assert_eq!(
+            footer(named).title(),
+            "scramjet-rs - a b ]0;c\\u{202e} - project"
+        );
+        assert_eq!(Footer::new(Path::new("/")).folder, "/");
+        assert_eq!(Footer::new(Path::new("/tmp/x y")).folder, "x y");
     }
 
     struct Scratch(PathBuf);
