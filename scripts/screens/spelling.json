@@ -3,6 +3,7 @@
   "settings": {
     "theme": "scramjet-dark"
   },
+  "config": {"words.txt": "aidd\nDarkstar\n"},
   "steps": [
     {"until": "Ctrl+O more"},
     {"type": "Teh agent shuold read src/agnt.rs, call fooBarr and run `cargo tset` with JSON; a wrod brokenacrossthewholerowbecauseitislongerthananyrowcanholdatallreally"},
@@ -10,6 +11,22 @@
     {"shot": "typed"},
     {"type": "\u0015!echo teh"},
     {"sleep": 0.3},
-    {"shot": "command"}
+    {"shot": "command"},
+    {"type": "\u0015The repo's config: run clippy and fmt in tmux, then aidd's Darkstar loop; darkstar adn Aidd"},
+    {"sleep": 0.3},
+    {"shot": "developer"},
+    {"type": "\u0015/settings\r"},
+    {"until": "(1/20)"},
+    {"type": "\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B"},
+    {"sleep": 0.3},
+    {"shot": "settings-row"},
+    {"type": "\r"},
+    {"sleep": 0.3},
+    {"shot": "settings-off"},
+    {"type": "\u001b"},
+    {"sleep": 0.3},
+    {"type": "Teh shuold adn"},
+    {"sleep": 0.3},
+    {"shot": "off"}
   ]
 }

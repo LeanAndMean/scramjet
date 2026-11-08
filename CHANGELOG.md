@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.91.0 — Your own words in spelling
+
+### Added
+
+- Spelling knows common developer words (`repo`, `config`, `async`, `stdin`, `tmux`, `clippy`, `subagent`…), which it underlined before.
+- Words of your own, one a line, go in `words.txt` beside the settings file; `/reload` reads it again.
+- Spelling in `/settings` (`spellCheck`) turns the underlining off.
+
 ## 0.90.0 — Release notes in a session
 
 ### Added

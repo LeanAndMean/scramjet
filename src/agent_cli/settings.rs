@@ -102,6 +102,7 @@ pub(super) enum Row {
     FollowUp,
     DoubleEscape,
     CopyOnSelect,
+    SpellCheck,
     BranchSummary,
     TreeFilter,
     Tools,
@@ -112,7 +113,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 19] = [
+pub(super) const ROWS: [Row; 20] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -124,6 +125,7 @@ pub(super) const ROWS: [Row; 19] = [
     Row::FollowUp,
     Row::DoubleEscape,
     Row::CopyOnSelect,
+    Row::SpellCheck,
     Row::BranchSummary,
     Row::TreeFilter,
     Row::Tools,
@@ -148,6 +150,7 @@ impl Row {
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
             Self::CopyOnSelect => "Copy on select",
+            Self::SpellCheck => "Spelling",
             Self::BranchSummary => "Leaving a branch",
             Self::TreeFilter => "Tree entries",
             Self::Tools => "Tools",
@@ -229,6 +232,13 @@ impl Row {
                      either way."
                 );
             }
+            Self::SpellCheck => {
+                return format!(
+                    "Words in the prompt the dictionary lacks are underlined. Words of your own, \
+                     one a line, go in {}, beside the settings file.",
+                    super::spelling::WORDS
+                );
+            }
             Self::BranchSummary => {
                 "When /tree moves to another branch: ask whether to summarize the one left behind."
             }
@@ -276,6 +286,8 @@ pub(super) struct Settings {
     /// `copyOnSelect`: a completed mouse selection is copied; by default only on macOS, whose
     /// terminals keep Command+C to themselves.
     pub(super) copy_on_select: bool,
+    /// `spellCheck`: misspelled words in the prompt are underlined.
+    pub(super) spell_check: bool,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
@@ -384,6 +396,7 @@ impl Settings {
             hide_thinking_block: false,
             double_escape: DoubleEscape::Tree,
             copy_on_select: cfg!(target_os = "macos"),
+            spell_check: true,
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             resume_chains: Chains::Flat,
@@ -436,6 +449,11 @@ impl Settings {
             None => {}
             Some(Value::Bool(copy)) => self.copy_on_select = *copy,
             Some(_) => wrong("copyOnSelect", "true or false"),
+        }
+        match object.get("spellCheck") {
+            None => {}
+            Some(Value::Bool(check)) => self.spell_check = *check,
+            Some(_) => wrong("spellCheck", "true or false"),
         }
         match object
             .get("branchSummary")
@@ -831,6 +849,11 @@ impl Settings {
         self.path.as_deref()
     }
 
+    /// The user's words for spelling, beside the settings file.
+    pub(super) fn words(&self) -> Option<PathBuf> {
+        Some(self.path.as_ref()?.with_file_name(super::spelling::WORDS))
+    }
+
     /// The `models.json` files providers come from: the one beside the settings file, then each
     /// installed command set's.
     pub(super) fn models_files(&self) -> Vec<PathBuf> {
@@ -1032,6 +1055,8 @@ impl Settings {
             .into(),
             Row::CopyOnSelect if self.copy_on_select => "on".into(),
             Row::CopyOnSelect => "off".into(),
+            Row::SpellCheck if self.spell_check => "on".into(),
+            Row::SpellCheck => "off".into(),
             Row::BranchSummary if self.skip_branch_summary_prompt => "no summary".into(),
             Row::BranchSummary => "asks for a summary".into(),
             Row::TreeFilter => match self.tree_filter {
@@ -1121,6 +1146,10 @@ impl Settings {
             Row::CopyOnSelect => {
                 self.copy_on_select = !self.copy_on_select;
                 self.save("copyOnSelect", json!(self.copy_on_select))
+            }
+            Row::SpellCheck => {
+                self.spell_check = !self.spell_check;
+                self.save("spellCheck", json!(self.spell_check))
             }
             Row::BranchSummary => {
                 self.skip_branch_summary_prompt = !self.skip_branch_summary_prompt;
@@ -1963,6 +1992,10 @@ mod tests {
             [default, other, default, other]
         );
         assert_eq!(
+            seen(Row::SpellCheck, &mut settings),
+            ["on", "off", "on", "off"]
+        );
+        assert_eq!(
             seen(Row::MarkdownReads, &mut settings),
             ["rendered", "source", "rendered", "source"]
         );
@@ -1995,6 +2028,7 @@ mod tests {
                 "steeringMode": "one-at-a-time",
                 "hideThinkingBlock": true,
                 "copyOnSelect": !cfg!(target_os = "macos"),
+                "spellCheck": false,
                 "treeFilterMode": "all",
                 "followUpMode": "all",
                 "tools": ["read", "ls"],

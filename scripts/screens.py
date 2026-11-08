@@ -21,6 +21,7 @@ A scenario (scripts/screens/*.json) holds:
     "size":     COLUMNSxROWS, unless --size gives one;
     "files":    the project's files, committed to a Git repository first;
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
+    "config":   more files beside the settings, by name, such as "words.txt";
     "model":    the scripted server's model (default gpt-6-luna);
     "window":   its context window, unknown unless given;
     "provider": more of its provider's fields, such as "api" and "apiKey";
@@ -364,6 +365,9 @@ def main():
         os.makedirs(os.path.join(work, 'config/scramjet-rs'))
         with open(os.path.join(work, 'config/scramjet-rs/settings.json'), 'w') as file:
             json.dump(settings, file)
+        for name, text in scenario.get('config', {}).items():
+            with open(os.path.join(work, 'config/scramjet-rs', name), 'w') as file:
+                file.write(text)
         # rg and fd as the harness finds them, linked into the scratch agent directory; nothing is
         # downloaded.
         user_bin = os.path.join(os.environ.get('SCRAMJET_CODING_AGENT_DIR') or os.path.expanduser('~/.scramjet/agent'),

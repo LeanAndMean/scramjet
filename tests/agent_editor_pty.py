@@ -2312,7 +2312,7 @@ def settings_menu(read, until, send, output):
     assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B' * 6 + b'\r')
+    send(b'\x1b[B' * 7 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [ ] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -2330,7 +2330,7 @@ def settings_menu(read, until, send, output):
     assert 'Command: ' not in '\n'.join(rows), rows
     # A list the user opened leaves the status row on what the turn does.
     assert any(' Running ' in row for row in rows), rows
-    send(b'\x1b[B' * 13 + b'\r')
+    send(b'\x1b[B' * 14 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))

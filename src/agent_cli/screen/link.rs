@@ -13,7 +13,7 @@ use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
 use crate::agent_cli::theme_editor::ThemeEditor;
 use crate::agent_cli::usage::UsageView;
-use crate::agent_cli::{clipboard, console};
+use crate::agent_cli::{clipboard, console, spelling};
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
@@ -176,6 +176,7 @@ impl Link {
     /// What `/reload` read: what the editor completes, and the `settings`.
     pub(in crate::agent_cli) fn reloaded(&mut self, completions: Completions, settings: &Settings) {
         self.modes = (settings.steering_mode, settings.follow_up_mode);
+        spelling::configure(settings.spell_check, settings.words().as_deref());
         self.send(ToScreen::Reloaded {
             completions,
             double_escape: settings.double_escape != DoubleEscape::Nothing,
@@ -337,6 +338,7 @@ impl Handle {
         root: PathBuf,
     ) -> io::Result<Self> {
         let modes = (settings.steering_mode, settings.follow_up_mode);
+        spelling::configure(settings.spell_check, settings.words().as_deref());
         let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
         let (design, banner) = (settings.look, settings.banner);
         let (to, messages) = mpsc::channel();
