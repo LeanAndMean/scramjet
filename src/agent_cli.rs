@@ -344,6 +344,7 @@ fn start(
         max_output_tokens: options.max_output_tokens,
         ask: options.ask,
         retries: settings.retries(),
+        compacting: settings.compacting,
         tools: settings.tools.clone(),
         only_tools: options.only_tools,
         command_sets: settings.command_sets.clone(),

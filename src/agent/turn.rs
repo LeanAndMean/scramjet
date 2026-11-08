@@ -21,8 +21,9 @@ pub struct ShownPaused {
 impl Agent {
     /// Runs one user prompt to completion: model requests and tool calls until a final answer.
     /// As Scramjet does, the conversation is compacted before the prompt and after the reply if
-    /// its context passed the model's window minus `compaction::RESERVE_TOKENS`. A request that
-    /// fails because its input exceeded the window is compacted and sent again, once per turn.
+    /// its context passed the model's window minus the settings' reserve. A request that fails
+    /// because its input exceeded the window is compacted and sent again, once per turn. Neither
+    /// happens with automatic compaction off.
     /// When `ui` asks for a pause, the turn returns `AgentError::Paused` for `resume_turn`.
     pub fn turn(
         &mut self,
@@ -278,6 +279,12 @@ finish and is not checked on. Reply to continue.",
             let model = replying.model.clone();
             let reply = match self.wait_reply(replying, ui, cancel) {
                 Ok(reply) => reply,
+                Err(AgentError::ContextOverflow(message)) if !self.config.compacting.automatic => {
+                    return Err(AgentError::ContextOverflow(format!(
+                        "{message} (automatic compaction is off: /compact, or turn it on in \
+/settings)"
+                    )));
+                }
                 Err(AgentError::ContextOverflow(message)) if !overflow_recovered => {
                     overflow_recovered = true;
                     if !self.auto_compact(AutoCompaction::Overflow, ui, cancel)? {
@@ -851,6 +858,7 @@ mod tests {
             max_output_tokens: None,
             ask: false,
             retries: Default::default(),
+            compacting: Default::default(),
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             only_tools: None,
             command_sets: Vec::new(),
@@ -1081,6 +1089,7 @@ scramjet-rs\n",
                     attempts: 0,
                     ..Default::default()
                 },
+                compacting: Default::default(),
                 tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
                 only_tools: None,
                 command_sets: Vec::new(),

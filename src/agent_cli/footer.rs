@@ -26,6 +26,8 @@ pub(super) struct Shown {
     /// How full the context is (`Agent::context_tokens`), out of `window` when known.
     pub(super) context: Option<u64>,
     pub(super) window: Option<u64>,
+    /// Whether compaction runs by itself (`compaction.enabled`).
+    pub(super) auto_compact: bool,
     /// The model's median output rate, in tokens a second (`Agent::output_rate`).
     pub(super) rate: Option<f64>,
     pub(super) model: String,
@@ -44,6 +46,7 @@ impl Shown {
             tokens: agent.session_tokens(),
             context: agent.context_tokens(),
             window: agent.context_window(),
+            auto_compact: agent.compacting().automatic,
             rate: agent.output_rate(),
             model: agent.model_id().to_owned(),
             provider: agent.provider().map(str::to_owned),
@@ -158,7 +161,7 @@ impl Footer {
 
     /// As Scramjet's: the tokens that are not zero, the output's with the model's rate, what was
     /// spent, how full the context is (in the warning color past 70%, the error color past 90%),
-    /// with `auto` as compaction runs by itself, and at the right when there is room the model
+    /// with `auto` while compaction runs by itself, and at the right when there is room the model
     /// with its effort, after its provider when that fits too.
     fn stats(&self, room: usize) -> String {
         let shown = &self.shown;
@@ -178,13 +181,14 @@ impl Footer {
         let running: f64 = self.running.iter().map(|(cost, _)| cost).sum();
         let running_unpriced = self.running.iter().any(|(_, unpriced)| *unpriced);
         counts.extend(dollars(cost + running, unpriced || running_unpriced, 3));
+        let auto = if shown.auto_compact { ", auto" } else { "" };
         let (full, percent) = match (shown.context, shown.window) {
             (count, Some(window @ 1..)) => {
                 let percent = count.map(|count| count as f64 * 100.0 / window as f64);
                 let count = count.map_or_else(|| "?".to_owned(), tokens);
                 let shown = percent.map_or_else(|| "?".to_owned(), |p| format!("{p:.1}"));
                 let window = tokens(window);
-                (format!("{count}/{window} ({shown}%, auto)"), percent)
+                (format!("{count}/{window} ({shown}%{auto})"), percent)
             }
             (Some(count), _) => (tokens(count), None),
             (None, _) => (String::new(), None),
@@ -331,6 +335,7 @@ mod tests {
             },
             context: Some(53_000),
             window: Some(1_000_000),
+            auto_compact: true,
             rate: None,
             model: "claude-opus-5-5".into(),
             provider: None,
@@ -370,6 +375,16 @@ mod tests {
         assert!(
             stats.starts_with("0/1.0M (0.0%, auto) ")
                 && stats.ends_with(" claude-opus-5-5 • thinking off"),
+            "{stats}"
+        );
+        // Without automatic compaction, as Scramjet's, no `auto`.
+        let manual = Shown {
+            auto_compact: false,
+            ..opus()
+        };
+        let stats = plain(&footer(manual).lines(67)[1]);
+        assert!(
+            stats.starts_with("↑12k ↓3.4k R104k 53k/1.0M (5.3%) "),
             "{stats}"
         );
         // A model that does not reason shows no effort.

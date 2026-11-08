@@ -212,7 +212,8 @@ directory when that is a set, else the sets at its top and those with a set.yaml
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
 and `remove REPO` deletes the clone.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
-this also happens by itself when the context nears the model's window.
+this also happens by itself when the context nears the model's window, unless the settings'
+compaction.enabled is false (Auto-compact in /settings).
 Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),
 with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
@@ -224,7 +225,9 @@ list and the agent save; and startupModel: per-directory (new sessions start wit
 chosen last in their project, kept in $XDG_STATE_HOME/scramjet-rs/last-used-models.json) or
 global; retry: enabled, maxRetries (3), baseDelayMs (2000, doubled at each retry) and
 provider.maxRetryDelayMs (60000: a longer wait, the provider's or the backoff's, fails the
-request; 0 for no limit).";
+request; 0 for no limit); compaction: enabled (true), reserveTokens (16384: compaction runs
+once the context passes the window less this) and keepRecentTokens (20000, kept whole), and
+branchSummary.reserveTokens (16384).";
 
 /// The session the agent starts in.
 pub(super) enum Start {

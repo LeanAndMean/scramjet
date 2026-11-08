@@ -360,7 +360,7 @@ impl Agent {
             .info
             .window
             .unwrap_or(128_000)
-            .saturating_sub(compaction::RESERVE_TOKENS)
+            .saturating_sub(self.config.compacting.branch_reserve)
             .max(1);
         let files = branch.files();
         let summary = match branch.prompt(budget, focus) {

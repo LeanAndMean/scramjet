@@ -207,6 +207,33 @@ impl Default for Retries {
     }
 }
 
+/// When and how far the conversation is compacted: Scramjet's `compaction` settings and its
+/// `branchSummary.reserveTokens`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Compacting {
+    /// Whether it compacts by itself, near the window and after an overflow (`enabled`); `/compact`
+    /// runs either way.
+    pub automatic: bool,
+    /// What is kept of the window for the next response (`reserveTokens`): automatic compaction
+    /// runs once the context passes the rest, and summaries take at most 0.8 of it.
+    pub reserve: u64,
+    /// About how much of the latest conversation is kept whole (`keepRecentTokens`).
+    pub keep_recent: u64,
+    /// What a branch summary keeps of the window (`branchSummary.reserveTokens`).
+    pub branch_reserve: u64,
+}
+
+impl Default for Compacting {
+    fn default() -> Self {
+        Self {
+            automatic: true,
+            reserve: 16_384,
+            keep_recent: 20_000,
+            branch_reserve: 16_384,
+        }
+    }
+}
+
 pub struct AgentConfig {
     /// The providers requests go to, by their models.
     pub providers: Providers,
@@ -219,6 +246,8 @@ pub struct AgentConfig {
     pub ask: bool,
     /// How a model request that failed transiently (rate limit, overload, network) is sent again.
     pub retries: Retries,
+    /// When and how far the conversation is compacted.
+    pub compacting: Compacting,
     /// The coding tools the model has, among `CODING_TOOLS`: the settings' `tools`.
     pub tools: Vec<String>,
     /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools the model has in this run,
@@ -791,6 +820,15 @@ impl Agent {
     /// The retry settings, read again at `/reload`; a request already waiting keeps its own.
     pub fn set_retries(&mut self, retries: Retries) {
         self.config.retries = retries;
+    }
+
+    pub fn compacting(&self) -> Compacting {
+        self.config.compacting
+    }
+
+    /// The compaction settings, changed in `/settings` or read again at `/reload`.
+    pub fn set_compacting(&mut self, compacting: Compacting) {
+        self.config.compacting = compacting;
     }
 
     /// Starts the MCP servers when the model is offered their tools; servers already running as

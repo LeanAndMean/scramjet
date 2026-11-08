@@ -1,0 +1,100 @@
+{
+  "size": "100x40",
+  "window": 20000,
+  "settings": {
+    "compaction": {
+      "enabled": false
+    }
+  },
+  "prompt": "Fill the context",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"
+        }
+      }
+    ],
+    [
+      {
+        "text": "First answer, not compacted."
+      }
+    ],
+    [
+      {
+        "text": "## Goal\n\nFill the context."
+      }
+    ],
+    [
+      {
+        "text": "Second answer, after compacting."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "First answer"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "off"
+    },
+    {
+      "type": "/settings\r"
+    },
+    {
+      "until": "Esc close"
+    },
+    {
+      "type": "\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "row"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "row-on"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "Go on\r"
+    },
+    {
+      "until": "Second answer"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "on"
+    },
+    {
+      "type": "\u0004"
+    }
+  ],
+  "total": 5510
+}

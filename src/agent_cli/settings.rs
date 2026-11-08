@@ -9,8 +9,8 @@ use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Retries, SandboxMode, Set,
-    offline, sets_in, shortened, state_directory, unavailable, write_replacing,
+    CODING_TOOLS, Compacting, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Retries, SandboxMode,
+    Set, offline, sets_in, shortened, state_directory, unavailable, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -104,6 +104,7 @@ pub(super) enum Row {
     DoubleEscape,
     CopyOnSelect,
     SpellCheck,
+    AutoCompact,
     BranchSummary,
     TreeFilter,
     Tools,
@@ -114,7 +115,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 20] = [
+pub(super) const ROWS: [Row; 21] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -127,6 +128,7 @@ pub(super) const ROWS: [Row; 20] = [
     Row::DoubleEscape,
     Row::CopyOnSelect,
     Row::SpellCheck,
+    Row::AutoCompact,
     Row::BranchSummary,
     Row::TreeFilter,
     Row::Tools,
@@ -152,6 +154,7 @@ impl Row {
             Self::DoubleEscape => "Escape twice",
             Self::CopyOnSelect => "Copy on select",
             Self::SpellCheck => "Spelling",
+            Self::AutoCompact => "Auto-compact",
             Self::BranchSummary => "Leaving a branch",
             Self::TreeFilter => "Tree entries",
             Self::Tools => "Tools",
@@ -239,6 +242,10 @@ impl Row {
                      one a line, go in {}, beside the settings file.",
                     super::spelling::WORDS
                 );
+            }
+            Self::AutoCompact => {
+                "The conversation's older part is summarized by itself as the context nears the \
+                 model's window, and after a request exceeds it. /compact works either way."
             }
             Self::BranchSummary => {
                 "When /tree moves to another branch: ask whether to summarize the one left behind."
@@ -347,6 +354,8 @@ pub(super) struct Settings {
     pub(super) shell_command_prefix: Option<String>,
     /// `retry`: how a request that failed transiently is sent again.
     retry: Retries,
+    /// `compaction` and `branchSummary.reserveTokens`.
+    pub(super) compacting: Compacting,
     /// `--retries`: the number of retries for the run, over the settings' and kept at `/reload`.
     pub(super) retries_given: Option<u32>,
     /// `enabledModels`: the patterns of the models Ctrl+P cycles through (`scope::resolve`);
@@ -459,6 +468,7 @@ impl Settings {
             shell_path: None,
             shell_command_prefix: None,
             retry: Retries::default(),
+            compacting: Compacting::default(),
             retries_given: None,
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
@@ -502,6 +512,37 @@ impl Settings {
             None | Some(None) => {}
             Some(Some(Value::Bool(skip))) => self.skip_branch_summary_prompt = *skip,
             Some(Some(_)) => wrong("branchSummary.skipPrompt", "true or false"),
+        }
+        match object
+            .get("branchSummary")
+            .map(|value| value.get("reserveTokens"))
+        {
+            None | Some(None) => {}
+            Some(Some(value)) => match value.as_u64() {
+                Some(reserve) => self.compacting.branch_reserve = reserve,
+                None => wrong("branchSummary.reserveTokens", TOKENS),
+            },
+        }
+        match object.get("compaction") {
+            None => {}
+            Some(Value::Object(compaction)) => {
+                match compaction.get("enabled") {
+                    None => {}
+                    Some(Value::Bool(on)) => self.compacting.automatic = *on,
+                    Some(_) => wrong("compaction.enabled", "true or false"),
+                }
+                for key in ["reserveTokens", "keepRecentTokens"] {
+                    let Some(value) = compaction.get(key) else {
+                        continue;
+                    };
+                    match (value.as_u64(), key) {
+                        (Some(reserve), "reserveTokens") => self.compacting.reserve = reserve,
+                        (Some(keep), _) => self.compacting.keep_recent = keep,
+                        (None, _) => wrong(&format!("compaction.{key}"), TOKENS),
+                    }
+                }
+            }
+            Some(_) => wrong("compaction", "an object"),
         }
         match object.get("treeFilterMode").map(|value| value.as_str()) {
             None => {}
@@ -1375,6 +1416,8 @@ impl Settings {
             Row::CopyOnSelect => "off".into(),
             Row::SpellCheck if self.spell_check => "on".into(),
             Row::SpellCheck => "off".into(),
+            Row::AutoCompact if self.compacting.automatic => "on".into(),
+            Row::AutoCompact => "off".into(),
             Row::BranchSummary if self.skip_branch_summary_prompt => "no summary".into(),
             Row::BranchSummary => "asks for a summary".into(),
             Row::TreeFilter => match self.tree_filter {
@@ -1468,6 +1511,10 @@ impl Settings {
             Row::SpellCheck => {
                 self.spell_check = !self.spell_check;
                 self.save("spellCheck", json!(self.spell_check))
+            }
+            Row::AutoCompact => {
+                self.compacting.automatic = !self.compacting.automatic;
+                self.save_in("compaction", "enabled", json!(self.compacting.automatic))
             }
             Row::BranchSummary => {
                 self.skip_branch_summary_prompt = !self.skip_branch_summary_prompt;
@@ -1640,6 +1687,9 @@ fn command_sets(object: &Map<String, Value>) -> Result<Vec<String>, ()> {
 }
 
 /// The entries of the list of paths `key`; an error when it is not a list of strings.
+/// What a token count in the settings must be.
+const TOKENS: &str = "a whole number of tokens";
+
 fn paths(object: &Map<String, Value>, key: &str) -> Result<Vec<String>, ()> {
     match object.get(key) {
         None => Ok(Vec::new()),
@@ -1827,6 +1877,50 @@ mod tests {
         assert_eq!(
             not_object.warnings,
             [format!("{path}: retry must be an object; ignored")]
+        );
+    }
+
+    #[test]
+    fn compaction_takes_scramjets_keys_and_names_wrong_ones() {
+        let scratch = Scratch::new("compaction");
+        let defaults = settings_with(&scratch, "{}");
+        assert_eq!(defaults.compacting, Compacting::default());
+        let mut settings = settings_with(
+            &scratch,
+            r#"{"compaction": {"enabled": false, "reserveTokens": 8000, "keepRecentTokens": 0},
+                "branchSummary": {"reserveTokens": 4000}}"#,
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        let expected = Compacting {
+            automatic: false,
+            reserve: 8000,
+            keep_recent: 0,
+            branch_reserve: 4000,
+        };
+        assert_eq!(settings.compacting, expected);
+        settings.reload();
+        assert_eq!(settings.compacting, expected);
+        let wrong = settings_with(
+            &scratch,
+            r#"{"compaction": {"enabled": "no", "reserveTokens": -1, "keepRecentTokens": 1.5},
+                "branchSummary": {"reserveTokens": "4000"}}"#,
+        );
+        assert_eq!(wrong.compacting, Compacting::default());
+        let path = shown(&scratch.0.join("settings.json"));
+        let tokens = |key: &str| format!("{path}: {key} must be a whole number of tokens; ignored");
+        assert_eq!(
+            wrong.warnings,
+            [
+                tokens("branchSummary.reserveTokens"),
+                format!("{path}: compaction.enabled must be true or false; ignored"),
+                tokens("compaction.reserveTokens"),
+                tokens("compaction.keepRecentTokens"),
+            ]
+        );
+        let not_object = settings_with(&scratch, r#"{"compaction": true}"#);
+        assert_eq!(
+            not_object.warnings,
+            [format!("{path}: compaction must be an object; ignored")]
         );
     }
 
@@ -2393,6 +2487,11 @@ mod tests {
             ["on", "off", "on", "off"]
         );
         assert_eq!(
+            seen(Row::AutoCompact, &mut settings),
+            ["on", "off", "on", "off"]
+        );
+        assert_eq!(settings.compacting.branch_reserve, 1);
+        assert_eq!(
             seen(Row::MarkdownReads, &mut settings),
             ["rendered", "source", "rendered", "source"]
         );
@@ -2419,6 +2518,7 @@ mod tests {
             saved(),
             json!({
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
+                "compaction": {"enabled": false},
                 "markdown": {"toolDisplay": "source"},
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "unattended",

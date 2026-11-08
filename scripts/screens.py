@@ -24,6 +24,7 @@ A scenario (scripts/screens/*.json) holds:
     "config":   more files beside the settings, by name, such as "words.txt";
     "model":    the scripted server's model (default gpt-6-luna);
     "window":   its context window, unknown unless given;
+    "total":    the total tokens each response reports, so the context's size is known;
     "provider": more of its provider's fields, such as "api" and "apiKey";
     "headers":  more headers its responses carry, by name;
     "providers": more models.json providers, listed after the scripted server's ("screens");
@@ -111,9 +112,11 @@ def items(reply, number):
     return made, paces
 
 
-def stream(output, paces=()):
+def stream(output, paces=(), total=None):
     """The stream of `output`, in pieces each with the seconds to wait before it."""
     usage = {'input_tokens': 5200, 'output_tokens': 310, 'input_tokens_details': {'cached_tokens': 4096}}
+    if total is not None:
+        usage['total_tokens'] = total
     events = [{'type': 'response.created', 'response': {'id': 'resp', 'status': 'in_progress', 'output': []}}]
     for index, item in enumerate(output):
         events += item_events(index, item, paces[index] if index < len(paces) else None)
@@ -140,14 +143,14 @@ def receive(connection):
     return head + b'\r\n\r\n' + body
 
 
-def serve(replies, headers=None):
+def serve(replies, headers=None, total=None):
     """Answers each request with the next reply, then with `No more replies.`, each with `headers`
     besides its own; the address."""
     extra = b''.join(b'%s: %s\r\n' % (name.encode(), str(text).encode()) for name, text in (headers or {}).items())
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
-    streams = [reply if isinstance(reply, dict) else stream(*items(reply, number))
+    streams = [reply if isinstance(reply, dict) else stream(*items(reply, number), total)
                for number, reply in enumerate(replies)]
 
     def answer():
@@ -397,7 +400,7 @@ def main():
 
         # The scripted server is the first provider, offering the scenario's model.
         model = scenario.get('model', 'gpt-6-luna')
-        base = 'http://%s/v1' % serve(scenario.get('replies', []), scenario.get('headers'))
+        base = 'http://%s/v1' % serve(scenario.get('replies', []), scenario.get('headers'), scenario.get('total'))
         env['SCREENS_BASE_URL'] = base
         provider = {'baseUrl': base, 'api': 'openai-responses',
                     'models': [{'id': model, 'reasoning': True, 'input': ['text', 'image']}]}

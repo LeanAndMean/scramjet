@@ -2,7 +2,9 @@
 //! items, and the agent replacing older history with a summary, on `/compact` or when the context
 //! fills.
 use super::client::Protocol;
-use super::{Agent, AgentError, AgentUi, PRODUCER, Purpose, USAGE, message_text, tools};
+use super::{
+    Agent, AgentError, AgentUi, Compacting, PRODUCER, Purpose, USAGE, message_text, tools,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::AtomicBool;
@@ -133,16 +135,12 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages."#;
 
-/// Scramjet's `reserveTokens`: automatic compaction runs once the context passes what is left
-/// of the model's window after this much is kept for the next response.
-pub(super) const RESERVE_TOKENS: u64 = 16_384;
-
-/// Whether a context of `tokens` should be compacted for a model whose window is `window`, as
-/// Scramjet's `shouldCompact`, or that takes at most `input` tokens, as its `maxInputTokens`
-/// check: a window no larger than the reserve never compacts.
-pub(super) fn should_compact(tokens: u64, window: u64, input: Option<u64>) -> bool {
-    window > RESERVE_TOKENS
-        && (tokens > window - RESERVE_TOKENS || input.is_some_and(|input| tokens > input))
+/// Whether a context of `tokens` should be compacted for a model whose window is `window`, less
+/// the `reserve` kept for the next response, as Scramjet's `shouldCompact`, or that takes at most
+/// `input` tokens, as its `maxInputTokens` check: a window no larger than the reserve never
+/// compacts.
+pub(super) fn should_compact(tokens: u64, window: u64, input: Option<u64>, reserve: u64) -> bool {
+    window > reserve && (tokens > window - reserve || input.is_some_and(|input| tokens > input))
 }
 
 /// The paths a summarized conversation gave to read, write and edit calls.
@@ -565,12 +563,15 @@ pub(super) fn split_turn_summary(history: &str, prefix: &str) -> String {
     format!("{history}\n\n---\n\n**Turn Context (split turn):**\n\n{prefix}")
 }
 
-/// Compaction keeps about this much of the latest conversation, as Scramjet does.
-const KEEP_RECENT_TOKENS: u64 = 20_000;
 /// Scramjet's caps on the output of a compaction summary and of a turn-prefix summary: 0.8 and
-/// 0.5 × its `reserveTokens`.
-const SUMMARY_TOKENS: u64 = RESERVE_TOKENS * 4 / 5;
-const TURN_PREFIX_TOKENS: u64 = RESERVE_TOKENS / 2;
+/// 0.5 × its `reserveTokens`, at least one token.
+fn summary_tokens(reserve: u64) -> u64 {
+    (reserve.saturating_mul(4) / 5).max(1)
+}
+
+fn turn_prefix_tokens(reserve: u64) -> u64 {
+    (reserve / 2).max(1)
+}
 
 #[derive(Clone)]
 pub struct Compaction {
@@ -584,7 +585,7 @@ pub struct Compaction {
 /// Why compaction ran without `/compact`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AutoCompaction {
-    /// The last response's context passed the model's window minus `RESERVE_TOKENS`.
+    /// The last response's context passed the model's window minus the reserve.
     Threshold,
     /// A request failed because its input exceeded the model's window.
     Overflow,
@@ -601,7 +602,7 @@ impl AutoCompaction {
 }
 
 impl Agent {
-    /// Replaces the conversation before its last ~20k tokens with a summary the model writes, as
+    /// Replaces the conversation before its last `keep_recent` tokens with a summary the model writes, as
     /// Scramjet's compaction does, followed by the files read and modified in all compacted
     /// history, and records that in the session; `automatic` says why it runs without
     /// `/compact`. On failure or cancellation nothing changes. `None`: nothing is old enough to
@@ -616,7 +617,12 @@ impl Agent {
         let purpose = Purpose::Compaction(automatic);
         let previous = previous_summary(&self.conversation).map(str::to_owned);
         let start = usize::from(previous.is_some());
-        let cut = cut_point(&self.conversation, start, KEEP_RECENT_TOKENS);
+        let Compacting {
+            reserve,
+            keep_recent,
+            ..
+        } = self.config.compacting;
+        let cut = cut_point(&self.conversation, start, keep_recent);
         if cut == start {
             return Ok(None);
         }
@@ -633,12 +639,13 @@ impl Agent {
             _ if history.is_empty() => "No prior history.".into(),
             previous => {
                 let prompt = prompt(history, previous.as_deref(), focus);
-                self.summarize(prompt, purpose, SUMMARY_TOKENS, ui, cancel)?
+                self.summarize(prompt, purpose, summary_tokens(reserve), ui, cancel)?
             }
         };
         if let Some(turn) = turn {
             let prompt = turn_prefix_prompt(&self.conversation[turn..cut]);
-            let prefix = self.summarize(prompt, purpose, TURN_PREFIX_TOKENS, ui, cancel)?;
+            let tokens = turn_prefix_tokens(reserve);
+            let prefix = self.summarize(prompt, purpose, tokens, ui, cancel)?;
             summary = split_turn_summary(&summary, &prefix);
         }
         summary.push_str(&files.format());
@@ -742,7 +749,8 @@ impl Agent {
     }
 
     /// As Scramjet's threshold check: compacts after a turn once the context passed the model's
-    /// window minus `RESERVE_TOKENS`. Without a known window it does nothing.
+    /// window minus the reserve. Without a known window, or with automatic compaction off, it
+    /// does nothing.
     pub(super) fn compact_when_full(
         &mut self,
         ui: &mut dyn AgentUi,
@@ -751,10 +759,18 @@ impl Agent {
         let (Some(tokens), Some(window)) = (self.usage.context_tokens, self.info.window) else {
             return Ok(());
         };
-        if should_compact(tokens, window, self.info.input) {
+        if self.full(tokens, window) {
             self.auto_compact(AutoCompaction::Threshold, ui, cancel)?;
         }
         Ok(())
+    }
+
+    /// Whether automatic compaction is on and `tokens` of context fill a `window` (`should_compact`).
+    fn full(&self, tokens: u64, window: u64) -> bool {
+        let Compacting {
+            automatic, reserve, ..
+        } = self.config.compacting;
+        automatic && should_compact(tokens, window, self.info.input, reserve)
     }
 
     /// As Scramjet counts the context: the last response's, if the current model gave it, and an
@@ -779,7 +795,7 @@ impl Agent {
         let (Some(tokens), Some(window)) = (self.context_size(), self.info.window) else {
             return Ok(());
         };
-        if !should_compact(tokens, window, self.info.input) {
+        if !self.full(tokens, window) {
             return Ok(());
         }
         match self.auto_compact(AutoCompaction::Threshold, ui, cancel) {
@@ -796,7 +812,7 @@ impl Agent {
 mod tests {
     use super::*;
     use crate::agent::tests::*;
-    use crate::agent::{AgentConfig, Session, SessionChoice, Tokens};
+    use crate::agent::{AgentConfig, Compacting, Session, SessionChoice, Tokens};
     use crate::provider_fixture as fixture;
 
     #[test]
@@ -979,15 +995,26 @@ mod tests {
 
     #[test]
     fn compaction_runs_past_the_window_less_the_reserve() {
-        assert!(!should_compact(20_000, 36_384, None));
-        assert!(should_compact(20_001, 36_384, None));
-        assert!(should_compact(u64::MAX, u64::MAX, None));
-        assert!(!should_compact(1_000_000, RESERVE_TOKENS, None));
-        assert!(!should_compact(0, 0, None));
+        const R: u64 = 16_384;
+        assert!(!should_compact(20_000, 36_384, None, R));
+        assert!(should_compact(20_001, 36_384, None, R));
+        assert!(should_compact(u64::MAX, u64::MAX, None, R));
+        assert!(!should_compact(1_000_000, R, None, R));
+        assert!(!should_compact(0, 0, None, R));
         // A model's input limit below its window is a threshold of its own.
-        assert!(!should_compact(272_000, 400_000, Some(272_000)));
-        assert!(should_compact(272_001, 400_000, Some(272_000)));
-        assert!(!should_compact(272_001, RESERVE_TOKENS, Some(272_000)));
+        assert!(!should_compact(272_000, 400_000, Some(272_000), R));
+        assert!(should_compact(272_001, 400_000, Some(272_000), R));
+        assert!(!should_compact(272_001, R, Some(272_000), R));
+        // The settings' reserve moves the threshold.
+        assert!(!should_compact(30_000, 36_384, None, 6_384));
+        assert!(should_compact(30_001, 36_384, None, 6_384));
+        assert!(should_compact(2, 1, None, 0));
+        assert_eq!(
+            (summary_tokens(16_384), turn_prefix_tokens(16_384)),
+            (13_107, 8192)
+        );
+        assert_eq!((summary_tokens(1), turn_prefix_tokens(1)), (1, 1));
+        assert_eq!(summary_tokens(u64::MAX), u64::MAX / 5);
     }
 
     #[test]
@@ -1184,16 +1211,23 @@ mod tests {
                 .summarize("p".into(), purpose, tokens, &mut ui, &cancel)
                 .unwrap()
         };
-        summarize(&mut agent, Purpose::Compaction(None), SUMMARY_TOKENS);
+        summarize(
+            &mut agent,
+            Purpose::Compaction(None),
+            summary_tokens(16_384),
+        );
         agent.info.output = Some(4000);
         summarize(&mut agent, Purpose::BranchSummary, 2048);
         agent.config.max_output_tokens = Some(1000);
-        summarize(&mut agent, Purpose::Compaction(None), TURN_PREFIX_TOKENS);
+        summarize(
+            &mut agent,
+            Purpose::Compaction(None),
+            turn_prefix_tokens(16_384),
+        );
         agent.config.max_output_tokens = None;
         agent.set_model("claude-opus-5-5").unwrap();
         summarize(&mut agent, Purpose::BranchSummary, 2048);
         let bodies = server.join().unwrap();
-        assert_eq!((SUMMARY_TOKENS, TURN_PREFIX_TOKENS), (13_107, 8192));
         assert_eq!(bodies[0]["max_output_tokens"], 13_107);
         assert_eq!(
             bodies[0]["reasoning"],
@@ -1329,6 +1363,7 @@ mod tests {
             max_output_tokens: None,
             ask: false,
             retries: Default::default(),
+            compacting: Default::default(),
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
             only_tools: None,
             command_sets: Vec::new(),
@@ -1380,6 +1415,85 @@ mod tests {
         agent
             .add(json!({"role":"user", "content":"recent work ".repeat(7000)}))
             .unwrap();
+    }
+
+    #[test]
+    fn with_automatic_compaction_off_only_compact_compacts() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("done", full_usage(10_000))),
+            stream(&overflow_events()),
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "auto-off");
+        seed_long_conversation(&mut agent);
+        agent.set_context_window(Some(20_000));
+        agent.set_compacting(Compacting {
+            automatic: false,
+            ..Default::default()
+        });
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("continue", &mut ui, &cancel).unwrap();
+        let error = agent.turn("more", &mut ui, &cancel).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "context overflow: provider error: Your input exceeds the context window of this \
+model. (automatic compaction is off: /compact, or turn it on in /settings)"
+        );
+        assert!(ui.compactions.is_empty());
+        assert!(agent.compact("", None, &mut ui, &cancel).unwrap().is_some());
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[2]["instructions"], SYSTEM_PROMPT);
+    }
+
+    #[test]
+    fn the_settings_reserve_and_kept_tokens_say_when_and_how_far() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "done",
+            full_usage(10_000),
+        ))]);
+        let (mut roomy, _scratch) = agent(endpoint, "auto-reserve-small");
+        seed_long_conversation(&mut roomy);
+        roomy.set_context_window(Some(20_000));
+        roomy.set_compacting(Compacting {
+            reserve: 5_000,
+            ..Default::default()
+        });
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        roomy.turn("continue", &mut ui, &cancel).unwrap();
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert!(ui.compactions.is_empty());
+
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("done", full_usage(10_000))),
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+            stream(&fixture::text_events("prefix", fixture::known_usage())),
+        ]);
+        let (mut tight, _scratch) = agent(endpoint, "auto-reserve-large");
+        seed_long_conversation(&mut tight);
+        tight.set_context_window(Some(20_000));
+        tight.set_compacting(Compacting {
+            reserve: 12_000,
+            keep_recent: 1,
+            ..Default::default()
+        });
+        tight.turn("continue", &mut ui, &cancel).unwrap();
+        assert_eq!(
+            ui.compactions,
+            [(10_000, 1, Some(AutoCompaction::Threshold))]
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests[1]["max_output_tokens"], 9_600);
+        // Keeping one token cuts the last turn: its start is summarized apart.
+        assert_eq!(requests[2]["max_output_tokens"], 6_000);
+        assert!(
+            requests[1]["input"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("recent work recent work")
+        );
     }
 
     #[test]

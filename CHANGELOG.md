@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.108.0 — Compaction as you set it
+
+### Added
+
+- The `compaction` setting, in Scramjet's format: `enabled` (false: the conversation is never compacted by itself, only by `/compact`), `reserveTokens` (16384: compaction runs once the context passes the model's window less this, and summaries are capped by it) and `keepRecentTokens` (20000, the latest part kept whole), with `branchSummary.reserveTokens` for `/tree`'s summaries. `/settings` has an Auto-compact row, and `/reload` applies them.
+
+### Changed
+
+- The footer says `auto` beside the context only while compaction runs by itself, as Scramjet's.
+
 ## 0.107.0 — Retries as you set them
 
 ### Added
