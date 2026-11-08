@@ -8,9 +8,22 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The binary under test: `SCRAMJET_RS_BINARY` where the build's own path does not run, as
+/// on Windows from a build made in Linux (`scripts/test-windows.sh`).
+fn binary() -> std::path::PathBuf {
+    std::env::var_os("SCRAMJET_RS_BINARY")
+        .map_or_else(|| env!("CARGO_BIN_EXE_scramjet-rs").into(), Into::into)
+}
+
+/// This repository: the `CARGO_MANIFEST_DIR` the tests run with, else the build's.
+fn repository() -> std::path::PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| env!("CARGO_MANIFEST_DIR").into(), Into::into)
+}
+
 #[test]
 fn help_shows_the_agents_usage_and_other_words_are_refused() {
-    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let binary = &binary();
     for help in ["--help", "-h"] {
         let output = Command::new(binary).arg(help).output().unwrap();
         assert!(output.status.success());
@@ -39,9 +52,10 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
     assert!(refused(&["-"]).starts_with("scramjet-rs: the message - (read from stdin) needs -p\n"));
     // Before a session is started.
     let missing = refused(&["-p", "@/nonexistent/notes.md"]);
+    let absolute = std::path::absolute("/nonexistent/notes.md").unwrap();
     assert_eq!(
         missing,
-        "scramjet-rs: file not found: /nonexistent/notes.md\n"
+        format!("scramjet-rs: file not found: {}\n", absolute.display())
     );
     for option in ["--thinking", "--effort"] {
         let output = Command::new(binary)
@@ -70,7 +84,7 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-models-{}", std::process::id())));
     let list = || {
-        let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+        let output = Command::new(binary())
             .arg("--list-models")
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
             .output()
@@ -82,7 +96,11 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
     let none = ("No provider offers any model\n".to_owned(), String::new());
     assert_eq!(list(), none);
     provide(&scratch.0.join("config"), "127.0.0.1:9");
-    let file = scratch.0.join("config/scramjet-rs/models.json");
+    let file = scratch
+        .0
+        .join("config")
+        .join("scramjet-rs")
+        .join("models.json");
     let mut models: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     models["providers"]["remote"] = serde_json::json!({"baseUrl": "https://example.com/v1",
@@ -134,9 +152,10 @@ fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
     )
     .unwrap();
     let list = || {
-        let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+        let output = Command::new(binary())
             .arg("--list-credential-stores")
             .env("HOME", &home)
+            .env("USERPROFILE", &home)
             .env("XDG_CONFIG_HOME", &config)
             .env_remove("SCRAMJET_CODING_AGENT_DIR")
             .output()
@@ -186,12 +205,12 @@ fn provide(config: &std::path::Path, endpoint: &str) {
 
 #[test]
 fn https_providers_are_reached_over_tls_and_untrusted_certificates_refused_once() {
-    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let binary = &binary();
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-https-{}", std::process::id())));
     let project = scratch.0.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let tls = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/tls");
+    let tls = repository().join("tests").join("tls");
     let (port, connections, heads) = serve_tls(&tls);
     let config = scratch.0.join("config");
     std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
@@ -321,18 +340,26 @@ fn serve_tls(tls: &std::path::Path) -> (u16, Arc<AtomicUsize>, std::sync::mpsc::
 
 #[test]
 fn session_and_fork_find_a_session_by_the_start_of_its_id() {
-    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let binary = &binary();
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-sessions-{}", std::process::id())));
     let project = scratch.0.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let project = project.canonicalize().unwrap();
-    let sessions = scratch.0.join("state/scramjet-rs/sessions");
+    // As the program takes it from the working directory, and names its sessions' directory.
+    let project = match cfg!(windows) {
+        true => project,
+        false => project.canonicalize().unwrap(),
+    };
+    let separators: &[char] = match cfg!(windows) {
+        true => &['/', '\\', ':'],
+        false => &['/'],
+    };
+    let sessions = scratch.0.join("state").join("scramjet-rs").join("sessions");
     let slug = project
         .to_str()
         .unwrap()
-        .trim_matches('/')
-        .replace('/', "-");
+        .trim_matches(separators)
+        .replace(separators, "-");
     let (here, other) = (sessions.join(slug), sessions.join("work-other"));
     let source = other.join("1700000000000-7.jsonl");
     let theirs = "{\"role\":\"user\",\"content\":\"one\"}\n";
@@ -391,7 +418,13 @@ fn session_and_fork_find_a_session_by_the_start_of_its_id() {
         "scramjet-rs: session \"1700\" belongs to another project, /work/other; --fork \"1700\" \
 continues it in a new session of this one"
     );
-    let listed = || std::fs::read_dir(&here).unwrap().count();
+    // Sessions, not Windows' `.lock` (`os::lock_directory`).
+    let sessions = || {
+        (std::fs::read_dir(&here).unwrap())
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|e| e == "jsonl"))
+    };
+    let listed = || sessions().count();
     assert_eq!(listed(), 1);
 
     // The requests fail (nothing listens), after the prompt is saved in the session.
@@ -401,10 +434,7 @@ continues it in a new session of this one"
     assert!(saved.contains("\"content\":\"again\""), "{saved}");
     assert!(run(&["--fork", "1700", "-p", "more"]).starts_with(refused));
     assert_eq!(listed(), 2);
-    let forked = (std::fs::read_dir(&here).unwrap())
-        .map(|entry| entry.unwrap().path())
-        .find(|path| *path != ours)
-        .unwrap();
+    let forked = sessions().find(|path| *path != ours).unwrap();
     let text = std::fs::read_to_string(forked).unwrap();
     let (header, lines) = text.split_once('\n').unwrap();
     assert!(lines.starts_with(theirs), "{text}");
@@ -420,7 +450,7 @@ continues it in a new session of this one"
 
 #[test]
 fn a_chains_session_resumed_without_a_terminal_shows_the_earlier_ones_first() {
-    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let binary = &binary();
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-chain-{}", std::process::id())));
     let project = scratch.0.join("project");
@@ -483,7 +513,7 @@ fn a_chains_session_resumed_without_a_terminal_shows_the_earlier_ones_first() {
 
 #[test]
 fn no_session_saves_none_and_its_directory_goes_at_exit() {
-    let binary = env!("CARGO_BIN_EXE_scramjet-rs");
+    let binary = &binary();
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-unsaved-{}", std::process::id())));
     let (project, temporary) = (scratch.0.join("project"), scratch.0.join("tmp"));
@@ -576,7 +606,7 @@ fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
 fn a_copys_owner_serves_until_another_takes_the_selection() {
     let selection = format!("SCRAMJET_RS_TEST_{}_owner", std::process::id());
     let start = |text: &str| -> (Child, String) {
-        let mut owner = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+        let mut owner = Command::new(binary())
             .args(["__x11-selection-owner", &selection])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -618,6 +648,10 @@ fn a_copys_owner_serves_until_another_takes_the_selection() {
 
 #[test]
 fn packages_from_git_are_cloned_listed_updated_and_removed() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("passed over: git is not here");
+        return;
+    }
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-packages-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&scratch.0);
@@ -678,7 +712,7 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
     let branch = git(&work, &["rev-parse", "--abbrev-ref", "HEAD"]);
 
     let run = |arguments: &[&str]| {
-        let output = Command::new(env!("CARGO_BIN_EXE_scramjet-rs"))
+        let output = Command::new(binary())
             .args(arguments)
             .current_dir(&project)
             .env("HOME", &scratch.0)

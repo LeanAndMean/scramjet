@@ -1,0 +1,84 @@
+{
+  "files": {
+    "README.md": "Project\n",
+    "notes/alpha.txt": "one\n",
+    "notes/deep/beta.txt": "two\n",
+    "src/main.rs": "fn main() {}\n"
+  },
+  "prompt": "unused",
+  "replies": [
+    [
+      {
+        "text": "Read."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "shot": "started, ripgrep and fd downloaded",
+      "wait": 12
+    },
+    {
+      "text": "look at @alp"
+    },
+    {
+      "shot": "@alp offers notes/alpha.txt",
+      "wait": 3
+    },
+    {
+      "keys": [
+        "Tab"
+      ]
+    },
+    {
+      "shot": "Tab took it",
+      "wait": 2
+    },
+    {
+      "text": "and @notes\\deep\\"
+    },
+    {
+      "shot": "@notes\\deep\\ offers beta.txt",
+      "wait": 3
+    },
+    {
+      "keys": [
+        "Tab"
+      ]
+    },
+    {
+      "shot": "Tab took it with /",
+      "wait": 2
+    },
+    {
+      "text": "@~\\"
+    },
+    {
+      "shot": "@~\\ lists the Windows home",
+      "wait": 4
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "Escape closed the list",
+      "wait": 1
+    },
+    {
+      "keys": [
+        "C-u"
+      ]
+    },
+    {
+      "keys": [
+        "C-d"
+      ]
+    },
+    {
+      "shot": "after Ctrl+D",
+      "wait": 3
+    }
+  ]
+}
