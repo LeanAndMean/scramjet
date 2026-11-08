@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.114.1 — Exported pages label commands and skills as the screen does
+
+### Fixed
+
+- `/export` and `--export` show a command's or skill's expansion under `[command] NAME` or `[skill] NAME`, without its tags, and compactions and branch summaries under `[compaction]` and `[branch]`, as the screen labels them.
+
 ## 0.114.0 — An edited command runs as edited
 
 ### Changed

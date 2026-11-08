@@ -1743,17 +1743,17 @@ pub(super) fn command_body(sent: &str) -> &str {
 
 /// A command's or skill's expansion as Scramjet's boxes show it.
 #[derive(Debug, PartialEq)]
-struct Framed<'a> {
-    label: &'static str,
+pub(super) struct Framed<'a> {
+    pub(super) label: &'static str,
     /// The name in its tag.
-    name: &'a str,
+    pub(super) name: &'a str,
     /// What is inside its tags; a skill's arguments after them are in the prompt as typed.
-    body: &'a str,
+    pub(super) body: &'a str,
 }
 
 /// `sent` as a command's or skill's expansion, as Scramjet parses them; `None` for other text,
 /// such as files attached to a prompt.
-fn framed(sent: &str) -> Option<Framed<'_>> {
+pub(super) fn framed(sent: &str) -> Option<Framed<'_>> {
     let (label, tag, rest) = match (
         sent.strip_prefix("<scramjet-command"),
         sent.strip_prefix("<skill"),
@@ -1790,7 +1790,7 @@ fn boxed(text: &str) -> String {
 }
 
 /// How many lines `text` has, in words.
-fn lines(text: &str) -> String {
+pub(super) fn lines(text: &str) -> String {
     match text.lines().count() {
         1 => "1 line".to_owned(),
         count => format!("{count} lines"),

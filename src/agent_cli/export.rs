@@ -6,7 +6,7 @@
 
 use super::children::{call, icon, usage_line};
 use super::slash::grouped;
-use super::terminal::command_body;
+use super::terminal::{command_body, framed, lines as lines_count};
 use super::text::visible;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use scramjet_rs::agent::{
@@ -326,26 +326,37 @@ scopes do not overlap; tool calls outside them are not blocked.</div>";
     fn command_prompt(&mut self, typed: &str, sent: &str) {
         self.block();
         let images = std::mem::take(&mut self.images);
-        let body = command_body(sent);
-        let count = match body.lines().count() {
-            1 => "1 line".to_owned(),
-            count => format!("{count} lines"),
+        // As the screen labels them: `[skill] NAME` or `[command] NAME`.
+        let (heading, body) = match framed(sent) {
+            Some(framed) => (
+                format!(
+                    "[{}] {}, sent as {}",
+                    framed.label,
+                    framed.name,
+                    lines_count(framed.body)
+                ),
+                framed.body,
+            ),
+            None => {
+                let body = command_body(sent);
+                (format!("Sent as {}", lines_count(body)), body)
+            }
         };
         self.out += &format!(
             "<div class=\"prompt\">{images}<div class=\"text\">{}</div>{}</div>\n",
             escape(&visible(typed)),
-            opened(&format!("Sent as {count}"), body),
+            opened(&heading, body),
         );
     }
     fn compaction_summary(&mut self, summary: &str) {
         self.summary(
-            "✓ Compacted: the earlier conversation is summarized",
+            "[compaction] The earlier conversation is summarized",
             summary,
         );
     }
     fn branch_summary(&mut self, summary: &str) {
         self.summary(
-            "✓ Summarized the branch this conversation came back from",
+            "[branch] The branch this conversation came back from is summarized",
             summary,
         );
     }
@@ -702,13 +713,44 @@ mod tests {
             at("<span class=\"removed\">-1 old</span>\n<span class=\"added\">+1 new</span>"),
             at("<p>Found <strong>two</strong> files:</p>"),
             at("<li><code>a.rs</code></li>"),
-            at("<summary>✓ Compacted: the earlier conversation is summarized</summary>"),
+            at("<summary>[compaction] The earlier conversation is summarized</summary>"),
             at("<div class=\"call\">$ false</div><div class=\"failed\">(exit 1)</div>"),
             at("<div class=\"note\">(cancelled)</div>"),
         ];
         assert!(order.is_sorted(), "{order:?}\n{page}");
         // Every block that opened closed.
         assert_eq!(page.matches("<div").count(), page.matches("</div>").count());
+    }
+
+    #[test]
+    fn a_command_or_skill_shows_under_its_label_without_its_tags() {
+        let skill = "<skill name=\"pdf\" location=\"/s/pdf/SKILL.md\">\nReferences are relative \
+            to /s/pdf.\n\nFill forms.\n</skill>\n\nform.pdf";
+        let command =
+            "<scramjet-command name=\"rs:loop\">\n# Build\n\nOne step.\n</scramjet-command>";
+        let page = page(
+            &branch(vec![
+                json!({"role":"user","content":skill,"_scramjet_typed":"/skill:pdf form.pdf"}),
+                json!({"role":"user","content":command,"_scramjet_typed":"/rs:loop"}),
+                json!({"role":"user","content":"a.txt:\nhello","_scramjet_typed":"@a.txt"}),
+            ]),
+            "1700000000000-1",
+            None,
+        );
+        let at = |text: &str| {
+            page.find(text)
+                .unwrap_or_else(|| panic!("{text:?} not in the page:\n{page}"))
+        };
+        let order = [
+            at("<div class=\"text\">/skill:pdf form.pdf</div>"),
+            at("<summary>[skill] pdf, sent as 3 lines</summary>"),
+            at("<p>Fill forms.</p>"),
+            at("<summary>[command] rs:loop, sent as 3 lines</summary>"),
+            at("<p>One step.</p>"),
+            at("<summary>Sent as 2 lines</summary>"),
+        ];
+        assert!(order.is_sorted(), "{order:?}\n{page}");
+        assert!(!page.contains("skill name=") && !page.contains("scramjet-command"));
     }
 
     #[test]
