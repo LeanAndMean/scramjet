@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.96.1 — Downloaded rg and fd within commands' reach
+
+### Fixed
+
+- Bash commands, `!` commands and subagents' commands find the `rg` and `fd` scramjet-rs downloaded into the agent directory's `bin` (`~/.scramjet/agent/bin`), which is put first on their `PATH` as in Scramjet; a command calling `rg` failed with `command not found` where neither is installed.
+
 ## 0.96.0 — Commands without a time limit
 
 ### Changed

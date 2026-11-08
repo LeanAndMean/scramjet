@@ -1427,6 +1427,19 @@ pub(super) fn run_sandboxed(
     run_process(process, sandbox::PROGRAM, timeout, cancel, progress)
 }
 
+/// `path` with `bin` first, unless it has it already, as Scramjet's `getShellEnv` puts the
+/// downloaded `rg` and `fd` within reach of commands.
+fn with_first(bin: &Path, path: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
+    if path.is_empty() {
+        return Some(bin.as_os_str().to_owned());
+    }
+    let entries: Vec<PathBuf> = std::env::split_paths(path).collect();
+    if entries.iter().any(|entry| entry == bin) {
+        return None;
+    }
+    std::env::join_paths(std::iter::once(bin.to_owned()).chain(entries)).ok()
+}
+
 fn run_process(
     mut process: Command,
     program: &str,
@@ -1434,6 +1447,11 @@ fn run_process(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
+    let bin = super::subagent::agent_directory().map(|directory| directory.join("bin"));
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    if let Some(path) = bin.and_then(|bin| with_first(&bin, &path)) {
+        process.env("PATH", path);
+    }
     let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
     let (mut child, group) = {
         process
@@ -1647,6 +1665,19 @@ mod tests {
 
     fn call(name: &str, arguments: Value) -> Call<'_> {
         Call { name, arguments }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commands_find_the_downloaded_programs_first() {
+        let bin = Path::new("/home/u/.scramjet/agent/bin");
+        let first = |path: &str| with_first(bin, path.as_ref()).map(|p| p.into_string().unwrap());
+        assert_eq!(
+            first("/usr/bin:/bin").unwrap(),
+            "/home/u/.scramjet/agent/bin:/usr/bin:/bin"
+        );
+        assert_eq!(first("").unwrap(), "/home/u/.scramjet/agent/bin");
+        assert_eq!(first("/usr/bin:/home/u/.scramjet/agent/bin"), None);
     }
 
     #[test]
