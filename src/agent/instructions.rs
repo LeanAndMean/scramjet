@@ -1,8 +1,9 @@
 //! The system instructions of the agent and of its subagents.
 use super::{
-    Commands, Problem, Skills, SystemPrompt, mcp, publish, question, status, subagent, suggest,
-    switch,
+    Commands, Problem, Skills, SystemPrompt, mcp, publish, question, sandbox::Hidden, status,
+    subagent, suggest, switch,
 };
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
@@ -250,6 +251,7 @@ pub(super) fn child(
     prompt: &str,
     skills: &Skills,
     agent_directory: Option<&Path>,
+    hidden: &Hidden,
 ) -> String {
     let listed: Vec<&str> = tools
         .iter()
@@ -299,7 +301,12 @@ Guidelines:
     if !prompt.trim().is_empty() {
         text += &format!("\n\n{prompt}");
     }
-    text += &project_context(&context_files(cwd, agent_directory));
+    text += &project_context(&context_files(
+        cwd,
+        agent_directory,
+        hidden,
+        &mut Vec::new(),
+    ));
     let listed = skills_section(tools.contains(&"read"), skills);
     if !listed.is_empty() && !text.ends_with('\n') {
         text.push('\n');
@@ -329,19 +336,25 @@ pub(super) struct Loaded {
 
 impl Loaded {
     /// The text `source` gives: the contents of the file it names, else itself.
-    fn read(&mut self, source: &str, opening: bool) -> Option<String> {
+    fn read(&mut self, source: &str, opening: bool, hidden: &Hidden) -> Option<String> {
         let path = Path::new(source);
         if !path.exists() {
             return Some(source.to_owned());
         }
-        match std::fs::read_to_string(path) {
+        let read = hidden
+            .opened(path, std::fs::File::open(path))
+            .and_then(|mut file| {
+                let mut text = String::new();
+                (file.read_to_string(&mut text).map(|_| text))
+                    .map_err(|error| format!("could not read {}: {error}", path.display()))
+            });
+        match read {
             Ok(text) => {
                 let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
                 self.files.push((path, opening));
                 Some(text)
             }
-            Err(error) => {
-                let text = format!("could not read {}: {error}", path.display());
+            Err(text) => {
                 self.problems.push(Problem::in_file(text, path));
                 None
             }
@@ -352,11 +365,17 @@ impl Loaded {
 /// Reads what `prompt` names for the instructions of an agent in `root`, as Scramjet does: its
 /// opening's text or file, else the project's `.scramjet/SYSTEM.md`, else the agent directory's;
 /// the texts or files it appends, else an `APPEND_SYSTEM.md` found the same way; and, unless it
-/// leaves them out, the context files.
-pub(super) fn load(prompt: &SystemPrompt, root: &Path, agent_directory: Option<&Path>) -> Loaded {
+/// leaves them out, the context files. A file in one of the `hidden` stores, also through a
+/// symlink, is left out with a problem: nobody chose to send it.
+pub(super) fn load(
+    prompt: &SystemPrompt,
+    root: &Path,
+    agent_directory: Option<&Path>,
+    hidden: &Hidden,
+) -> Loaded {
     let mut loaded = Loaded::default();
     if !prompt.no_context_files {
-        loaded.context = context_files(root, agent_directory);
+        loaded.context = context_files(root, agent_directory, hidden, &mut loaded.problems);
     }
     let found = |name: &str| {
         let directories = [
@@ -370,14 +389,15 @@ pub(super) fn load(prompt: &SystemPrompt, root: &Path, agent_directory: Option<&
     };
     let opening = (prompt.system.clone()).or_else(|| found("SYSTEM.md"));
     if let Some(source) = opening {
-        loaded.opening = (loaded.read(&source, true)).filter(|text| !text.trim().is_empty());
+        loaded.opening =
+            (loaded.read(&source, true, hidden)).filter(|text| !text.trim().is_empty());
     }
     let appended = match prompt.append.is_empty() {
         true => found("APPEND_SYSTEM.md").into_iter().collect(),
         false => prompt.append.clone(),
     };
     for source in appended {
-        if let Some(text) = loaded.read(&source, false) {
+        if let Some(text) = loaded.read(&source, false, hidden) {
             let text = text.trim_end();
             if !text.is_empty() {
                 loaded.appended.push(text.to_owned());
@@ -389,12 +409,20 @@ pub(super) fn load(prompt: &SystemPrompt, root: &Path, agent_directory: Option<&
 
 /// The context files, as Scramjet's: those of the `agent_directory`, then those of `root` and
 /// the directories above it, outermost first, with their contents. A directory's `CLAUDE.md` comes
-/// before its `AGENTS.md`, which is left out when it says the same.
-pub(super) fn context_files(root: &Path, agent_directory: Option<&Path>) -> Vec<(PathBuf, String)> {
-    let mut files = agent_directory.map(directory_context).unwrap_or_default();
+/// before its `AGENTS.md`, which is left out when it says the same. One in a `hidden` store is
+/// left out, said in `problems`.
+pub(super) fn context_files(
+    root: &Path,
+    agent_directory: Option<&Path>,
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Vec<(PathBuf, String)> {
+    let mut files = (agent_directory
+        .map(|directory| directory_context(directory, hidden, problems)))
+    .unwrap_or_default();
     let mut above = Vec::new();
     for directory in root.ancestors() {
-        let found = directory_context(directory).into_iter();
+        let found = directory_context(directory, hidden, problems).into_iter();
         let found: Vec<_> = found
             .filter(|(path, _)| !files.iter().any(|(seen, _)| seen == path))
             .collect();
@@ -405,17 +433,29 @@ pub(super) fn context_files(root: &Path, agent_directory: Option<&Path>) -> Vec<
 }
 
 /// The `CLAUDE.md` and `AGENTS.md` (or `.MD`) of `directory`, as Scramjet reads them.
-fn directory_context(directory: &Path) -> Vec<(PathBuf, String)> {
-    let first = |names: [&str; 2]| {
-        names.into_iter().find_map(|name| {
-            let path = directory.join(name);
-            let fits = std::fs::metadata(&path)
-                .is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES);
-            let contents = fits
-                .then(|| std::fs::read_to_string(&path).ok())
-                .flatten()?;
-            Some((path, contents))
-        })
+fn directory_context(
+    directory: &Path,
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Vec<(PathBuf, String)> {
+    let mut first = |names: [&str; 2]| {
+        let path = (names.into_iter().map(|name| directory.join(name))).find(|path| {
+            std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES)
+        })?;
+        let file = std::fs::File::open(&path).ok()?;
+        let mut file = match hidden.opened(&path, Ok(file)) {
+            Ok(file) => file.take(CONTEXT_FILE_BYTES),
+            Err(why) => {
+                let problem = Problem::in_file(why, &path);
+                if !problems.contains(&problem) {
+                    problems.push(problem);
+                }
+                return None;
+            }
+        };
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).ok()?;
+        Some((path, contents))
     };
     let claude = first(["CLAUDE.md", "CLAUDE.MD"]);
     let agents = first(["AGENTS.md", "AGENTS.MD"]);
@@ -603,18 +643,18 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             std::fs::write(path, text).unwrap();
         };
         let prompt = SystemPrompt::default();
-        let loaded = load(&prompt, &root, Some(&home));
+        let loaded = load(&prompt, &root, Some(&home), &Hidden::default());
         assert_eq!(
             (loaded.opening, loaded.appended),
             (None, Vec::<String>::new())
         );
         write(&home.join("SYSTEM.md"), "Global.");
         write(&home.join("APPEND_SYSTEM.md"), "Global after.");
-        let loaded = load(&prompt, &root, Some(&home));
+        let loaded = load(&prompt, &root, Some(&home), &Hidden::default());
         assert_eq!(loaded.opening.as_deref(), Some("Global."));
         assert_eq!(loaded.appended, ["Global after."]);
         write(&root.join(".scramjet/SYSTEM.md"), "Project.");
-        let loaded = load(&prompt, &root, Some(&home));
+        let loaded = load(&prompt, &root, Some(&home), &Hidden::default());
         assert_eq!(loaded.opening.as_deref(), Some("Project."));
         assert_eq!(
             loaded.files,
@@ -631,7 +671,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             append: vec![given.display().to_string(), "Inline.".into()],
             no_context_files: false,
         };
-        let loaded = load(&prompt, &root, Some(&home));
+        let loaded = load(&prompt, &root, Some(&home), &Hidden::default());
         assert_eq!(loaded.opening.as_deref(), Some("Be terse."));
         assert_eq!(loaded.appended, ["From a file.", "Inline."]);
         assert_eq!(loaded.files, [(given, false)]);
@@ -639,10 +679,18 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             system: Some(String::new()),
             ..SystemPrompt::default()
         };
-        assert_eq!(load(&prompt, &root, Some(&home)).opening, None);
+        assert_eq!(
+            load(&prompt, &root, Some(&home), &Hidden::default()).opening,
+            None
+        );
         // A file that cannot be read is a problem, and left out.
         std::fs::create_dir(root.join(".scramjet/APPEND_SYSTEM.md")).unwrap();
-        let loaded = load(&SystemPrompt::default(), &root, Some(&home));
+        let loaded = load(
+            &SystemPrompt::default(),
+            &root,
+            Some(&home),
+            &Hidden::default(),
+        );
         assert!(loaded.appended.is_empty());
         let unread = crate::os::join(&root, ".scramjet/APPEND_SYSTEM.md");
         assert_eq!(loaded.problems.len(), 1);
@@ -668,7 +716,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             append: vec!["First.".into(), "Second.\n".into()],
             no_context_files: false,
         };
-        let loaded = load(&prompt, &scratch, None);
+        let loaded = load(&prompt, &scratch, None, &Hidden::default());
         let tools = super::super::tools::offered(
             &super::super::tools::DEFAULT_TOOLS.map(String::from),
             None,
@@ -694,7 +742,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
             no_context_files: true,
             ..SystemPrompt::default()
         };
-        let loaded = load(&prompt, &scratch, None);
+        let loaded = load(&prompt, &scratch, None, &Hidden::default());
         assert!(loaded.context.is_empty());
         let text = agent(
             &scratch,
@@ -728,10 +776,11 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
         write(outer.join("CLAUDE.MD"), "Outer claude.");
         write(root.join("CLAUDE.md"), "Same.");
         write(root.join("AGENTS.md"), "Same.");
-        let found: Vec<(PathBuf, String)> = context_files(&root, Some(&home))
-            .into_iter()
-            .filter(|(path, _)| path.starts_with(&scratch))
-            .collect();
+        let found: Vec<(PathBuf, String)> =
+            context_files(&root, Some(&home), &Hidden::default(), &mut Vec::new())
+                .into_iter()
+                .filter(|(path, _)| path.starts_with(&scratch))
+                .collect();
         // A file system that ignores case (Windows', macOS's by default) finds it as CLAUDE.md.
         let claude = match outer.join("CLAUDE.md").is_file() {
             true => "CLAUDE.md",
@@ -747,6 +796,49 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
         assert_eq!(found, expected);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn files_that_lead_into_a_credential_store_are_left_out_and_said() {
+        let scratch = std::env::temp_dir().join(format!("sjrs-hidden-md-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        let (root, home) = (scratch.join("project"), scratch.join("home"));
+        std::fs::create_dir_all(root.join(".scramjet")).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        let key = home.join(".ssh/id_x");
+        std::fs::write(&key, "SECRET-key").unwrap();
+        std::fs::write(root.join("AGENTS.md"), "Kept.").unwrap();
+        let link = |at: &str| std::os::unix::fs::symlink(&key, root.join(at)).unwrap();
+        link("CLAUDE.md");
+        link(".scramjet/SYSTEM.md");
+        let hidden = Hidden::under(&home, Vec::new());
+        let loaded = load(&SystemPrompt::default(), &root, None, &hidden);
+        let context: Vec<&str> = (loaded.context.iter())
+            .filter(|(path, _)| path.starts_with(&scratch))
+            .map(|(_, text)| text.as_str())
+            .collect();
+        assert_eq!(context, ["Kept."]);
+        assert_eq!(loaded.opening, None);
+        let said: Vec<String> = (loaded.problems.iter()).map(|p| p.text.clone()).collect();
+        let hidden_at = |at: &str| {
+            let path = root.join(at);
+            format!("{}: hidden, as it holds credentials", path.display())
+        };
+        assert_eq!(
+            said,
+            [hidden_at("CLAUDE.md"), hidden_at(".scramjet/SYSTEM.md")]
+        );
+        // A subagent's instructions leave it out too.
+        let text = child(
+            &root,
+            &["read"],
+            "",
+            &Skills::in_directory(&scratch),
+            None,
+            &hidden,
+        );
+        assert!(text.contains("Kept.") && !text.contains("SECRET"), "{text}");
+    }
+
     #[test]
     fn children_that_can_read_are_told_of_the_skills() {
         let scratch =
@@ -757,7 +849,14 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
         std::fs::write(&file, "---\ndescription: PDFs.\n---\nBody").unwrap();
         let skills = Skills::in_directory(&scratch);
         let cwd = Path::new("/nonexistent/scramjet-rs-child");
-        let text = child(cwd, &["read", "bash"], "Be brief.", &skills, None);
+        let text = child(
+            cwd,
+            &["read", "bash"],
+            "Be brief.",
+            &skills,
+            None,
+            &Hidden::default(),
+        );
         let listed = "Be brief.\n\nThe following skills provide specialized instructions for \
 specific tasks.\n";
         assert!(text.contains(listed), "{text}");
@@ -766,6 +865,9 @@ specific tasks.\n";
             file.display()
         );
         assert!(text.contains(&end), "{text}");
-        assert!(!child(cwd, &["bash"], "", &skills, None).contains("<available_skills>"));
+        assert!(
+            !child(cwd, &["bash"], "", &skills, None, &Hidden::default())
+                .contains("<available_skills>")
+        );
     }
 }

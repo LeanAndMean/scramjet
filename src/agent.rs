@@ -893,7 +893,8 @@ impl Agent {
     fn instruct(&mut self) {
         let config = &self.config;
         let directory = self.agent_directory.as_deref();
-        let loaded = instructions::load(&config.prompt, &config.root, directory);
+        let hidden = sandbox::Hidden::stores(config.providers.credential_files());
+        let loaded = instructions::load(&config.prompt, &config.root, directory, &hidden);
         let agents = subagent::registered(&self.sets, &mut Vec::new());
         let mcp = !self.enabled_mcp().is_empty();
         self.instructions = instructions::agent(

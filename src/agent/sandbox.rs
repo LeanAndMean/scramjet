@@ -330,7 +330,7 @@ impl Hidden {
     }
 
     /// `current`'s credential stores, without the tmux servers.
-    fn stores(named: &[PathBuf]) -> Hidden {
+    pub(super) fn stores(named: &[PathBuf]) -> Hidden {
         let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
         let own = super::login::auth_file();
         if let Some(own) = &own {

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.3 — Instruction files that lead into a credential store
+
+### Fixed
+
+- A `CLAUDE.md`, `AGENTS.md`, `SYSTEM.md` or `APPEND_SYSTEM.md` that is, or links to, a file in a credential store (`~/.ssh`, `~/.netrc`, those `--list-credential-stores` lists) is no longer sent to the model with every request: it is left out, and the start and `/reload` say `instructions: PATH: hidden, as it holds credentials`. Subagents leave it out too.
+
 ## 0.97.2 — Commands that stop processes by name
 
 ### Fixed

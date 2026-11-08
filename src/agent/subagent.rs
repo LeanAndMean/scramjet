@@ -1212,6 +1212,7 @@ fn run_child(
         &agent.prompt,
         parent.skills,
         parent.agent_directory,
+        &sandbox::Hidden::stores(parent.providers.credential_files()),
     );
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
