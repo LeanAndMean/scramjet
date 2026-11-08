@@ -5,7 +5,7 @@ use super::completions;
 use super::providers::{Login, ModelInfo};
 use super::{
     Agent, AgentError, AgentUi, PRODUCER, Purpose, Retries, StreamProgress, messages, rates, sent,
-    tools,
+    status, tools,
 };
 use serde_json::{Value, json};
 use std::{
@@ -53,13 +53,23 @@ impl Agent {
     /// The conversation as sent to the current model: the items a model is sent (`sent`). As in
     /// Scramjet, items another model produced lose what only that model accepts: encrypted
     /// reasoning, and `fc_` ids paired with it. The same id from another provider is another
-    /// model.
+    /// model. A next-step record's result says that the harness made its call, which models
+    /// otherwise take for their own.
     fn replay_conversation(&self) -> Vec<Value> {
+        let mut records = std::collections::HashSet::new();
         self.conversation
             .iter()
             .filter(|item| sent(item))
             .map(|item| {
                 let mut item = item.clone();
+                if item["type"] == "function_call" && item["name"] == status::RECORD {
+                    records.insert(item["call_id"].clone());
+                } else if item["type"] == "function_call_output"
+                    && records.contains(&item["call_id"])
+                    && let Some(output) = item["output"].as_str()
+                {
+                    item["output"] = json!(format!("{}\n{output}", status::RECORD_NOTE));
+                }
                 let producer = item.as_object_mut().and_then(|object| {
                     let producer = object.remove(PRODUCER);
                     object.retain(|key, _| !key.starts_with("_scramjet_"));

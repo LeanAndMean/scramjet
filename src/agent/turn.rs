@@ -1411,7 +1411,7 @@ auto-dispatches it only when its message is a slash command."
             .turn("go on", &mut ui, &AtomicBool::new(false))
             .unwrap();
 
-        // The model sees each record as a call it did not make, and its result.
+        // The model sees each record as a call it did not make, and its result, which says so.
         let input = server.join().unwrap()[0]["input"].clone();
         let input = input.as_array().unwrap();
         assert_eq!(input.len(), 5, "{input:#?}");
@@ -1425,7 +1425,16 @@ auto-dispatches it only when its message is a slash command."
                 "source":"completion"})
         );
         assert_eq!(input[1]["call_id"], input[0]["call_id"]);
-        assert_eq!(input[1]["output"].as_str(), Some(shown.as_str()));
+        let sent = format!("{}\n{shown}", status::RECORD_NOTE);
+        assert_eq!(input[1]["output"].as_str(), Some(sent.as_str()));
+        assert_eq!(
+            input[3]["output"].as_str(),
+            Some(format!("{}\n{dismissed}", status::RECORD_NOTE).as_str())
+        );
+        let saved = agent.conversation().iter().find(|item| {
+            item["call_id"] == input[1]["call_id"] && item["type"] == "function_call_output"
+        });
+        assert_eq!(saved.unwrap()["output"].as_str(), Some(shown.as_str()));
         assert_ne!(input[2]["call_id"], input[0]["call_id"]);
         assert_eq!(
             serde_json::from_str::<Value>(input[2]["arguments"].as_str().unwrap()).unwrap()["outcome"],

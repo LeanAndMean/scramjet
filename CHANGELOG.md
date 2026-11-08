@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.108.2 — Models no longer claim the next-step record
+
+### Fixed
+
+- The record of a next step chosen (or dismissed) now tells the model that the harness added it, so models stop taking it for a call they made by mistake. The session and the screen keep Scramjet's record as before.
+
 ## 0.108.1 — No status line left after SIGTERM
 
 ### Fixed
