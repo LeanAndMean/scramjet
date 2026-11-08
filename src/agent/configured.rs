@@ -79,24 +79,34 @@ async fn run(command: &str) -> Result<String, String> {
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
     crate::os::own_group_async(&mut shell);
-    let child = shell
+    let mut child = shell
         .spawn()
         .map_err(|error| format!("could not start: {error}"))?;
-    // Ended with all it started when the request is cancelled or the limit passes.
+    // Ended with all it started when the request is cancelled or the limit passes. Declared after
+    // `child` so it drops first: Windows finds the tree only while the shell is alive.
     let mut group = Group(child.id());
-    let output = tokio::time::timeout(LIMIT, child.wait_with_output()).await;
-    let output = match output {
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let mut printed = Vec::new();
+    let finished = tokio::time::timeout(LIMIT, async {
+        let (read, status) = tokio::join!(
+            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut printed),
+            child.wait()
+        );
+        read.and(status)
+    })
+    .await;
+    let status = match finished {
         Err(_) => return Err(format!("did not finish within {} seconds", LIMIT.as_secs())),
-        Ok(output) => output.map_err(|error| format!("failed: {error}"))?,
+        Ok(status) => status.map_err(|error| format!("failed: {error}"))?,
     };
     group.0 = None;
-    if !output.status.success() {
-        return Err(match output.status.code() {
+    if !status.success() {
+        return Err(match status.code() {
             Some(code) => format!("exited with {code}"),
             None => "was killed".to_owned(),
         });
     }
-    let printed = String::from_utf8(output.stdout).map_err(|_| "printed no text".to_owned())?;
+    let printed = String::from_utf8(printed).map_err(|_| "printed no text".to_owned())?;
     match printed.trim() {
         "" => Err("printed nothing".to_owned()),
         printed => Ok(printed.to_owned()),
@@ -203,6 +213,42 @@ mod tests {
             failed("printf '\\377'"),
             "apiKey: its command `printf '\\377'` printed no text"
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_cancelled_command_ends_with_what_it_started() {
+        let path = std::env::temp_dir().join(format!("scramjet-cancel-{}", std::process::id()));
+        let scratch = crate::agent::tests::ScratchDir::new(path);
+        let pid = scratch.0.join("pid");
+        let command = format!("sleep 60 & echo $! > '{}'; wait", pid.display());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let running = run(&command);
+            tokio::pin!(running);
+            for _ in 0..200 {
+                if std::fs::read_to_string(&pid).is_ok_and(|p| p.ends_with('\n')) {
+                    break;
+                }
+                let _ = tokio::time::timeout(Duration::from_millis(10), &mut running).await;
+            }
+        });
+        let pid: i32 = std::fs::read_to_string(&pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = (0..200).any(|_| {
+            let alive =
+                rustix::process::test_kill_process(rustix::process::Pid::from_raw(pid).unwrap())
+                    .is_ok();
+            std::thread::sleep(Duration::from_millis(10));
+            !alive
+        });
+        assert!(gone, "the command's `sleep` still runs");
     }
 
     #[test]

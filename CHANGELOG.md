@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.103.1 — A key command's children end with it on Windows
+
+### Fixed
+
+- On Windows, a `models.json` key command that is cancelled or runs past 10 s now ends with the programs it started; before, only its shell was stopped.
+
 ## 0.103.0 — Keys printed by a command
 
 ### Added
