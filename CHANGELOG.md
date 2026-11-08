@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.1 — Saved keys' refusals say what helps
+
+### Fixed
+
+- A saved key refused for a model whose server comes from a later file's entry of the same provider no longer says that `/login` again would help: `/login` saves a key only for the servers of the first entry naming the provider (the user's own `models.json` comes first), and the refusal now says so. The servers an entry's `modelOverrides` give are among those a key is saved for.
+
 ## 0.98.0 — Credentials tied to their servers
 
 ### Changed

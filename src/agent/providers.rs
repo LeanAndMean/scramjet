@@ -776,17 +776,24 @@ impl Reading {
         let mut headers = Vec::new();
         // As Scramjet's, a key `/login` saved is sent in place of the entry's, but only to the
         // servers it was saved for: a package's entry of the same name may name another.
+        let again = match (self.origins.get(name)).is_some_and(|named| named.contains(&origin)) {
+            true => format!("/login again to send it to {origin}"),
+            false => format!(
+                "/login saves it only for the servers the first entry naming {name} gives, \
+                 and {origin} is not one"
+            ),
+        };
         let key = match super::login::key(&self.saved, name) {
             Some((_, origins)) if origins.is_empty() => {
                 return Err(format!(
                     "{subject}: the API key /login saved for {name} names no server, as keys \
-                     saved before 0.98.0 do; /login again to save it for {origin}"
+                     saved before 0.98.0 do; {again}"
                 ));
             }
             Some((_, origins)) if !origins.contains(&origin.as_str()) => {
                 return Err(format!(
                     "{subject}: the API key /login saved for {name} is for {}, not {origin}; \
-                     /login again to send it there",
+                     {again}",
                     origins.join(", ")
                 ));
             }
@@ -1018,9 +1025,12 @@ pub(super) fn private_to(origin: &str) -> bool {
     base_url(origin).is_ok_and(|url| url.private())
 }
 
-/// The servers a provider's `entry` sends requests to: its `baseUrl` and its models', each once.
+/// The servers a provider's `entry` sends requests to: its `baseUrl` and its models' and
+/// `modelOverrides`', each once.
 fn origins(entry: &Value) -> Vec<String> {
     let models = entry["models"].as_array().into_iter().flatten();
+    let overrides = entry["modelOverrides"].as_object().into_iter().flatten();
+    let models = models.chain(overrides.map(|(_, model)| model));
     let urls = std::iter::once(&entry["baseUrl"]).chain(models.map(|model| &model["baseUrl"]));
     let mut origins: Vec<String> = (urls.filter_map(Value::as_str))
         .filter_map(|url| base_url(url).ok())
@@ -1722,13 +1732,39 @@ mod tests {
             [
                 "models: provider anthropic: model m-anthropic-messages: the API key /login saved \
                  for anthropic names no server, as keys saved before 0.98.0 do; /login again to \
-                 save it for http://127.0.0.1:9",
+                 send it to http://127.0.0.1:9",
                 "models: provider openrouter: model elsewhere: the API key /login saved for \
                  openrouter is for http://127.0.0.1:9, not http://127.0.0.1:10; /login again to \
-                 send it there"
+                 send it to http://127.0.0.1:10"
             ]
         );
         assert_eq!(problems.len(), 2);
+        // A later file's entry of the same name cannot take the key elsewhere, and /login
+        // would not change that; an entry's modelOverrides name its servers too.
+        let (first, later) = (scratch.0.join("first.json"), scratch.0.join("later.json"));
+        std::fs::write(&first, document.to_string()).unwrap();
+        let other = json!({"providers": {"openrouter": {"baseUrl": "http://127.0.0.1:11",
+            "api": "openai-completions", "models": [{"id": "other"}]}}});
+        std::fs::write(&later, other.to_string()).unwrap();
+        let providers = Providers::read(vec![first, later], Some(logins.clone()));
+        assert!(providers.find("openrouter/m-openai-completions").is_some());
+        assert!(providers.find("openrouter/other").is_none());
+        assert_eq!(providers.origins("openrouter"), ["http://127.0.0.1:9"]);
+        assert!(
+            (providers.problems().iter()).any(|problem| problem.ends_with(
+                "model other: the API key /login saved for openrouter is for http://127.0.0.1:9, \
+                 not http://127.0.0.1:11; /login saves it only for the servers the first entry \
+                 naming openrouter gives, and http://127.0.0.1:11 is not one"
+            )),
+            "{:?}",
+            providers.problems()
+        );
+        let overridden = json!({"baseUrl": "https://a.example",
+            "modelOverrides": {"m": {"baseUrl": "https://b.example:8443/v1"}}});
+        assert_eq!(
+            origins(&overridden),
+            ["https://a.example:443", "https://b.example:8443"]
+        );
     }
 
     #[test]
