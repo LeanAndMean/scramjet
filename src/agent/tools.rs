@@ -31,7 +31,6 @@ const CAPTURE_BYTES: usize = 4 << 20;
 const OUTPUT_UPDATE: Duration = Duration::from_millis(100);
 /// How much of the end of a running command's output is passed on.
 const OUTPUT_TAIL_BYTES: usize = 8 << 10;
-const DEFAULT_TIMEOUT: u64 = 120;
 /// Pi's default number of entries `ls` lists, of matches `grep` returns and of paths `find`
 /// returns.
 const LS_LIMIT: usize = 500;
@@ -39,7 +38,6 @@ const GREP_LIMIT: usize = 100;
 const FIND_LIMIT: usize = 1000;
 /// Pi cuts a longer `grep` line to this many characters.
 const GREP_LINE_CHARS: usize = 500;
-const MAX_TIMEOUT: u64 = 3600;
 /// Unchanged lines shown around each change in an edit diff, as in Scramjet.
 const DIFF_CONTEXT: usize = 4;
 
@@ -136,7 +134,7 @@ fn definition(name: &str, sandboxed: bool) -> Value {
          },
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"Bash command to execute"},
-            "timeout":{"type":"integer","description":"Seconds before the command is killed (default 120)"}},
+            "timeout":{"type":"integer","description":"Seconds before the command is killed (none by default)"}},
           "required":["command"]}}),
         "grep" => json!({"type":"function","name":"grep","strict":false,
         "description":format!("Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to {GREP_LIMIT} matches or {}KB (whichever is hit first). Long lines are truncated to {GREP_LINE_CHARS} chars.", MAX_BYTES / 1024),
@@ -343,7 +341,7 @@ impl<'a> Call<'a> {
             }
             "bash" => {
                 let process = sandbox::sandboxed(root, self.str("command")?, hidden, sandbox)?;
-                let timeout = Some(timeout(self));
+                let timeout = timeout(self);
                 Ok(
                     run_process(process, sandbox::PROGRAM, timeout, cancel, progress)?
                         .tool_output(),
@@ -372,7 +370,7 @@ impl<'a> Call<'a> {
                     root,
                     self.str("command")?,
                     hidden,
-                    Some(timeout(self)),
+                    timeout(self),
                     cancel,
                     &mut |_| {},
                 )?;
@@ -950,13 +948,12 @@ pub fn sequence_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, 
     ops.extend(old[old.len() - suffix..].iter().map(|line| (' ', *line)));
 }
 
-fn timeout(call: &Call) -> Duration {
-    Duration::from_secs(
-        call.arguments["timeout"]
-            .as_u64()
-            .unwrap_or(DEFAULT_TIMEOUT)
-            .clamp(1, MAX_TIMEOUT),
-    )
+/// The call's `timeout`, if positive; none by default, as Scramjet's bash.
+fn timeout(call: &Call) -> Option<Duration> {
+    call.arguments["timeout"]
+        .as_f64()
+        .filter(|&seconds| seconds > 0.0)
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
 }
 
 fn bash(
@@ -967,7 +964,7 @@ fn bash(
     progress: &mut dyn FnMut(&str),
 ) -> Result<Output, String> {
     let command = call.str("command")?;
-    let timeout = Some(timeout(call));
+    let timeout = timeout(call);
     let ran = match hidden {
         None => run_command(root, command, timeout, cancel, progress)?,
         Some(hidden) => {
@@ -1884,6 +1881,19 @@ inline image size limit.]",
         assert_eq!(bash("false"), ("Command exited with code 1".into(), true));
         let (timed, failed) = bash("echo started; sleep 30");
         assert!(timed.starts_with("started\n\nCommand timed out after ") && failed);
+        let limit = |arguments: Value| timeout(&call("bash", arguments));
+        assert_eq!(limit(json!({"command":"x"})), None);
+        assert_eq!(limit(json!({"timeout":0})), None);
+        assert_eq!(limit(json!({"timeout":"60"})), None);
+        assert_eq!(
+            limit(json!({"timeout":600})),
+            Some(Duration::from_secs(600))
+        );
+        assert_eq!(
+            limit(json!({"timeout":1.5})),
+            Some(Duration::from_millis(1500))
+        );
+        assert_eq!(limit(json!({"timeout":1e300})), None);
         let mut shown = Vec::new();
         call(
             "bash",

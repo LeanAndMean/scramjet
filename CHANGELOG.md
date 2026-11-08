@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.96.0 — Commands without a time limit
+
+### Changed
+
+- A bash call runs until it ends, Escape stops it or the model's own `timeout` passes, as in Scramjet; it is no longer killed after 120 seconds by default, which cut long builds and test runs short.
+
 ## 0.95.9 — Times of calls run together
 
 ### Fixed
