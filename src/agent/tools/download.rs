@@ -67,7 +67,8 @@ fn asset(binary: &str, version: &str, os: &str, arch: &str) -> Option<String> {
     })
 }
 
-fn offline() -> bool {
+/// `SCRAMJET_OFFLINE` (or `PI_OFFLINE`): no downloads or clones, as in Scramjet.
+pub fn offline() -> bool {
     let value = std::env::var("SCRAMJET_OFFLINE")
         .ok()
         .filter(|value| !value.is_empty())

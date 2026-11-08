@@ -818,6 +818,35 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert!(ok);
     assert_eq!(out, format!("Cloned {source} into {shown_clone}\n"));
 
+    // A session's start clones it too, as Scramjet's does, unless SCRAMJET_OFFLINE is set.
+    let start = |offline: &str| {
+        let output = Command::new(binary())
+            .args(["-p", "--no-session", "--model", "nowhere/none", "hi"])
+            .current_dir(&project)
+            .env("HOME", &scratch.0)
+            .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+            .env("XDG_DATA_HOME", scratch.0.join("data"))
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("SCRAMJET_OFFLINE", offline)
+            .env_remove("PI_OFFLINE")
+            .env_remove("SCRAMJET_CACHE")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8(output.stderr).unwrap()
+    };
+    std::fs::remove_dir_all(&clone).unwrap();
+    let err = start("1");
+    assert!(!err.contains("Cloning"), "{err}");
+    assert!(!clone.exists());
+    let err = start("");
+    assert!(
+        err.starts_with(&format!("Cloning {source} into {shown_clone}…\n")),
+        "{err}"
+    );
+    assert!(!err.contains("not cloned"), "{err}");
+    assert!(clone.join(".git").exists());
+
     let (ok, out, err) = run(&["remove", &source]);
     assert!(ok, "{err}");
     assert_eq!(

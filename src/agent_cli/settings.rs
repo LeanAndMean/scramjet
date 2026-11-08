@@ -9,8 +9,8 @@ use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
-    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, SandboxMode, Set, sets_in,
-    shortened, state_directory, unavailable, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, McpServer, McpTransport, Origin, SandboxMode, Set, offline,
+    sets_in, shortened, state_directory, unavailable, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -328,6 +328,8 @@ pub(super) struct Settings {
     pub(super) packages: Vec<Source>,
     /// Where packages are cloned (`packages::clones`); `None`: nowhere.
     clones: Option<PathBuf>,
+    /// Whether reading the file clones the packages missing, as a session's start does.
+    cloning: bool,
     /// `skills`: skill files and directories besides those found by default, as `commandSets`'.
     pub(super) skills: Vec<PathBuf>,
     /// `themes`: theme files and directories besides those found by default, as `skills`.
@@ -345,31 +347,45 @@ pub(super) struct Settings {
 
 impl Settings {
     pub(super) fn load() -> Self {
-        let path = scramjet_rs::os::base_directory("XDG_CONFIG_HOME", ".config")
-            .map(|config| config.join("scramjet-rs").join("settings.json"));
-        let mut settings = Self::read_with(path, packages::clones());
-        settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
-        settings
+        Self::loaded(false)
     }
 
     #[cfg(test)]
     fn read(path: Option<PathBuf>) -> Self {
-        Self::read_with(path, None)
+        Self::read_with(path, None, false)
     }
 
-    /// The settings in `path`, with packages cloned under `clones`.
-    fn read_with(path: Option<PathBuf>, clones: Option<PathBuf>) -> Self {
+    /// The settings as `load` reads them, cloning first the packages not cloned yet, as
+    /// Scramjet's start does, unless `SCRAMJET_OFFLINE` is set. Git has the terminal, so this
+    /// runs before the full screen takes it, and `/reload` only warns of a missing clone.
+    pub(super) fn load_cloning() -> Self {
+        Self::loaded(!offline())
+    }
+
+    fn loaded(cloning: bool) -> Self {
+        let path = scramjet_rs::os::base_directory("XDG_CONFIG_HOME", ".config")
+            .map(|config| config.join("scramjet-rs").join("settings.json"));
+        let mut settings = Self::read_with(path, packages::clones(), cloning);
+        settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
+        settings
+    }
+
+    /// The settings in `path`, with packages cloned under `clones`, those missing cloned
+    /// there first when `cloning`.
+    fn read_with(path: Option<PathBuf>, clones: Option<PathBuf>, cloning: bool) -> Self {
         let mut settings = Self::defaults(path);
         settings.clones = clones;
         let Some(path) = &settings.path else {
             return settings;
         };
+        settings.cloning = cloning;
         match read_object(path) {
             Ok(object) => settings.apply(&object),
             Err(error) => settings
                 .warnings
                 .push(format!("{error}; using the defaults")),
         }
+        settings.cloning = false;
         settings
     }
 
@@ -418,6 +434,7 @@ impl Settings {
             command_sets: Vec::new(),
             packages: Vec::new(),
             clones: None,
+            cloning: false,
             skills: Vec::new(),
             themes: Vec::new(),
             enabled_models: Vec::new(),
@@ -724,12 +741,18 @@ impl Settings {
                 continue;
             };
             let directory = source.clone_directory(root);
+            let mut failed = None;
+            if self.cloning && !directory.exists() {
+                eprintln!("Cloning {} into {}…", source.written, shown(&directory));
+                failed = packages::clone(source, &directory, root).err();
+            }
             let sets = sets_in(&directory);
             match directory.is_dir() {
                 false => self.warnings.push(format!(
-                    "{}: not cloned into {}; `scramjet-rs update` clones it",
+                    "{}: not cloned into {}{}; `scramjet-rs update` clones it",
                     source.written,
-                    shown(&directory)
+                    shown(&directory),
+                    failed.map(|why| format!(" ({why})")).unwrap_or_default()
                 )),
                 true if sets.is_empty() => self.warnings.push(format!(
                     "{}: {} holds no command set",

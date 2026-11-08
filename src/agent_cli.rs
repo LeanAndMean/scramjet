@@ -135,7 +135,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         eprintln!("Aborted.");
         return Ok(());
     };
-    let mut settings = Settings::load();
+    let mut settings = Settings::load_cloning();
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let theme_options = theme::ThemeOptions {
         paths: (options.themes.iter())

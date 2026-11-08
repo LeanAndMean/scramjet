@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.93.0 — Missing packages cloned at start
+
+### Changed
+
+- A session's start clones the git packages in the settings' `packages` that are not cloned yet, as Scramjet's start does, so that settings copied to another machine bring their command sets; it said to run `scramjet-rs update` before. `SCRAMJET_OFFLINE` (or `PI_OFFLINE`) keeps it from cloning, and `/reload` still only warns.
+
 ## 0.92.1 — Selected line breaks and steady columns
 
 ### Fixed

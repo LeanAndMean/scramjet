@@ -19,7 +19,7 @@ use std::{
 mod download;
 mod matching;
 
-pub use download::{download_missing, unavailable};
+pub use download::{download_missing, offline, unavailable};
 
 pub(super) const MAX_LINES: usize = 2000;
 pub(super) const MAX_BYTES: usize = 50 * 1024;
