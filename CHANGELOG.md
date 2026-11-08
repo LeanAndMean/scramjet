@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.120.0 — Retries spread out
+
+### Changed
+
+- A failed request retried without a Retry-After from the provider now waits its doubling backoff give or take a tenth (as Codex does), so that subagents failed together are not all sent again at the same moment. A provider's Retry-After is still waited exactly.
+
 ## 0.119.0 — Other scramjet-rs processes wait out a provider's Retry-After too
 
 ### Changed

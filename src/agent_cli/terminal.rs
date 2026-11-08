@@ -996,11 +996,15 @@ impl AgentUi for Terminal {
     }
     fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration) {
         self.clear();
+        // The backoff varies by a tenth: 2.1 seconds reads as the 2 it doubles from.
+        let seconds = match delay.as_secs_f64() {
+            short if short < 1.0 => short.ceil(),
+            long => long.round(),
+        };
         let text = format!(
-            "{}\n{} {}s (Ctrl-C to cancel)",
+            "{}\n{} {seconds}s (Ctrl-C to cancel)",
             visible(error),
             retrying(attempt, retries),
-            delay.as_secs_f64().ceil()
         );
         let text = self.styled(style::WARNING, &self.wrapped(&text));
         // As every block, it ends with a blank line before what follows.

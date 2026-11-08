@@ -481,7 +481,7 @@ pub(super) fn send(
                     .collect(),
             });
         }
-        let backoff = retries.delay.saturating_mul(2u32.pow(attempt.min(5)));
+        let backoff = jittered(retries.delay.saturating_mul(2u32.pow(attempt.min(5))));
         let delay = backoff.min(max_wait).max(failure.wait.unwrap_or_default());
         let too_long = delay > max_wait || failure.wait == Some(Duration::MAX);
         // A context overflow is not retried as is: only compaction can let the request through.
@@ -508,6 +508,16 @@ pub(super) fn send(
         if sleep(executor, delay, cancel) {
             return Err(AgentError::Cancelled);
         }
+    }
+}
+
+/// `backoff` made up to a tenth shorter or longer, as Codex does, so that requests failed
+/// together (a call's children) are not all sent again at the same moment.
+fn jittered(backoff: Duration) -> Duration {
+    let mut bytes = [0; 2];
+    match getrandom::getrandom(&mut bytes) {
+        Ok(()) => backoff.mul_f64(0.9 + 0.2 * f64::from(u16::from_le_bytes(bytes)) / 65535.0),
+        Err(_) => backoff,
     }
 }
 
@@ -707,9 +717,12 @@ response is incomplete; retry the request."});
         assert_eq!(bodies[0], bodies[1]);
         assert_eq!(ui.retries.len(), 1);
         assert!(ui.retries[0].0.contains("retry the request"));
-        assert_eq!(
-            (ui.retries[0].1, ui.retries[0].2),
-            (1, Retries::default().delay)
+        let (attempt, wait) = (ui.retries[0].1, ui.retries[0].2);
+        let base = Retries::default().delay;
+        assert_eq!(attempt, 1);
+        assert!(
+            base.mul_f64(0.9) <= wait && wait <= base.mul_f64(1.1),
+            "{wait:?}"
         );
         assert_eq!(ui.replies, ["done"]);
         assert!(ui.calls.is_empty());
@@ -801,6 +814,32 @@ response is incomplete; retry the request."});
         assert_eq!(ui.retries.len(), 1);
         assert_eq!((ui.retries[0].1, ui.retries[0].2), (1, Duration::ZERO));
         assert_eq!(server.join().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn retries_without_a_providers_wait_back_off_by_a_spread_amount() {
+        let second = Duration::from_secs(1);
+        let waits: Vec<_> = (0..50).map(|_| jittered(second)).collect();
+        assert!(waits.iter().all(|wait| {
+            (Duration::from_millis(900)..=Duration::from_millis(1100)).contains(wait)
+        }));
+        assert!(waits.iter().any(|wait| *wait != waits[0]));
+        assert_eq!(jittered(Duration::ZERO), Duration::ZERO);
+
+        let busy = b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\n\r\nbusy".to_vec();
+        let done = stream(&fixture::text_events("done", fixture::known_usage()));
+        let (endpoint, server) = serve(vec![busy, done]);
+        let (mut agent, _scratch) = agent(endpoint, "jittered");
+        agent.set_retries(Retries {
+            attempts: 1,
+            delay: Duration::from_millis(100),
+            max_wait: None,
+        });
+        let mut ui = Recorder::default();
+        agent.turn("hi", &mut ui, &AtomicBool::new(false)).unwrap();
+        let wait = ui.retries[0].2;
+        assert!((Duration::from_millis(90)..=Duration::from_millis(110)).contains(&wait));
+        assert_eq!(server.join().unwrap().len(), 2);
     }
 
     #[test]
@@ -1570,7 +1609,8 @@ response is incomplete; retry the request."});
         assert_eq!(reply.items[0]["content"][0]["text"], "Renewed.");
         assert_eq!(events.len(), 4, "{events:?}");
         assert!(
-            events[1].starts_with("retry 1 in 2s: cannot connect to 127.0.0.1:1 ")
+            events[1].starts_with("retry 1 in ")
+                && events[1].contains("s: cannot connect to 127.0.0.1:1 ")
                 && events[1].ends_with(" (renewing the ChatGPT token; /login if it goes on)"),
             "{events:?}"
         );
