@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.98.6 — Invisible characters shown
+
+### Fixed
+
+- Replies, tool output, approvals and lists now show Unicode's invisible characters as escapes (`\u{e0041}`): the tag characters, which can spell out text the model reads but a terminal shows as nothing, soft hyphens, line and paragraph separators, and the rest of the default-ignorable ones. Tool output used to show bidirectional overrides too, which could reorder what a line looked like. Emoji variation selectors (`⚠️`) still show as emoji.
+
 ## 0.98.5 — More credential stores hidden
 
 ### Fixed

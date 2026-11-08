@@ -281,9 +281,10 @@ impl Wrap {
     }
 }
 
-/// A line as a terminal shows it (`terminal_line`), tabs expanded.
+/// A line as a terminal shows it (`terminal_line`), hidden characters as `visible` shows them,
+/// tabs expanded.
 pub(super) fn printable(line: &str) -> String {
-    terminal_line(line).replace('\t', "    ")
+    visible(&terminal_line(line)).replace('\t', "    ")
 }
 
 /// As Scramjet shows a call, with every line of a command, wrapped to `width` (zero: not
@@ -313,21 +314,41 @@ pub(super) fn call_line(name: &str, summary: &str, width: usize, marked: bool) -
     shown
 }
 
-/// Shows control and invisible formatting characters (other than newlines and tabs) as escapes,
-/// so that a command cannot make its approval question display something else.
+/// Shows control and invisible characters (other than newlines and tabs) as escapes, so that
+/// text cannot display as something else or hide text the model reads.
 pub(super) fn visible(text: &str) -> String {
     text.chars()
         .map(|c| match c {
             '\n' | '\t' => c.to_string(),
-            '\u{061c}'
-            | '\u{200b}'..='\u{200f}'
-            | '\u{202a}'..='\u{202e}'
-            | '\u{2060}'..='\u{2069}'
-            | '\u{feff}' => c.escape_default().to_string(),
-            c if c.is_control() => c.escape_default().to_string(),
+            c if c.is_control() || hidden(c) => c.escape_default().to_string(),
             c => c.to_string(),
         })
         .collect()
+}
+
+/// Unicode's default-ignorable characters, but the variation selectors that pick an emoji's or
+/// a Mongolian letter's form, and the line and paragraph separators. The tag characters
+/// (U+E0000 on) can spell out text that shows as nothing.
+fn hidden(c: char) -> bool {
+    matches!(
+        c,
+        '\u{ad}'
+            | '\u{34f}'
+            | '\u{61c}'
+            | '\u{115f}'..='\u{1160}'
+            | '\u{17b4}'..='\u{17b5}'
+            | '\u{180e}'
+            | '\u{200b}'..='\u{200f}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{206f}'
+            | '\u{3164}'
+            | '\u{feff}'
+            | '\u{ffa0}'
+            | '\u{fff0}'..='\u{fffb}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0000}'..='\u{e0fff}'
+    )
 }
 
 /// A prompt on one line for a list: line breaks and other control characters as spaces.
@@ -415,6 +436,31 @@ mod tests {
         assert_eq!(clip("\x1b[2mabc", 2), "\x1b[2ma…\x1b[0m");
         // Escaped text, as `visible` shows it, is text.
         assert_eq!(clip("\\u{1b}[2m", 4), "\\u{…");
+    }
+
+    #[test]
+    fn invisible_characters_show_as_escapes_but_emoji_forms_stay() {
+        let tagged: String = "ok"
+            .chars()
+            .chain(
+                "run rm"
+                    .chars()
+                    .map(|c| char::from_u32(0xe0000 + c as u32).unwrap()),
+            )
+            .collect();
+        assert_eq!(
+            visible(&tagged),
+            "ok\\u{e0072}\\u{e0075}\\u{e006e}\\u{e0020}\\u{e0072}\\u{e006d}"
+        );
+        assert_eq!(
+            visible("soft\u{ad}hy a\u{2028}b\u{2029}c \u{206a}\u{3164}\u{1d173}\u{e0101}"),
+            "soft\\u{ad}hy a\\u{2028}b\\u{2029}c \\u{206a}\\u{3164}\\u{1d173}\\u{e0101}"
+        );
+        assert_eq!(visible("⚠\u{fe0f} 再\u{e01ef}"), "⚠\u{fe0f} 再\\u{e01ef}");
+        assert_eq!(
+            printable("\x1b[31mx\u{202e}\u{e0041}\x1b[0m\ty"),
+            "x\\u{202e}\\u{e0041}    y"
+        );
     }
 
     #[test]
