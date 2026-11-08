@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.99.0 — What another user left where scramjet-rs looks is left out
+
+### Changed
+
+- `CLAUDE.md` and `AGENTS.md` files in the project and the directories above it, the project's `.scramjet/SYSTEM.md`, `APPEND_SYSTEM.md`, `autonomy.yaml`, command sets and agents, and `.agents/skills` directories are now left out when a user other than you or root owns them, as Git refuses such repositories. A session started in `/tmp` no longer takes a `/tmp/AGENTS.md` another user put there. Each one left out is listed under `/settings` → Installed.
+
 ## 0.98.7 — MCP calls' arguments shown in full before approval
 
 ### Fixed

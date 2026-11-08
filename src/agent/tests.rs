@@ -2757,3 +2757,119 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     session::Session::delete_with(&path, "scramjet-no-such-trash").unwrap();
     assert_eq!(listed(), 0);
 }
+
+#[cfg(unix)]
+#[test]
+fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
+    let scratch =
+        ScratchDir::new(std::env::temp_dir().join(format!("sjrs-stranger-{}", std::process::id())));
+    let project = scratch.0.join("shared/project");
+    let file = |at: &str, text: &str| {
+        let path = project.join(at);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    file("../AGENTS.md", "Planted above.");
+    file("CLAUDE.md", "In the project.");
+    file(".scramjet/SYSTEM.md", "Planted opening.");
+    file(
+        ".scramjet/autonomy.yaml",
+        "edges:\n  demo:greet:\n    demo:greet: chain\n",
+    );
+    file(".scramjet/demo/commands/demo:greet.md", "Greet.");
+    file(
+        ".scramjet/agents/helper.md",
+        "---\nname: helper\ndescription: Helps.\n---\nHelp.",
+    );
+    file(
+        ".agents/skills/tidy/SKILL.md",
+        "---\nname: tidy\ndescription: Tidies.\n---\nTidy.",
+    );
+    let found = || {
+        let loaded = instructions::load(
+            &SystemPrompt::default(),
+            &project,
+            None,
+            &sandbox::Hidden::default(),
+        );
+        let sets = Sets::find(&[], None, &project.join(".scramjet"));
+        let commands = Commands::discover(&sets);
+        let edges = autonomy::Edges::load(None, &project, &commands);
+        let sources = subagent::Sources {
+            user: None,
+            sets: &sets,
+        };
+        let agents = subagent::discover(&sources, &project, subagent::Scope::Both);
+        let skills = Skills::discover(&[], &SkillOptions::default(), &project);
+        let mut said: Vec<String> = (loaded.problems.iter())
+            .chain(sets.warnings())
+            .chain(&edges.diagnostics)
+            .chain(&agents.diagnostics)
+            .chain(skills.warnings())
+            .map(|problem| problem.text.clone())
+            .collect();
+        said.sort();
+        let context: Vec<String> = (loaded.context.iter())
+            .filter(|(path, _)| path.starts_with(&scratch.0))
+            .map(|(_, text)| text.clone())
+            .collect();
+        let taken = (
+            context,
+            loaded.opening,
+            edges.resolve("demo:greet", "demo:greet"),
+            (commands.list().iter())
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>(),
+            (agents.agents.iter())
+                .map(|a| a.name.clone())
+                .collect::<Vec<_>>(),
+            (skills.list().iter())
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>(),
+        );
+        (taken, said)
+    };
+    let (taken, said) = found();
+    assert!(said.is_empty(), "{said:?}");
+    assert_eq!(taken.0, ["Planted above.", "In the project."]);
+    assert_eq!(taken.1.as_deref(), Some("Planted opening."));
+    assert_eq!(taken.2, Some(autonomy::Edge::Chain));
+    assert_eq!(
+        (taken.3, taken.4, taken.5),
+        (
+            vec!["demo:greet".to_owned()],
+            vec!["helper".to_owned()],
+            vec!["tidy".to_owned()]
+        )
+    );
+
+    let me = rustix::process::geteuid().as_raw();
+    crate::os::PRETEND_USER.set(Some(me + 1));
+    let (taken, said) = found();
+    crate::os::PRETEND_USER.set(None);
+    assert_eq!(taken.0, Vec::<String>::new());
+    assert_eq!((&taken.1, taken.2), (&None, None));
+    assert!(
+        taken.3.is_empty() && taken.4.is_empty() && taken.5.is_empty(),
+        "{taken:?}"
+    );
+    let left_out = |at: &str| {
+        let path = std::path::absolute(project.join(at)).unwrap();
+        let path = path.to_string_lossy().replace("project/../", "");
+        format!("{path}: left out, as another user (uid {me}) owns it")
+    };
+    let mut expected: Vec<String> = [
+        "../AGENTS.md",
+        "CLAUDE.md",
+        ".scramjet/SYSTEM.md",
+        ".scramjet/autonomy.yaml",
+        ".scramjet/demo",
+        ".scramjet/agents",
+        ".agents/skills",
+    ]
+    .into_iter()
+    .map(left_out)
+    .collect();
+    expected.sort();
+    assert_eq!(said, expected);
+}

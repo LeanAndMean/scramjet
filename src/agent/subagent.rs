@@ -149,7 +149,14 @@ pub(super) struct Discovery {
 /// names belong to the set.
 pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery {
     let mut found = Discovery::default();
-    let project = project_directory(cwd);
+    let mut project = project_directory(cwd);
+    if let Some(directory) = &project
+        && let Some(owner) = crate::os::stranger(directory)
+    {
+        let text = crate::os::left_out(directory, owner);
+        found.diagnostics.push(Problem::in_file(text, directory));
+        project = None;
+    }
     let mut agents: Vec<Definition> = Vec::new();
     if scope != Scope::Project
         && let Some(user) = sources.user

@@ -377,23 +377,32 @@ pub(super) fn load(
     if !prompt.no_context_files {
         loaded.context = context_files(root, agent_directory, hidden, &mut loaded.problems);
     }
-    let found = |name: &str| {
+    let found = |name: &str, problems: &mut Vec<Problem>| {
         let directories = [
             Some(root.join(".scramjet")),
             agent_directory.map(Path::to_path_buf),
         ];
-        (directories.into_iter().flatten())
+        let path = (directories.into_iter().flatten())
             .map(|directory| directory.join(name))
-            .find(|path| path.exists())
-            .map(|path| path.to_string_lossy().into_owned())
+            .filter(|path| path.exists())
+            .find(|path| match crate::os::stranger(path) {
+                Some(owner) => {
+                    problems.push(Problem::in_file(crate::os::left_out(path, owner), path));
+                    false
+                }
+                None => true,
+            })?;
+        Some(path.to_string_lossy().into_owned())
     };
-    let opening = (prompt.system.clone()).or_else(|| found("SYSTEM.md"));
+    let opening = (prompt.system.clone()).or_else(|| found("SYSTEM.md", &mut loaded.problems));
     if let Some(source) = opening {
         loaded.opening =
             (loaded.read(&source, true, hidden)).filter(|text| !text.trim().is_empty());
     }
     let appended = match prompt.append.is_empty() {
-        true => found("APPEND_SYSTEM.md").into_iter().collect(),
+        true => (found("APPEND_SYSTEM.md", &mut loaded.problems))
+            .into_iter()
+            .collect(),
         false => prompt.append.clone(),
     };
     for source in appended {
@@ -442,6 +451,13 @@ fn directory_context(
         let path = (names.into_iter().map(|name| directory.join(name))).find(|path| {
             std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES)
         })?;
+        if let Some(owner) = crate::os::stranger(&path) {
+            let problem = Problem::in_file(crate::os::left_out(&path, owner), &path);
+            if !problems.contains(&problem) {
+                problems.push(problem);
+            }
+            return None;
+        }
         let file = std::fs::File::open(&path).ok()?;
         let mut file = match hidden.opened(&path, Ok(file)) {
             Ok(file) => file.take(CONTEXT_FILE_BYTES),

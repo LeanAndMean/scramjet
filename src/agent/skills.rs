@@ -112,6 +112,11 @@ impl Skills {
         let mut loaded = HashSet::new();
         for (path, place) in places {
             let files = match place {
+                Place::Directory { .. } if let Some(owner) = crate::os::stranger(path) => {
+                    let text = crate::os::left_out(path, owner);
+                    found.warnings.push(Problem::in_file(text, path));
+                    continue;
+                }
                 Place::Directory { top_files } => skill_files(path, *top_files),
                 _ if path.is_dir() => skill_files(path, true),
                 _ if path.is_file() && path.extension() == Some("md".as_ref()) => {

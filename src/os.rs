@@ -77,6 +77,42 @@ pub fn owned(metadata: &Metadata) -> bool {
     }
 }
 
+/// The owner of `path` (through links) when it is neither this user nor root, never on Windows:
+/// what another user put where this one looks, as in `/tmp`, which Git refuses too.
+pub fn stranger(path: &Path) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let owner = std::fs::metadata(path).ok()?.uid();
+        #[cfg(test)]
+        let me = PRETEND_USER
+            .get()
+            .unwrap_or_else(|| rustix::process::geteuid().as_raw());
+        #[cfg(not(test))]
+        let me = rustix::process::geteuid().as_raw();
+        (owner != me && owner != 0).then_some(owner)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The user `stranger` takes this thread's to be, so that a test can see its files as another's.
+    pub static PRETEND_USER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// Why `path` is passed over, as another user owns it.
+pub fn left_out(path: &Path, owner: u32) -> String {
+    format!(
+        "{}: left out, as another user (uid {owner}) owns it",
+        path.display()
+    )
+}
+
 /// Whether `metadata` is of a file a program can be run from.
 pub fn executable(metadata: &Metadata) -> bool {
     #[cfg(unix)]

@@ -141,9 +141,17 @@ impl Sets {
         let roots = global.map(|global| (global, Origin::Global));
         for (root, origin) in roots.into_iter().chain([(project, Origin::Project)]) {
             for name in set_directories(root) {
-                let Ok(set) = Set::at(&root.join(name), origin) else {
+                let directory = root.join(name);
+                let Ok(set) = Set::at(&directory, origin) else {
                     continue;
                 };
+                if origin == Origin::Project
+                    && let Some(owner) = crate::os::stranger(&directory)
+                {
+                    let text = crate::os::left_out(&directory, owner);
+                    sets.warnings.push(Problem::in_file(text, &directory));
+                    continue;
+                }
                 match sets.list[..installed]
                     .iter()
                     .find(|known| known.name == set.name)

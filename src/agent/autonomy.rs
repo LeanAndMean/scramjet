@@ -95,6 +95,13 @@ impl Edges {
             };
             let ignored =
                 |message: &str| note(&format!("{message}; edge settings ignored this dispatch"));
+            if scope == "project"
+                && let Some(owner) = crate::os::stranger(path)
+            {
+                let text = crate::os::left_out(path, owner);
+                edges.diagnostics.push(Problem::in_file(text, path));
+                continue;
+            }
             match read(path, scope == "project") {
                 Ok(None) => {}
                 Ok(Some(file)) => {
@@ -201,6 +208,10 @@ impl NextSteps {
         let mut problems = Vec::new();
         let mut load = |path: Option<&Path>, in_project| {
             let path = path?;
+            if in_project && let Some(owner) = crate::os::stranger(path) {
+                problems.push(crate::os::left_out(Path::new(&shown_path(path)), owner));
+                return None;
+            }
             read(path, in_project).unwrap_or_else(|message| {
                 problems.push(format!("{}: {message}", shown_path(path)));
                 None
