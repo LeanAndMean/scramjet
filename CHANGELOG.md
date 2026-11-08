@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.105.0 — Your own shell and lines before each command
+
+### Added
+
+- The `shellPath` setting names the shell that runs the agent's and your `!` commands (subagents' and the sandbox's too), in place of bash, as in Scramjet; one that is not there fails the command saying so. `shellCommandPrefix` runs its lines before each command, for example `shopt -s expand_aliases` and your aliases.
+
 ## 0.104.1 — One `!` command at a time
 
 ### Fixed

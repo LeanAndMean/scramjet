@@ -499,6 +499,10 @@ impl Interactive {
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
         self.settings.reload();
+        scramjet_rs::agent::set_shell(
+            self.settings.shell_path.clone(),
+            self.settings.shell_command_prefix.clone(),
+        );
         self.discover_themes();
         self.use_theme();
         self.keybindings = keymap::load(self.settings.path());

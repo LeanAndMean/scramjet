@@ -340,6 +340,10 @@ pub(super) struct Settings {
     /// `sessionDir`: where sessions are saved and found, as typed: as Scramjet's, a relative one
     /// is from the current directory, which `--session-dir` replaces.
     pub(super) session_dir: Option<String>,
+    /// `shellPath`: the shell commands run with, as Scramjet's; `None`: bash.
+    pub(super) shell_path: Option<PathBuf>,
+    /// `shellCommandPrefix`: lines run before each command, as Scramjet's.
+    pub(super) shell_command_prefix: Option<String>,
     /// `enabledModels`: the patterns of the models Ctrl+P cycles through (`scope::resolve`);
     /// empty: all.
     pub(super) enabled_models: Vec<String>,
@@ -445,6 +449,8 @@ impl Settings {
             skills: Vec::new(),
             themes: Vec::new(),
             session_dir: None,
+            shell_path: None,
+            shell_command_prefix: None,
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
             disabled_mcp_servers: Vec::new(),
@@ -668,6 +674,22 @@ impl Settings {
             }
             Some(_) => {
                 (self.warnings).push(format!("{path}: sessionDir must be a directory; ignored"))
+            }
+        }
+        match object.get("shellPath") {
+            None => {}
+            Some(Value::String(shell)) if !shell.trim().is_empty() => {
+                self.shell_path = Some(self.resolve(shell))
+            }
+            Some(_) => {
+                (self.warnings).push(format!("{path}: shellPath must be a program; ignored"))
+            }
+        }
+        match object.get("shellCommandPrefix") {
+            None => {}
+            Some(Value::String(prefix)) => self.shell_command_prefix = Some(prefix.clone()),
+            Some(_) => {
+                (self.warnings).push(format!("{path}: shellCommandPrefix must be text; ignored"))
             }
         }
         match paths(object, "enabledModels") {

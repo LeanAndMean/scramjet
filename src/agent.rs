@@ -74,8 +74,8 @@ pub use subagent::agent_directory;
 pub use suggest::Suggested;
 pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, HARNESS_TOOLS, READ_MORE, download_missing, offline,
-    read_line_too_long, search_program, sequence_diff, shortened, terminal_line, unavailable,
-    write_replacing,
+    read_line_too_long, search_program, sequence_diff, set_shell, shortened, terminal_line,
+    unavailable, write_replacing,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{

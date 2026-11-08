@@ -131,6 +131,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
+    scramjet_rs::agent::set_shell(
+        settings.shell_path.clone(),
+        settings.shell_command_prefix.clone(),
+    );
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let session_dir = (options.session_dir.as_deref())
         .or(settings.session_dir.as_deref())

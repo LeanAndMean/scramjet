@@ -10,7 +10,7 @@ use std::{
     path::{Component, Path, PathBuf},
     process::{Command, ExitStatus, Stdio},
     sync::{
-        Arc, Mutex, PoisonError,
+        Arc, Mutex, PoisonError, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -1763,10 +1763,43 @@ pub(super) fn run_command(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let mut process = Command::new(crate::os::bash()?);
+    let mut process = Command::new(shell_program()?);
     bash_runs(&mut process, command);
     process.current_dir(root);
     run_process(process, "bash", timeout, cancel, progress)
+}
+
+/// The settings' `shellPath` and `shellCommandPrefix`, as Scramjet's: the shell that runs the
+/// agent's and the user's commands, and lines run before each. Process-wide, as the settings are.
+static SHELL: RwLock<(Option<PathBuf>, Option<String>)> = RwLock::new((None, None));
+
+/// Sets the shell commands run with (`None`: bash, as `os::bash` finds it) and the lines run
+/// before each command (`None` or empty: none).
+pub fn set_shell(path: Option<PathBuf>, prefix: Option<String>) {
+    let prefix = prefix.filter(|prefix| !prefix.trim().is_empty());
+    *SHELL.write().unwrap_or_else(|e| e.into_inner()) = (path, prefix);
+}
+
+/// The shell commands run with: `shellPath` if set, refused when it is not there, as Scramjet's.
+pub(super) fn shell_program() -> Result<PathBuf, String> {
+    let shell = SHELL.read().unwrap_or_else(|e| e.into_inner());
+    match &shell.0 {
+        Some(path) if path.is_file() => Ok(path.clone()),
+        Some(path) => Err(format!(
+            "the settings' shellPath {} is not a file",
+            crate::os::tilde(path)
+        )),
+        None => crate::os::bash(),
+    }
+}
+
+/// `command` after the settings' `shellCommandPrefix`, on a line of its own as in Scramjet.
+fn prefixed(command: &str) -> String {
+    let shell = SHELL.read().unwrap_or_else(|e| e.into_inner());
+    match &shell.1 {
+        Some(prefix) => format!("{prefix}\n{command}"),
+        None => command.to_owned(),
+    }
 }
 
 /// The variable that brings a command to bash, which unsets it before running it.
@@ -1781,7 +1814,7 @@ pub(super) fn bash_runs(process: &mut Command, command: &str) {
         .arg(format!(
             "eval \"unset {COMMAND_VARIABLE}; ${COMMAND_VARIABLE}\""
         ))
-        .env(COMMAND_VARIABLE, command);
+        .env(COMMAND_VARIABLE, prefixed(command));
 }
 
 /// As `run_command`, inside the read-only sandbox.

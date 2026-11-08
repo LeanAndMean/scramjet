@@ -1111,3 +1111,161 @@ and no skills or themes directory\n",
         "{err}"
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn shell_path_and_shell_command_prefix_run_the_agents_commands() {
+    let binary = &binary();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-shell-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    let (port, bodies) = serve_bash_call("greet");
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+    let marker = scratch.0.join("ran");
+    let shell = scratch.0.join("shell");
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" > '{}'\nexec bash \"$@\"\n",
+        marker.display()
+    );
+    std::fs::write(&shell, script).unwrap();
+    std::fs::set_permissions(&shell, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let run = |settings: serde_json::Value| {
+        let file = config.join("scramjet-rs/settings.json");
+        std::fs::write(file, settings.to_string()).unwrap();
+        let output = Command::new(binary)
+            .args(["--retries", "0", "--no-session", "-p", "hi"])
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{stderr}");
+        let _first = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let second = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+        let messages = second["messages"].as_array().unwrap();
+        let result = &messages.last().unwrap()["content"][0];
+        assert_eq!(result["type"], "tool_result", "{second}");
+        (result["content"].to_string(), stderr)
+    };
+    let prefix = "shopt -s expand_aliases\nalias greet='echo hello from the prefix'";
+    // In a turn nobody watches, the commands run with the credential stores hidden; without.
+    for hide in ["unattended", "never"] {
+        let _ = std::fs::remove_file(&marker);
+        let (result, stderr) = run(serde_json::json!({
+            "shellPath": shell, "shellCommandPrefix": prefix, "hideCredentials": hide,
+        }));
+        if hide == "unattended" && result.contains("bwrap") {
+            eprintln!("passed over with the stores hidden: {result}");
+            continue;
+        }
+        assert!(
+            result.contains("hello from the prefix"),
+            "{result} {stderr}"
+        );
+        let ran = std::fs::read_to_string(&marker).unwrap();
+        assert!(ran.starts_with("-c "), "{ran}");
+    }
+    // In the sandbox, whose /tmp is its own, so that the scratch shell is not there.
+    let (result, stderr) = run(serde_json::json!({
+        "shellPath": "/bin/bash", "shellCommandPrefix": prefix, "sandbox": "workspace-write",
+    }));
+    if result.contains("bwrap") || stderr.contains("bwrap") {
+        eprintln!("passed over in the sandbox: {result} {stderr}");
+    } else {
+        assert!(
+            result.contains("hello from the prefix"),
+            "{result} {stderr}"
+        );
+    }
+    // A shellPath that is not there is said in the call's result.
+    let (result, _) = run(serde_json::json!({
+        "shellPath": scratch.0.join("missing"), "hideCredentials": "never",
+    }));
+    assert!(
+        result.contains("shellPath") && result.contains("is not a file"),
+        "{result}"
+    );
+    let (result, stderr) = run(serde_json::json!({"shellPath": 7, "hideCredentials": "never"}));
+    assert!(result.contains("command not found"), "{result}");
+    assert!(
+        stderr.contains("shellPath must be a program; ignored"),
+        "{stderr}"
+    );
+}
+
+/// A Messages provider on a port of 127.0.0.1 whose replies alternate between a bash call
+/// running `command` and a short text: its port, and each request's body.
+#[cfg(unix)]
+fn serve_bash_call(command: &str) -> (u16, std::sync::mpsc::Receiver<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sent, received) = std::sync::mpsc::channel();
+    let input = serde_json::json!({"command": command}).to_string();
+    let call = vec![
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"bash","input":{}}}"#.to_owned(),
+        serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": input}}).to_string(),
+        r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ];
+    let text = [
+        r#"{"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let reply = |events: &[String]| {
+        let body: String = (events.iter())
+            .map(|event| {
+                let kind: serde_json::Value = serde_json::from_str(event).unwrap();
+                let kind = kind["type"].as_str().unwrap().to_owned();
+                format!("event: {kind}\ndata: {event}\n\n")
+            })
+            .collect();
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\
+connection: close\r\n\r\n{body}",
+            body.len()
+        )
+    };
+    let replies = [reply(&call), reply(&text)];
+    std::thread::spawn(move || {
+        for (n, socket) in listener.incoming().enumerate() {
+            let mut stream = socket.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut head, mut length) = (String::new(), 0);
+            while let Ok(read) = reader.read_line(&mut head) {
+                let line = &head[head.len() - read..];
+                if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+                if read == 0 || line == "\r\n" {
+                    break;
+                }
+            }
+            let mut body = vec![0; length];
+            std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+            stream.write_all(replies[n % 2].as_bytes()).unwrap();
+            let _ = sent.send(String::from_utf8(body).unwrap());
+        }
+    });
+    (port, received)
+}
