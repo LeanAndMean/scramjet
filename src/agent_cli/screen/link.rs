@@ -365,6 +365,7 @@ impl Handle {
                     root,
                     wake: woke,
                     threads: Vec::new(),
+                    started: 0,
                 };
                 let app = App::new(editor, hide_thinking, cancel, inputs, queue, sides);
                 let app = App {

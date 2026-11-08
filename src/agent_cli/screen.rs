@@ -224,6 +224,8 @@ struct Queue {
 
 /// A `!` command run apart from the session.
 struct Side {
+    /// Which of those typed in this screen it is.
+    serial: usize,
     command: String,
     /// Run with `!`, rather than `!!`.
     include: bool,
@@ -286,6 +288,7 @@ struct Sides {
     /// Wakes the screen when one's output grows or it ends.
     wake: PipeWriter,
     threads: Vec<JoinHandle<()>>,
+    started: usize,
 }
 
 struct App {
@@ -999,8 +1002,9 @@ impl App {
     }
 
     /// Runs `typed` if it is a `!` or `!!` command, as Scramjet does during a turn: apart from
-    /// the session, shown under the conversation until the turn ends, then added to it (`!`) or
-    /// only shown (`!!`). Returns whether it was one.
+    /// the session, shown under the conversation while it runs and at its end once it ended,
+    /// added to the session (`!`) or only shown (`!!`) when the turn ends. Returns whether it
+    /// was one.
     fn shell(&mut self, typed: &str) -> bool {
         let Some(command) = typed.strip_prefix('!') else {
             return false;
@@ -1012,6 +1016,7 @@ impl App {
         if command.is_empty() {
             return false;
         }
+        self.sides.started += 1;
         let mut queue = self.queue();
         if self.session_shell || queue.shells.iter().any(|side| side.ended.is_none()) {
             drop(queue);
@@ -1025,6 +1030,7 @@ impl App {
         }
         let cancel = Arc::new(AtomicBool::new(false));
         queue.shells.push(Side {
+            serial: self.sides.started,
             command: command.to_owned(),
             include,
             output: String::new(),

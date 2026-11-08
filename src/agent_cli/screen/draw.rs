@@ -14,11 +14,11 @@ use crate::agent_cli::terminal::{
     COMMAND_LINES, Terminal, elapsed, retrying, spinner, waiting_for,
 };
 use crate::agent_cli::text::{Wrap, clip, columns, one_line, plain, visible};
-use scramjet_rs::agent::{Purpose, StreamProgress};
+use scramjet_rs::agent::{Purpose, Shell, StreamProgress};
 use std::{
     fmt::Write as _,
     io::{self, Write},
-    sync::atomic::Ordering,
+    sync::{PoisonError, atomic::Ordering},
     time::{Duration, Instant},
 };
 
@@ -269,13 +269,10 @@ impl App {
         // Above the status line, as Scramjet shows them, each in at most about half the screen
         // (Scramjet's view scrolls instead, and its editor stays).
         let lines = (height / 2).saturating_sub(6).clamp(1, COMMAND_LINES);
-        for side in &queue.shells {
+        for side in queue.shells.iter().filter(|side| side.ended.is_none()) {
             let events = [
                 Event::CommandStarted(side.command.clone(), side.include),
-                match &side.ended {
-                    Some(shell) => Event::CommandResult(shell.shown()),
-                    None => Event::ToolOutput(side.output.clone()),
-                },
+                Event::ToolOutput(side.output.clone()),
             ];
             let content = width.saturating_sub(1).max(1);
             let mut ui = Terminal::capture_dock(content, self.hide_thinking.clone(), lines);
@@ -436,6 +433,21 @@ impl App {
     /// How the conversation looks on a screen `width` columns wide. As Scramjet's, the last
     /// column is the scrollbar's, whether it shows or not, so that the conversation does not
     /// wrap again when it grows taller than the screen.
+    /// Shows the `!` commands that ended during the turn at the conversation's end, where the
+    /// session adds them once it ends, so that they scroll and Ctrl+O expands them meanwhile.
+    fn show_ended(&mut self) {
+        let queue = self.queue.clone();
+        let queue = queue.lock().unwrap_or_else(PoisonError::into_inner);
+        let ended = (queue.shells.iter())
+            .filter(|side| side.ended.is_some() && self.conversation.is_none());
+        let serials: Vec<usize> = ended.clone().map(|side| side.serial).collect();
+        if serials != self.transcript.tailed() {
+            let shown = ended.filter_map(|side| side.ended.as_ref().map(Shell::shown));
+            let events = shown.map(Event::CommandResult).collect();
+            self.transcript.tail(serials, events);
+        }
+    }
+
     fn look(&self, width: usize) -> Look {
         Look {
             width: width.saturating_sub(1).max(1),
@@ -453,6 +465,7 @@ impl App {
     /// leaves them.
     pub(super) fn retained(&mut self) -> String {
         self.preview();
+        self.show_ended();
         let (width, height) = terminal_size();
         let (dock, _) = self.dock((width, height));
         self.transcript
@@ -466,6 +479,7 @@ impl App {
 
     pub(super) fn draw(&mut self) -> io::Result<()> {
         self.preview();
+        self.show_ended();
         let (width, height) = terminal_size();
         let mut out = String::from("\x1b[?2026h\x1b[?25l");
         // Some terminals move what they show on a resize.

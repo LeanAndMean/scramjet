@@ -47,6 +47,9 @@ pub(super) struct Transcript {
     /// Where the turn's latest reply has got to, by part and event: what the session says
     /// while it streams shows under it.
     reply: Option<(usize, usize)>,
+    /// Shown after the parts until the session adds them: the `!` commands that ended during
+    /// the turn, by their serial numbers.
+    tail: (Vec<usize>, Part),
 }
 
 #[derive(Default)]
@@ -139,8 +142,24 @@ impl Transcript {
         }
     }
 
+    /// The serial numbers of the `!` commands `tail` shows.
+    pub(super) fn tailed(&self) -> &[usize] {
+        &self.tail.0
+    }
+
+    /// Shows `events` after the conversation: the `!` commands numbered `serials`.
+    pub(super) fn tail(&mut self, serials: Vec<usize>, events: Vec<Event>) {
+        self.tail.0 = serials;
+        self.tail.1.events = events;
+        self.tail.1.version += 1;
+    }
+
+    fn all(&self) -> impl Iterator<Item = &Part> {
+        self.parts.iter().chain([&self.tail.1])
+    }
+
     pub(super) fn render(&mut self, look: Look, hide_thinking: &Arc<AtomicBool>) {
-        for part in &mut self.parts {
+        for part in self.parts.iter_mut().chain([&mut self.tail.1]) {
             if part.rendered != Some((look, part.version)) {
                 part.lines = render(&part.events, look, hide_thinking.clone());
                 part.rendered = Some((look, part.version));
@@ -149,29 +168,29 @@ impl Transcript {
     }
 
     pub(super) fn len(&self) -> usize {
-        self.parts.iter().map(|part| part.lines.len()).sum()
+        self.all().map(|part| part.lines.len()).sum()
     }
 
     /// The part that line `line` is in, and where in it.
     pub(super) fn locate(&self, mut line: usize) -> Place {
-        for (part, lines) in self.parts.iter().map(|part| part.lines.len()).enumerate() {
+        for (part, lines) in self.all().map(|part| part.lines.len()).enumerate() {
             if line < lines {
                 return Place { part, line };
             }
             line -= lines;
         }
         Place {
-            part: self.parts.len(),
+            part: self.parts.len() + 1,
             line,
         }
     }
 
     /// The line at `place`, as near as the part's lines now reach.
     pub(super) fn line(&self, place: Place) -> usize {
-        let before: usize = (self.parts.iter().take(place.part))
+        let before: usize = (self.all().take(place.part))
             .map(|part| part.lines.len())
             .sum();
-        let within = match self.parts.get(place.part) {
+        let within = match self.all().nth(place.part) {
             Some(part) => place.line.min(part.lines.len().saturating_sub(1)),
             None => place.line,
         };
@@ -180,7 +199,7 @@ impl Transcript {
 
     /// `count` lines from `top`, as far as there are.
     pub(super) fn window(&self, top: usize, count: usize) -> Vec<Line> {
-        let lines = self.parts.iter().flat_map(|part| &part.lines);
+        let lines = self.all().flat_map(|part| &part.lines);
         lines.skip(top).take(count).cloned().collect()
     }
 
@@ -309,6 +328,31 @@ mod tests {
         transcript.push(Event::Waiting(Purpose::Reply));
         transcript.push(Event::Progress(StreamProgress::Text("Next.".into())));
         assert_eq!(text(&transcript.parts[1]), ["Next."]);
+    }
+
+    #[test]
+    fn the_tail_stays_under_what_is_added_until_it_is_taken() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        let shown = |transcript: &mut Transcript| -> Vec<String> {
+            transcript.render(look(40, false), &hide);
+            let lines = transcript.window(0, 100).into_iter();
+            lines
+                .map(|line| plain(&line.shown).trim().to_owned())
+                .collect()
+        };
+        transcript.push(Event::Text("Before".into()));
+        transcript.tail(vec![1], vec![Event::Text("Ended".into())]);
+        transcript.push(Event::Text("After".into()));
+        let all = ["Before", "", "After", "", "Ended", ""];
+        assert_eq!(shown(&mut transcript), all);
+        let place = transcript.locate(4);
+        assert_eq!(transcript.line(place), 4);
+        assert_eq!(transcript.tailed(), [1]);
+        // Taken into the conversation, it shows where it was.
+        transcript.tail(Vec::new(), Vec::new());
+        transcript.push(Event::Text("Ended".into()));
+        assert_eq!(shown(&mut transcript), all);
     }
 
     #[test]

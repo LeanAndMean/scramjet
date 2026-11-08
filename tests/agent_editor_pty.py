@@ -4431,19 +4431,26 @@ def prompt_keys(read, until, send, output):
 
 
 def fullscreen_shell_and_effort_during_turn(read, until, send, output):
-    shown, on_screen = full_screen()(read, output)
+    shown, on_screen = full_screen(rows=50)(read, output)
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('Running 1s')
     # Shift+Tab chooses the effort of the turn's next request; the footer says so at once.
     send(b'\x1b[Z')
-    footer_shows(read, output, [project, stats('', 'gpt-6-luna \u2022 high')])
-    # A `!` command runs at once, under the conversation until the turn ends.
+    footer_shows(read, output, [project, stats('', 'gpt-6-luna \u2022 high')], rows=50)
+    # A `!` command runs at once, under the conversation while it runs.
     send(b'!echo side$((0+1)); sleep 1; echo side$((1+1))\r')
     rows = on_screen('side2')
     assert 'Replied.' not in '\n'.join(rows), rows
-    on_screen('Replied.')
-    ended(read, output)
+    # Once ended it shows at the conversation's end, where Ctrl+O expands it while the turn runs.
+    send(b'!seq 101 125\r')
+    rows = on_screen('… 5 earlier lines, Ctrl+O to expand')
+    send(b'\x0f')
+    rows = on_screen('… 5 earlier lines, Ctrl+O to expand', gone=True)
+    assert any(' Running ' in row for row in rows), rows
+    send(b'\x0f')
+    on_screen('… 5 earlier lines, Ctrl+O to expand')
+    ended(read, output, rows=50)
     rows = on_screen(' $ echo side$((0+1))')
     text = '\n'.join(rows)
     assert text.index('Replied.') < text.index(' $ echo side$((0+1))'), text
@@ -4454,7 +4461,7 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     on_screen(' $ sleep 30')
     send(b'!echo no\r')
     ending(read, output, ['A bash command is already running. Press Esc to cancel it', 'first.', '\u2500' * 59,
-                          '> !echo no'])
+                          '> !echo no'], rows=50)
     send(b'\x15')
     rows = on_screen('Second.')
     # Still running when the turn ends; Escape stops it, and it is added then.
@@ -4468,15 +4475,15 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     on_screen(' $ sleep 31')
     send(b'!echo no\r')
     ending(read, output, ['A bash command is already running. Press Esc to cancel it', 'first.', '\u2500' * 59,
-                          '> !echo no'])
+                          '> !echo no'], rows=50)
     rows = on_screen('> !echo no')
     assert ' $ echo no' not in '\n'.join(rows), rows
     send(b'\x1b')
     end = time.monotonic() + 10
-    while '\n'.join(Screen(output, 60).rows()).count('(cancelled)') < 2:
-        assert time.monotonic() < end, Screen(output, 60).rows()
+    while '\n'.join(Screen(output, 60, 50).rows()).count('(cancelled)') < 2:
+        assert time.monotonic() < end, Screen(output, 60, 50).rows()
         read(.05)
-    ending(read, output, ['> !echo no'])
+    ending(read, output, ['> !echo no'], rows=50)
     send(b'\x15\x04')
 
 
@@ -4929,7 +4936,7 @@ assert prompts(second) == ['more'], prompts(second)
 bodies = []
 during = config_home('during')
 known = set(session_files())
-run([], fullscreen_shell_and_effort_during_turn, serve_items([
+run([], fullscreen_shell_and_effort_during_turn, rows=50, endpoint=serve_items([
     [tool_call('call_1', 'bash', {'command': 'sleep 5'})],
     [message('Replied.')],
     [tool_call('call_2', 'bash', {'command': 'sleep 2'})],
@@ -4943,7 +4950,8 @@ assert saved_levels(during_session) == ['medium', 'high'], saved_levels(during_s
 said = [item['content'] if item.get('role') == 'user' else item['content'][0]['text']
         for item in items if item.get('role') in ('user', 'assistant') or item.get('type') == 'message']
 assert said[:3] == ['go', 'Replied.', 'Ran `echo side$((0+1)); sleep 1; echo side$((1+1))`\n```\nside1\nside2\n```'], said
-assert said[3:5] == ['again', 'Second.'] and said[5].startswith('Ran `sleep 30`'), said
+assert said[3].startswith('Ran `seq 101 125`') and said[4:6] == ['again', 'Second.'], said
+assert said[6].startswith('Ran `sleep 30`'), said
 run([], fullscreen_lists, serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {
         'type': 'select', 'message': 'Which **one**?', 'recommended': 1,

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.116.0 — `!` commands that end during a turn join the conversation
+
+### Changed
+
+- A `!` or `!!` command run in the full screen while a turn runs now shows at the conversation's end as soon as it ends, where it scrolls and Ctrl+O expands it, instead of staying cut to a few lines above the status line until the turn ends. Only the one still running stays there. The session still adds it after the turn, in the same place.
+
 ## 0.115.1 — `bg` lets a stopped turn run on
 
 ### Fixed

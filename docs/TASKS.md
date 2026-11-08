@@ -85,7 +85,7 @@ Not scheduled; fix them when they matter.
 - Without `--sandbox`, with credentials hidden, the main agent's bash shares the host's processes, `/tmp`, `/run` and session. Servers outside act for it: an ssh-agent, a tmux server on a socket outside `${TMUX_TMPDIR:-/tmp}/tmux-UID`, WSL interop (`cmd.exe` read a fake key under a hidden `~/.ssh` through `\\wsl.localhost\`; Open questions), Docker's socket (not tried); and TIOCSTI on the terminal (allowed before Linux 6.2; WSL runs 5.15).
 - Subagents' bash cannot start tmux in its private `/tmp` (the sandbox mounts over the socket directory). If it matters, give the sandbox a `TMUX_TMPDIR` of its own in `/tmp`.
 - The full screen renders a running turn's part again from all its events at each frame: 4 ms for 150 calls with 400-line outputs, 100 ms with Ctrl+O (61,000 lines), release build. A reply line waiting on an unclosed `**`, `*` or `[` is rescanned at each delta (about 11 ms a frame for 5000 characters).
-- A `!` command run during a turn shows at most 20 of its last lines under the conversation, not expandable with Ctrl+O until the turn ends; several each keep a block until then.
+- A `!` command still running during a turn shows at most 20 of its last lines under the conversation (fewer on a short screen), not expandable with Ctrl+O until it ends.
 - Skill discovery ignores `.gitignore`, `.ignore` and `.fdignore` (Pi honors them), and Pi's `skills` patterns (`!`, `+`, `-`) and `enableSkillCommands` are not supported.
 - `/settings` rewrites an `autonomy.yaml` it changes in Scramjet's layout, without its comments, as Scramjet does.
 - Mach 12's commands still tell the model to report `blocked` or `incomplete`; the refusal steers it to `completed`. Mach 12 lives in Scramjet's repository.
