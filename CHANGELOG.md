@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.4 — Files kept whole when a write fails
+
+### Fixed
+
+- `write` and `edit` no longer cut a file before writing it: the new text goes into a file beside it, renamed over it once complete, with the file's mode and group kept and a symlink left a link. A full disk or a kill during the write now leaves the file as it was (it used to be left empty or half written). A file with other hard links, owned by someone else, or in a directory that takes no new file is still written in place.
+
 ## 0.97.3 — Instruction files that lead into a credential store
 
 ### Fixed

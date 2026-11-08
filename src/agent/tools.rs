@@ -641,61 +641,201 @@ fn shell_word(text: &str) -> String {
 /// Writes a file, making the directories missing.
 type Put<'a> = dyn Fn(&Path, &str) -> Result<(), String> + 'a;
 
-/// Writes `content` to `path`, checked against the stores `hidden` as opened, before the file
-/// is cut.
+/// Writes `content` to `path`, checked against the stores `hidden` as opened. A file that exists
+/// is replaced whole, so that a full disk or a kill leaves it as it was.
 fn put(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String> {
-    let failed = |e: io::Error| format!("{}: {e}", path.display());
-    let Some(hidden) = hidden else {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-        }
-        return std::fs::write(path, content).map_err(failed);
-    };
     #[cfg(windows)]
     {
-        use std::io::Write;
-        hidden.check(path)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        if let Some(hidden) = hidden {
+            hidden.check(path)?;
         }
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(path);
-        let mut file = hidden.opened(path, file)?;
-        file.set_len(0).map_err(failed)?;
-        file.write_all(content.as_bytes()).map_err(failed)
+        put_windows(path, content)
     }
     #[cfg(unix)]
-    put_checked(path, content, hidden)
+    put_unix(path, content, hidden)
+}
+
+#[cfg(windows)]
+fn put_windows(path: &Path, content: &str) -> Result<(), String> {
+    use std::io::Write;
+    let failed = |e: io::Error| format!("{}: {e}", path.display());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let mut file = match std::fs::OpenOptions::new().write(true).open(&real) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return std::fs::write(path, content).map_err(failed);
+        }
+        opened => opened.map_err(failed)?,
+    };
+    let (Some(parent), Some(name)) = (real.parent(), real.file_name()) else {
+        return Err(format!("{}: not a file", path.display()));
+    };
+    let temp = parent.join(temp_name(name));
+    let refused = |error: &io::Error| error.kind() == io::ErrorKind::PermissionDenied;
+    let made = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp);
+    let replaced = made.and_then(|mut made| {
+        made.set_permissions(file.metadata()?.permissions())?;
+        made.write_all(content.as_bytes())?;
+        drop(made);
+        std::fs::rename(&temp, &real)
+    });
+    match replaced {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&temp);
+            match refused(&error) {
+                // A directory that takes no new file, or a file another program holds open.
+                true => in_place(&mut file, content).map_err(failed),
+                false => Err(failed(error)),
+            }
+        }
+    }
 }
 
 #[cfg(unix)]
-fn put_checked(path: &Path, content: &str, hidden: &Hidden) -> Result<(), String> {
-    use std::io::Write;
-    let failed = |e: io::Error| format!("{}: {e}", path.display());
+fn put_unix(path: &Path, content: &str, hidden: Option<&Hidden>) -> Result<(), String> {
     use rustix::{
         fs::{Mode, OFlags},
         io::Errno,
     };
-    let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+    let failed = |e: io::Error| format!("{}: {e}", path.display());
+    let real;
+    let at = match hidden {
+        Some(_) => path,
+        None => {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("{}: {e}", parent.display()))?;
+            }
+            // A symlink's file is replaced, the link kept.
+            real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+            &real
+        }
+    };
+    let (Some(parent), Some(name)) = (at.parent(), at.file_name()) else {
         return Err(format!("{}: not a file", path.display()));
     };
-    // Made only in a directory checked as opened, and a symlink there followed only to a file
-    // that exists, so that nothing is made in a store before the check refuses it.
-    let directory = checked_directory(parent, hidden)?;
+    // With the stores hidden, made only in a directory checked as opened, and a symlink there
+    // followed only to a file that exists, so that nothing is made in a store before the check
+    // refuses it.
+    let directory = match hidden {
+        Some(hidden) => checked_directory(parent, hidden)?,
+        None => {
+            let flags = super::sandbox::LOOKUP | OFlags::DIRECTORY | OFlags::CLOEXEC;
+            let opened = rustix::fs::open(parent, flags, Mode::empty());
+            std::fs::File::from(opened.map_err(|e| failed(e.into()))?)
+        }
+    };
+    let checked = |file: rustix::io::Result<rustix::fd::OwnedFd>| {
+        let file = file.map(std::fs::File::from).map_err(io::Error::from);
+        match hidden {
+            Some(hidden) => hidden.opened(path, file),
+            None => file.map_err(failed),
+        }
+    };
     let flags = OFlags::WRONLY | OFlags::CLOEXEC;
     let made = OFlags::CREATE | OFlags::NOFOLLOW;
-    let file = match rustix::fs::openat(&directory, name, flags | made, Mode::from_raw_mode(0o666))
-    {
-        Err(Errno::LOOP) => rustix::fs::openat(&directory, name, flags, Mode::empty()),
-        opened => opened,
+    let mode = Mode::from_raw_mode(0o666);
+    match rustix::fs::openat(&directory, name, flags | OFlags::NOFOLLOW, Mode::empty()) {
+        Err(Errno::NOENT) => {
+            let mut file = checked(rustix::fs::openat(&directory, name, flags | made, mode))?;
+            in_place(&mut file, content).map_err(failed)
+        }
+        // A symlink the path did not resolve: one left dangling is made only with the stores
+        // shown, as before, and written in place.
+        Err(Errno::LOOP) => {
+            let flags = match hidden {
+                Some(_) => flags,
+                None => flags | OFlags::CREATE,
+            };
+            let mut file = checked(rustix::fs::openat(&directory, name, flags, mode))?;
+            in_place(&mut file, content).map_err(failed)
+        }
+        opened => {
+            let file = checked(opened)?;
+            replace(&directory, name, file, content).map_err(failed)
+        }
+    }
+}
+
+/// Replaces the file `file` opened as `name` in `directory` by a new one holding `content`, with
+/// its mode and group. A file with other links, or owned by someone else, is written in place,
+/// as a new file would leave its other names or change its owner; so is one in a directory
+/// that refuses a new file.
+#[cfg(unix)]
+fn replace(
+    directory: &std::fs::File,
+    name: &std::ffi::OsStr,
+    mut file: std::fs::File,
+    content: &str,
+) -> io::Result<()> {
+    use rustix::{
+        fs::{AtFlags, Mode, OFlags},
+        io::Errno,
+        process::Gid,
     };
-    let file = file.map(std::fs::File::from).map_err(io::Error::from);
-    let mut file = hidden.opened(path, file)?;
-    file.set_len(0).map_err(failed)?;
-    file.write_all(content.as_bytes()).map_err(failed)
+    use std::io::Write;
+    let stat = rustix::fs::fstat(&file)?;
+    if stat.st_nlink > 1 || stat.st_uid != rustix::process::geteuid().as_raw() {
+        return in_place(&mut file, content);
+    }
+    let temp = temp_name(name);
+    let flags = OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW;
+    let made = rustix::fs::openat(
+        directory,
+        &temp,
+        flags | OFlags::CLOEXEC,
+        Mode::from_raw_mode(0o600),
+    );
+    let mut made = match made {
+        Err(Errno::ACCESS | Errno::PERM | Errno::NAMETOOLONG) => {
+            return in_place(&mut file, content);
+        }
+        made => std::fs::File::from(made?),
+    };
+    let removed = |error: io::Error| {
+        let _ = rustix::fs::unlinkat(directory, &temp, AtFlags::empty());
+        error
+    };
+    let group = rustix::fs::fstat(&made)
+        .map_err(|e| removed(e.into()))?
+        .st_gid;
+    if group != stat.st_gid {
+        let group = Gid::from_raw(stat.st_gid);
+        if let Err(error) = rustix::fs::fchown(&made, None, Some(group)) {
+            removed(error.into());
+            return in_place(&mut file, content);
+        }
+    }
+    // After the group, as changing it clears the set-id bits.
+    #[allow(clippy::unnecessary_cast)]
+    let mode = Mode::from_raw_mode((stat.st_mode as u32 & 0o7777) as _);
+    rustix::fs::fchmod(&made, mode).map_err(|e| removed(e.into()))?;
+    made.write_all(content.as_bytes()).map_err(removed)?;
+    drop(made);
+    rustix::fs::renameat(directory, &temp, directory, name).map_err(|e| removed(e.into()))
+}
+
+/// Cuts `file` and writes `content` into it.
+fn in_place(file: &mut std::fs::File, content: &str) -> io::Result<()> {
+    use std::io::Write;
+    file.set_len(0)?;
+    file.write_all(content.as_bytes())
+}
+
+/// A name, unused by anyone else, for the new file replacing `name` beside it.
+fn temp_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
+    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut temp = std::ffi::OsString::from(".");
+    temp.push(name);
+    temp.push(format!(".{}-{count}.scramjet-rs", std::process::id()));
+    temp
 }
 
 /// The directory `path`, checked against the stores `hidden` as opened, made where missing in
@@ -2340,6 +2480,132 @@ to see full lines]",
             super::put(&root.join("link/authorized_keys/x"), "key\n", Some(&hidden)).unwrap_err();
         assert!(error.contains("hidden, as it holds credentials"), "{error}");
         assert_eq!(std::fs::read_dir(home.join(".ssh")).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_file_written_again_is_replaced_whole_with_its_mode_group_and_links() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let home = std::env::temp_dir().join(format!("scramjet-put-whole-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        // Another of the user's groups, where the system lets the file take one.
+        let groups = std::process::Command::new("id").arg("-G").output().unwrap();
+        let groups = String::from_utf8(groups.stdout).unwrap();
+        let other_groups: Vec<_> = groups.split_whitespace().skip(1).collect();
+        let shown = Hidden::under(&home, Vec::new());
+        for hidden in [None, Some(&shown)] {
+            let put = |name: &str, content: &str| super::put(&root.join(name), content, hidden);
+            let file = root.join("a.txt");
+            std::fs::write(&file, "old\n").unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o751)).unwrap();
+            for group in &other_groups {
+                let changed = std::process::Command::new("chgrp")
+                    .args([group, file.to_str().unwrap()])
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                if changed.unwrap().success() {
+                    break;
+                }
+            }
+            let before = std::fs::metadata(&file).unwrap();
+            put("a.txt", "new\n").unwrap();
+            let after = std::fs::metadata(&file).unwrap();
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "new\n");
+            assert_ne!(after.ino(), before.ino(), "replaced, not cut");
+            assert_eq!(after.mode() & 0o7777, 0o751);
+            assert_eq!(after.gid(), before.gid());
+            // A symlink stays one, its file replaced.
+            std::os::unix::fs::symlink("a.txt", root.join("link.txt")).unwrap();
+            put("link.txt", "linked\n").unwrap();
+            assert!(root.join("link.txt").is_symlink());
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "linked\n");
+            // A file with another name is written in place, so that both names see it.
+            std::fs::hard_link(&file, root.join("b.txt")).unwrap();
+            put("b.txt", "both\n").unwrap();
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "both\n");
+            // A directory that takes no new file still lets its files be written.
+            let mode = |mode| std::fs::Permissions::from_mode(mode);
+            std::fs::create_dir(root.join("shut")).unwrap();
+            std::fs::write(root.join("shut/c.txt"), "old\n").unwrap();
+            std::fs::set_permissions(root.join("shut"), mode(0o555)).unwrap();
+            put("shut/c.txt", "new\n").unwrap();
+            std::fs::set_permissions(root.join("shut"), mode(0o755)).unwrap();
+            assert_eq!(
+                std::fs::read_to_string(root.join("shut/c.txt")).unwrap(),
+                "new\n"
+            );
+            // A file that may not be written stays so.
+            std::fs::set_permissions(&file, mode(0o444)).unwrap();
+            let error = put("a.txt", "refused\n").unwrap_err();
+            assert!(error.contains("Permission denied"), "{error}");
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "both\n");
+            let names: Vec<_> = std::fs::read_dir(&root)
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            assert_eq!(names.len(), 4, "{names:?}");
+            std::fs::remove_dir_all(&root).unwrap();
+            std::fs::create_dir(&root).unwrap();
+        }
+    }
+
+    /// Runs in a mount namespace of its own, where `SCRAMJET_TEST_FULL_DIR` is a tmpfs that this
+    /// test fills; outside, it starts itself there, and passes where that cannot be done.
+    #[cfg(unix)]
+    #[test]
+    fn on_a_full_disk_write_and_edit_fail_leaving_the_file_whole() {
+        const NAME: &str =
+            "agent::tools::tests::on_a_full_disk_write_and_edit_fail_leaving_the_file_whole";
+        let Some(directory) = std::env::var_os("SCRAMJET_TEST_FULL_DIR") else {
+            let scratch =
+                std::env::temp_dir().join(format!("scramjet-put-full-{}", std::process::id()));
+            let _scratch = crate::agent::tests::ScratchDir::new(scratch.clone());
+            let script = r#"mount -t tmpfs -o size=64k tmpfs "$1" || exit 77
+                SCRAMJET_TEST_FULL_DIR="$1" exec "$2" --exact "$3" --nocapture"#;
+            let status = std::process::Command::new("unshare")
+                .args(["-r", "-m", "sh", "-c", script, "sh"])
+                .arg(&scratch)
+                .arg(std::env::current_exe().unwrap())
+                .arg(NAME)
+                .status();
+            match status.map(|status| status.code()) {
+                Ok(Some(0)) => {}
+                Ok(Some(101)) => panic!("the test failed on a full tmpfs"),
+                other => eprintln!("skipped: no tmpfs of its own ({other:?})"),
+            }
+            return;
+        };
+        let root = PathBuf::from(directory);
+        let original = "line\n".repeat(400);
+        std::fs::write(root.join("a.txt"), &original).unwrap();
+        let mut fill = std::fs::File::create(root.join("fill")).unwrap();
+        while std::io::Write::write_all(&mut fill, &[0; 512]).is_ok() {}
+        let shown = Hidden::under(&root, Vec::new());
+        let cancel = AtomicBool::new(false);
+        let longer = "longer line\n".repeat(400);
+        let edits = json!([{"oldText": original.clone(), "newText": longer.clone()}]);
+        for hidden in [None, Some(&shown)] {
+            for (name, arguments) in [
+                ("write", json!({"path": "a.txt", "content": longer})),
+                ("edit", json!({"path": "a.txt", "edits": edits})),
+            ] {
+                let run = call(name, arguments).run(&root, hidden, &cancel, &mut |_| {});
+                let error = run.map(|output| output.text).unwrap_err();
+                assert!(error.contains("No space left on device"), "{name}: {error}");
+                assert_eq!(
+                    std::fs::read_to_string(root.join("a.txt")).unwrap(),
+                    original
+                );
+                assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2, "{name}");
+            }
+        }
+        drop(fill);
+        std::fs::remove_file(root.join("fill")).unwrap();
+        let run = call("write", json!({"path": "a.txt", "content": longer}));
+        run.run(&root, Some(&shown), &cancel, &mut |_| {}).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), longer);
     }
 
     #[test]
