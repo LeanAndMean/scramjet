@@ -556,7 +556,8 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
 /// `bash -c command` in `root`, confined.
 pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Result<Command, String> {
     let mut process = confined(root, None, hidden, None, None)?;
-    process.args(["bash", "-c"]).arg(command);
+    process.arg("bash");
+    super::tools::bash_runs(&mut process, command);
     Ok(process)
 }
 
@@ -568,7 +569,8 @@ pub(super) fn sandboxed(
     sandbox: Sandbox,
 ) -> Result<Command, String> {
     let mut process = confined(root, None, hidden, Some(sandbox), None)?;
-    process.args(["bash", "-c"]).arg(command);
+    process.arg("bash");
+    super::tools::bash_runs(&mut process, command);
     Ok(process)
 }
 
@@ -615,7 +617,8 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
         if let Some(own) = &hidden.tmux {
             process.env("TMUX_TMPDIR", own);
         }
-        process.args(["bash", "-c"]).arg(command);
+        process.arg("bash");
+        super::tools::bash_runs(&mut process, command);
         return Ok(process);
     }
     let mut process = Command::new(PROGRAM);
@@ -627,8 +630,8 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
     if Path::new(WSLG_DISTRO).is_dir() {
         process.args(["--tmpfs", WSLG_DISTRO, "--remount-ro", WSLG_DISTRO]);
     }
-    process.arg("--chdir").arg(root).args(["--", "bash", "-c"]);
-    process.arg(command);
+    process.arg("--chdir").arg(root).args(["--", "bash"]);
+    super::tools::bash_runs(&mut process, command);
     Ok(process)
 }
 

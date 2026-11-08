@@ -1456,8 +1456,24 @@ pub(super) fn run_command(
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
     let mut process = Command::new(crate::os::bash()?);
-    process.arg("-c").arg(command).current_dir(root);
+    bash_runs(&mut process, command);
+    process.current_dir(root);
     run_process(process, "bash", timeout, cancel, progress)
+}
+
+/// The variable that brings a command to bash, which unsets it before running it.
+pub(super) const COMMAND_VARIABLE: &str = "SCRAMJET_RS_COMMAND";
+
+/// Gives `process`, bash or a sandbox about to start it, `-c` and `command` in the environment
+/// rather than in its arguments, so that no process's command line holds it: a `pkill -f` or
+/// `pgrep -f` with a pattern from the command would otherwise find the shell running it.
+pub(super) fn bash_runs(process: &mut Command, command: &str) {
+    process
+        .arg("-c")
+        .arg(format!(
+            "eval \"unset {COMMAND_VARIABLE}; ${COMMAND_VARIABLE}\""
+        ))
+        .env(COMMAND_VARIABLE, command);
 }
 
 /// As `run_command`, inside the read-only sandbox.
@@ -2363,6 +2379,38 @@ to see full lines]",
             "{}",
             String::from_utf8_lossy(&left.stdout)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_command_killing_processes_by_its_own_text_goes_on() {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-pkill-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        let marker = format!("{}.{}", 500 + std::process::id() % 100, std::process::id());
+        let command = format!(
+            "sleep {marker} & sleep 0.2; pkill -f 'sleep {marker}'; wait; \
+             echo \"after ${{{COMMAND_VARIABLE}-unset}} $(env | grep -c {COMMAND_VARIABLE})\"; \
+             exit 3"
+        );
+        let cancel = AtomicBool::new(false);
+        let expected = "after unset 0\n\nCommand exited with code 3";
+        let plain = run_command(&root, &command, None, &cancel, &mut |_| {}).unwrap();
+        assert_eq!(plain.tool_output().text, expected);
+        let hidden = call("bash", json!({"command": command}))
+            .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
+            .unwrap();
+        assert_eq!(hidden.text, expected);
+        let sandboxed = run_sandboxed(
+            &root,
+            &command,
+            &Hidden::default(),
+            None,
+            &cancel,
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(sandboxed.tool_output().text, expected);
     }
 
     #[cfg(unix)]

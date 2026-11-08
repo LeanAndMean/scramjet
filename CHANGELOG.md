@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.2 — Commands that stop processes by name
+
+### Fixed
+
+- A bash command that stops processes by a pattern from its own text (`pkill -f "gunicorn … --bind :8080"`, `pgrep -f … | xargs kill`) no longer kills the shell running it, which ended it with `Command terminated (signal: 15 (SIGTERM))` before the rest of the command ran. The command now reaches bash through its environment, not its command line.
+
 ## 0.97.1 — A read stuck on a long line
 
 ### Fixed
