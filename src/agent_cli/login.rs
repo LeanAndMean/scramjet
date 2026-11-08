@@ -711,15 +711,10 @@ fn few(ids: &[&str]) -> String {
     }
 }
 
-/// Opens `url` in the user's browser, as Scramjet's login dialog does (`open` on macOS, else
-/// `xdg-open`, which WSL's `wslview` serves); the page is shown and copied besides.
+/// Opens `url` in the user's browser, as Scramjet's login dialog does (`open` on macOS,
+/// `xdg-open` elsewhere, which WSL's `wslview` serves); the page is shown and copied besides.
 fn open_in_browser(url: &str) {
-    let program = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    let opened = (Command::new(program).arg(url))
+    let opened = browser_opener(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -727,6 +722,27 @@ fn open_in_browser(url: &str) {
     if let Ok(mut opener) = opened {
         std::thread::spawn(move || opener.wait());
     }
+}
+
+/// On Windows `rundll32`'s URL handler, as Claude Code opens pages there: no shell sits between,
+/// where Scramjet's `start` through `cmd.exe` would expand a `%…%` in the address.
+fn browser_opener(url: &str) -> Command {
+    if cfg!(windows) {
+        let system = std::env::var_os("SystemRoot").map(std::path::PathBuf::from);
+        let rundll32 = system.map_or("rundll32.exe".into(), |root| {
+            root.join("System32").join("rundll32.exe")
+        });
+        let mut command = Command::new(rundll32);
+        command.arg("url.dll,FileProtocolHandler").arg(url);
+        return command;
+    }
+    let mut command = Command::new(if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    });
+    command.arg(url);
+    command
 }
 
 #[cfg(test)]

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.89.4 — The sign-in page opens on Windows
+
+### Fixed
+
+- On Windows, `/login` opens the sign-in page in the default browser (through `rundll32`, as Claude Code opens pages there) rather than trying `xdg-open`, which Windows lacks.
+
 ## 0.89.3 — MCP servers started through .cmd launchers on Windows
 
 ### Fixed

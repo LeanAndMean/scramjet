@@ -1,0 +1,70 @@
+{
+  "files": {
+    "README.md": "Project\n",
+    "bin/acme-login.cmd": "@powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0acme-login.ps1\"\r\n",
+    "bin/acme-login.ps1": "$request = [Console]::In.ReadLine()\nfunction Say($line) { [Console]::Out.WriteLine($line); [Console]::Out.Flush() }\nif ($request -match '\"action\":\"login\"') {\n    Say '{\"open\":\"https://example.com/?client=scramjet-rs&state=a%26b%25PATH%25\"}'\n    Start-Sleep -Seconds 2\n    Say '{\"credential\":{\"access\":\"try-token\",\"refresh\":\"try\",\"expires\":99999999999999}}'\n} elseif ($request -match '\"action\":\"refresh\"') {\n    Say '{\"credential\":{\"access\":\"try-token\",\"expires\":99999999999999}}'\n} elseif ($request -match '\"action\":\"models\"') {\n    Say '{\"provider\":{\"baseUrl\":\"http://127.0.0.1:9/v1\",\"api\":\"openai-responses\",\"models\":[{\"id\":\"acme-large\",\"name\":\"Acme Large\"}]}}'\n} else {\n    Say '{\"error\":\"unknown action\"}'\n}\n"
+  },
+  "path": [
+    "work/proj/bin"
+  ],
+  "models": {
+    "logins": {
+      "acme": {
+        "name": "Acme Cloud",
+        "command": [
+          "acme-login"
+        ]
+      }
+    }
+  },
+  "steps": [
+    {
+      "shot": "started",
+      "wait": 5
+    },
+    {
+      "text": "/login"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "/login",
+      "wait": 2
+    },
+    {
+      "keys": [
+        "Down",
+        "Down"
+      ]
+    },
+    {
+      "shot": "chosen",
+      "wait": 1
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "opened",
+      "wait": 1.5
+    },
+    {
+      "shot": "logged in",
+      "wait": 5
+    },
+    {
+      "keys": [
+        "C-d"
+      ]
+    },
+    {
+      "shot": "after Ctrl+D",
+      "wait": 3
+    }
+  ]
+}

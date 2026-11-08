@@ -13,7 +13,8 @@ full screen runs in a tmux pane (a Windows console through WSL interop) and play
 "steps", by default: the prompt typed and sent, the window resized to 80x24 and Ctrl+D pressed,
 printing the pane after each.
 
-A scenario holds "files", "settings", "args" (more command-line words), "path" (WSL paths
+A scenario holds "files", "settings", "models" (more of models.json's fields, such as
+"logins"), "args" (more command-line words), "path" (WSL paths
 of directories put ahead of Windows' own PATH, relative ones from %TEMP%\\scramjet-rs-try),
 "env" (more variables, WSL paths among them given as Windows ones), "prompt", "replies", each
 reply as in scripts/screens.py, and "steps", each one of {"text": typed}, {"keys": [tmux key
@@ -49,7 +50,7 @@ for name, text in scenario.get('files', {}).items():
 base = 'http://%s/v1' % screens.serve(scenario.get('replies', []))
 provider = {'baseUrl': base, 'api': 'openai-responses', 'apiKey': 'scripted',
             'models': [{'id': 'gpt-6-luna', 'reasoning': True, 'contextWindow': 200000}]}
-json.dump({'providers': {'screens': provider}}, open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w'))
+json.dump(dict(scenario.get('models', {}), providers={'screens': provider}), open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w'))
 json.dump(scenario.get('settings', {}), open(os.path.join(work, 'config/scramjet-rs/settings.json'), 'w'))
 env = dict(XDG_STATE_HOME=work + '/state', XDG_CONFIG_HOME=work + '/config', XDG_DATA_HOME=work + '/data',
            SCRAMJET_CODING_AGENT_DIR=work + '/agent')
