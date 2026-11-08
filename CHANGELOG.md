@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.8 — Reads that end, and stop on Escape
+
+### Fixed
+
+- `read` no longer loads a whole file to show a part of it: a file of any size is read in pieces, keeping only the lines shown, and Escape stops a long read. A device, FIFO or socket (`/dev/zero`, a named pipe) is refused, pointing to bash with a limit, where it used to hang the turn or fill memory; `edit` refuses them too.
+
 ## 0.97.7 — Projects cannot approve their own publications
 
 ### Fixed

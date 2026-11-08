@@ -1737,7 +1737,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
             tool_calls(&[("bash", meet("a", "b")), ("bash", meet("b", "a"))]),
             stream(&fixture::text_events("met", fixture::known_usage())),
             tool_calls(&[
-                ("read", json!({"path":"slow.fifo"})),
+                ("read", json!({"path":"slow.txt","limit":1})),
                 (
                     subagent::NAME,
                     json!({"agent":"p","task":"go","agentScope":"both"}),
@@ -1784,18 +1784,12 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         let project = crate::os::join(agent.root(), ".scramjet/agents");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
-        // The read waits on the pipe until it is written half a second later.
-        let fifo = agent.root().join("slow.fifo");
-        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
-        assert!(made.unwrap().success());
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(500));
-            std::fs::write(fifo, "slept\n").unwrap();
-        });
+        // A read of 4 million lines takes a while.
+        std::fs::write(agent.root().join("slow.txt"), "slept\n".repeat(4 << 20)).unwrap();
         ui.shown.clear();
         agent.turn("ask", &mut ui, &AtomicBool::new(false)).unwrap();
         let calls = each(&ui.shown[1..ui.shown.len() - 2]);
-        assert_eq!(calls[0], ["call read slow.fifo", "result read slept"]);
+        assert_eq!(calls[0], ["call read slow.txt", "result read slept"]);
         assert_eq!(
             calls[1],
             [

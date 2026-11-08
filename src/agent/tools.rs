@@ -303,7 +303,7 @@ impl<'a> Call<'a> {
             self.check_path(root, hidden)?;
         }
         let text = match self.name {
-            "read" => return read(root, self, hidden),
+            "read" => return read(root, self, hidden, cancel),
             "ls" => ls(root, self)?,
             "grep" => grep(root, self, hidden, cancel)?,
             "find" => find(root, self, hidden, cancel)?,
@@ -369,7 +369,7 @@ impl<'a> Call<'a> {
     ) -> Result<Output, String> {
         self.check_path(root, hidden)?;
         let text = match self.name {
-            "read" => return read(root, self, Some(hidden)),
+            "read" => return read(root, self, Some(hidden), cancel),
             "ls" => ls(root, self)?,
             "grep" => grep(root, self, Some(hidden), cancel)?,
             "find" => find(root, self, Some(hidden), cancel)?,
@@ -517,25 +517,71 @@ pub(super) fn resolve(root: &Path, path: &str) -> PathBuf {
     resolved
 }
 
+/// The file at `path`, checked against the stores `hidden` as opened. Only a regular file is
+/// read: a device such as `/dev/zero` may never end, and a FIFO, opened without waiting for a
+/// writer, would wait in the read.
+fn regular_file(path: &Path, hidden: Option<&Hidden>) -> Result<std::fs::File, String> {
+    let failed = |e: io::Error| format!("{}: {e}", path.display());
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    let file = match hidden {
+        Some(hidden) => hidden.opened(path, options.open(path))?,
+        None => options.open(path).map_err(failed)?,
+    };
+    let kind = file.metadata().map_err(failed)?.file_type();
+    if kind.is_dir() {
+        return Err(format!("{} is a directory; use ls", path.display()));
+    }
+    if !kind.is_file() {
+        return Err(format!(
+            "{} is not a regular file (a device, FIFO or socket may never end); use bash with a \
+limit, such as head -c",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+
 /// The contents of the file at `path`, checked against the stores `hidden` as opened.
 fn contents(path: &Path, hidden: Option<&Hidden>) -> Result<Vec<u8>, String> {
-    let failed = |e: io::Error| format!("{}: {e}", path.display());
-    let mut file = match hidden {
-        Some(hidden) => hidden.opened(path, std::fs::File::open(path))?,
-        None => std::fs::File::open(path).map_err(failed)?,
-    };
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(failed)?;
+    let read = regular_file(path, hidden)?.read_to_end(&mut bytes);
+    read.map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(bytes)
 }
 
-fn read(root: &Path, call: &Call, hidden: Option<&Hidden>) -> Result<Output, String> {
+fn read(
+    root: &Path,
+    call: &Call,
+    hidden: Option<&Hidden>,
+    cancel: &AtomicBool,
+) -> Result<Output, String> {
     let given = call.str("path")?;
     let path = resolve(root, given);
-    let bytes = contents(&path, hidden)?;
-    let (text, image) = match image::mime(&bytes) {
-        Some(mime) => read_image(&bytes, mime),
-        None => (read_text(bytes, call, &path, given)?, None),
+    let failed = |e: io::Error| format!("{}: {e}", path.display());
+    let mut file = regular_file(&path, hidden)?;
+    // As much as `image::mime` looks at.
+    let mut start = Vec::new();
+    let read = (&mut file).take(4100).read_to_end(&mut start);
+    read.map_err(failed)?;
+    let (text, image) = match image::mime(&start) {
+        Some(mime) => {
+            file.read_to_end(&mut start).map_err(failed)?;
+            read_image(&start, mime)
+        }
+        None => {
+            let scanned = Scanned::scan(&start, &mut file, call, cancel).map_err(|e| match e {
+                Scan::Failed(error) => failed(error),
+                Scan::NotText => format!("{} is not a UTF-8 text file", path.display()),
+                Scan::Aborted => "Operation aborted".into(),
+            })?;
+            (read_text(scanned, call, given)?, None)
+        }
     };
     Ok(Output {
         text,
@@ -565,39 +611,147 @@ inline image size limit.]"
     }
 }
 
-fn read_text(bytes: Vec<u8>, call: &Call, path: &Path, given: &str) -> Result<String, String> {
-    let text = String::from_utf8(bytes)
-        .map_err(|_| format!("{} is not a UTF-8 text file", path.display()))?;
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let offset = call.arguments["offset"].as_u64().unwrap_or(1).max(1) as usize;
-    if offset > lines.len().max(1) {
+fn read_offset(call: &Call) -> usize {
+    call.arguments["offset"].as_u64().unwrap_or(1).max(1) as usize
+}
+
+/// A line `read` may show, kept only up to just over what it can show.
+struct Line {
+    kept: Vec<u8>,
+    len: usize,
+    ended: bool,
+}
+
+/// A text file as `read` shows it: its number of lines (as `split_inclusive('\n')` counts them)
+/// and the lines from the offset that the limits may show, read in pieces so that a large file
+/// is never held whole.
+struct Scanned {
+    lines: usize,
+    window: Vec<Line>,
+}
+
+enum Scan {
+    Failed(io::Error),
+    NotText,
+    Aborted,
+}
+
+impl Scanned {
+    fn scan(
+        start: &[u8],
+        file: &mut impl Read,
+        call: &Call,
+        cancel: &AtomicBool,
+    ) -> Result<Scanned, Scan> {
+        let first = read_offset(call) - 1;
+        let limit = call.arguments["limit"]
+            .as_u64()
+            .map_or(usize::MAX, |n| n as usize);
+        let end = first.saturating_add(limit.min(MAX_LINES));
+        let mut scanned = Scanned {
+            lines: 0,
+            window: Vec::new(),
+        };
+        let (mut line, mut window_bytes) = (
+            Line {
+                kept: Vec::new(),
+                len: 0,
+                ended: false,
+            },
+            0,
+        );
+        // The bytes of a character a piece ends within, carried into the next.
+        let mut carried = Vec::new();
+        let mut piece = start.to_vec();
+        let mut buffer = vec![0; 64 * 1024];
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err(Scan::Aborted);
+            }
+            carried.extend_from_slice(&piece);
+            match std::str::from_utf8(&carried) {
+                Ok(_) => carried.clear(),
+                Err(error) if error.error_len().is_none() => {
+                    carried.drain(..error.valid_up_to());
+                }
+                Err(_) => return Err(Scan::NotText),
+            }
+            let mut rest = &piece[..];
+            while !rest.is_empty() {
+                let ends = rest.iter().position(|&b| b == b'\n');
+                let part = &rest[..ends.map_or(rest.len(), |at| at + 1)];
+                let shown = (first..end).contains(&scanned.lines) && window_bytes <= MAX_BYTES;
+                if shown {
+                    let room = (MAX_BYTES + 1).saturating_sub(line.kept.len());
+                    line.kept.extend_from_slice(&part[..part.len().min(room)]);
+                }
+                line.len += part.len();
+                rest = &rest[part.len()..];
+                if ends.is_some() {
+                    line.ended = true;
+                    let done = std::mem::replace(
+                        &mut line,
+                        Line {
+                            kept: Vec::new(),
+                            len: 0,
+                            ended: false,
+                        },
+                    );
+                    if shown {
+                        window_bytes += done.len;
+                        scanned.window.push(done);
+                    }
+                    scanned.lines += 1;
+                }
+            }
+            let read = loop {
+                match file.read(&mut buffer) {
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    read => break read.map_err(Scan::Failed)?,
+                }
+            };
+            if read == 0 {
+                break;
+            }
+            piece = buffer[..read].to_vec();
+        }
+        if !carried.is_empty() {
+            return Err(Scan::NotText);
+        }
+        if line.len > 0 {
+            if (first..end).contains(&scanned.lines) && window_bytes <= MAX_BYTES {
+                scanned.window.push(line);
+            }
+            scanned.lines += 1;
+        }
+        Ok(scanned)
+    }
+}
+
+fn read_text(scanned: Scanned, call: &Call, given: &str) -> Result<String, String> {
+    let lines = scanned.lines;
+    let offset = read_offset(call);
+    if offset > lines.max(1) {
         return Err(format!(
-            "offset {offset} is past the end of the file ({} lines)",
-            lines.len()
+            "offset {offset} is past the end of the file ({lines} lines)"
         ));
     }
-    let limit = call.arguments["limit"]
-        .as_u64()
-        .map_or(usize::MAX, |n| n as usize);
-    let selected = &lines[offset - 1..lines.len().min((offset - 1).saturating_add(limit))];
     let mut output = String::new();
     let mut shown = 0;
     let mut by_bytes = false;
-    for line in selected {
-        if shown == MAX_LINES {
-            break;
-        }
-        if output.len() + line.len() > MAX_BYTES {
+    for line in &scanned.window {
+        if output.len() + line.len > MAX_BYTES {
             by_bytes = true;
             break;
         }
-        output.push_str(line);
+        output.push_str(&String::from_utf8_lossy(&line.kept));
         shown += 1;
     }
     // As Scramjet's: a line too long to show at all is pointed to, else the next read would
     // start at it again.
     if shown == 0 && by_bytes {
-        let size = size_text(selected[0].trim_end_matches('\n').len());
+        let first = &scanned.window[0];
+        let size = size_text(first.len - usize::from(first.ended));
         return Ok(format!(
             "[Line {offset} is {size}, exceeds {} limit. Use bash: sed -n '{offset}p' {} | head -c \
 {MAX_BYTES}]",
@@ -606,14 +760,13 @@ fn read_text(bytes: Vec<u8>, call: &Call, path: &Path, given: &str) -> Result<St
         ));
     }
     let last = offset - 1 + shown;
-    if last < lines.len() {
+    if last < lines {
         let limit = match by_bytes {
             true => format!(" ({} limit)", size_text(MAX_BYTES)),
             false => String::new(),
         };
         output.push_str(&format!(
-            "\n{READ_MORE}{offset}-{last} of {}{limit}. Use offset={} to continue.]",
-            lines.len(),
+            "\n{READ_MORE}{offset}-{last} of {lines}{limit}. Use offset={} to continue.]",
             last + 1
         ));
     }
@@ -2058,6 +2211,76 @@ inline image size limit.]",
         }
         let write = call("write", json!({"path":"CLAUDE.md","content":""}));
         assert_eq!(write.compact(root), None);
+    }
+
+    #[test]
+    fn read_takes_a_file_in_pieces_and_refuses_one_that_may_never_end() {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-read-pieces-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        let cancel = AtomicBool::new(false);
+        let read =
+            |arguments: Value| call("read", arguments).run(&root, None, &cancel, &mut |_| {});
+        // 1999-byte lines of two-byte characters, so that pieces end within characters.
+        let line = |n: usize| format!("{n:06}{}\n", "é".repeat(996));
+        let text: String = (1..=3000).map(line).collect();
+        std::fs::write(root.join("wide.txt"), &text).unwrap();
+        let page = read(json!({"path":"wide.txt","offset":2001,"limit":3}))
+            .unwrap()
+            .text;
+        assert_eq!(
+            page,
+            format!(
+                "{}{}{}\n[Showing lines 2001-2003 of 3000. Use offset=2004 to continue.]",
+                line(2001),
+                line(2002),
+                line(2003)
+            )
+        );
+        let first = read(json!({"path":"wide.txt"})).unwrap().text;
+        assert!(first.starts_with(&line(1)));
+        assert!(first.ends_with(
+            "\n\n[Showing lines 1-25 of 3000 (50.0KB limit). Use offset=26 to continue.]"
+        ));
+        let mut bad = text.into_bytes();
+        bad.extend_from_slice(b"tail\xc3");
+        std::fs::write(root.join("bad.txt"), &bad).unwrap();
+        let refused = read(json!({"path":"bad.txt","offset":1,"limit":1})).unwrap_err();
+        assert!(
+            refused.ends_with("bad.txt is not a UTF-8 text file"),
+            "{refused}"
+        );
+        std::fs::write(root.join("empty.txt"), "").unwrap();
+        assert_eq!(read(json!({"path":"empty.txt"})).unwrap().text, "");
+        std::fs::write(root.join("open.txt"), "a\nb").unwrap();
+        assert_eq!(
+            read(json!({"path":"open.txt","offset":2})).unwrap().text,
+            "b"
+        );
+        let past = read(json!({"path":"open.txt","offset":3})).unwrap_err();
+        assert_eq!(past, "offset 3 is past the end of the file (2 lines)");
+        let directory = read(json!({"path":"."})).unwrap_err();
+        assert!(
+            directory.ends_with(" is a directory; use ls"),
+            "{directory}"
+        );
+        #[cfg(unix)]
+        {
+            let fifo = root.join("fifo");
+            let made = Command::new("mkfifo").arg(&fifo).status().unwrap();
+            assert!(made.success());
+            for path in [fifo.to_str().unwrap(), "/dev/zero"] {
+                let refused = read(json!({"path":path})).unwrap_err();
+                assert!(refused.contains("is not a regular file"), "{refused}");
+                let edited = call("edit", json!({"path":path,"oldText":"a","newText":"b"}))
+                    .run(&root, None, &cancel, &mut |_| {})
+                    .unwrap_err();
+                assert!(edited.contains("is not a regular file"), "{edited}");
+            }
+        }
+        cancel.store(true, Ordering::Relaxed);
+        let aborted = read(json!({"path":"wide.txt"})).unwrap_err();
+        assert_eq!(aborted, "Operation aborted");
     }
 
     #[test]
