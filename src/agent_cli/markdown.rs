@@ -1,11 +1,11 @@
 //! Turns the markdown of streamed replies into terminal styles, as Scramjet renders them: strong,
-//! emphasized and struck text, code spans, links, headings, lists, block quotes, rules, fenced
-//! code blocks, highlighted when they name their language, and tables. A marker is shown as typed
-//! unless its span closes on the same line, so text after an opening marker waits until the span
-//! closes or the line ends. A table's lines wait until it ends, as its columns are fitted to all
-//! its rows, and so does a highlighted code line. A blank line waits for the next, as Scramjet
-//! shows a run of them as one, and none between a list's items; and, as Scramjet's, blocks the
-//! text did not separate are shown with a blank line between them.
+//! emphasized and struck text, code spans, links, headings, lists, block quotes, rules, fenced and
+//! indented code blocks, highlighted when they name their language, tables and line breaks. A
+//! marker is shown as typed unless its span closes on the same line, so text after an opening
+//! marker waits until the span closes or the line ends. A table's lines wait until it ends, as its
+//! columns are fitted to all its rows, and so does a highlighted code line. A blank line waits for
+//! the next, as Scramjet shows a run of them as one, and none between a list's items; and, as
+//! Scramjet's, blocks the text did not separate are shown with a blank line between them.
 
 use super::highlight::{self, Highlighter};
 use super::selection;
@@ -41,6 +41,8 @@ enum Kind {
     Held,
     Code,
     Fence,
+    /// The first line of a code block indented by four columns.
+    Indented,
 }
 
 /// The block a line is in, as far as the blank lines between blocks go.
@@ -82,6 +84,9 @@ struct Fence {
     indent: usize,
     /// The spaces before it as shown, which its lines are shown after.
     shown: usize,
+    /// A block of lines indented by `indent`, which has no fence and ends at a line indented
+    /// less; its blank lines wait, as Scramjet shows only those between its lines.
+    indented: bool,
 }
 
 /// An open list. As Scramjet's, each level is four columns in, an ordered list is numbered from
@@ -131,6 +136,9 @@ pub struct Markdown {
     separable: bool,
     /// The quotes the line before's text is in, which a line of text goes on in.
     quoted: usize,
+    /// The line before ended in a backslash, a line break if the next line goes on with its
+    /// text and shown otherwise: the style it is shown in, and whether its newline came.
+    broken: Option<(&'static str, bool)>,
 }
 
 /// A table's lines so far, or the one line that may start a table.
@@ -200,6 +208,7 @@ impl Markdown {
             previous: None,
             separable: false,
             quoted: 0,
+            broken: None,
         }
     }
 
@@ -237,13 +246,26 @@ impl Markdown {
         if !self.enabled || self.ended {
             return String::new();
         }
+        let backslashes = self
+            .pending
+            .chars()
+            .rev()
+            .take_while(|&c| c == '\\')
+            .count();
+        if let Line::Text(style) = self.line
+            && backslashes % 2 == 1
+            && self.previous != Some(Block::Heading)
+        {
+            self.pending.pop();
+            self.broken = Some((style, false));
+        }
         let mut out = self.advance(true);
         match self.line {
             // A blank line, or one of spaces, which in a code block show after its indent.
             Line::Start => {
                 out += &self.flush_table();
                 let mut line = std::mem::take(&mut self.pending);
-                let Some(fence) = self.block else {
+                let Some(fence) = self.block.filter(|fence| !fence.indented) else {
                     self.blank = true;
                     self.lazy = false;
                     self.quoted = 0;
@@ -270,6 +292,7 @@ impl Markdown {
                     length,
                     indent: self.indent,
                     shown: fence.len() - marker.len(),
+                    indented: false,
                 };
                 let (shown, info) = match self.block.take() {
                     Some(open) => (open, ""),
@@ -306,6 +329,10 @@ impl Markdown {
     pub fn finish(&mut self) -> String {
         let empty = !self.ended && self.line == Line::Start && self.pending.is_empty();
         let mut out = self.end_line();
+        if let Some((style, newline)) = self.broken.take() {
+            out += &self.backslash(style);
+            out += if newline { "\n" } else { "" };
+        }
         out += &self.flush_table();
         if let Some(fence) = self.block.take() {
             if !empty {
@@ -339,6 +366,14 @@ impl Markdown {
         format!("{}{line}", self.base)
     }
 
+    /// A line's last backslash, which did not break it, in the line's `style`.
+    fn backslash(&self, style: &str) -> String {
+        match style {
+            "" => "\\".into(),
+            style => format!("{style}\\{RESET}{}", self.base),
+        }
+    }
+
     /// A fence line: its indent, then ``` and the info string it was given.
     fn fence(&self, fence: Fence, info: &str) -> String {
         let indent = " ".repeat(fence.shown);
@@ -362,6 +397,10 @@ impl Markdown {
             self.blanks += 1;
             return "";
         }
+        if let Some((_, newline)) = &mut self.broken {
+            *newline = true;
+            return "";
+        }
         if !std::mem::take(&mut self.held) {
             return "\n";
         }
@@ -377,6 +416,32 @@ impl Markdown {
             let Some(kind) = self.decide(ended) else {
                 return out;
             };
+            // As CommonMark's hard line break: a backslash before a line its text goes on in.
+            if let Some((style, newline)) = self.broken.take() {
+                let goes_on = self.blanks == 0
+                    && match kind {
+                        Kind::Text => true,
+                        Kind::Quote => {
+                            let rest = self.pending.trim_start_matches(['>', ' ']);
+                            self.previous == Some(Block::Quote) && !rest.is_empty()
+                        }
+                        _ => false,
+                    };
+                if !goes_on {
+                    out += &self.backslash(style);
+                }
+                out += if newline { "\n" } else { "" };
+            }
+            if let Some(fence) = self.block.filter(|fence| fence.indented) {
+                match kind {
+                    Kind::Code => out += &"\n".repeat(std::mem::take(&mut self.blanks)),
+                    _ => {
+                        out += &self.fence(fence, "");
+                        out.push('\n');
+                        self.block = None;
+                    }
+                }
+            }
             if !matches!(kind, Kind::Held) {
                 out += &self.flush_table();
             }
@@ -416,13 +481,12 @@ impl Markdown {
         if text.is_empty() {
             return None;
         }
-        if let Some(fence) = self.block {
-            let run = text.chars().take_while(|&m| m == fence.marker).count();
-            if text[run..].trim_end_matches(' ').is_empty() && !ended {
-                return None;
-            }
-            let closing = run >= fence.length && text[run..].trim_end_matches(' ').is_empty();
-            return Some(if closing { Kind::Fence } else { Kind::Code });
+        let indent = self.pending.len() - text.len();
+        match self.block {
+            Some(fence) if fence.indented && indent >= fence.indent => return Some(Kind::Code),
+            Some(fence) if fence.indented => {}
+            Some(fence) => return self.fenced(fence, text, ended),
+            None => {}
         }
         if text.starts_with("```") || text.starts_with("~~~") {
             return Some(Kind::Fence);
@@ -430,9 +494,13 @@ impl Markdown {
         if !ended && ["`", "``", "~", "~~"].contains(&text) {
             return None;
         }
-        let indent = self.pending.len() - text.len();
         let item = self.lists[..self.within(indent)].last();
-        if indent - item.map_or(0, |list| list.written) < 4 {
+        let relative = indent - item.map_or(0, |list| list.written);
+        // As CommonMark's indented code, which cannot go on with a paragraph's text.
+        if relative >= 4 && !self.lazy {
+            return Some(Kind::Indented);
+        }
+        if relative < 4 {
             if text.starts_with('|') {
                 return Some(Kind::Held);
             }
@@ -486,6 +554,16 @@ impl Markdown {
         Some(Kind::Text)
     }
 
+    /// What a line in the code block under `fence` is: its closing fence, or code.
+    fn fenced(&self, fence: Fence, text: &str, ended: bool) -> Option<Kind> {
+        let run = text.chars().take_while(|&m| m == fence.marker).count();
+        if text[run..].trim_end_matches(' ').is_empty() && !ended {
+            return None;
+        }
+        let closing = run >= fence.length && text[run..].trim_end_matches(' ').is_empty();
+        Some(if closing { Kind::Fence } else { Kind::Code })
+    }
+
     /// The block a line starting as `kind` is in, unless it is in a code block or may be in a
     /// table, which its next line decides.
     fn block_of(&self, kind: &Kind) -> Option<Block> {
@@ -499,7 +577,7 @@ impl Markdown {
             Kind::Quote => Block::Quote,
             Kind::Item => Block::List,
             Kind::Rule => Block::Rule,
-            Kind::Fence | Kind::Code => Block::Code,
+            Kind::Fence | Kind::Code | Kind::Indented => Block::Code,
             Kind::Held => return None,
         })
     }
@@ -556,6 +634,9 @@ impl Markdown {
             Kind::Text | Kind::Quote | Kind::Held if lazy => {}
             _ => self.lists.truncate(within),
         }
+        if matches!(kind, Kind::Indented) {
+            return false;
+        }
         if let Some(list) = self.lists.last() {
             self.pending = " ".repeat(list.shown) + &self.pending[indent..];
         }
@@ -593,6 +674,24 @@ impl Markdown {
                 Line::Code
             }
             Kind::Fence => Line::Fence,
+            // As Scramjet's, between fences, its lines losing the four columns that made it.
+            Kind::Indented => {
+                let list = self.lists.last();
+                let fence = Fence {
+                    marker: ' ',
+                    length: 0,
+                    indent: list.map_or(0, |list| list.written) + 4,
+                    shown: list.map_or(0, |list| list.shown),
+                    indented: true,
+                };
+                self.block = Some(fence);
+                *out += &self.fence(fence, "");
+                out.push('\n');
+                *out += &self.code_indent(fence);
+                self.pending.drain(..fence.indent);
+                *out += CODE_BLOCK.get();
+                Line::Code
+            }
             Kind::Held => Line::Held,
             Kind::Heading(level) => {
                 let style = if level == 1 { TITLE } else { HEADING }.get();
@@ -1454,6 +1553,49 @@ mod tests {
             markdown.push(" x\n"),
             format!("{SYNTAX_KEYWORD}let{RESET}\x1b[2m x\n")
         );
+    }
+
+    #[test]
+    fn indented_code_shows_between_fences_unless_it_goes_on_with_text() {
+        let (fence, code) = ("\x1b[2m```\x1b[0m", "\x1b[32m");
+        assert_eq!(
+            rendered_alike(80, "Run:\n\n    let x;\n\n\n      **y**\n\nafter"),
+            format!(
+                "Run:\n\n{fence}\n  {code}let x;\x1b[0m\n\n\n  {code}  **y**\x1b[0m\n{fence}\n\nafter"
+            )
+        );
+        assert_eq!(
+            rendered_alike(80, "# T\n    c\nnext"),
+            format!("\x1b[1;4;33mT\x1b[0m\n\n{fence}\n  {code}c\x1b[0m\n{fence}\n\nnext")
+        );
+        // In a list, four columns past its item's text.
+        assert_eq!(
+            rendered_alike(80, "- a\n\n        c\n\n    text"),
+            format!("\x1b[36m-\x1b[0m a\n\n  {fence}\n    {code}  c\x1b[0m\n  {fence}\n\n  text")
+        );
+        assert_eq!(render(&["text\n    more"]), "text\n    more");
+        assert_eq!(
+            render(&["    c\n\n"]),
+            format!("{fence}\n  {code}c\x1b[0m\n{fence}\n")
+        );
+    }
+
+    #[test]
+    fn a_backslash_ending_a_line_breaks_it_when_its_text_goes_on() {
+        assert_eq!(
+            rendered_alike(80, "one\\\ntwo\\\n- a\\\n  b"),
+            "one\ntwo\\\n\x1b[36m-\x1b[0m a\n  b"
+        );
+        let quote = "\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ";
+        assert_eq!(
+            rendered_alike(80, "> q\\\n> r\\\n>\n> s\\"),
+            format!(
+                "{quote}q\x1b[0m\n{quote}r\x1b[0m\x1b[2;3m\\\x1b[0m\n{quote}\x1b[0m\n{quote}s\x1b[0m\x1b[2;3m\\\x1b[0m"
+            )
+        );
+        assert_eq!(render(&["end\\\n\nnext"]), "end\\\n\nnext");
+        assert_eq!(render(&["# H\\\nx"]), "\x1b[1;4;33mH\\\x1b[0m\n\nx");
+        assert_eq!(render(&["two\\\\\nx", "\\\\\\\ny"]), "two\\\nx\\\ny");
     }
 
     #[test]

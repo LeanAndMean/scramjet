@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.3 — Indented code and line breaks in replies
+
+### Fixed
+
+- A reply's block indented by four spaces shows as a code block between fences, as Scramjet shows it, where it showed as text; one that goes on with a paragraph's text stays text.
+- A backslash ending a reply's line breaks the line there without showing, as Scramjet's; it still shows at the end of a paragraph or before another block.
+
 ## 0.95.2 — Compaction that frees the context after long thinking
 
 ### Fixed
