@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.7 — Wrapping indented lines
+
+### Fixed
+
+- An indented line of a reply's paragraph wraps back to where the paragraph starts (the screen's edge, the item's text or the quote's border), as Scramjet wraps it; it wrapped under its own indent.
+
 ## 0.95.6 — Indented lines in list items
 
 ### Fixed

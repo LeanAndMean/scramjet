@@ -13,7 +13,7 @@ use super::style::{
     CODE, CODE_BLOCK, CODE_FENCE, EMPHASIS, HEADING, HORIZONTAL_RULE, LINK, LINK_URL, LIST_BULLET,
     QUOTE, QUOTE_BORDER, RESET, STRONG, STRONG_EMPHASIS, STRUCK, TITLE,
 };
-use super::text::{FROM, JOINED, RULE, SPACE, Wrap, columns, plain};
+use super::text::{FROM, HANG, JOINED, RULE, SPACE, Wrap, columns, plain};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -261,8 +261,8 @@ impl Markdown {
             return text.to_owned();
         }
         let text = match self.marked {
-            true => text.replace([FROM, JOINED, SPACE, RULE], ""),
-            false => text.to_owned(),
+            true => text.replace([FROM, JOINED, SPACE, RULE, HANG], ""),
+            false => text.replace(HANG, ""),
         };
         let mut out = String::new();
         let mut lines = text.split('\n');
@@ -761,7 +761,17 @@ impl Markdown {
                 self.quoting = true;
                 Line::Quote(false)
             }
-            Kind::Text => Line::Text(self.plain),
+            // As Scramjet's, whose lines wrapped from a paragraph's start where it does, not
+            // under a line's own indent.
+            Kind::Text => {
+                if self.width > 0 {
+                    let start = self.lists.last().map_or(0, |list| list.shown).min(indent);
+                    *out += &self.pending[..start];
+                    out.push(HANG);
+                    self.pending.drain(..start);
+                }
+                Line::Text(self.plain)
+            }
             Kind::Code => {
                 if let Some(fence) = self.block {
                     *out += &self.code_indent(fence);
@@ -1481,7 +1491,7 @@ mod tests {
         let mut markdown = Markdown::new(true, "", width);
         let mut out: String = pieces.iter().map(|piece| markdown.push(piece)).collect();
         out += &markdown.finish();
-        out
+        out.replace(HANG, "")
     }
 
     /// The text rendered as a streamed reply's deltas are (`Terminal::stream`): newlines at
@@ -1499,7 +1509,7 @@ mod tests {
                 out += &markdown.end_line();
             }
         }
-        out + &markdown.finish()
+        (out + &markdown.finish()).replace(HANG, "")
     }
 
     /// The text rendered however it arrives: whole, and in three pieces split anywhere, pushed
@@ -1560,7 +1570,7 @@ mod tests {
 
     #[test]
     fn text_after_an_open_span_waits_for_it_to_close() {
-        let mut markdown = Markdown::new(true, "", 80);
+        let mut markdown = Markdown::new(true, "", 0);
         assert_eq!(markdown.push("see **this"), "see ");
         assert_eq!(markdown.push(" part** now"), "\x1b[1mthis part\x1b[0m now");
         assert_eq!(markdown.push(" `open"), " ");
@@ -1608,7 +1618,7 @@ mod tests {
         );
         assert_eq!(render(&["  ```"]), format!("  {closed}\n  {closed}"));
         // Ended while its newline waits, as a streamed reply's line does.
-        let mut markdown = Markdown::new(true, "", 80);
+        let mut markdown = Markdown::new(true, "", 0);
         markdown.push("```\nx");
         markdown.end_line();
         assert_eq!(markdown.finish(), format!("\n{closed}"));
@@ -1616,7 +1626,7 @@ mod tests {
 
     #[test]
     fn marked_code_lines_start_their_copy_after_the_indent() {
-        let mut markdown = Markdown::new(true, "", 80).marking(true);
+        let mut markdown = Markdown::new(true, "", 0).marking(true);
         // The text's own marks are not taken as the renderer's.
         let text = format!("a{FROM}b{JOINED}{SPACE}{RULE}\n```\n  x\n\n```");
         assert_eq!(
@@ -1649,7 +1659,7 @@ mod tests {
             )
         );
         // A line shows once it ends, in the block's style.
-        let mut markdown = Markdown::new(true, "\x1b[2m", 80);
+        let mut markdown = Markdown::new(true, "\x1b[2m", 0);
         assert_eq!(
             markdown.push("```rs\nlet"),
             "\x1b[2m```rs\x1b[0m\x1b[2m\n  "
@@ -1706,7 +1716,7 @@ mod tests {
 
     #[test]
     fn styles_restore_the_block_style() {
-        let mut markdown = Markdown::new(true, "\x1b[2m", 80);
+        let mut markdown = Markdown::new(true, "\x1b[2m", 0);
         assert_eq!(
             markdown.push("**Title** `c`\n"),
             "\x1b[1mTitle\x1b[0m\x1b[2m \x1b[36mc\x1b[0m\x1b[2m\n"
@@ -1792,6 +1802,41 @@ mod tests {
                 bullet("-"),
                 bullet("1."),
             )
+        );
+    }
+
+    #[test]
+    fn a_paragraphs_lines_wrap_back_to_where_it_starts_as_in_scramjet() {
+        let text = "para\n    indented line that goes on past the edge\n- item\n      deeper line that \
+            goes on past the edge\n  - nested\n       kept line that goes on past the edge\n\n\
+            > quote\n>    quoted line that goes on past the edge";
+        let shown = |pieces: &[&str]| {
+            let mut markdown = Markdown::new(true, "", 30);
+            let mut wrap = Wrap::new(30).keeping_gutters();
+            let mut out = String::new();
+            for piece in pieces {
+                out += &wrap.push(&markdown.push(piece));
+            }
+            out += &wrap.push(&markdown.finish());
+            out += &wrap.finish();
+            let mut escape = super::super::text::Escape::None;
+            out.chars().filter(|&c| !escape.step(c)).collect::<String>()
+        };
+        let expected = "para\n    indented line that goes on\npast the edge\n- item\n  deeper line that goes on\n  \
+            past the edge\n    - nested\n         kept line that goes\n      on past the edge\n\n│ quote\n\
+            │    quoted line that goes on\n│ past the edge";
+        assert_eq!(shown(&[text]), expected);
+        for at in (0..text.len()).filter(|&at| text.is_char_boundary(at)) {
+            assert_eq!(
+                shown(&[&text[..at], &text[at..]]),
+                expected,
+                "split at {at}"
+            );
+        }
+        // Text from the model cannot place the mark.
+        assert_eq!(
+            shown(&[&format!("a\n {HANG}  b c d e f g h i j k l m n o p")]),
+            "a\n   b c d e f g h i j k l m n o\np"
         );
     }
 
@@ -1900,7 +1945,7 @@ mod tests {
             "| a |\n\n┌───┬───┐\n│ \x1b[1mb\x1b[0m │ \x1b[1mc\x1b[0m │\n├───┼───┤\n└───┴───┘"
         );
         // Shown as the line ends, while the reply streams.
-        let mut markdown = Markdown::new(true, "", 80);
+        let mut markdown = Markdown::new(true, "", 0);
         assert_eq!(markdown.push("| a |\n|-|\n| 1 |"), "");
         assert_eq!(markdown.end_line(), "");
         assert_eq!(markdown.push("\n"), "");

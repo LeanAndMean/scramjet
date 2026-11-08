@@ -14,6 +14,9 @@ pub(super) const UNTIL: char = '\x10';
 pub(super) const RULE: char = '\x1c';
 pub(super) const JOINED: char = '\x1e';
 pub(super) const SPACE: char = '\x1f';
+/// From the markdown renderer: lines wrapped from this one start at this column, not under the
+/// spaces after it (`Wrap::keeping_gutters`).
+pub(super) const HANG: char = '\x11';
 
 /// Breaks streamed text into lines that fit the terminal, between words where it can, instead of
 /// leaving the terminal to split words at its edge. A word is held until it is complete.
@@ -42,8 +45,11 @@ pub(super) struct Wrap {
     escape: Escape,
     /// The lines it starts at a break are marked with `JOINED`.
     marked: bool,
-    /// The `FROM` marks of its input are kept, where it drops them otherwise.
+    /// The `FROM` marks of its input are kept, where it drops them otherwise, and its `HANG`
+    /// marks are followed.
     gutters: bool,
+    /// Where a `HANG` mark put the start of lines wrapped from the current one.
+    hang: Option<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -93,14 +99,15 @@ impl Wrap {
             escape: Escape::None,
             marked: false,
             gutters: false,
+            hang: None,
         }
     }
     /// The wrap, its breaks marked for a copy (`JOINED`) if `marked`.
     pub(super) fn marking(self, marked: bool) -> Self {
         Self { marked, ..self }
     }
-    /// The wrap, keeping the gutters (`FROM`) its input marks, for text whose renderer removed
-    /// the marks from what it was given (`Markdown::marking`).
+    /// The wrap, keeping the gutters (`FROM`) its input marks and hanging lines where it marks
+    /// (`HANG`), for text whose renderer removed the marks from what it was given.
     pub(super) fn keeping_gutters(self) -> Self {
         Self {
             gutters: true,
@@ -109,7 +116,10 @@ impl Wrap {
     }
     pub(super) fn push(&mut self, text: &str) -> String {
         if self.width == 0 {
-            return text.to_owned();
+            return match self.gutters {
+                true => text.replace(HANG, ""),
+                false => text.to_owned(),
+            };
         }
         let mut out = String::new();
         for c in text.chars() {
@@ -124,6 +134,7 @@ impl Wrap {
                     self.column = 0;
                     self.line_start = true;
                     self.indent = 0;
+                    self.hang = None;
                     self.task = Task::None;
                     self.lead.clear();
                     self.lead_columns = 0;
@@ -139,6 +150,10 @@ impl Wrap {
                     out.extend(std::iter::repeat_n(' ', self.spaces));
                     self.column += std::mem::take(&mut self.spaces);
                     out.push(FROM);
+                }
+                HANG if self.gutters => {
+                    self.place(&mut out);
+                    self.hang = Some(self.column + self.spaces);
                 }
                 FROM | JOINED | SPACE if self.marked => {}
                 c => {
@@ -204,11 +219,15 @@ impl Wrap {
                 self.continued = false;
                 return;
             }
-            let marker = matches!(shown.as_str(), "-" | "*" | "+" | "•" | "●")
-                || shown.strip_suffix(['.', ')']).is_some_and(|number| {
-                    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
-                });
-            let indent = self.column + self.spaces + if marker { self.word_width + 1 } else { 0 };
+            let marker = self.hang.is_none()
+                && (matches!(shown.as_str(), "-" | "*" | "+" | "•" | "●")
+                    || shown.strip_suffix(['.', ')']).is_some_and(|number| {
+                        !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+                    }));
+            let indent = match self.hang {
+                Some(hang) => hang,
+                None => self.column + self.spaces + if marker { self.word_width + 1 } else { 0 },
+            };
             let under_lead = self.lead_columns + usize::from(self.lead_columns > 0);
             self.indent = if indent < self.width / 2 {
                 indent
