@@ -33,20 +33,41 @@ pub(super) struct Buffer {
     pub(super) text: String,
     /// Byte offset, always on a grapheme boundary.
     pub(super) cursor: usize,
+    /// Where a selection started, which runs from there to the cursor.
+    pub(super) anchor: Option<usize>,
 }
 
 impl Buffer {
     fn set(&mut self, text: String) {
         self.cursor = text.len();
         self.text = text;
+        self.anchor = None;
     }
+    /// Types `text` at the cursor, in place of the selection if there is one.
     fn insert(&mut self, text: &str) {
+        self.remove_selection();
         self.text.insert_str(self.cursor, text);
         self.cursor += text.len();
     }
     fn remove(&mut self, start: usize, end: usize) {
         self.text.replace_range(start..end, "");
         self.cursor = start;
+        self.anchor = None;
+    }
+    /// The bytes selected, from the start to before the end; `None` when nothing is.
+    fn selection(&self) -> Option<Range<usize>> {
+        let anchor = self.anchor.filter(|&anchor| anchor != self.cursor)?;
+        let range = anchor.min(self.cursor)..anchor.max(self.cursor);
+        (range.end <= self.text.len()).then_some(range)
+    }
+    /// Removes the selection; returns whether there was one.
+    fn remove_selection(&mut self) -> bool {
+        let selection = self.selection();
+        self.anchor = None;
+        selection.is_some_and(|range| {
+            self.remove(range.start, range.end);
+            true
+        })
     }
     fn previous(&self) -> usize {
         self.text[..self.cursor]
@@ -102,6 +123,14 @@ impl Buffer {
     }
     fn apply(&mut self, edit: Edit) {
         match edit {
+            Edit::Backspace | Edit::Delete if self.remove_selection() => {}
+            // As in other editors, a move without Shift goes to the selection's side first.
+            Edit::Left | Edit::Right if let Some(range) = self.selection() => {
+                self.cursor = match edit {
+                    Edit::Left => range.start,
+                    _ => range.end,
+                };
+            }
             Edit::Backspace => self.remove(self.previous(), self.cursor),
             Edit::Delete => {
                 let end = self.next();
@@ -173,6 +202,32 @@ fn edit(key: &Key) -> Option<Edit> {
         .map(|&(_, edit)| edit)
 }
 
+/// How a key that selects moves the cursor, the selection's end.
+#[derive(Clone, Copy)]
+enum Extend {
+    By(Edit),
+    /// A row up (`true`) or down, as on screen.
+    Row(bool),
+}
+
+const EXTENDS: [(Binding, Extend); 8] = [
+    (Binding::SelectLeft, Extend::By(Edit::Left)),
+    (Binding::SelectRight, Extend::By(Edit::Right)),
+    (Binding::SelectLineUp, Extend::Row(true)),
+    (Binding::SelectLineDown, Extend::Row(false)),
+    (Binding::SelectWordLeft, Extend::By(Edit::WordLeft)),
+    (Binding::SelectWordRight, Extend::By(Edit::WordRight)),
+    (Binding::SelectLineStart, Extend::By(Edit::LineStart)),
+    (Binding::SelectLineEnd, Extend::By(Edit::LineEnd)),
+];
+
+/// The way `key` extends a selection, if it is one of the keys that select.
+fn extend(key: &Key) -> Option<Extend> {
+    (EXTENDS.iter())
+        .find(|&&(binding, _)| key.is(binding))
+        .map(|&(_, extend)| extend)
+}
+
 /// Screen rows for the text, with the row and column of every cursor position.
 struct Layout {
     rows: Vec<String>,
@@ -195,16 +250,32 @@ struct WordStart {
 
 impl Layout {
     fn new(text: &str, width: usize) -> Self {
-        Self::marked(text, width, false, &[])
+        Self::marked(text, width, false, &[], None)
     }
 
     /// Wraps lines between words where it can. As in Scramjet's editor the last column stays
     /// free for the cursor; spaces that reach it hang there instead of starting a row. With
     /// `marked`, the rows are marked for a copy (`text::FROM`). The `misspelled` byte ranges,
-    /// in order, are underlined.
-    fn marked(text: &str, width: usize, marked: bool, misspelled: &[Range<usize>]) -> Self {
+    /// in order, are underlined, and the `selected` ones shown selected.
+    fn marked(
+        text: &str,
+        width: usize,
+        marked: bool,
+        misspelled: &[Range<usize>],
+        selected: Option<Range<usize>>,
+    ) -> Self {
         let mut misspelled = misspelled.iter().peekable();
         let (underline, end) = (spelling_style(), style::RESET);
+        let selected = selected.unwrap_or_default();
+        // As the underline, a selected grapheme joins the selected one before it.
+        let pick = |row: &mut String, shown: &str, joined: bool| {
+            match joined && row.ends_with(end) {
+                true => row.truncate(row.len() - end.len()),
+                false => row.push_str(style::SELECTION.get()),
+            }
+            row.push_str(shown);
+            row.push_str(end);
+        };
         let gutter = |first: &str| match marked {
             true => format!("{first}{FROM}"),
             false => first.to_owned(),
@@ -232,6 +303,7 @@ impl Layout {
             let mut hanging = false;
             let mut hung = 0;
             let mut word: Option<WordStart> = None;
+            let mut after_selected = false;
             for (index, grapheme) in line.grapheme_indices(true) {
                 let escaped: String;
                 // Text the user did not type, such as a resumed or dispatched prompt, may hold
@@ -257,8 +329,13 @@ impl Layout {
                     });
                     if hanging {
                         hung += 1;
+                    } else if selected.contains(&(offset + index)) {
+                        pick(&mut rows[row], shown, after_selected);
+                        after_selected = true;
+                        column += cells;
                     } else {
                         rows[row].push_str(shown);
+                        after_selected = false;
                         column += cells;
                     }
                     continue;
@@ -304,11 +381,13 @@ impl Layout {
                 let at = offset + index;
                 while misspelled.next_if(|range| range.end <= at).is_some() {}
                 let last = rows.last_mut().unwrap();
+                let selecting = selected.contains(&at);
                 match misspelled.peek().is_some_and(|range| range.start <= at) {
+                    _ if selecting => pick(last, shown, after_selected),
                     // Each grapheme closes its underline, so that a word moved to the next row
                     // or broken across rows carries its own; neighbors join again.
                     true => {
-                        match last.ends_with(end) {
+                        match last.ends_with(end) && !after_selected {
                             true => last.truncate(last.len() - end.len()),
                             false => last.push_str(&underline),
                         }
@@ -317,6 +396,7 @@ impl Layout {
                     }
                     false => last.push_str(shown),
                 }
+                after_selected = selecting;
                 column += cells;
                 row_has_text = true;
             }
@@ -363,7 +443,7 @@ impl Layout {
 /// The rows a prompt takes on screen as the editor shows it, wrapped to `width`, `marked` for
 /// a copy (`text::FROM`) if asked.
 pub(super) fn prompt_rows(text: &str, width: usize, marked: bool) -> Vec<String> {
-    Layout::marked(text, width, marked, &[]).rows
+    Layout::marked(text, width, marked, &[], None).rows
 }
 
 /// The curly underline Scramjet marks a misspelled word with, in the theme's color for it; a
@@ -557,6 +637,7 @@ impl Editor {
         .into_iter()
         .any(|binding| key.is(binding));
         let edit = edit(&key);
+        let extending = extend(&key);
         let empty = buffer.text.is_empty();
         // As Scramjet's, a space is undone apart from the word before it, and with the one after.
         let typed = match &key {
@@ -583,6 +664,26 @@ impl Editor {
                 *last = previous;
                 false
             }
+            _ if let Some(extending) = extending => {
+                *completion = None;
+                let anchor = buffer.anchor.unwrap_or(buffer.cursor);
+                buffer.anchor = None;
+                match extending {
+                    Extend::By(edit) => buffer.apply(edit),
+                    // Up from the first row selects to the start, as in other editors.
+                    Extend::Row(up) => {
+                        let layout = Layout::new(&buffer.text, terminal_size().0);
+                        buffer.cursor = (layout.vertical(buffer.cursor, up)).unwrap_or(if up {
+                            0
+                        } else {
+                            buffer.text.len()
+                        });
+                    }
+                }
+                buffer.anchor = (anchor != buffer.cursor).then_some(anchor);
+                true
+            }
+            _ if escape && buffer.selection().is_some() => true,
             _ if undoing => {
                 if let Some(snapshot) = undo.pop() {
                     *buffer = snapshot;
@@ -804,6 +905,9 @@ impl Editor {
                 false
             }
         };
+        if extending.is_none() {
+            buffer.anchor = None;
+        }
         if let Some(space) = typed.filter(|_| buffer.text != prior.text) {
             *last = Last::Typing;
             if !space && previous == Last::Typing {
@@ -863,6 +967,7 @@ impl Editor {
             return false;
         };
         let Lookup { search, tab, .. } = lookup.take().expect("polled");
+        buffer.anchor = None;
         *completion = Completion::found(search.mention.start, found, buffer);
         if let Some(list) = completion.take_if(|list| tab && list.items.len() == 1) {
             list.apply(buffer);
@@ -935,6 +1040,15 @@ impl Draft {
         self.completion.is_some()
     }
 
+    /// The text selected with the keys that select, if any.
+    pub(super) fn selected(&self) -> Option<&str> {
+        (self.buffer.selection()).and_then(|range| self.buffer.text.get(range))
+    }
+
+    pub(super) fn deselect(&mut self) {
+        self.buffer.anchor = None;
+    }
+
     /// The status row's note: how to exit after a first Ctrl-C, or the note set, while it lasts.
     pub(super) fn note(&self) -> Option<String> {
         if self.exit_armed {
@@ -967,7 +1081,7 @@ impl Draft {
             true => spelling::misspelled(text),
             false => Vec::new(),
         };
-        let layout = Layout::marked(text, width, true, &misspelled);
+        let layout = Layout::marked(text, width, true, &misspelled, self.buffer.selection());
         let cursor = layout.at(self.buffer.cursor);
         (layout.rows, cursor.row, cursor.column)
     }
@@ -1022,6 +1136,7 @@ mod tests {
         let mut buffer = Buffer {
             text: text.into(),
             cursor,
+            anchor: None,
         };
         for key in keys(input) {
             match (&key, super::edit(&key)) {
@@ -1100,8 +1215,9 @@ mod tests {
     #[allow(clippy::single_range_in_vec_init)]
     fn misspelled_words_are_underlined_on_every_row_they_reach() {
         let (on, off) = (spelling_style(), style::RESET);
-        let marked =
-            |text, width, ranges: &[Range<usize>]| Layout::marked(text, width, false, ranges).rows;
+        let marked = |text, width, ranges: &[Range<usize>]| {
+            Layout::marked(text, width, false, ranges, None).rows
+        };
         assert_eq!(
             marked("teh cat", 80, &[0..3]),
             [format!("> {on}teh{off} cat")]
@@ -1112,7 +1228,7 @@ mod tests {
             ["> hello ".to_owned(), format!("  {on}wrld{off}")]
         );
         assert_eq!(
-            Layout::marked("hello wrld", 10, false, &[6..10])
+            Layout::marked("hello wrld", 10, false, &[6..10], None)
                 .at(8)
                 .column,
             Layout::new("hello wrld", 10).at(8).column
@@ -1329,5 +1445,74 @@ mod tests {
         assert_eq!(cursor(&draft), "e\u{301}x ".len());
         type_in(&mut editor, &mut draft, b"\x1de");
         assert_eq!(cursor(&draft), "e\u{301}x é ".len());
+    }
+
+    #[test]
+    fn shift_keys_select_and_typing_or_deleting_replaces_the_selection() {
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft("one two three".into());
+        // Shift+Left twice, then Ctrl+Shift+Left: back over "ee", then to the word's start.
+        type_in(&mut editor, &mut draft, b"\x1b[1;2D\x1b[1;2D");
+        assert_eq!(draft.selected(), Some("ee"));
+        type_in(&mut editor, &mut draft, b"\x1b[1;6D");
+        assert_eq!(draft.selected(), Some("three"));
+        // Back past the anchor, the selection goes to its other side.
+        type_in(&mut editor, &mut draft, b"\x1b[1;2F\x1b[1;2C");
+        assert_eq!(draft.selected(), None);
+        type_in(&mut editor, &mut draft, b"\x1b[1;2H");
+        assert_eq!(draft.selected(), Some("one two three"));
+        type_in(&mut editor, &mut draft, b"x");
+        assert_eq!(draft.text(), "x");
+        assert_eq!(draft.selected(), None);
+        // Undo brings the text back.
+        type_in(&mut editor, &mut draft, b"\x1f");
+        assert_eq!(draft.text(), "one two three");
+
+        let mut draft = editor.draft("one two three".into());
+        type_in(&mut editor, &mut draft, b"\x1b[1;5D\x1b[D\x1b[1;6D\x7f");
+        assert_eq!(draft.text(), "one  three");
+        // A move without Shift drops the selection, Left at its start.
+        type_in(&mut editor, &mut draft, b"\x1b[1;2C\x1b[1;2C\x1b[D");
+        assert_eq!((draft.selected(), draft.buffer.cursor), (None, 4));
+        type_in(&mut editor, &mut draft, b"\x1b[1;2C\x1b[3~");
+        assert_eq!(draft.text(), "one three");
+        // A paste takes its place too.
+        type_in(
+            &mut editor,
+            &mut draft,
+            b"\x1b[1;2C\x1b[1;2F\x1b[200~ree\x1b[201~",
+        );
+        assert_eq!(draft.text(), "one ree");
+        // Shift+Up on the first row selects to the start, Shift+Down on the last to the end.
+        let mut draft = editor.draft("first\nsecond".into());
+        type_in(&mut editor, &mut draft, b"\x1b[1;2A");
+        assert_eq!(draft.selected(), Some("\nsecond"));
+        type_in(&mut editor, &mut draft, b"\x1b[1;2A");
+        assert_eq!(draft.selected(), Some("first\nsecond"));
+        type_in(&mut editor, &mut draft, b"\x1b[1;2B\x1b[1;2B");
+        assert_eq!(draft.selected(), None);
+        // Escape lets it go and leaves the text.
+        type_in(&mut editor, &mut draft, b"\x1b[1;2H\x1b");
+        assert_eq!((draft.selected(), draft.text()), (None, "first\nsecond"));
+    }
+
+    #[test]
+    fn the_selection_shows_reversed_and_a_misspelled_word_after_it_underlined() {
+        let mut draft = prompt_editor(Vec::new()).draft("ab cd".into());
+        draft.buffer.anchor = Some(1);
+        draft.buffer.cursor = 3;
+        let layout = Layout::marked(
+            &draft.buffer.text,
+            40,
+            false,
+            std::slice::from_ref(&(3..5)),
+            draft.buffer.selection(),
+        );
+        let (selected, end) = (style::SELECTION.get(), style::RESET);
+        let underline = spelling_style();
+        assert_eq!(
+            layout.rows[0],
+            format!("> a{selected}b {end}{underline}cd{end}")
+        );
     }
 }

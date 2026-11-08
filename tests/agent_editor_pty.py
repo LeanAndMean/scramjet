@@ -4311,6 +4311,37 @@ def fullscreen_mouse(read, until, send, output):
     assert b'\x1b[7m' not in output[copied:], 'still selected'
     rows = shown()
     assert '6 more lines below' in '\n'.join(rows) and 'Ctrl+C again' not in '\n'.join(rows), rows
+
+    def copied_text(text):
+        end = time.monotonic() + 10
+        while not os.path.exists(clipboard) or open(clipboard).read() != text:
+            assert time.monotonic() < end, open(clipboard).read() if os.path.exists(clipboard) else None
+            read(.05)
+        os.remove(clipboard)
+    os.remove(clipboard)
+    # Shift+Down and Shift+End move the end of a selection made with the mouse.
+    mark = len(output)
+    send(b'\x1b[<0;6;%dM\x1b[<32;10;%dM\x1b[<0;10;%dm' % (row, row, row))
+    until(b'\x1b[7m20 ', mark)
+    send(b'\x1b[1;2B\x1b[1;2F\x03')
+    copied_text('20 of the reply.\nRow 21 of the reply.')
+    # The prompt selects with them too, shown reversed; Ctrl+C copies it, which stays.
+    mark = len(output)
+    send(b'hello world\x1b[1;6D\x1b[1;2D')
+    until(b'\x1b[7m ', mark)
+    send(b'\x03')
+    copied_text(' world')
+    rows = on_screen('> hello world')
+    assert 'Ctrl+C again' not in '\n'.join(rows), rows
+    # Typing replaces it; Escape lets a selection go, the text and the cursor staying.
+    send(b'_\x1b[1;2H')
+    until(b'\x1b[7mhello_', mark)
+    send(b'\x1b')
+    read(.3)
+    send(b'X')
+    on_screen('> Xhello_')
+    send(b'\x05\x15')
+    on_screen('hello_', gone=True)
     # A click selects nothing; Escape lets a selection go and goes back to the end.
     send(b'\x1b[<0;3;3M\x1b[<0;3;3m\x03')
     rows = on_screen('Ctrl+C again')

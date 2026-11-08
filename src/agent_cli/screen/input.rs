@@ -124,6 +124,9 @@ impl App {
             _ => None,
         };
         if self.selection.is_some() {
+            if self.extend_selection(&key) {
+                return Flow::Go;
+            }
             if key.is(Binding::Copy) {
                 self.copy();
                 return Flow::Go;
@@ -135,6 +138,19 @@ impl App {
             }
             if key != Key::Idle && paging.is_none() {
                 self.clear_selection();
+            }
+        }
+        // The prompt's own selection: the copy key copies it, which stays, and Escape lets it go.
+        if let Some((_, draft)) = self.editing()
+            && let Some(text) = draft.selected().map(str::to_owned)
+        {
+            if key.is(Binding::Copy) {
+                self.copy_text(text, None);
+                return Flow::Go;
+            }
+            if key.is(Binding::Interrupt) {
+                draft.deselect();
+                return Flow::Go;
             }
         }
         let listing = matches!(

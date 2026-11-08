@@ -25,6 +25,14 @@ pub(super) enum Binding {
     CursorWordRight,
     CursorLineStart,
     CursorLineEnd,
+    SelectLeft,
+    SelectRight,
+    SelectLineUp,
+    SelectLineDown,
+    SelectWordLeft,
+    SelectWordRight,
+    SelectLineStart,
+    SelectLineEnd,
     JumpForward,
     JumpBackward,
     PageUp,
@@ -108,6 +116,7 @@ pub(super) enum Binding {
 #[derive(Clone, Copy, PartialEq)]
 enum Section {
     Navigation,
+    Selecting,
     Editing,
     Other,
     Lists,
@@ -118,8 +127,9 @@ enum Section {
     ThemeEditor,
 }
 
-const SECTIONS: [(Section, &str); 9] = [
+const SECTIONS: [(Section, &str); 10] = [
     (Section::Navigation, "Navigation"),
+    (Section::Selecting, "Selecting"),
     (Section::Editing, "Editing"),
     (Section::Other, "Other"),
     (Section::Lists, "Lists"),
@@ -161,7 +171,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 85] = [
+const DEFINITIONS: [Definition; 93] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -170,6 +180,14 @@ const DEFINITIONS: [Definition; 85] = [
     define(B::CursorWordRight, "tui.editor.cursorWordRight", &["alt+right", "ctrl+right", "alt+f"], S::Navigation, "Move a word right"),
     define(B::CursorLineStart, "tui.editor.cursorLineStart", &["home", "ctrl+a"], S::Navigation, "Start of line"),
     define(B::CursorLineEnd, "tui.editor.cursorLineEnd", &["end", "ctrl+e"], S::Navigation, "End of line"),
+    define(B::SelectLeft, "tui.editor.selectLeft", &["shift+left"], S::Selecting, "Select a character left"),
+    define(B::SelectRight, "tui.editor.selectRight", &["shift+right"], S::Selecting, "Select a character right"),
+    define(B::SelectLineUp, "tui.editor.selectUp", &["shift+up"], S::Selecting, "Select a line up"),
+    define(B::SelectLineDown, "tui.editor.selectDown", &["shift+down"], S::Selecting, "Select a line down"),
+    define(B::SelectWordLeft, "tui.editor.selectWordLeft", &["ctrl+shift+left", "alt+shift+left"], S::Selecting, "Select a word left"),
+    define(B::SelectWordRight, "tui.editor.selectWordRight", &["ctrl+shift+right", "alt+shift+right"], S::Selecting, "Select a word right"),
+    define(B::SelectLineStart, "tui.editor.selectLineStart", &["shift+home"], S::Selecting, "Select to the start of the line"),
+    define(B::SelectLineEnd, "tui.editor.selectLineEnd", &["shift+end"], S::Selecting, "Select to the end of the line"),
     define(B::JumpForward, "tui.editor.jumpForward", &["ctrl+]"], S::Navigation, "Jump forward to character"),
     define(B::JumpBackward, "tui.editor.jumpBackward", &["ctrl+alt+]"], S::Navigation, "Jump backward to character"),
     define(B::PageUp, "tui.viewport.pageUp", &["pageUp"], S::Navigation, "Scroll the conversation up a page"),
@@ -190,7 +208,7 @@ const DEFINITIONS: [Definition; 85] = [
     define(B::Tab, "tui.input.tab", &["tab"], S::Other, "Path completion / accept autocomplete"),
     define(B::Interrupt, "app.interrupt", &["escape"], S::Other, "Cancel autocomplete / interrupt the turn"),
     define(B::Clear, "app.clear", &["ctrl+c"], S::Other, "Clear editor (first) / exit (second)"),
-    define(B::Copy, "tui.input.copy", &["ctrl+c"], S::Other, "Copy the text selected with the mouse"),
+    define(B::Copy, "tui.input.copy", &["ctrl+c"], S::Other, "Copy the text selected"),
     define(B::Exit, "app.exit", &["ctrl+d"], S::Other, "Exit (when editor is empty)"),
     define(B::Suspend, "app.suspend", &["ctrl+z"], S::Other, "Suspend to background"),
     define(B::ThinkingCycle, "app.thinking.cycle", &["shift+tab"], S::Other, "Cycle thinking level"),
@@ -426,7 +444,10 @@ const EVERYWHERE: [Binding; 6] = [
 fn together(a: Binding, b: Binding) -> bool {
     let at_prompt = |binding: Binding| {
         let section = DEFINITIONS[binding as usize].section;
-        matches!(section, S::Navigation | S::Editing | S::Other)
+        matches!(
+            section,
+            S::Navigation | S::Selecting | S::Editing | S::Other
+        )
     };
     let (s, t) = (
         DEFINITIONS[a as usize].section,
@@ -457,7 +478,12 @@ pub(super) fn conflicts(binding: Binding, press: Press) -> Vec<String> {
         .collect();
     let section = DEFINITIONS[binding as usize].section;
     let typed = matches!(press.code, Code::Char(_)) && press.modifiers & (CTRL | ALT) == 0;
-    if typed && matches!(section, S::Navigation | S::Editing | S::Other) {
+    if typed
+        && matches!(
+            section,
+            S::Navigation | S::Selecting | S::Editing | S::Other
+        )
+    {
         also.push("typing it in the prompt".to_owned());
     }
     also

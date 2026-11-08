@@ -185,14 +185,7 @@ pub(super) fn width(line: &str) -> usize {
 /// same kind (whitespace, punctuation or other) around the cell there, from its first column
 /// to after its last; `None` past the line's end.
 pub(super) fn word(line: &str, column: usize) -> Option<(usize, usize)> {
-    let mut cells = Vec::new();
-    let mut at = 0;
-    for piece in pieces(line) {
-        if let Piece::Cell(cell, width) = piece {
-            cells.push((at, at + width, kind(cell)));
-            at += width;
-        }
-    }
+    let cells = cells(line);
     let index = cells
         .iter()
         .position(|&(start, end, _)| start <= column && column < end)?;
@@ -205,6 +198,59 @@ pub(super) fn word(line: &str, column: usize) -> Option<(usize, usize)> {
         .map_or(cells.len(), |after| index + after)
         - 1;
     Some((cells[first].0, cells[last].1))
+}
+
+/// The cells of `line`: their first column, the column after them and their kind.
+fn cells(line: &str) -> Vec<(usize, usize, u8)> {
+    let mut cells = Vec::new();
+    let mut at = 0;
+    for piece in pieces(line) {
+        if let Piece::Cell(cell, width) = piece {
+            cells.push((at, at + width, kind(cell)));
+            at += width;
+        }
+    }
+    cells
+}
+
+/// The edge of the cell after (`forward`) or before `column` in `line`.
+pub(super) fn step(line: &str, column: usize, forward: bool) -> usize {
+    let cells = cells(line);
+    match forward {
+        true => (cells.iter())
+            .find(|&&(_, end, _)| end > column)
+            .map_or(column, |&(_, end, _)| end),
+        false => (cells.iter().rev())
+            .find(|&&(start, _, _)| start < column)
+            .map_or(0, |&(start, _, _)| start),
+    }
+}
+
+/// Where a move by a word from `column` in `line` goes, as in editors: past the whitespace,
+/// then past the run of cells of the kind after it (`forward`) or before it.
+pub(super) fn word_step(line: &str, column: usize, forward: bool) -> usize {
+    let cells = cells(line);
+    let mut ahead: Vec<_> = match forward {
+        true => (cells.iter()).filter(|cell| cell.0 >= column).collect(),
+        false => (cells.iter().rev())
+            .filter(|cell| cell.1 <= column)
+            .collect(),
+    };
+    let blank = ahead.iter().take_while(|cell| cell.2 == 0).count();
+    let rest = ahead.split_off(blank);
+    let kind = rest.first().map(|cell| cell.2);
+    let taken = rest.iter().take_while(|cell| Some(cell.2) == kind).count();
+    match (
+        forward,
+        ahead
+            .into_iter()
+            .chain(rest)
+            .nth((blank + taken).max(1) - 1),
+    ) {
+        (_, None) => column,
+        (true, Some(cell)) => cell.1,
+        (false, Some(cell)) => cell.0,
+    }
 }
 
 /// Scramjet's kinds of cell for a double click: 0 whitespace, 1 punctuation, 2 other.
@@ -349,6 +395,23 @@ mod tests {
         assert_eq!(at(30), None);
         assert_eq!(width(line), 30);
         assert_eq!(word("", 0), None);
+    }
+
+    #[test]
+    fn keys_move_a_selections_end_by_a_cell_or_a_word() {
+        let line = "\x1b[1mab\x1b[0m 漢字, x";
+        // Wide characters take two columns, which a step crosses at once.
+        assert_eq!(step(line, 3, true), 5);
+        assert_eq!(step(line, 5, false), 3);
+        assert_eq!(step(line, 0, false), 0);
+        assert_eq!(step(line, 10, true), 10);
+        assert_eq!(word_step(line, 0, true), 2);
+        assert_eq!(word_step(line, 2, true), 7);
+        assert_eq!(word_step(line, 7, true), 8);
+        assert_eq!(word_step(line, 10, false), 9);
+        assert_eq!(word_step(line, 9, false), 7);
+        assert_eq!(word_step(line, 7, false), 3);
+        assert_eq!(word_step(line, 0, false), 0);
     }
 
     #[test]

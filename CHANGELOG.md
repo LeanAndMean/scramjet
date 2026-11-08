@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.92.0 — Selecting with the keyboard
+
+### Added
+
+- Shift+Left/Right/Up/Down, Shift+Home/End and Ctrl+Shift+Left/Right (also Alt+Shift) select text in the prompt, shown reversed: typing or a paste replaces it, Backspace or Delete removes it, Ctrl+C copies it and keeps it, Escape or a move without Shift lets it go.
+- The same keys move the end of a selection made with the mouse in the conversation, by a character, a word, a line or to a line's start or end, scrolling to keep it shown.
+- `/hotkeys` lists them under Selecting (`tui.editor.selectLeft` and the rest), so they can be given other keys.
+
 ## 0.91.0 — Your own words in spelling
 
 ### Added

@@ -551,6 +551,7 @@ mod tests {
         let mut buffer = Buffer {
             text: "/resu rest".into(),
             cursor: 5,
+            anchor: None,
         };
         let list = Completion::slash(&buffer.text[..buffer.cursor], &[]).unwrap();
         assert_eq!(labels(&list), ["/resume"]);
@@ -644,6 +645,7 @@ mod tests {
         let mut buffer = Buffer {
             text: "/model hai".into(),
             cursor: 10,
+            anchor: None,
         };
         Completion::argument(&buffer.text, &models, &[])
             .unwrap()
@@ -675,6 +677,7 @@ mod tests {
         let mut buffer = Buffer {
             text: "/mcp reconnect ta".into(),
             cursor: 17,
+            anchor: None,
         };
         let list = Completion::argument(&buffer.text, &[], &servers).unwrap();
         list.apply(&mut buffer);
@@ -754,6 +757,7 @@ mod tests {
         let mut buffer = Buffer {
             text: "/rs:l".into(),
             cursor: 5,
+            anchor: None,
         };
         let list = Completion::slash("/rs:l", &loaded).unwrap();
         list.apply(&mut buffer);
@@ -795,6 +799,7 @@ mod tests {
         let mut buffer = Buffer {
             text: "see AL".into(),
             cursor: 6,
+            anchor: None,
         };
         let mut list = list;
         list.select(false);
@@ -844,6 +849,7 @@ mod tests {
             let mut buffer = Buffer {
                 text: text.into(),
                 cursor,
+                anchor: None,
             };
             Completion::path(&text[..cursor], &root)
                 .unwrap()
@@ -890,6 +896,7 @@ mod tests {
             let mut buffer = Buffer {
                 text: text.into(),
                 cursor,
+                anchor: None,
             };
             Completion::found(start, vec![item(value, label)], &buffer)
                 .unwrap()
@@ -920,6 +927,7 @@ mod tests {
         let buffer = Buffer {
             text: "@src/ed".into(),
             cursor: 7,
+            anchor: None,
         };
         let items = || {
             vec![
@@ -939,6 +947,7 @@ mod tests {
         let buffer = Buffer {
             text: "@xyz".into(),
             cursor: 4,
+            anchor: None,
         };
         assert_eq!(Completion::found(0, items(), &buffer).unwrap().selected, 0);
         assert!(Completion::found(0, Vec::new(), &buffer).is_none());

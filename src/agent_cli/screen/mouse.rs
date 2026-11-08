@@ -86,11 +86,11 @@ pub(super) struct Thumb {
     last: usize,
 }
 
-/// A copy under way, of the selection `selection`.
+/// A copy under way, of the selection `selection`, or of the prompt's when `None`.
 pub(super) struct Copying {
     /// The terminal's sequence that copies, if any, or the failure.
     outcome: mpsc::Receiver<Result<Option<String>, String>>,
-    selection: u64,
+    selection: Option<u64>,
 }
 
 /// The clipboard read for a right click, or an image's path for Ctrl+V, pasted only into the
@@ -418,6 +418,73 @@ impl App {
         }
     }
 
+    /// Moves the end of the mouse's selection as `key` says, if it is a key that selects, and
+    /// scrolls to keep it shown; returns whether it moved. As the mouse's, it starts and ends at
+    /// cells' edges, and a line up or down goes between the conversation and the dock.
+    pub(super) fn extend_selection(&mut self, key: &Key) -> bool {
+        use crate::agent_cli::keymap::Binding as B;
+        let Some(head) = self.selection.as_ref().map(|selection| selection.head) else {
+            return false;
+        };
+        let line = self.shown(head.at);
+        let length = self.transcript.len();
+        let row = |up: bool| -> At {
+            match head.at {
+                At::Line(place) => {
+                    let line = self.transcript.line(place);
+                    match up {
+                        true if line > 0 => At::Line(self.transcript.locate(line - 1)),
+                        false if line + 1 < length => At::Line(self.transcript.locate(line + 1)),
+                        false if !self.docked.is_empty() && self.reaches_dock() => At::Dock(0),
+                        _ => head.at,
+                    }
+                }
+                At::Dock(row) => match up {
+                    true if row > 0 => At::Dock(row - 1),
+                    true if length > 0 => At::Line(self.transcript.locate(length - 1)),
+                    false if row + 1 < self.docked.len() => At::Dock(row + 1),
+                    _ => head.at,
+                },
+            }
+        };
+        let moved = |at: At| Mark {
+            at,
+            column: selection::snap(&self.shown(at), head.column),
+        };
+        let within = |column| Mark { column, ..head };
+        let next = if key.is(B::SelectLeft) {
+            within(selection::step(&line, head.column, false))
+        } else if key.is(B::SelectRight) {
+            within(selection::step(&line, head.column, true))
+        } else if key.is(B::SelectWordLeft) {
+            within(selection::word_step(&line, head.column, false))
+        } else if key.is(B::SelectWordRight) {
+            within(selection::word_step(&line, head.column, true))
+        } else if key.is(B::SelectLineStart) {
+            within(0)
+        } else if key.is(B::SelectLineEnd) {
+            within(selection::width(&line))
+        } else if key.is(B::SelectLineUp) {
+            moved(row(true))
+        } else if key.is(B::SelectLineDown) {
+            moved(row(false))
+        } else {
+            return false;
+        };
+        if let Some(selection) = &mut self.selection {
+            selection.head = next;
+        }
+        if let At::Line(place) = next.at {
+            let (line, top) = (self.transcript.line(place), self.shown_top());
+            if line < top {
+                self.navigate(line as isize - top as isize);
+            } else if line >= top + self.rows {
+                self.navigate((line + 1 - top - self.rows) as isize);
+            }
+        }
+        true
+    }
+
     /// Scrolls on while a selection is dragged at an edge, until the view can go no further.
     pub(super) fn edge_scroll(&mut self) {
         let Some(Edge {
@@ -474,6 +541,14 @@ impl App {
             return;
         }
         self.edge = None;
+        self.copy_text(text, Some(id));
+    }
+
+    /// Copies `text`, that of the selection `selection` or the prompt's, as `copy` does.
+    pub(super) fn copy_text(&mut self, text: String, selection: Option<u64>) {
+        if self.copying.is_some() {
+            return;
+        }
         let (done, outcome) = mpsc::channel();
         let started = std::thread::Builder::new()
             .name("clipboard".into())
@@ -481,12 +556,7 @@ impl App {
                 let _ = done.send(clipboard::copy(&text, true));
             });
         match started {
-            Ok(_) => {
-                self.copying = Some(Copying {
-                    outcome,
-                    selection: id,
-                })
-            }
+            Ok(_) => self.copying = Some(Copying { outcome, selection }),
             Err(error) => self.note(Note::Error(format!("Copy failed: {error}"))),
         }
     }
@@ -509,14 +579,18 @@ impl App {
                 if let Some(sequence) = sequence {
                     to_terminal(&sequence)?;
                 }
-                if self.selection.as_ref().is_some_and(|s| s.id == copied) {
+                if self
+                    .selection
+                    .as_ref()
+                    .is_some_and(|s| Some(s.id) == copied)
+                {
                     self.clear_selection();
                 }
             }
             Err(error) => self.note(Note::Error(format!("Copy failed: {error}"))),
         }
         let waiting = (self.selection.as_ref())
-            .is_some_and(|selection| !selection.held && selection.id != copied);
+            .is_some_and(|selection| !selection.held && Some(selection.id) != copied);
         if waiting && self.copy_on_select {
             self.copy();
         }

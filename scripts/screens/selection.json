@@ -1,0 +1,73 @@
+{
+  "size": "80x20",
+  "settings": {
+    "theme": "scramjet-dark"
+  },
+  "prompt": "List them",
+  "replies": [
+    [
+      {
+        "text": "Row one of the reply.\n\nRow two of the reply.\n\nRow three of the reply."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "Row three"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[<0;6;8M\u001b[<32;10;8M\u001b[<0;10;8m"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "mouse"
+    },
+    {
+      "type": "\u001b[1;2B\u001b[1;2B\u001b[1;2F"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "extended"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "Check the selection in the prompt\u001b[1;6D\u001b[1;6D"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "prompt"
+    },
+    {
+      "type": "\u0005\u0015/hotkeys\r"
+    },
+    {
+      "until": "browse history"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "shift+\u001b[H"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "hotkeys"
+    }
+  ]
+}
