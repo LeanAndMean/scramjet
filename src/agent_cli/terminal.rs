@@ -1304,6 +1304,16 @@ impl Terminal {
         let rows = banner::rows(self.banner, opening, self.width(), self.full, self.marked);
         self.err(&format!("{}\n\n", rows.join("\n")));
     }
+    /// A changelog in a message box, cut as summaries are.
+    pub(super) fn release_notes(&mut self, notes: &str) {
+        self.clear();
+        let version = env!("CARGO_PKG_VERSION");
+        let heading = format!("What changed in scramjet-rs, newest first (this is {version})");
+        let heading = self.styled(style::SUMMARY, &heading);
+        let body = Some(notes).filter(|notes| !notes.is_empty());
+        let block = self.message_box("release notes", &heading, body);
+        self.err(&format!("{block}\n"));
+    }
     pub(super) fn compaction_error(&mut self, error: &str) {
         self.clear();
         let text = self.wrapped(&format!("Error: automatic compaction failed: {error}"));

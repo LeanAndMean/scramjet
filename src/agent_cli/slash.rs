@@ -1,9 +1,10 @@
 //! The built-in commands: `/export`, `/import`, `/copy`, `/clear`, `/rename`, `/status`,
-//! `/compact`, `/autopilot`, `/reload`, and `!` commands. `/settings` is in `settings_menu.rs`;
-//! `/hotkeys` and `/keybindings` in `hotkeys.rs`; `/resume`, `/fork`, `/branch`, `/clone` and
-//! `/tree` in `sessions.rs`; `/model` and `/scoped-models` in `scope.rs`; `/login` and `/logout`
-//! in `login.rs`.
+//! `/release-notes`, `/compact`, `/autopilot`, `/reload`, and `!` commands. `/settings` is in
+//! `settings_menu.rs`; `/hotkeys` and `/keybindings` in `hotkeys.rs`; `/resume`, `/fork`,
+//! `/branch`, `/clone` and `/tree` in `sessions.rs`; `/model` and `/scoped-models` in
+//! `scope.rs`; `/login` and `/logout` in `login.rs`.
 use super::interactive::{Interactive, completions, model_line, saved_line};
+use super::record::Event;
 use super::terminal::{self, Terminal};
 use super::text::{clip, visible};
 use super::{clipboard, completion, export, keymap, style};
@@ -27,6 +28,7 @@ pub(super) enum Builtin<'a> {
     Status,
     /// With whether the details come first.
     Usage(bool),
+    ReleaseNotes,
     Hotkeys,
     Keybindings,
     Resume(&'a str),
@@ -65,6 +67,7 @@ impl<'a> Builtin<'a> {
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
+            "release-notes" if argument.is_empty() => Self::ReleaseNotes,
             "hotkeys" if argument.is_empty() => Self::Hotkeys,
             "keybindings" if argument.is_empty() => Self::Keybindings,
             "resume" => Self::Resume(argument),
@@ -97,6 +100,7 @@ impl<'a> Builtin<'a> {
                 | Self::Rename(_)
                 | Self::Status
                 | Self::Usage(_)
+                | Self::ReleaseNotes
                 | Self::Hotkeys
                 | Self::Keybindings
                 | Self::Model(_)
@@ -130,6 +134,7 @@ impl Interactive {
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.agent, &self.ui).trim_end()),
             Some(Builtin::Usage(details)) => self.usage(details),
+            Some(Builtin::ReleaseNotes) => self.release_notes(),
             Some(Builtin::Hotkeys) => self.hotkeys(),
             Some(Builtin::Keybindings) => self.keybindings(),
             Some(Builtin::Resume(wanted)) => {
@@ -177,6 +182,16 @@ impl Interactive {
                 Ok(()) => self.say_styled(style::MUTED, &format!("Session name set: {name}")),
                 Err(error) => self.say(&format!("Error: {error}")),
             }
+        }
+    }
+
+    /// `/release-notes`: what changed in each released version, the newest first, cut to its
+    /// first lines until tool results are shown whole.
+    fn release_notes(&mut self) {
+        let notes = released(include_str!("../../CHANGELOG.md"));
+        match &self.screen {
+            Some(screen) => screen.event(Event::ReleaseNotes(notes.to_owned())),
+            None => self.ui.release_notes(notes),
         }
     }
 
@@ -640,6 +655,14 @@ fn session_info(agent: &Agent, ui: &Terminal) -> String {
 /// A count with thousands separators, as Scramjet's `toLocaleString` writes it.
 /// The path a command's argument starts with, as Scramjet reads one: up to the first space, or
 /// within quotes; `None` when there is none.
+/// A changelog's released versions: from its first `## <version>` heading on, without its own
+/// heading and the section of what is not released yet.
+fn released(changelog: &str) -> &str {
+    let start = (changelog.match_indices("\n## ").map(|(at, _)| at + 1))
+        .find(|&at| changelog[at + 3..].starts_with(|c: char| c.is_ascii_digit()));
+    start.map_or("", |at| changelog[at..].trim_end())
+}
+
 fn path_argument(argument: &str) -> Option<&str> {
     let quote = argument.chars().next().filter(|c| matches!(c, '"' | '\''));
     let path = match quote {
@@ -686,6 +709,8 @@ mod tests {
             "/hotkeys",
             "/keybindings",
             "/keymap",
+            "/release-notes",
+            "/changelog",
             "/copy",
             "/rename",
             "/rename  my work ",
@@ -757,10 +782,25 @@ mod tests {
             ("/continue 2", Builtin::Resume("2")),
             ("/help", Builtin::Hotkeys),
             ("/keymap", Builtin::Hotkeys),
+            ("/changelog", Builtin::ReleaseNotes),
         ] {
             assert_eq!(Builtin::parse(typed), Some(listed), "{typed}");
         }
         assert_eq!(Builtin::parse("/session now"), None);
+    }
+
+    #[test]
+    fn release_notes_start_at_the_first_released_version() {
+        let changelog = "# Changelog\n\nIntro.\n\n## Unreleased\n\n## 1.2.0 — Two\n\n\
+                         - b\n\n## 1.1.0 — One\n\n- a\n";
+        assert_eq!(
+            released(changelog),
+            "## 1.2.0 — Two\n\n- b\n\n## 1.1.0 — One\n\n- a"
+        );
+        assert_eq!(released("# Changelog\n\n## Unreleased\n"), "");
+        let ours = released(include_str!("../../CHANGELOG.md"));
+        let version = format!("## {} — ", env!("CARGO_PKG_VERSION"));
+        assert!(ours.starts_with(&version), "{}", &ours[..80]);
     }
 
     #[test]

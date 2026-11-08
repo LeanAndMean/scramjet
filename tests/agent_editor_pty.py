@@ -1641,7 +1641,7 @@ def completes_paths_and_commands(read, until, send, output):
     on_screen('Autopilot is off')
     # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
     send(b'/')
-    on_screen('(1/23)')
+    on_screen('(1/24)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count

@@ -169,7 +169,8 @@ Tab (or Left and Right) all of it or another provider's, Escape closes it.
 loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
-clipboard. The keys named here are the defaults: keybindings.json beside the settings file
+clipboard. /release-notes (or /changelog) shows what changed in each version, the newest
+first. The keys named here are the defaults: keybindings.json beside the settings file
 gives actions others; /hotkeys lists those in use and changes them, and /keybindings opens the
 file in your editor. /settings lists the settings, each with what it does, and
 changes them; it also shows each command's next steps, publication approval, and what the
@@ -180,8 +181,9 @@ skills and context files again, and starts the MCP servers whose entries changed
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
 available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disable [SERVER|all]
 starts or stops them, saved in disabledMcpServers.
-Typed while a turn runs, /status, /usage, /hotkeys, /keybindings, /rename, /model, /scoped-models,
-/copy, /export, /settings, /autopilot and /mcp run before its next request, /reload and /mcp's
+Typed while a turn runs, /status, /usage, /release-notes, /hotkeys, /keybindings, /rename,
+/model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
+request, /reload and /mcp's
 changes are refused,
 and the other commands stop the turn and run once it has.
 Scramjet's names of the commands named otherwise here are accepted too (/new, /quit, /name,

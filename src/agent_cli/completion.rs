@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 23] = [
+const SLASH_COMMANDS: [(&str, &str); 24] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -27,6 +27,7 @@ const SLASH_COMMANDS: [(&str, &str); 23] = [
         "usage",
         "Show quota left and what was spent, or its details (/usage details)",
     ),
+    ("release-notes", "View release notes"),
     ("hotkeys", "Show all keyboard shortcuts, and change them"),
     ("keybindings", "Open your keyboard shortcuts file"),
     ("fork", "Create a new fork from a previous user message"),
@@ -57,7 +58,7 @@ const SLASH_COMMANDS: [(&str, &str); 23] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 12] = [
+const ALIASES: [(&str, &str); 13] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
@@ -70,6 +71,7 @@ const ALIASES: [(&str, &str); 12] = [
     ("continue", "resume"),
     ("help", "hotkeys"),
     ("keymap", "hotkeys"),
+    ("changelog", "release-notes"),
 ];
 
 /// The listed name of the built-in command typed as `name` (without its `/`).
@@ -495,6 +497,7 @@ mod tests {
                 "/rename",
                 "/status",
                 "/usage",
+                "/release-notes",
                 "/hotkeys",
                 "/keybindings",
                 "/fork",
@@ -519,7 +522,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /export         Export session (HTML default, or specify…",
                 "  /import         Import and resume a session from a JSONL…",
-                "  (1/23)",
+                "  (1/24)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -533,12 +536,12 @@ mod tests {
                 "  /rename",
                 "  /status",
                 "→ /usage",
+                "  /release-notes",
                 "  /hotkeys",
-                "  /keybindings",
-                "  (9/23)"
+                "  (9/24)"
             ]
         );
-        for _ in 0..15 {
+        for _ in 0..16 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -546,8 +549,8 @@ mod tests {
         assert_eq!(list.items[list.selected].label, "/exit");
 
         let mut buffer = Buffer {
-            text: "/res rest".into(),
-            cursor: 4,
+            text: "/resu rest".into(),
+            cursor: 5,
         };
         let list = Completion::slash(&buffer.text[..buffer.cursor], &[]).unwrap();
         assert_eq!(labels(&list), ["/resume"]);

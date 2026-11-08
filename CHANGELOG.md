@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.90.0 — Release notes in a session
+
+### Added
+
+- `/release-notes` (Claude Code's name; Scramjet's `/changelog` works too) shows this changelog in a box, the newest version first and the rest behind Ctrl+O.
+
 ## 0.89.4 — The sign-in page opens on Windows
 
 ### Fixed

@@ -1,0 +1,20 @@
+{
+  "size": "100x40",
+  "settings": {"theme": "scramjet-dark"},
+  "steps": [
+    {"until": "scramjet-rs"},
+    {"type": "/release"},
+    {"until": "View release notes"},
+    {"shot": "completion"},
+    {"type": "\r"},
+    {"until": "more lines"},
+    {"sleep": 0.3},
+    {"shot": "release-notes"},
+    {"type": "\u000f"},
+    {"sleep": 0.5},
+    {"shot": "release-notes-whole"},
+    {"type": "\u000f/changelog\r"},
+    {"sleep": 0.5},
+    {"shot": "changelog"}
+  ]
+}
