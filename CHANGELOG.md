@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.89.2 — Unzipping under a path with a space on Windows
+
+### Fixed
+
+- On Windows, when its own `tar.exe` cannot unpack a downloaded ripgrep or `fd`, PowerShell's fallback now takes paths with spaces (a user name such as `C:\Users\Jane Doe`).
+
 ## 0.89.1 — Escape stops a waiting download
 
 ### Fixed

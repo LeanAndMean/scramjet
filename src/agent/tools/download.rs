@@ -283,20 +283,31 @@ fn extract(file: &Path, into: &Path) -> Result<(), String> {
         let Err(tar_failed) = tarred else {
             return Ok(());
         };
-        let script = "& { param($archive, $destination) $ErrorActionPreference = 'Stop'; \
-                      Expand-Archive -LiteralPath $archive -DestinationPath $destination -Force }";
-        let mut powershell = Command::new("powershell.exe");
-        powershell.args([
+        return expand_archive(file, into).map_err(|failed| format!("{tar_failed}; {failed}"));
+    }
+    run(Command::new("tar").arg("xzf").arg(file).arg("-C").arg(into))
+}
+
+/// Unzips with PowerShell's `Expand-Archive`.
+fn expand_archive(file: &Path, into: &Path) -> Result<(), String> {
+    // PowerShell joins the arguments after `-Command` into its text, so a path given there
+    // splits at a space; variables keep each path whole.
+    let script = "$ErrorActionPreference = 'Stop'; Expand-Archive \
+                  -LiteralPath $env:SCRAMJET_RS_ARCHIVE -DestinationPath $env:SCRAMJET_RS_INTO -Force";
+    let mut powershell = Command::new("powershell.exe");
+    powershell
+        .args([
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
-        ]);
-        powershell.arg("-Command").arg(script).arg(file).arg(into);
-        return run(&mut powershell).map_err(|failed| format!("{tar_failed}; {failed}"));
-    }
-    run(Command::new("tar").arg("xzf").arg(file).arg("-C").arg(into))
+            "-Command",
+            script,
+        ])
+        .env("SCRAMJET_RS_ARCHIVE", file)
+        .env("SCRAMJET_RS_INTO", into);
+    run(&mut powershell)
 }
 
 fn run(command: &mut Command) -> Result<(), String> {
@@ -492,6 +503,37 @@ mod tests {
         );
         assert!(!bin.exists());
         server.join().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_unzips_into_paths_with_spaces_and_quotes() {
+        let scratch = crate::agent::tests::ScratchDir::new(std::env::temp_dir().join(format!(
+            "scramjet-rs download 'unzip' $x {}",
+            std::process::id()
+        )));
+        let made = scratch.0.join("made dir");
+        std::fs::create_dir_all(&made).unwrap();
+        std::fs::write(made.join("rg.exe"), "found").unwrap();
+        let zip = scratch.0.join("an archive.zip");
+        let tarred = Command::new("tar.exe")
+            .arg("-a")
+            .arg("-cf")
+            .arg(&zip)
+            .arg("-C")
+            .arg(&made)
+            .arg("rg.exe")
+            .status();
+        assert!(tarred.unwrap().success());
+        let into = scratch.0.join("un packed");
+        std::fs::create_dir_all(&into).unwrap();
+        assert_eq!(expand_archive(&zip, &into), Ok(()));
+        assert_eq!(
+            std::fs::read_to_string(into.join("rg.exe")).unwrap(),
+            "found"
+        );
+        let missing = expand_archive(&scratch.0.join("none.zip"), &into).unwrap_err();
+        assert!(missing.starts_with("powershell.exe: "), "{missing}");
     }
 
     #[test]
