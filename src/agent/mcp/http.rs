@@ -78,6 +78,7 @@ pub(super) fn target(url: &str) -> Result<(providers::Route, String), String> {
         authority: parts.authority,
         path: String::new(),
         headers: Vec::new(),
+        commanded: Vec::new(),
         login: None,
     };
     Ok((route, target))

@@ -298,6 +298,8 @@ pub(super) enum Protocol {
 pub(super) struct Sent<'a> {
     pub route: &'a Route,
     pub protocol: Protocol,
+    /// The route's headers, its commands' run for this request.
+    pub given: &'a [(String, String)],
     pub headers: &'a [(&'static str, String)],
     pub priced_by: Option<&'a str>,
     /// What a Chat Completions server accepts.
@@ -321,6 +323,7 @@ async fn exchange(
     Sent {
         route,
         protocol,
+        given,
         headers,
         priced_by,
         compat,
@@ -343,7 +346,7 @@ async fn exchange(
             .uri(format!("{}/v1/messages", route.path))
             .header("anthropic-version", "2023-06-01"),
     };
-    for (name, value) in &route.headers {
+    for (name, value) in given {
         request = request.header(name, value);
     }
     for (name, value) in headers {
@@ -504,6 +507,7 @@ pub(super) async fn fetch_within(
         authority: parts.authority,
         path: parts.path,
         headers: Vec::new(),
+        commanded: Vec::new(),
         login: None,
     };
     let exchange = async {

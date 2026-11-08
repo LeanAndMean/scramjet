@@ -41,7 +41,7 @@ Other main options: `--thinking LEVEL` (or `--effort`), `--models PATTERNS` (the
 
 ## Providers
 
-Models come from the providers in `~/.config/scramjet-rs/models.json` and in the `models.json` of each installed command set or package, in Scramjet's format. Each provider has a `baseUrl` (`http://`, or `https://`, trusting the system's certificates or those `SSL_CERT_FILE` and `SSL_CERT_DIR` name, as OpenSSL does), an `api` (`openai-responses`; `anthropic-messages`, under which requests go to `/v1/messages`; or `openai-completions`, Chat Completions at `/chat/completions`, which vLLM, Ollama and llama.cpp serve), an `apiKey` (the variable of that name in the environment, else the text itself) and the `models` it offers:
+Models come from the providers in `~/.config/scramjet-rs/models.json` and in the `models.json` of each installed command set or package, in Scramjet's format. Each provider has a `baseUrl` (`http://`, or `https://`, trusting the system's certificates or those `SSL_CERT_FILE` and `SSL_CERT_DIR` name, as OpenSSL does), an `api` (`openai-responses`; `anthropic-messages`, under which requests go to `/v1/messages`; or `openai-completions`, Chat Completions at `/chat/completions`, which vLLM, Ollama and llama.cpp serve), an `apiKey` (the variable of that name in the environment, else the text itself; `!command` takes what the command prints, run with `sh` for each request, so a key can stay in a password manager, out of files the agent's tools read, as can `headers`' values) and the `models` it offers:
 
 ```json
 {

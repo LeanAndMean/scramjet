@@ -377,7 +377,21 @@ pub(super) fn send(
         let failure = match token {
             Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
             Err(ClientError::Failed(failure)) => failure,
-            Ok(token) => {
+            Ok(token) => 'sent: {
+                let given = super::configured::headers(&route.headers, &route.commanded);
+                let given = executor.block_on(async {
+                    tokio::select! {
+                        given = given => Ok(given),
+                        () = client::cancelled(cancel) => Err(AgentError::Cancelled),
+                    }
+                })?;
+                let given = match given {
+                    Ok(given) => given,
+                    Err(problem) => {
+                        let problem = format!("{}: {problem}", route.provider);
+                        break 'sent client::Failure::new(problem, false);
+                    }
+                };
                 let mut headers = headers.clone();
                 if let (Some(login), Some(token)) = (&route.login, &token) {
                     headers.push(("authorization", format!("Bearer {token}")));
@@ -387,7 +401,7 @@ pub(super) fn send(
                 }
                 if info.protocol == Protocol::Codex {
                     // A models.json's key, else the login's, names the account.
-                    let keyed = (route.headers.iter())
+                    let keyed = (given.iter())
                         .find(|(name, _)| name == "authorization")
                         .and_then(|(_, value)| value.strip_prefix("Bearer "));
                     let token = keyed.or(token.as_deref()).unwrap_or_default();
@@ -400,6 +414,7 @@ pub(super) fn send(
                 let sent = client::Sent {
                     route,
                     protocol: info.protocol,
+                    given: &given,
                     headers: &headers,
                     priced_by: info.prices.header(),
                     compat: &info.compat,
@@ -1483,6 +1498,63 @@ response is incomplete; retry the request."});
         let replay = agent.replay_conversation();
         assert_eq!(replay[1]["type"], "function_call");
         assert_eq!(replay[1]["call_id"], "call_9");
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "runs `sh` commands")]
+    fn a_key_command_runs_for_each_request_and_one_that_fails_sends_nothing() {
+        let choice = |delta: Value, finish: Value| json!({"id":"c","choices":[{"index":0,"delta":delta,"finish_reason":finish}]});
+        let (endpoint, server) = serve_requests(vec![
+            completions_stream(&[
+                choice(
+                    json!({"tool_calls":[{"index":0,"id":"call_1","type":"function",
+                    "function":{"name":"read","arguments":"{\"path\":\"notes.txt\"}"}}]}),
+                    json!(null),
+                ),
+                choice(json!({}), json!("tool_calls")),
+            ]),
+            completions_stream(&[
+                choice(json!({"content":"Read."}), json!(null)),
+                choice(json!({}), json!("stop")),
+            ]),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "commanded-key");
+        std::fs::write(scratch.0.join("notes.txt"), "hello\n").unwrap();
+        let count = scratch.0.join("count");
+        std::fs::write(&count, "").unwrap();
+        let command = format!(
+            "!printf \"k$(wc -l < '{0}')\"; echo >> '{0}'",
+            count.display()
+        );
+        let providers = |key: &str| {
+            crate::agent::Providers::given(json!({"providers": {"local": {
+                "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-completions",
+                "apiKey": key, "models": [{"id": "qwen3"}],
+            }}}))
+        };
+        agent.config.providers = providers(&command);
+        agent.set_model("qwen3").unwrap();
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("Read notes.txt", &mut ui, &cancel).unwrap();
+        assert_eq!(ui.replies, ["Read."]);
+        let requests = server.join().unwrap();
+        let keys: Vec<bool> = (requests.iter().enumerate())
+            .map(|(n, (head, _))| head.contains(&format!("authorization: bearer k{n}\r\n")))
+            .collect();
+        assert_eq!(keys, [true, true]);
+        // Not sent, not tried again: the server is gone, and a connection would say so.
+        agent.config.providers = providers("!echo sk-secret; exit 4");
+        agent.set_model("qwen3").unwrap();
+        let error = agent
+            .turn("Again", &mut ui, &cancel)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            "provider: local: apiKey: its command `echo sk-secret; exit 4` exited with 4"
+        );
+        assert!(ui.retries.is_empty());
     }
 
     #[test]

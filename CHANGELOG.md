@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.103.0 — Keys printed by a command
+
+### Added
+
+- A `models.json` `apiKey` or header value starting with `!` is a command, as in Scramjet: it runs with `sh` (10 s at most) each time a request or a model-list read is sent, and what it prints is the value, so a key can come from a password manager (`"apiKey": "!pass show openrouter"`) rather than sit in a file the agent's tools can read. A command that fails stops the request with what went wrong, never with what it printed. `/login` takes such a key too.
+
 ## 0.102.0 — Packages from a directory, with their skills and themes
 
 ### Added

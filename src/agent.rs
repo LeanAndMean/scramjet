@@ -11,6 +11,7 @@ pub mod codex;
 mod commands;
 mod compaction;
 mod completions;
+mod configured;
 pub mod copilot;
 mod delegate;
 mod forge;

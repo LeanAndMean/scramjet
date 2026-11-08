@@ -489,6 +489,7 @@ mod tests {
             authority: endpoint.to_string(),
             path: String::new(),
             headers: Vec::new(),
+            commanded: Vec::new(),
             login: None,
         };
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -500,6 +501,7 @@ mod tests {
             let sent = Sent {
                 route: &route,
                 protocol,
+                given: &[],
                 headers: &[],
                 priced_by: None,
                 compat: &compat,

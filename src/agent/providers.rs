@@ -15,6 +15,7 @@
 use super::ModelOption;
 use super::client::Protocol;
 use super::completions::Compat;
+use super::configured::{self, Commanded, Configured};
 use super::listed::{self, Listing};
 use super::login::{LoginProgram, Logins};
 use super::pricing::Prices;
@@ -63,6 +64,8 @@ pub(super) struct Route {
     pub path: String,
     /// Authentication and the entries' `headers`.
     pub headers: Vec<(String, String)>,
+    /// Those of them whose values a command prints at each request (`!command`).
+    pub commanded: Vec<Commanded>,
     /// The login whose token each request carries, fresh, besides `headers`.
     pub login: Option<Login>,
 }
@@ -79,12 +82,16 @@ pub(super) struct Login {
 impl std::fmt::Debug for Route {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
+        let commanded: Vec<&str> = (self.commanded.iter())
+            .map(|commanded| commanded.header.as_str())
+            .collect();
         f.debug_struct("Route")
             .field("provider", &self.provider)
             .field("tls", &self.tls)
             .field("authority", &self.authority)
             .field("path", &self.path)
             .field("headers", &names)
+            .field("commanded", &commanded)
             .field("login", &self.login)
             .finish()
     }
@@ -843,13 +850,21 @@ impl Reading {
                 ));
             }
         }
+        let mut commanded = Vec::new();
         if let Some((key, what)) = key {
-            let key = resolve(key).map_err(|problem| format!("{subject}: {what} {problem}"))?;
+            let key = configured::read(key);
             if protocol == Protocol::Messages {
-                headers.push(("x-api-key".to_owned(), key.clone()));
+                put(&mut headers, &mut commanded, "x-api-key", "", &key, what);
             }
             if protocol != Protocol::Messages || field("authHeader") == Some(&Value::Bool(true)) {
-                headers.push(("authorization".to_owned(), format!("Bearer {key}")));
+                put(
+                    &mut headers,
+                    &mut commanded,
+                    "authorization",
+                    "Bearer ",
+                    &key,
+                    what,
+                );
             }
         }
         for given in headed.into_iter().flatten() {
@@ -859,16 +874,17 @@ impl Reading {
                 let value = value.as_str().ok_or_else(|| {
                     format!("{subject}: the header {header}'s value must be a string")
                 })?;
-                let value = resolve(value)
-                    .map_err(|problem| format!("{subject}: the header {header} {problem}"))?;
                 let header = header.to_ascii_lowercase();
-                headers.retain(|(name, _)| *name != header);
-                headers.push((header, value));
+                let what = format!("the header {header}");
+                let value = configured::read(value);
+                put(&mut headers, &mut commanded, &header, "", &value, &what);
             }
         }
-        for (header, value) in &headers {
+        let named = (commanded.iter()).map(|commanded| (&commanded.header, None));
+        let given = (headers.iter()).map(|(header, value)| (header, Some(value)));
+        for (header, value) in given.chain(named) {
             if hyper::header::HeaderName::from_bytes(header.as_bytes()).is_err()
-                || hyper::header::HeaderValue::from_str(value).is_err()
+                || value.is_some_and(|value| hyper::header::HeaderValue::from_str(value).is_err())
             {
                 return Err(format!(
                     "{subject}: the header {header} is not valid in HTTP"
@@ -890,6 +906,7 @@ impl Reading {
             authority,
             path,
             headers,
+            commanded,
             login,
         };
         Ok((protocol, url, route))
@@ -993,15 +1010,26 @@ pub(super) fn level_map(efforts: &[&str]) -> Value {
     Value::Object(map.collect())
 }
 
-/// A configured value, as Scramjet resolves it: the environment variable of that name when one
-/// is set, else the text itself.
-fn resolve(value: &str) -> Result<String, String> {
-    if value.starts_with('!') {
-        return Err("is a shell command (`!…`), which is not run yet".to_owned());
-    }
-    match std::env::var(value) {
-        Ok(set) if !set.is_empty() => Ok(set),
-        _ => Ok(value.to_owned()),
+/// Sets `header` to `prefix` and `value`, in place of any value it had: in `headers` when it is
+/// a text, in `commanded` when a command prints it at each request.
+fn put(
+    headers: &mut Vec<(String, String)>,
+    commanded: &mut Vec<Commanded>,
+    header: &str,
+    prefix: &'static str,
+    value: &Configured,
+    what: &str,
+) {
+    headers.retain(|(name, _)| name != header);
+    commanded.retain(|commanded| commanded.header != header);
+    match value {
+        Configured::Text(text) => headers.push((header.to_owned(), format!("{prefix}{text}"))),
+        Configured::Command(command) => commanded.push(Commanded {
+            header: header.to_owned(),
+            prefix,
+            command: command.clone(),
+            what: what.to_owned(),
+        }),
     }
 }
 
@@ -1325,13 +1353,47 @@ mod tests {
     }
 
     #[test]
+    fn commands_are_kept_to_run_at_each_request_and_a_later_value_replaces_one() {
+        let providers = Providers::given(json!({"providers": {"p": {
+            "baseUrl": "http://localhost", "api": "anthropic-messages", "apiKey": "!pass key", "authHeader": true,
+            "headers": {"x-team": "!pass team", "X-Api-Key": "literal"},
+            "models": [{"id": "m", "headers": {"x-team": "t", "x-user": "!whoami"}}],
+        }}}));
+        assert_eq!(providers.problems(), [] as [&str; 0]);
+        let route = route(&providers, "m");
+        let header = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+        assert_eq!(
+            route.headers,
+            [header("x-api-key", "literal"), header("x-team", "t")]
+        );
+        let commanded: Vec<(&str, &str, &str, &str)> = (route.commanded.iter())
+            .map(|c| {
+                (
+                    c.header.as_str(),
+                    c.prefix,
+                    c.command.as_str(),
+                    c.what.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            commanded,
+            [
+                ("authorization", "Bearer ", "pass key", "apiKey"),
+                ("x-user", "", "whoami", "the header x-user"),
+            ]
+        );
+        assert!(!format!("{route:?}").contains("pass"));
+    }
+
+    #[test]
     fn what_is_wrong_is_said_and_the_rest_is_offered() {
         let providers = Providers::given(json!({
             "providers": {
                 "a": {"baseUrl": "http://a/v1", "api": "openai-responses", "models": [
                     {"id": "m"}, {"name": "no id"}, {"id": "chat", "api": "google-generative-ai"},
                     {"id": "odd", "api": "openai-completions", "compat": {"supportsStore": 1}},
-                    {"id": "shell", "apiKey": "!pass show key"},
+                    {"id": "shell", "headers": {"x shell": "!pass show key"}},
                     {"id": "bad", "headers": {"x-bad": "line\nbreak"}},
                     {"id": "m", "name": "again"},
                 ]},
@@ -1360,8 +1422,7 @@ mod tests {
                 "models: provider a: a model has no id",
                 "models: provider a: model chat: api google-generative-ai is not supported yet",
                 "models: provider a: model odd: compat.supportsStore must be true or false",
-                "models: provider a: model shell: apiKey is a shell command (`!…`), which is not \
-                 run yet",
+                "models: provider a: model shell: the header x shell is not valid in HTTP",
                 "models: provider a: model bad: the header x-bad is not valid in HTTP",
                 "models: provider a: model m is listed already; not offered here",
                 "models: provider c: lists no models, and has no baseUrl and api \

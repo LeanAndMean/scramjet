@@ -138,12 +138,9 @@ pub fn save_key(path: &Path, provider: &str, key: &str, origins: &[String]) -> R
     if key.is_empty() {
         return Err("the key is empty".to_owned());
     }
-    // Read as configured values are, it would be a command.
-    if key.starts_with('!') {
-        return Err("a key starting with ! is a shell command, which is not run yet".to_owned());
-    }
     // A space or a line break inside comes of a paste gone wrong; no provider's keys have one.
-    if !key.chars().all(|ch| ch.is_ascii_graphic()) {
+    // One starting with `!` is a command that prints the key at each request, as in Scramjet.
+    if !key.starts_with('!') && !key.chars().all(|ch| ch.is_ascii_graphic()) {
         return Err("an API key is letters, digits and punctuation, without spaces".to_owned());
     }
     let credential = serde_json::json!({"type": "api_key", "key": key, "origins": origins});
@@ -724,7 +721,6 @@ mod tests {
         assert_eq!(logged_in(&path).unwrap(), ["github-copilot", "openrouter"]);
         for (refused, why) in [
             ("  ", "the key is empty"),
-            ("!pass show key", "a key starting with ! is a shell command"),
             ("sk-or\nv1", "without spaces"),
             ("sk or", "without spaces"),
             ("sk-é", "without spaces"),
@@ -756,6 +752,10 @@ mod tests {
         let local: Vec<String> = local.iter().map(|s| s.to_string()).collect();
         save_key(&path, "local", "sk", &local).unwrap();
         assert_eq!(key(&super::saved(&path).unwrap(), "openrouter"), only);
+        // A command that prints the key, as typed.
+        save_key(&path, "local", " !pass show local key\n", &local).unwrap();
+        let saved = super::saved(&path).unwrap();
+        assert_eq!(key(&saved, "local").unwrap().0, "!pass show local key");
         let logins = Logins {
             auth: path.clone(),
             lists: scratch.0.join("logins"),

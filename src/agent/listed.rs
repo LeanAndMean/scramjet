@@ -7,6 +7,7 @@
 //! `models.json`, and the entry's `modelOverrides` may say it, as in Scramjet.
 
 use super::client;
+use super::configured::{self, Commanded};
 use super::login;
 use super::providers::Route;
 use serde_json::{Map, Value, json};
@@ -28,6 +29,7 @@ pub struct Listing {
     url: String,
     /// Its requests' headers; they hold its key.
     headers: Vec<(String, String)>,
+    commanded: Vec<Commanded>,
     messages: bool,
     /// `None` without a state directory: the list is then kept only while the process runs.
     file: Option<PathBuf>,
@@ -61,6 +63,7 @@ impl Listing {
             provider: route.provider.clone(),
             url: format!("{scheme}://{}{}{path}", route.authority, route.path),
             headers: route.headers.clone(),
+            commanded: route.commanded.clone(),
             messages,
             file,
             offered: Ok(0),
@@ -82,6 +85,7 @@ impl Listing {
     pub fn key(&self) -> String {
         let mut hasher = DefaultHasher::new();
         self.headers.hash(&mut hasher);
+        self.commanded.hash(&mut hasher);
         format!("{}\n{}\n{:x}", self.provider, self.url, hasher.finish())
     }
 
@@ -164,7 +168,9 @@ impl Listing {
     }
 
     async fn read(&self) -> Result<Vec<Value>, String> {
-        let mut headers: Vec<(&str, &str)> = (self.headers.iter())
+        let given = configured::headers(&self.headers, &self.commanded).await;
+        let given = given.map_err(|problem| format!("{}: {problem}", self.provider))?;
+        let mut headers: Vec<(&str, &str)> = (given.iter())
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         headers.push(("accept", "application/json"));
