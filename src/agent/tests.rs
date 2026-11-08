@@ -825,6 +825,8 @@ fn a_session_whose_file_could_not_be_created_creates_it_once_there_is_room() {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o700);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
     let (reopened, conversation, _) = Session::open(&path).unwrap();
     assert_eq!(conversation, [json!({"role":"user","content":"first"})]);

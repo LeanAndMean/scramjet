@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.5 — Session files private
+
+### Fixed
+
+- Session files are created readable by you alone (`0600`), not by everyone (`0644`); until now only their directory, when scramjet-rs made it, kept others out. Files made by earlier versions keep their mode: `chmod 600 ~/.local/state/scramjet-rs/sessions/*/*.jsonl` tightens them.
+
 ## 0.97.4 — Files kept whole when a write fails
 
 ### Fixed

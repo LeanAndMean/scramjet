@@ -659,12 +659,13 @@ fn make_directory(directory: &Path) -> io::Result<()> {
     }
 }
 
-/// Creates the session file `path` and its directory; one already there is an error.
+/// Creates the session file `path`, private to the user, and its directory; one already there is
+/// an error.
 fn create_file(path: &Path) -> io::Result<File> {
     if let Some(directory) = path.parent() {
         make_directory(directory)?;
     }
-    OpenOptions::new().append(true).create_new(true).open(path)
+    crate::os::private_file(OpenOptions::new().append(true).create_new(true)).open(path)
 }
 
 /// The current branch of the session saved at `path`, where a resume would continue it.
