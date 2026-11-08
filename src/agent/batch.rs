@@ -1,15 +1,15 @@
 //! Coding tools and subagents running in threads of their own, so that the turn can pause for
 //! the user's commands while they run; and the calls of one reply that run at the same time, as
-//! Pi runs them: shown each in its place as it runs where the interface can
+//! Pi runs them, but for those that must follow others (`waits`): shown each in its place as it runs where the interface can
 //! (`AgentUi::running_calls`), else as if they ran one after another, what a call shows waiting
 //! until the calls before it have ended.
 use super::tools::{self, Call, Output};
 use super::{AgentUi, Answer, Children, Choice, CompactRead, ToolDetail, Usage};
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::{
-    Arc,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
@@ -66,33 +66,57 @@ pub(super) enum Waited {
 }
 
 impl Batch {
-    /// Starts each of `calls` with `run`, those that change the same file one after another in
-    /// their order (`lanes`). With `together`, the interface shows each call's display as it
-    /// happens, told whose it is; otherwise once the calls before it have ended, only its latest
-    /// output and children kept until then.
-    pub(super) fn start(calls: Vec<Value>, root: &Path, run: Run, together: bool) -> Self {
+    /// Starts each of `calls` with `run`, each in a thread of its own once the earlier calls it
+    /// must follow have ended (`waits`), shown first, before it waits, when `announce`. With
+    /// `together`, the interface shows each call's
+    /// display as it happens, told whose it is; otherwise once the calls before it have ended,
+    /// only its latest output and children kept until then.
+    pub(super) fn start(
+        calls: Vec<Value>,
+        root: &Path,
+        run: Run,
+        together: bool,
+        announce: bool,
+    ) -> Self {
         let parsed: Vec<_> = calls.iter().map(|item| Call::parse(item).ok()).collect();
-        let lanes = lanes(&parsed, root);
+        let waits = waits(&parsed, root);
         let calls = Arc::new(calls);
         let cancel = Arc::new(AtomicBool::new(false));
+        let done = Arc::new((Mutex::new(vec![false; calls.len()]), Condvar::new()));
         let (to, from) = mpsc::channel();
-        for lane in lanes {
+        for (index, waits) in waits.into_iter().enumerate() {
             let (to, calls, run, cancel) = (to.clone(), calls.clone(), run.clone(), cancel.clone());
+            let (done, root) = (done.clone(), root.to_owned());
             std::thread::spawn(move || {
-                for index in lane {
-                    let mut relay = Relay {
-                        index,
-                        to: to.clone(),
-                        cancel: cancel.clone(),
-                    };
-                    let (output, usage) = match Call::parse(&calls[index]) {
-                        Ok(call) => run(&call, &mut relay, &cancel),
-                        Err(error) => {
-                            (Output::failure(format!("Error: {error}")), Usage::default())
-                        }
-                    };
-                    let _ = to.send((index, Shown::Ended(output, usage)));
+                let _ended = Ended(index, done.clone());
+                let mut relay = Relay {
+                    index,
+                    to: to.clone(),
+                    cancel: cancel.clone(),
+                };
+                let parsed = Call::parse(&calls[index]);
+                if let (true, Ok(call)) = (announce, &parsed) {
+                    relay.tool_call(call.name, &call.summary(), call.compact(&root).as_ref());
                 }
+                let (ended, changed) = &*done;
+                let mut ended = ended.lock().unwrap_or_else(|e| e.into_inner());
+                while !waits.iter().all(|&before| ended[before]) {
+                    ended = changed.wait(ended).unwrap_or_else(|e| e.into_inner());
+                }
+                drop(ended);
+                let (output, usage) = match parsed {
+                    // Nothing starts after a stop, not even what waited for the calls it stopped.
+                    Ok(call) if cancel.load(Ordering::Relaxed) => {
+                        relay.tool_result(call.name, super::calls::NOT_RUN, None, true);
+                        (
+                            Output::failure(super::calls::NOT_RUN.into()),
+                            Usage::default(),
+                        )
+                    }
+                    Ok(call) => run(&call, &mut relay, &cancel),
+                    Err(error) => (Output::failure(format!("Error: {error}")), Usage::default()),
+                };
+                let _ = to.send((index, Shown::Ended(output, usage)));
             });
         }
         Self {
@@ -211,30 +235,54 @@ impl Drop for Batch {
     }
 }
 
-/// The calls each thread runs, in order: edits and writes of one file go to the same thread,
-/// as Pi's file mutation queue runs them one after another; every other call has its own.
-fn lanes(calls: &[Option<Call>], root: &Path) -> Vec<Vec<usize>> {
-    let mut lanes: Vec<Vec<usize>> = Vec::new();
-    let mut files: HashMap<std::path::PathBuf, usize> = HashMap::new();
-    for (index, call) in calls.iter().enumerate() {
-        let call = call
-            .as_ref()
-            .filter(|call| matches!(call.name, "edit" | "write"));
-        let file = call.map(|call| {
-            let path = tools::resolve(root, call.arguments["path"].as_str().unwrap_or_default());
-            std::fs::canonicalize(&path).unwrap_or(path)
-        });
-        match file.as_ref().and_then(|file| files.get(file)) {
-            Some(&lane) => lanes[lane].push(index),
-            None => {
-                if let Some(file) = file {
-                    files.insert(file, lanes.len());
-                }
-                lanes.push(vec![index]);
-            }
-        }
+/// Marks its call ended when dropped, even by a panic, so that the calls after it go on.
+struct Ended(usize, Arc<(Mutex<Vec<bool>>, Condvar)>);
+
+impl Drop for Ended {
+    fn drop(&mut self) {
+        let (ended, changed) = &*self.1;
+        ended.lock().unwrap_or_else(|e| e.into_inner())[self.0] = true;
+        changed.notify_all();
     }
-    lanes
+}
+
+/// The earlier calls each call waits for: those that change files (`bash`, `write`, `edit`) end
+/// before the calls after them start and wait for those before them, as Claude Code and Codex
+/// run calls that change things on their own, so that a command's output, or an edit, is there
+/// for the next call that reads, builds or edits it. Calls that only look run beside each other,
+/// as in Pi, and so do `bash` calls, and edits and writes of different files.
+fn waits(calls: &[Option<Call>], root: &Path) -> Vec<Vec<usize>> {
+    #[derive(PartialEq)]
+    enum Kind {
+        Looks,
+        Bash,
+        File(std::path::PathBuf),
+    }
+    let kinds: Vec<Kind> = (calls.iter())
+        .map(|call| match call.as_ref().map(|call| (call.name, call)) {
+            Some(("bash", _)) => Kind::Bash,
+            Some(("edit" | "write", call)) => {
+                let path =
+                    tools::resolve(root, call.arguments["path"].as_str().unwrap_or_default());
+                Kind::File(std::fs::canonicalize(&path).unwrap_or(path))
+            }
+            Some(_) => Kind::Looks,
+            // A call that cannot be read fails at once.
+            None => Kind::Looks,
+        })
+        .collect();
+    let follows = |later: &Kind, earlier: &Kind| match (later, earlier) {
+        (Kind::Looks, Kind::Looks) | (Kind::Bash, Kind::Bash) => false,
+        (Kind::File(later), Kind::File(earlier)) => later == earlier,
+        _ => true,
+    };
+    (kinds.iter().enumerate())
+        .map(|(index, later)| {
+            (0..index)
+                .filter(|&before| follows(later, &kinds[before]))
+                .collect()
+        })
+        .collect()
 }
 
 /// A running call's display, sent to the thread that shows it.
@@ -334,6 +382,43 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn calls_that_change_files_follow_the_calls_before_them_and_lead_those_after() {
+        let call = |name: &str, arguments: Value| {
+            let arguments = arguments.to_string();
+            json!({"type":"function_call","call_id":"c","name":name,"arguments":arguments})
+        };
+        let items = [
+            call("read", json!({"path":"a"})),
+            call("grep", json!({"pattern":"x"})),
+            call("bash", json!({"command":"make"})),
+            call("bash", json!({"command":"make test"})),
+            call("read", json!({"path":"a"})),
+            call("edit", json!({"path":"a","edits":[]})),
+            call("write", json!({"path":"b","content":""})),
+            call("write", json!({"path":"./a","content":""})),
+            json!({"type":"function_call","call_id":"c","name":"read","arguments":"{"}),
+            call("subagent", json!({"agent":"x","task":"y"})),
+        ];
+        let calls: Vec<_> = items.iter().map(|item| Call::parse(item).ok()).collect();
+        let waits = waits(&calls, Path::new("/project"));
+        let expected: [&[usize]; 10] = [
+            &[],
+            &[],
+            // Commands wait for what came before, but not for each other.
+            &[0, 1],
+            &[0, 1],
+            &[2, 3],
+            &[0, 1, 2, 3, 4],
+            // Writes and edits of other files run beside each other; of one file, in order.
+            &[0, 1, 2, 3, 4],
+            &[0, 1, 2, 3, 4, 5],
+            &[2, 3, 5, 6, 7],
+            &[2, 3, 5, 6, 7],
+        ];
+        assert_eq!(waits, expected.map(<[usize]>::to_vec));
+    }
+
+    #[test]
     fn questions_wait_while_another_thread_shows_the_calls() {
         let call =
             |id: &str| json!({"type":"function_call","call_id":id,"name":"bash","arguments":"{}"});
@@ -356,6 +441,7 @@ mod tests {
                 Path::new("/"),
                 run.clone(),
                 together,
+                false,
             );
             let (to, seen) = mpsc::channel();
             let stop = Arc::new(AtomicBool::new(false));
@@ -406,7 +492,7 @@ mod tests {
             (output, Usage::default())
         });
         let calls = vec![call("slow", 600), call("quick", 50)];
-        let mut batch = Batch::start(calls, Path::new("/"), run, false);
+        let mut batch = Batch::start(calls, Path::new("/"), run, false, false);
         let mut ui = Recorder::default();
         let Waited::Ended(_) = batch.wait(&mut ui, &AtomicBool::new(false)) else {
             panic!("paused");

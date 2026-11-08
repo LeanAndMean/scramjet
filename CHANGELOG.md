@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.0 — Calls that change files run in their order
+
+### Changed
+
+- Of the calls a model makes in one reply, those that change files (bash, write, edit) now wait for the calls before them, and the calls after them wait for them, as in Claude Code and Codex: a read of a screenshot a command makes, or a build after an edit, sees what the earlier call did instead of failing or building half-edited code. Calls that only look (read, grep, find, ls, subagents) still run side by side, and so do bash calls, and edits and writes of different files. A waiting call shows in its place at once; after Escape it does not run.
+
 ## 0.96.1 — Downloaded rg and fd within commands' reach
 
 ### Fixed

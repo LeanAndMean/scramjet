@@ -126,14 +126,11 @@ impl Agent {
         }
     }
 
-    /// Runs a call as `Tools::run` does, shown first when `announce`.
-    fn runner(&self, announce: bool) -> batch::Run {
+    /// Runs a call as `Tools::run` does.
+    fn runner(&self) -> batch::Run {
         let kit = self.kit();
         Arc::new(
             move |call: &Call, ui: &mut dyn AgentUi, cancel: &AtomicBool| {
-                if announce {
-                    ui.tool_call(call.name, &call.summary(), call.compact(&kit.root).as_ref());
-                }
                 kit.tools().run(call, ui, cancel)
             },
         )
@@ -148,8 +145,9 @@ impl Agent {
                 let batch = Batch::start(
                     calls.clone(),
                     &self.config.root,
-                    self.runner(true),
+                    self.runner(),
                     together,
+                    true,
                 );
                 Run::Together(batch)
             }
@@ -484,8 +482,8 @@ impl Agent {
         if together {
             ui.of_call(None);
         }
-        let (root, run) = (&self.config.root, self.runner(false));
-        Called::Running(Batch::start(vec![item.clone()], root, run, together))
+        let (root, run) = (&self.config.root, self.runner());
+        Called::Running(Batch::start(vec![item.clone()], root, run, together, false))
     }
 }
 
@@ -1629,18 +1627,20 @@ sed.\n- Be concise";
         }
         // Each command waits up to 5 s for the other's file, which one after the other the first
         // would not see.
-        let meet = |mine: &str, theirs: &str| {
+        let meet = |mine: &str, theirs: &str, then: &str| {
             json!({"command":format!("touch {mine}; for _ in $(seq 100); do [ -e {theirs} ] && \
-break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
+break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone; {then}")})
         };
         let edit = |path: &str, old: &str, new: &str| json!({"path":path,"edits":[{"oldText":old,"newText":new}]});
         let (endpoint, server) = serve(vec![
             tool_calls(&[
-                ("bash", meet("a", "b")),
+                ("bash", meet("a", "b", "sleep 0.3; echo made > made.txt")),
+                ("bash", meet("b", "a", "")),
+                ("read", json!({"path":"made.txt"})),
                 ("write", json!({"path":"f.txt","content":"one\n"})),
                 ("edit", edit("f.txt", "one", "two")),
                 ("edit", edit("./f.txt", "two", "three")),
-                ("bash", meet("b", "a")),
+                ("bash", json!({"command":"cat f.txt"})),
             ]),
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);
@@ -1649,13 +1649,10 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         let started = std::time::Instant::now();
         agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
         assert!(started.elapsed() < Duration::from_secs(4));
-        // The edits of one file ran in their order.
-        let file = agent.root().join("f.txt");
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
         let shown: Vec<String> = (ui.shown.iter())
             .map(|shown| shown.splitn(3, ' ').take(2).collect::<Vec<_>>().join(" "))
             .collect();
-        let each = ["bash", "write", "edit", "edit", "bash"]
+        let each = ["bash", "bash", "read", "write", "edit", "edit", "bash"]
             .map(|name| [format!("call {name}"), format!("result {name}")]);
         let mut expected: Vec<String> = each.concat();
         expected.push("reply done".into());
@@ -1664,11 +1661,16 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         let bodies = server.join().unwrap();
         let outputs = outputs(&bodies[1]);
         let ids: Vec<&str> = outputs.iter().map(|(id, _)| id.as_str()).collect();
-        assert_eq!(ids, ["call_0", "call_1", "call_2", "call_3", "call_4"]);
+        let expected: Vec<String> = (0..7).map(|index| format!("call_{index}")).collect();
+        assert_eq!(ids, expected);
+        // The commands ran side by side; the read waited for the command that made its file,
+        // and the last command for the edits, which ran in their order.
         assert_eq!(
-            (outputs[0].1.as_str(), outputs[4].1.as_str()),
+            (outputs[0].1.as_str(), outputs[1].1.as_str()),
             ("met\n", "met\n")
         );
+        assert!(outputs[2].1.contains("made"), "{:?}", outputs[2].1);
+        assert_eq!(outputs[6].1, "three\n");
     }
 
     #[test]
@@ -1722,6 +1724,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
     }
 
     #[test]
+    #[cfg(unix)] // a named pipe
     fn calls_running_together_show_each_as_it_runs_where_the_interface_can() {
         if crate::agent::tests::missing("bash") {
             return;
@@ -1734,7 +1737,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
             tool_calls(&[("bash", meet("a", "b")), ("bash", meet("b", "a"))]),
             stream(&fixture::text_events("met", fixture::known_usage())),
             tool_calls(&[
-                ("bash", json!({"command":"sleep 0.5; echo slept"})),
+                ("read", json!({"path":"slow.fifo"})),
                 (
                     subagent::NAME,
                     json!({"agent":"p","task":"go","agentScope":"both"}),
@@ -1781,10 +1784,18 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         let project = crate::os::join(agent.root(), ".scramjet/agents");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
+        // The read waits on the pipe until it is written half a second later.
+        let fifo = agent.root().join("slow.fifo");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        assert!(made.unwrap().success());
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            std::fs::write(fifo, "slept\n").unwrap();
+        });
         ui.shown.clear();
         agent.turn("ask", &mut ui, &AtomicBool::new(false)).unwrap();
         let calls = each(&ui.shown[1..ui.shown.len() - 2]);
-        assert_eq!(calls[0], ["call bash sleep 0.5", "result bash slept"]);
+        assert_eq!(calls[0], ["call read slow.fifo", "result read slept"]);
         assert_eq!(
             calls[1],
             [
@@ -1798,7 +1809,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
             .shown
             .iter()
             .position(|shown| shown.starts_with("question"));
-        let slept = (ui.shown.iter()).position(|shown| shown.starts_with("result bash slept"));
+        let slept = (ui.shown.iter()).position(|shown| shown.starts_with("result read slept"));
         assert!(asked < slept, "{:?}", ui.shown);
         server.join().unwrap();
     }
@@ -1811,24 +1822,29 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
         let (endpoint, server) = serve(vec![
             tool_calls(&[
                 ("bash", json!({"command":"sleep 30"})),
-                ("write", json!({"path":"x.txt","content":"x"})),
+                ("bash", json!({"command":"touch x.txt; sleep 30"})),
+                ("write", json!({"path":"y.txt","content":"y"})),
             ]),
             stream(&fixture::text_events("ok", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "calls-together-stopped");
         let mut ui = Recorder::default();
-        // Stopped once the write ran, which it does only beside the command, as in Pi.
+        // Stopped once the second command runs beside the first.
         let cancel = stop_once_written(agent.root().join("x.txt"));
+        let started = std::time::Instant::now();
         let stopped = agent.turn("go", &mut ui, &cancel);
         assert!(matches!(stopped, Err(AgentError::Cancelled)), "{stopped:?}");
-        assert!(agent.root().join("x.txt").exists());
+        assert!(started.elapsed() < Duration::from_secs(10));
+        // The write waiting for the commands did not run after the stop.
+        assert!(!agent.root().join("y.txt").exists());
         cancel.store(false, Ordering::Relaxed);
         agent.turn("again", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
         let outputs = outputs(&bodies[1]);
-        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs.len(), 3);
         assert!(outputs[0].1.starts_with("Command cancelled"), "{outputs:?}");
-        assert!(outputs[1].1.starts_with("Wrote 1 bytes"), "{outputs:?}");
+        assert!(outputs[1].1.starts_with("Command cancelled"), "{outputs:?}");
+        assert_eq!(outputs[2].1, NOT_RUN);
     }
 
     #[test]
