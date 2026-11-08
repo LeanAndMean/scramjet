@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.95.1 — Why commands do not run unattended on Windows
+
+### Fixed
+
+- On Windows, a command refused in a turn nobody started (`-p`, autopilot, a next step running by itself) says why in full: there is no sandbox there yet to hide the credential stores, as the `hideCredentials` setting asks. grep and find refused there say so too, where they said only that there is no sandbox.
+
 ## 0.95.0 — Installing the sets a directory holds
 
 ### Changed

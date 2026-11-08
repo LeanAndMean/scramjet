@@ -1,0 +1,132 @@
+{
+  "bash": true,
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Ping for a minute",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo waiting && ping -n 60 127.0.0.1"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo waiting && ping -n 60 127.0.0.1",
+          "timeout": 3
+        }
+      }
+    ],
+    [
+      {
+        "text": "It timed out."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "shot": "started",
+      "wait": 5
+    },
+    {
+      "text": "Ping for a minute"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "running",
+      "wait": 4
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "after Escape",
+      "wait": 3
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "text": "Ping with a timeout"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "timed out",
+      "wait": 8
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "text": "!ping -n 60 127.0.0.1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "! running",
+      "wait": 4
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "! after Escape",
+      "wait": 3
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "keys": [
+        "C-d"
+      ]
+    },
+    {
+      "shot": "after Ctrl+D",
+      "wait": 3
+    }
+  ]
+}

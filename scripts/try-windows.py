@@ -16,7 +16,9 @@ printing the pane after each.
 A scenario holds "files", "settings", "models" (more of models.json's fields, such as
 "logins"), "args" (more command-line words), "path" (WSL paths
 of directories put ahead of Windows' own PATH, relative ones from %TEMP%\\scramjet-rs-try),
-"env" (more variables, WSL paths among them given as Windows ones), "prompt", "replies", each
+"env" (more variables, WSL paths among them given as Windows ones), "bash": true (a stand-in
+bash.exe, scripts/try-windows-bash.c built with build-windows.sh's image, put on the PATH; it
+runs commands through cmd.exe), "prompt", "replies", each
 reply as in scripts/screens.py, and "steps", each one of {"text": typed}, {"keys": [tmux key
 names]}, {"resize": [columns, rows]}, {"host": [a WSL command run in the project]} and
 {"shot": label, "wait": seconds}.
@@ -47,6 +49,14 @@ for name, text in scenario.get('files', {}).items():
     path = os.path.join(work, 'proj', name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, 'w').write(text)
+if scenario.get('bash'):
+    standin = os.path.join(win, 'standin')
+    os.makedirs(standin, exist_ok=True)
+    subprocess.run(['docker', 'run', '--rm', '-u', '%d:%d' % (os.getuid(), os.getgid()),
+                    '-v', '%s:/src:ro' % os.path.join(ROOT, 'scripts'), '-v', '%s:/out' % standin,
+                    'scramjet-rs-mingw', 'x86_64-w64-mingw32-gcc-posix', '-O2', '-o', '/out/bash.exe',
+                    '/src/try-windows-bash.c'], check=True)
+    scenario['path'] = scenario.get('path', []) + ['standin']
 base = 'http://%s/v1' % screens.serve(scenario.get('replies', []))
 provider = {'baseUrl': base, 'api': 'openai-responses', 'apiKey': 'scripted',
             'models': [{'id': 'gpt-6-luna', 'reasoning': True, 'contextWindow': 200000}]}

@@ -30,6 +30,12 @@ pub(super) const FAILED: &str = match cfg!(target_os = "macos") {
 #[cfg(windows)]
 const UNAVAILABLE: &str = "scramjet-rs has no sandbox on Windows yet";
 
+/// Why a command whose credential stores are to be hidden does not run on Windows.
+#[cfg(windows)]
+const NOT_HIDDEN: &str = "scramjet-rs has no sandbox on Windows yet, so it cannot run commands \
+    with the credential stores hidden, as the hideCredentials setting asks for this turn (by \
+    default, turns nobody started: -p, autopilot, a next step that runs by itself)";
+
 /// Credential stores in the home directory that subagents, and the main agent when its
 /// credentials are hidden, do not see, after an agent printed `~/.scramjet/agent/auth.json` to
 /// its provider: common ones, not every secret. Packages name their own (`credentialFiles`).
@@ -597,7 +603,7 @@ pub(super) fn server(
 /// it, as outside.
 #[cfg(windows)]
 pub(super) fn hiding(_: &Path, _: &str, _: &Hidden) -> Result<Command, String> {
-    Err(format!("{UNAVAILABLE} to hide the credential stores in"))
+    Err(NOT_HIDDEN.to_owned())
 }
 
 #[cfg(unix)]
@@ -628,6 +634,14 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
 
 /// `program` (its arguments to follow) confined as `command` is, with `path`, which it reads,
 /// mounted again too.
+#[cfg(windows)]
+pub(super) fn program(_: &Path, _: &Path, _: &Path, _: &Hidden) -> Result<Command, String> {
+    Err(NOT_HIDDEN.to_owned())
+}
+
+/// `program` (its arguments to follow) confined as `command` is, with `path`, which it reads,
+/// mounted again too.
+#[cfg(unix)]
 pub(super) fn program(
     root: &Path,
     path: &Path,
