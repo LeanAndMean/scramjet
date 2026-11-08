@@ -93,7 +93,6 @@ To compare a display with Scramjet's: `scripts/screens.py` can run it with `--bi
 
 Not scheduled; fix them when they matter.
 
-- Keyboard selection (0.92.0): in the conversation the keys move only a selection the mouse started there.
 - Replies' markdown departs from Scramjet's in smaller rules (left from item 10 at the 2026-11-04 steer). Blocks inside quotes: a heading, list or nested quote there, with Scramjet's blank lines between them, a table after a lazy line kept in the quote, and a quote's last empty `>` lines not shown. Setext headings: a `---` under a paragraph line shows as a rule after a blank line, where Scramjet makes the paragraph a heading (the line is shown before the next line says so). A table's rows without `|`: a line of text right under a table shows after it, where marked makes it a row. Tables without a leading `|`. Scramjet's renderer runs under Node for comparisons: `new Markdown(text, 0, 0, theme).render(width)` from `~/repos/scramjet/packages/tui/dist/components/markdown.js`, with a theme of tagging functions.
 
 - In printed output (`-p`, piped input), a reply's calls running at the same time print in call order, each once the calls before it ended, so a quick call after a slow one prints `took` up to when it printed, not when it ended (`AgentUi::tool_result` carries no time; the full screen records it as the result comes).

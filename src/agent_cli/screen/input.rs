@@ -123,6 +123,9 @@ impl App {
             (_, true) => Some(false),
             _ => None,
         };
+        if self.start_selection(&key) {
+            return Flow::Go;
+        }
         if self.selection.is_some() {
             if self.extend_selection(&key) {
                 return Flow::Go;

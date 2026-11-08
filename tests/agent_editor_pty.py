@@ -4331,6 +4331,16 @@ def fullscreen_mouse(read, until, send, output):
     until(b'\x1b[7m22 ', mark)
     send(b'\x1b[1;2F\x1b[1;2B\x1b[1;2B\x03')
     copied_text('22 of the reply.\nRow 23.\nRow 24 of the reply.')
+    # With the prompt empty, Shift+Up starts a selection at the end of the last line shown.
+    send(b'\x1b[1;2A\x1b[1;2A\x1b[1;2H\x03')
+    copied_text('Row 33 of the reply.\nRow 34 of the reply.\nRow 35 of the reply.')
+    # At the end of the conversation, Ctrl+Shift+Left starts one there, by a word.
+    send(b'\x1b[<65;5;5M\x1b[<65;5;5M\x1b[<65;5;5M')
+    on_screen('more lines below', gone=True)
+    send(b'\x1b[1;6D\x1b[1;6D\x03')
+    copied_text('reply.')
+    send(b'\x1b[<64;5;5M\x1b[<64;5;5M')
+    on_screen('6 more lines below')
     # The prompt selects with them too, shown reversed; Ctrl+C copies it, which stays.
     mark = len(output)
     send(b'hello world\x1b[1;6D\x1b[1;2D')

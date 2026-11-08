@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.94.0 — Selecting the conversation without the mouse
+
+### Changed
+
+- With the prompt empty, Shift+Up, Shift+Left, Shift+Home and Ctrl+Shift+Left start a selection in the conversation at the end of its last line shown, so that it can be selected and copied with the keyboard alone; before, the keys moved only a selection the mouse had made. Ctrl+C copies it and Escape lets it go.
+
 ## 0.93.0 — Missing packages cloned at start
 
 ### Changed

@@ -43,6 +43,24 @@
       "sleep": 0.3
     },
     {
+      "type": "\u001b[1;2A\u001b[1;2A"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "from-keys"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "sleep": 0.3
+    },
+    {
       "type": "Check the selection in the prompt\u001b[1;6D\u001b[1;6D"
     },
     {
@@ -61,7 +79,7 @@
       "shot": "prompt-lines"
     },
     {
-      "type": "\u0005\u0015/hotkeys\r"
+      "type": "/hotkeys\r"
     },
     {
       "until": "browse history"

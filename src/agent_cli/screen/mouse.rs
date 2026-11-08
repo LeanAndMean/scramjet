@@ -421,6 +421,52 @@ impl App {
         }
     }
 
+    /// With nothing selected and nothing in the prompt, a key that selects backwards starts a
+    /// selection at the end of the conversation's last line shown with text, and moves its end
+    /// as it says; returns whether it did.
+    pub(super) fn start_selection(&mut self, key: &Key) -> bool {
+        use crate::agent_cli::keymap::Binding as B;
+        let backwards = [
+            B::SelectLineUp,
+            B::SelectLeft,
+            B::SelectWordLeft,
+            B::SelectLineStart,
+        ];
+        let length = self.transcript.len();
+        if self.selection.is_some()
+            || self.dialog.is_some()
+            || !self.draft.text().is_empty()
+            || length == 0
+            || !backwards.iter().any(|&binding| key.is(binding))
+        {
+            return false;
+        }
+        let top = self.shown_top();
+        let bottom = (top + self.rows.saturating_sub(1)).min(length - 1);
+        let line = (top..=bottom)
+            .rev()
+            .find(|&line| !self.transcript.shown(line).trim().is_empty())
+            .unwrap_or(bottom);
+        let mark = Mark {
+            at: At::Line(self.transcript.locate(line)),
+            column: selection::width(&self.transcript.shown(line)),
+        };
+        let follow = self.top.is_none();
+        self.top = Some(self.transcript.locate(top));
+        self.selections += 1;
+        self.selection = Some(Selection {
+            id: self.selections,
+            anchor: mark,
+            head: mark,
+            held: false,
+            dragged: false,
+            follow,
+            in_dock: false,
+            goal: None,
+        });
+        self.extend_selection(key)
+    }
+
     /// Moves the end of the mouse's selection as `key` says, if it is a key that selects, and
     /// scrolls to keep it shown; returns whether it moved. As the mouse's, it starts and ends at
     /// cells' edges, and a line up or down goes between the conversation and the dock.
