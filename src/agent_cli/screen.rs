@@ -307,6 +307,8 @@ struct App {
     ready: bool,
     /// A turn runs, with what it does now.
     activity: Option<Activity>,
+    /// The session runs a `!` command of its own, typed while no turn ran.
+    session_shell: bool,
     /// Since the last turn ended, until the user sends or types something: `Waiting for you`,
     /// with the draft as it was then.
     handed: Option<(Activity, String)>,
@@ -378,6 +380,7 @@ impl App {
             efforts: EffortCycle::default(),
             ready: false,
             activity: None,
+            session_shell: false,
             handed: None,
             dialog: None,
             held_keys: Vec::new(),
@@ -565,6 +568,11 @@ impl App {
         match message {
             ToScreen::Event(event) => {
                 self.track(&event);
+                match event {
+                    Event::CommandStarted(..) => self.session_shell = true,
+                    Event::CommandResult(..) => self.session_shell = false,
+                    _ => {}
+                }
                 if let Event::Subagents(children) = &event {
                     self.footer.subagents(0, children);
                 }
@@ -966,7 +974,7 @@ impl App {
             return false;
         }
         let mut queue = self.queue();
-        if queue.shells.iter().any(|side| side.ended.is_none()) {
+        if self.session_shell || queue.shells.iter().any(|side| side.ended.is_none()) {
             drop(queue);
             let busy = "A bash command is already running.";
             let busy = match keymap::key(Binding::Interrupt) {

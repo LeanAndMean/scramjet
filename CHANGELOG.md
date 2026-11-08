@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.104.1 — One `!` command at a time
+
+### Fixed
+
+- On the full screen, a `!` command typed while another runs with no turn going is now refused with `A bash command is already running`, as during a turn and as in Scramjet; before, both ran at once.
+
 ## 0.104.0 — Sessions in a directory of your choice
 
 ### Added

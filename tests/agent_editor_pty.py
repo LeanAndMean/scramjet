@@ -4356,7 +4356,21 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     rows = on_screen(' (cancelled)')
     text = '\n'.join(rows)
     assert text.index('Second.') < text.index(' $ sleep 30'), text
-    send(b'\x04')
+    # One the session runs with no turn refuses a second too, as Scramjet's.
+    send(b'!sleep 31\r')
+    on_screen(' $ sleep 31')
+    send(b'!echo no\r')
+    ending(read, output, ['A bash command is already running. Press Esc to cancel it', 'first.', '\u2500' * 59,
+                          '> !echo no'])
+    rows = on_screen('> !echo no')
+    assert ' $ echo no' not in '\n'.join(rows), rows
+    send(b'\x1b')
+    end = time.monotonic() + 10
+    while '\n'.join(Screen(output, 60).rows()).count('(cancelled)') < 2:
+        assert time.monotonic() < end, Screen(output, 60).rows()
+        read(.05)
+    ending(read, output, ['> !echo no'])
+    send(b'\x15\x04')
 
 
 def fullscreen_mouse(read, until, send, output):
