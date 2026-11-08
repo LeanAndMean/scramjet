@@ -386,6 +386,12 @@ impl Interactive {
                 Some(screen) => screen.event(Event::Stopped(error)),
                 None => self.ui.stopped(error.as_deref()),
             }
+            if let Some(notice) = self.agent.take_interrupted() {
+                match &self.screen {
+                    Some(screen) => screen.event(Event::Notice(notice)),
+                    None => self.ui.notice(&notice),
+                }
+            }
         }
         // The full screen's footer shows the same.
         if self.screen.is_none() {

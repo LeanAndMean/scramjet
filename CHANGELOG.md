@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.114.2 — A stopped command's note follows the stop
+
+### Fixed
+
+- When a command's turn fails or is cancelled, `/NAME is waiting for you. Reply to continue.` now shows after the `Error: …` or `(cancelled)` that ended it, not before.
+
 ## 0.114.1 — Exported pages label commands and skills as the screen does
 
 ### Fixed

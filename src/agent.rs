@@ -566,6 +566,9 @@ pub struct Agent {
     lifecycle: status::Lifecycle,
     /// The command the last turn reported completed, until its next step is routed.
     completed: Option<Completed>,
+    /// What to tell the user of the command a failed or cancelled turn left waiting, shown after
+    /// the turn's stop.
+    interrupted: Option<String>,
     /// The steps the agent suggested in the last turn, outside a command, for the user to choose
     /// from once it ends.
     suggestion: suggest::Pending,
@@ -760,6 +763,7 @@ impl Agent {
             skills: Skills::default(),
             lifecycle,
             completed: None,
+            interrupted: None,
             suggestion: suggest::Pending::Nothing,
             delegated: Vec::new(),
             attached: None,

@@ -558,6 +558,9 @@ fn print(
     let result = agent.turn(&prompt, ui, cancel);
     drop(mode);
     ui.clear();
+    if let Some(notice) = agent.take_interrupted() {
+        ui.notice(&notice);
+    }
     ui.print_usage(agent);
     if let Some(completed) = agent.take_completed() {
         let routing = agent.route(&completed, false, true);

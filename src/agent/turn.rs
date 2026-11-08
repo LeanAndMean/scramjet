@@ -130,9 +130,7 @@ impl Agent {
                 Err(AgentError::Paused) => return Err(AgentError::Paused),
                 Err(error) => {
                     self.suggestion = suggest::Pending::Nothing;
-                    if let Some(notice) = self.lifecycle.interrupted() {
-                        ui.notice(&notice);
-                    }
+                    self.interrupted = self.lifecycle.interrupted();
                     self.save_command()?;
                     // After the command's state, which `/tree` takes as the state there.
                     let stopped = match &error {
@@ -179,6 +177,12 @@ finish and is not checked on. Reply to continue.",
     /// The command the last turn reported completed, for `route`.
     pub fn take_completed(&mut self) -> Option<Completed> {
         self.completed.take()
+    }
+
+    /// What to tell the user, once the turn's stop is shown, of the command the turn left
+    /// waiting when it failed or was cancelled.
+    pub fn take_interrupted(&mut self) -> Option<String> {
+        self.interrupted.take()
     }
 
     /// The steps the agent suggested in the last turn, which ended as a turn ends without a
@@ -1133,8 +1137,9 @@ scramjet-rs\n",
         // A command whose turn failed waits for the user, also after a resume: their reply
         // resumes it, and its turn gets the status check.
         assert!(agent.turn("/rs:work", &mut ui, &cancel).is_err());
-        let waiting = "notice /rs:work is waiting for you. Reply to continue.".to_owned();
-        assert_eq!(ui.shown.last(), Some(&waiting));
+        let waiting = "/rs:work is waiting for you. Reply to continue.";
+        assert_eq!(agent.take_interrupted().as_deref(), Some(waiting));
+        assert_eq!(agent.take_interrupted(), None);
         let mut agent = resume(agent);
         agent.turn("hello", &mut ui, &cancel).unwrap();
         assert!(agent.take_completed().is_some());
