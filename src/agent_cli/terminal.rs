@@ -21,11 +21,28 @@ use std::{
     collections::VecDeque,
     io::{BufRead, IsTerminal, Write},
     sync::{
-        Arc, LazyLock, Mutex,
+        Arc, LazyLock, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
+
+/// The status line of the terminal's output, for an exit to remove.
+static STATUS: Mutex<Option<Arc<Mutex<Status>>>> = Mutex::new(None);
+
+/// Removes the status line, if drawn, before an exit ends the process, and keeps it from being
+/// drawn again, which would leave it under the shell's prompt.
+pub(super) fn clear_on_exit() {
+    let status = STATUS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    if let Some(status) = status {
+        let mut status = status.lock().unwrap_or_else(PoisonError::into_inner);
+        status.clear();
+        std::mem::forget(status);
+    }
+}
 
 /// Scramjet's spinner, a frame each `SPIN`.
 const SPINNER: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -656,6 +673,9 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     pub(super) fn new(hide_thinking: Arc<AtomicBool>, status_thread: bool) -> Self {
         let color = std::io::stderr().is_terminal();
         let status = Arc::new(Mutex::<Status>::default());
+        if color {
+            *STATUS.lock().unwrap_or_else(PoisonError::into_inner) = Some(status.clone());
+        }
         if color && status_thread {
             let status = status.clone();
             let hide = hide_thinking.clone();

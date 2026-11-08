@@ -452,6 +452,7 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
     assert output.rfind(b'\x1b[?1002l') >= output.rfind(b'\x1b[?1002h'), 'mouse reports left on'
     os.close(master)
     os.close(slave)
+    return output
 
 
 def run_in_shell(script, endpoint):
@@ -977,6 +978,21 @@ def printed_command(command):
     return script
 
 
+def printed_running(command):
+    def script(read, until, send, output):
+        until(b'bash ' + command.encode())
+        started(command)
+        until('Running'.encode())
+    return script
+
+
+def status_line_removed(output):
+    """Whether the last frame of `-p`'s status line was erased, so the shell's prompt does not
+    follow it on its row."""
+    drawn = max(output.rfind(frame.encode()) for frame in SPINNING[1:11])
+    return drawn < 0 or output.rfind(b'\r\x1b[2K') > drawn
+
+
 def printed_cancelled_twice(read, until, send, output):
     until(b'bash setsid')
     read(.3)
@@ -994,9 +1010,10 @@ assert not running('sleep 31.25')
 assert readable_sessions()
 run([], screen_idle, status=129, signal=signal.SIGHUP)
 visible = config_home('signals', '{"hideCredentials": "never"}')
-run(['-p', 'go'], printed_command('sleep 32.5'), serve_call('sleep 32.5'), status=143, signal=signal.SIGTERM,
-    variables={'XDG_CONFIG_HOME': visible})
+printed = run(['-p', 'go'], printed_running('sleep 32.5'), serve_call('sleep 32.5'), status=143,
+              signal=signal.SIGTERM, variables={'XDG_CONFIG_HOME': visible})
 assert not running('sleep 32.5')
+assert status_line_removed(printed), bytes(printed[-300:])
 run(['-p', 'go'], printed_cancelled_twice, calling, status=130)
 
 

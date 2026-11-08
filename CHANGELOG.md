@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.108.1 — No status line left after SIGTERM
+
+### Fixed
+
+- When `-p` is ended by SIGTERM or SIGHUP, its status line (such as `Running` or a retry's countdown) is erased, so the shell's prompt no longer follows it on the same row.
+
 ## 0.108.0 — Compaction as you set it
 
 ### Added

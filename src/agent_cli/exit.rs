@@ -125,6 +125,7 @@ fn exit(startup: Option<&console::Mode>) -> ! {
         let _ = std::fs::remove_file(prompt);
     }
     scramjet_rs::agent::end();
+    super::terminal::clear_on_exit();
     let mut stderr = io::stderr().lock();
     if let Some(leave) = screen::leave_on_exit() {
         let _ = stderr.write_all(leave.as_bytes());
