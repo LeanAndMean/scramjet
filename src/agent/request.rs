@@ -389,7 +389,7 @@ pub(super) fn send(
     let max_wait = retries.max_wait.unwrap_or(Duration::MAX);
     loop {
         // A wait longer than the settings allow is the provider's to refuse again.
-        if let Some(left) = super::cooldown::left(route, model).filter(|left| *left <= max_wait) {
+        while let Some(left) = super::cooldown::take(route, model, max_wait) {
             on(Sending::Cooling(left));
             if sleep(executor, left, cancel) {
                 return Err(AgentError::Cancelled);
@@ -481,17 +481,19 @@ pub(super) fn send(
                     .collect(),
             });
         }
-        if let Some(wait) = failure
-            .wait
-            .filter(|wait| failure.transient && *wait < Duration::MAX)
-        {
-            super::cooldown::hold(route, model, wait);
-        }
         let backoff = retries.delay.saturating_mul(2u32.pow(attempt.min(5)));
         let delay = backoff.min(max_wait).max(failure.wait.unwrap_or_default());
         let too_long = delay > max_wait || failure.wait == Some(Duration::MAX);
         // A context overflow is not retried as is: only compaction can let the request through.
-        if !failure.transient || failure.overflow || attempt >= retries.attempts || too_long {
+        let gives_up =
+            !failure.transient || failure.overflow || attempt >= retries.attempts || too_long;
+        if let Some(wait) = failure
+            .wait
+            .filter(|wait| failure.transient && *wait < Duration::MAX)
+        {
+            super::cooldown::hold(route, model, wait, !gives_up && delay == wait);
+        }
+        if gives_up {
             let message = match attempt {
                 0 => failure.message,
                 n => format!("{} (after {n} retries)", failure.message),
@@ -833,6 +835,57 @@ response is incomplete; retry the request."});
         assert_eq!(ui.cooling.len(), 1);
         assert!(ui.retries.is_empty());
         assert_eq!(server.join().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn requests_held_by_a_shared_wait_reach_the_provider_one_after_another() {
+        let busy =
+            b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 1\r\ncontent-length: 4\r\n\r\nbusy";
+        let mut answers = vec![busy.to_vec()];
+        answers
+            .extend((0..3).map(|_| stream(&fixture::text_events("done", fixture::known_usage()))));
+        let mut answers = answers.into_iter();
+        let arrived = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = arrived.clone();
+        let (endpoint, server) = serve_answering(4, move |_| {
+            seen.lock().unwrap().push(Instant::now());
+            answers.next().unwrap()
+        });
+        let no_retries = Retries {
+            attempts: 0,
+            delay: Duration::ZERO,
+            max_wait: None,
+        };
+        let (mut refused, _scratch) = agent(endpoint, "spaced-refused");
+        refused.set_retries(no_retries);
+        let cancel = AtomicBool::new(false);
+        assert!(
+            refused
+                .turn("hi", &mut Recorder::default(), &cancel)
+                .is_err()
+        );
+        let waiting: Vec<_> = (0..3)
+            .map(|n| {
+                std::thread::spawn(move || {
+                    let (mut agent, _scratch) = agent(endpoint, &format!("spaced-{n}"));
+                    agent.set_retries(no_retries);
+                    let cancel = AtomicBool::new(false);
+                    agent.turn("hi", &mut Recorder::default(), &cancel).unwrap();
+                })
+            })
+            .collect();
+        waiting
+            .into_iter()
+            .for_each(|thread| thread.join().unwrap());
+        server.join().unwrap();
+        let arrived = arrived.lock().unwrap();
+        assert!(arrived[1] - arrived[0] >= Duration::from_millis(900));
+        for pair in arrived[1..].windows(2) {
+            assert!(
+                pair[1] - pair[0] >= Duration::from_millis(200),
+                "{arrived:?}"
+            );
+        }
     }
 
     #[test]

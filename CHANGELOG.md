@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.118.1 — Requests held by a Retry-After start one after another
+
+### Fixed
+
+- Requests held by a provider's Retry-After no longer all reach it at the same moment when the wait ends: they start a quarter of a second apart, the refused request first, so parallel subagents are not refused together again. A longer wait given meanwhile is waited out too.
+
 ## 0.118.0 — Requests wait out a provider's Retry-After together
 
 ### Changed
