@@ -3,12 +3,13 @@
 //! model to read when a task matches, and `/skill:<name> args` sends one's instructions.
 use super::Problem;
 use super::commands::split_frontmatter;
+use super::yaml;
 use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
-use yaml_rust2::{Yaml, YamlLoader};
+use yaml_rust2::Yaml;
 
 /// The Agent Skills standard's limits, which Pi only warns about.
 const MAX_NAME: usize = 64;
@@ -289,8 +290,8 @@ fn load_skill(path: &Path, warnings: &mut Vec<String>) -> Option<Skill> {
         }
     };
     let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-    let frontmatter = match YamlLoader::load_from_str(&split_frontmatter(content).0) {
-        Ok(documents) => documents.into_iter().next().unwrap_or(Yaml::Null),
+    let frontmatter = match yaml::first(&split_frontmatter(content).0) {
+        Ok(frontmatter) => frontmatter,
         Err(error) => {
             warnings.push(format!(
                 "skipping skill {shown}: malformed frontmatter — {error}"

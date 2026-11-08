@@ -4,6 +4,7 @@
 //! `read` and `ls`, and bash, `grep` and `find` in the read-only sandbox, none of which shows
 //! the user's credential stores.
 
+use super::yaml;
 use super::{
     AgentError, AgentUi, ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation,
     MAX_STEPS, Problem, Skills, ToolDetail, Usage,
@@ -24,7 +25,7 @@ use std::{
         mpsc,
     },
 };
-use yaml_rust2::{Yaml, YamlLoader};
+use yaml_rust2::Yaml;
 
 pub const NAME: &str = "subagent";
 
@@ -355,11 +356,8 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
     let digest = approvals::digest(content);
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let (frontmatter, body) = commands::split_frontmatter(content);
-    let frontmatter = YamlLoader::load_from_str(&frontmatter)
-        .map_err(|error| format!("{shown}: invalid YAML frontmatter ({error})"))?
-        .into_iter()
-        .next()
-        .unwrap_or(Yaml::Null);
+    let frontmatter = yaml::first(&frontmatter)
+        .map_err(|error| format!("{shown}: invalid YAML frontmatter ({error})"))?;
     let text = |key: &str| frontmatter[key].as_str().map(str::trim).unwrap_or_default();
     let (name, description) = (text("name"), text("description"));
     if name.is_empty() || description.is_empty() {

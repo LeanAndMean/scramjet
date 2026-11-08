@@ -5,11 +5,12 @@
 
 use super::Problem;
 use super::autonomy::{self, Publication, Publications, Suggestion};
+use super::yaml;
 use std::{
     fs,
     path::{Path, PathBuf},
 };
-use yaml_rust2::{Yaml, YamlLoader};
+use yaml_rust2::Yaml;
 
 /// Where a command set was found.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -540,11 +541,8 @@ fn parse(
     }
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let (frontmatter, body) = split_frontmatter(content);
-    let frontmatter = YamlLoader::load_from_str(&frontmatter)
-        .map_err(|error| format!("{file}: malformed frontmatter — {error}"))?
-        .into_iter()
-        .next()
-        .unwrap_or(Yaml::Null);
+    let frontmatter = yaml::first(&frontmatter)
+        .map_err(|error| format!("{file}: malformed frontmatter — {error}"))?;
     let next = Policy::parse(&frontmatter["next"])
         .map_err(|error| format!("{file}: invalid next block — {error}"))?;
     let field = |key: &str| {

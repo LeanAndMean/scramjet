@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.97.9 — YAML that cannot fill memory
+
+### Fixed
+
+- A command, agent or skill file's frontmatter, or an `autonomy.yaml`, whose aliases (`*name`) would expand past 100,000 copied nodes is refused with a warning, as Scramjet refuses one, rather than filling memory at start: twelve lines could make scramjet-rs use all the memory it could get, so a cloned project could stop it from starting.
+
 ## 0.97.8 — Reads that end, and stop on Escape
 
 ### Fixed

@@ -42,6 +42,7 @@ mod turn;
 pub use turn::ShownPaused;
 mod ui;
 pub mod usage;
+mod yaml;
 
 pub use attached::Attached;
 pub use autonomy::{

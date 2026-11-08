@@ -9,8 +9,9 @@
 use super::Problem;
 use super::commands::{Commands, Policy};
 use super::tools::{shortened, write_replacing};
+use super::yaml;
 use std::path::{Path, PathBuf};
-use yaml_rust2::{Yaml, YamlLoader};
+use yaml_rust2::Yaml;
 
 /// The project's file, under its root.
 const PROJECT_FILE: &str = ".scramjet/autonomy.yaml";
@@ -653,9 +654,7 @@ pub(super) fn unknown_in_edges(edges: &Layer, commands: &Commands) -> Vec<String
 }
 
 fn load(text: &str) -> Result<Yaml, String> {
-    let documents = YamlLoader::load_from_str(text)
-        .map_err(|error| format!("autonomy.yaml: failed to load config: {error}"))?;
-    Ok(documents.into_iter().next().unwrap_or(Yaml::Null))
+    yaml::first(text).map_err(|error| format!("autonomy.yaml: failed to load config: {error}"))
 }
 
 /// A file's settings, with Scramjet's errors for what it rejects.
