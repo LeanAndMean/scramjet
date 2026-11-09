@@ -84,6 +84,8 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 **Platforms (user decision, 2026-11-07):** macOS (Terminal.app, and Homebrew's xterm under XQuartz), then native Windows, both before what is left of S3's parallel work and S5. No platform is called supported until it has been used there.
 
+**RPC mode (user decision, 2026-11-09):** `scramjet-rs --mode rpc` for front ends built in other repositories ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)), after the platforms and before what is left of S3's parallel work and S5, now the lowest priority. Its protocol design is signed off by the user before it is built; no network surface and no daemon in this repository.
+
 ## S5 — Capacity and admission hardening
 
 **Demonstration:** reproducible sustained high-concurrency workloads with responsive control, bounded resources, accountable failures, and explainable admission adjustments.

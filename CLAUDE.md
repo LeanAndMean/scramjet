@@ -14,7 +14,7 @@ Most limits, checks and invariants in this codebase were written by agents. Each
 - Don't spend effort collecting evidence to justify a self-imposed rule, and don't treat "no document guarantees X" as a reason to reject X.
 - Don't escalate an engineering question to the user or to an external owner while the answer can be found in local source or by a quick test.
 
-Keep the genuinely important safety properties: never execute tool calls from failed or incomplete responses, never silently re-run an effect whose outcome is unknown, and never read or log credentials. The agent's approval questions are opt-in (`--ask`; user decision 2026-10-30) because they are not containment; real confinement is an OS sandbox, planned with parallel subagents (`docs/DESIGN.md`).
+Keep the genuinely important safety properties: never execute tool calls from failed or incomplete responses, never silently re-run an effect whose outcome is unknown, and never read or log credentials. The agent's approval questions are opt-in (`--ask`; user decision 2026-10-30) because they are not containment; real confinement is an OS sandbox, planned with parallel subagents (`docs/DESIGN.md`). Approval and publication checks serve the user's choices of what runs without asking, not defence against a malicious repository or agent: don't make the harness harder to use for safety it cannot guarantee; what an OS sandbox guarantees holds (user decision, 2026-11-09).
 
 ## Workflow
 
