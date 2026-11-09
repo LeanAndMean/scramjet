@@ -13,8 +13,12 @@ full screen runs in a tmux pane (a Windows console through WSL interop) and play
 "steps", by default: the prompt typed and sent, the window resized to 80x24 and Ctrl+D pressed,
 printing the pane after each.
 
-A scenario holds "files", "settings", "models" (more of models.json's fields, such as
-"logins"), "args" (more command-line words), "path" (WSL paths
+A scenario holds "files", "copy" (WSL files or directories, relative to this repository, copied
+to paths under the scratch directory: {"packages/proxy": "../scramjet-rs-provider-proxy/models.json"}),
+"settings", "models" (more of models.json's fields, such as "logins"), "auth" (auth.json's
+credentials), "servers" (WSL commands run from this repository for the run's length; each a list
+of words, or {"run": words, "port": N} waited for), "$WORK" in settings, models and auth standing
+for the scratch directory's Windows path, "args" (more command-line words), "path" (WSL paths
 of directories put ahead of Windows' own PATH, relative ones from %TEMP%\\scramjet-rs-try),
 "env" (more variables, WSL paths among them given as Windows ones), "bash": true (a stand-in
 bash.exe, scripts/try-windows-bash.c built with build-windows.sh's image, put on the PATH; it
@@ -23,7 +27,7 @@ reply as in scripts/screens.py, and "steps", each one of {"text": typed}, {"keys
 names]}, {"resize": [columns, rows]}, {"host": [a WSL command run in the project]} and
 {"shot": label, "wait": seconds}.
 """
-import argparse, json, os, shlex, shutil, subprocess, sys, time
+import argparse, atexit, json, os, shlex, shutil, socket, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'scripts'))
@@ -43,12 +47,34 @@ work = os.path.join(win, 'work')
 shutil.rmtree(work, ignore_errors=True)
 for directory in ['config/scramjet-rs', 'state', 'data', 'proj']:
     os.makedirs(os.path.join(work, directory))
+work_windows = temp + '\\scramjet-rs-try\\work'
 binary = os.path.join(win, 'scramjet-rs.exe')
 shutil.copy(options.binary, binary)
 for name, text in scenario.get('files', {}).items():
     path = os.path.join(work, 'proj', name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, 'w').write(text)
+for target, source in scenario.get('copy', {}).items():
+    source, target = os.path.join(ROOT, source), os.path.join(work, target)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    (shutil.copytree if os.path.isdir(source) else shutil.copy)(source, target)
+servers = []
+for server in scenario.get('servers', []):
+    server = server if isinstance(server, dict) else {'run': server}
+    servers.append(subprocess.Popen(server['run'], cwd=ROOT))
+    for _ in range(100 if 'port' in server else 0):
+        try:
+            socket.create_connection(('127.0.0.1', server['port']), timeout=1).close()
+            break
+        except OSError:
+            time.sleep(0.1)
+
+
+def placed(value):
+    """`value` written as JSON, with $WORK replaced by the scratch directory's Windows path."""
+    return json.dumps(value).replace('$WORK', work_windows.replace('\\', '\\\\'))
+
+
 if scenario.get('bash'):
     standin = os.path.join(win, 'standin')
     os.makedirs(standin, exist_ok=True)
@@ -60,8 +86,11 @@ if scenario.get('bash'):
 base = 'http://%s/v1' % screens.serve(scenario.get('replies', []))
 provider = {'baseUrl': base, 'api': 'openai-responses', 'apiKey': 'scripted',
             'models': [{'id': 'gpt-6-luna', 'reasoning': True, 'contextWindow': 200000}]}
-json.dump(dict(scenario.get('models', {}), providers={'screens': provider}), open(os.path.join(work, 'config/scramjet-rs/models.json'), 'w'))
-json.dump(scenario.get('settings', {}), open(os.path.join(work, 'config/scramjet-rs/settings.json'), 'w'))
+config = os.path.join(work, 'config/scramjet-rs')
+open(os.path.join(config, 'models.json'), 'w').write(placed(dict(scenario.get('models', {}), providers={'screens': provider})))
+open(os.path.join(config, 'settings.json'), 'w').write(placed(scenario.get('settings', {})))
+if 'auth' in scenario:
+    open(os.path.join(config, 'auth.json'), 'w').write(placed(scenario['auth']))
 env = dict(XDG_STATE_HOME=work + '/state', XDG_CONFIG_HOME=work + '/config', XDG_DATA_HOME=work + '/data',
            SCRAMJET_CODING_AGENT_DIR=work + '/agent')
 env.update({name: value.replace('$PROJECT', work + '/proj') for name, value in scenario.get('env', {}).items()})
@@ -71,10 +100,13 @@ if scenario.get('path'):
     unix = [subprocess.run(['wslpath', '-u', d], capture_output=True, text=True).stdout.strip()
             for d in windows_path.split(';') if d]
     env['PATH'] = ':'.join(ahead + [d for d in unix if d])
-env['WSLENV'] = ':'.join(name + ('/l' if name == 'PATH' else '/p') for name in env)
+# WSLENV's /p would turn a value that is no path, such as a URL, into a mangled one.
+env['WSLENV'] = ':'.join(name + ('/l' if name == 'PATH' else '/p' if value.startswith('/') else '')
+                         for name, value in env.items())
 args = [binary, '--model', 'screens/gpt-6-luna'] + scenario.get('args', [])
 project = os.path.join(work, 'proj')
 
+atexit.register(lambda: [server.kill() for server in servers])
 if not options.screen:
     ran = subprocess.run(args + ['-p', scenario['prompt']], cwd=project, env=dict(os.environ, **env), timeout=120)
     print('exit', ran.returncode)
