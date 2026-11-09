@@ -2,7 +2,7 @@
 
 A terminal coding agent written in Rust: an independent rewrite of Scramjet that talks to the providers its `models.json` lists and runs Scramjet's command sets (Mach 12 among them).
 
-**Status:** an early but working interactive agent, verified live through a local proxy on Linux and WSL2 Ubuntu. macOS is untested; a native Windows build (`scripts/build-windows.sh`) runs scripted turns there, without a sandbox, so its shell commands are refused in unattended turns. Parallel agents at scale (the ~8,000 concurrent requests goal) are not built yet; [docs/TASKS.md](docs/TASKS.md) lists the pending work.
+**Status:** an early but working interactive agent, verified live through a local proxy on Linux and WSL2 Ubuntu. macOS is untested; a native Windows build (`scripts/build-windows.sh`) runs scripted turns there, without a sandbox, so its shell commands run unhidden in unattended turns (with a notice) and subagents' are refused; it needs Git for Windows' bash for now. Parallel agents at scale (the ~8,000 concurrent requests goal) are not built yet; [docs/TASKS.md](docs/TASKS.md) lists the pending work.
 
 ## Build and run
 
