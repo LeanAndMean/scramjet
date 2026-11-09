@@ -163,6 +163,7 @@ pub(super) enum Row {
     CopyOnSelect,
     WheelStep,
     RetainTranscript,
+    Changelog,
     PromptHeight,
     CompletionRows,
     TerminalProgress,
@@ -180,7 +181,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 28] = [
+pub(super) const ROWS: [Row; 29] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -194,6 +195,7 @@ pub(super) const ROWS: [Row; 28] = [
     Row::CopyOnSelect,
     Row::WheelStep,
     Row::RetainTranscript,
+    Row::Changelog,
     Row::PromptHeight,
     Row::CompletionRows,
     Row::TerminalProgress,
@@ -227,6 +229,7 @@ impl Row {
             Self::CopyOnSelect => "Copy on select",
             Self::WheelStep => "Wheel scrolls",
             Self::RetainTranscript => "Retain transcript",
+            Self::Changelog => "Changelog",
             Self::PromptHeight => "Prompt height",
             Self::CompletionRows => "Completion rows",
             Self::TerminalProgress => "Terminal progress",
@@ -320,6 +323,10 @@ impl Row {
                 "On exit, the whole conversation, the prompt and the footer stay in the \
                  terminal's scrollback, as they were on the screen."
             }
+            Self::Changelog => {
+                "How What's new, at the first start after an update, and /changelog show each \
+                 version: whole, or only its title line. d switches between them there."
+            }
             Self::PromptHeight => {
                 "The most rows the prompt's text takes, as a share of the screen's; a longer \
                  prompt scrolls within them."
@@ -408,6 +415,10 @@ pub(super) struct Settings {
     /// `retainTranscriptOnExit`: leaving the full screen for good writes the conversation into
     /// the terminal's scrollback, as Scramjet's.
     pub(super) retain_transcript: bool,
+    /// `collapseChangelog`: What's new and `/changelog` show each version's title line first.
+    pub(super) collapse_changelog: bool,
+    /// `lastChangelogVersion`: the version What's new last showed, or that first started.
+    pub(super) last_changelog_version: Option<String>,
     /// `terminal.showTerminalProgress`: the full screen tells the terminal it is busy while a
     /// turn runs (OSC 9;4), as Scramjet's.
     pub(super) terminal_progress: bool,
@@ -558,6 +569,8 @@ impl Settings {
             block_images: false,
             layout: Layout::default(),
             retain_transcript: false,
+            collapse_changelog: false,
+            last_changelog_version: None,
             terminal_progress: false,
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
@@ -624,6 +637,16 @@ impl Settings {
             None => {}
             Some(Value::Bool(retain)) => self.retain_transcript = *retain,
             Some(_) => wrong("retainTranscriptOnExit", "true or false"),
+        }
+        match object.get("collapseChangelog") {
+            None => {}
+            Some(Value::Bool(collapse)) => self.collapse_changelog = *collapse,
+            Some(_) => wrong("collapseChangelog", "true or false"),
+        }
+        match object.get("lastChangelogVersion") {
+            None => {}
+            Some(Value::String(version)) => self.last_changelog_version = Some(version.clone()),
+            Some(_) => wrong("lastChangelogVersion", "a version"),
         }
         match object.get("spellCheck") {
             None => {}
@@ -1417,6 +1440,15 @@ impl Settings {
         self.save("hideThinkingBlock", json!(hide))
     }
 
+    /// The version What's new showed last, saved when it changed.
+    pub(super) fn set_last_changelog_version(&mut self, version: &str) -> io::Result<()> {
+        if self.last_changelog_version.as_deref() == Some(version) {
+            return Ok(());
+        }
+        self.last_changelog_version = Some(version.to_owned());
+        self.save("lastChangelogVersion", json!(version))
+    }
+
     /// The form `/resume` showed chains in last, saved when it changed.
     pub(super) fn set_resume_chains(&mut self, chains: Chains) -> io::Result<()> {
         if self.resume_chains == chains {
@@ -1581,6 +1613,8 @@ impl Settings {
             Row::CompletionRows => self.layout.completion_rows.to_string(),
             Row::RetainTranscript if self.retain_transcript => "on".into(),
             Row::RetainTranscript => "off".into(),
+            Row::Changelog if self.collapse_changelog => "titles".into(),
+            Row::Changelog => "whole".into(),
             Row::TerminalProgress if self.terminal_progress => "on".into(),
             Row::TerminalProgress => "off".into(),
             Row::SpellCheck if self.spell_check => "on".into(),
@@ -1684,6 +1718,10 @@ impl Settings {
             Row::RetainTranscript => {
                 self.retain_transcript = !self.retain_transcript;
                 self.save("retainTranscriptOnExit", json!(self.retain_transcript))
+            }
+            Row::Changelog => {
+                self.collapse_changelog = !self.collapse_changelog;
+                self.save("collapseChangelog", json!(self.collapse_changelog))
             }
             Row::TerminalProgress => {
                 self.terminal_progress = !self.terminal_progress;
@@ -2125,6 +2163,30 @@ mod tests {
         assert_eq!(
             wrong.warnings,
             [format!("{path}: images must be an object; ignored")]
+        );
+    }
+
+    #[test]
+    fn the_changelog_settings_take_scramjets_keys() {
+        let scratch = Scratch::new("changelog");
+        let settings = settings_with(&scratch, "{}");
+        assert!(!settings.collapse_changelog);
+        assert_eq!(settings.last_changelog_version, None);
+        let settings = settings_with(
+            &scratch,
+            r#"{"collapseChangelog": true, "lastChangelogVersion": "0.9.0"}"#,
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        assert!(settings.collapse_changelog);
+        assert_eq!(settings.last_changelog_version.as_deref(), Some("0.9.0"));
+        let path = shown(&scratch.0.join("settings.json"));
+        let wrong = settings_with(&scratch, r#"{"lastChangelogVersion": 9}"#);
+        assert_eq!(wrong.last_changelog_version, None);
+        assert_eq!(
+            wrong.warnings,
+            [format!(
+                "{path}: lastChangelogVersion must be a version; ignored"
+            )]
         );
     }
 
@@ -2864,6 +2926,11 @@ mod tests {
             ["off", "on", "off", "on"]
         );
         assert_eq!(
+            seen(Row::Changelog, &mut settings),
+            ["whole", "titles", "whole", "titles"]
+        );
+        settings.set_last_changelog_version("1.2.3").unwrap();
+        assert_eq!(
             seen(Row::MarkdownReads, &mut settings),
             ["rendered", "source", "rendered", "source"]
         );
@@ -2903,6 +2970,8 @@ mod tests {
                 "editorMaxHeightPercent": 45,
                 "autocompleteMaxVisible": 3,
                 "retainTranscriptOnExit": true,
+                "collapseChangelog": true,
+                "lastChangelogVersion": "1.2.3",
                 "terminal": {"showTerminalProgress": true},
                 "treeFilterMode": "all",
                 "followUpMode": "all",

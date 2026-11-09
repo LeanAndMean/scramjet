@@ -4,6 +4,17 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.124.0 — What's new, and the changelog in a view of its own
+
+### Added
+
+- The first start on the full screen after scramjet-rs changed version opens What's new: the changelog of the versions since the one run before, newest first, in a view that scrolls on its own and Escape closes. The very first start records the version without showing it; a resumed session or a prompt given on the command line skips it until the next plain start.
+- `collapseChangelog` (Changelog in `/settings`) shows each version's title line first; `d` switches between titles and whole versions in the view.
+
+### Changed
+
+- `/release-notes` (`/changelog`) opens the same view on every version, rendered as markdown, instead of writing the changelog into the conversation.
+
 ## 0.123.0 — Bash calls a model can find and stop
 
 ### Changed

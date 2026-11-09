@@ -1,0 +1,24 @@
+{
+  "size": "100x40",
+  "settings": {
+    "theme": "scramjet-dark",
+    "lastChangelogVersion": "0.120.0"
+  },
+  "steps": [
+    {
+      "until": "What's new"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "whats-new"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.5
+    }
+  ]
+}

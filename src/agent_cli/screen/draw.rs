@@ -334,7 +334,7 @@ impl App {
                 None
             }
             Some(Open {
-                shown: Shown::Usage(view),
+                shown: Shown::Report(view),
                 ..
             }) => {
                 rows.extend(selection::rows(&view.lines(width)));

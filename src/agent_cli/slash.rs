@@ -4,10 +4,9 @@
 //! `/branch`, `/clone` and `/tree` in `sessions.rs`; `/model` and `/scoped-models` in
 //! `scope.rs`; `/login` and `/logout` in `login.rs`.
 use super::interactive::{Interactive, completions, model_line, saved_line};
-use super::record::Event;
 use super::terminal;
 use super::text::{clip, visible};
-use super::{clipboard, completion, export, keymap, style};
+use super::{changelog, clipboard, completion, export, keymap, style};
 use scramjet_rs::agent::{Agent, AgentError, McpState, Providers};
 use std::{
     io::IsTerminal,
@@ -185,13 +184,13 @@ impl Interactive {
         }
     }
 
-    /// `/release-notes`: what changed in each released version, the newest first, cut to its
-    /// first lines until tool results are shown whole.
+    /// `/release-notes`: what changed in each released version, the newest first; on the full
+    /// screen in a view of its own, else cut to its first lines until tool results are shown
+    /// whole.
     fn release_notes(&mut self) {
-        let notes = released(include_str!("../../CHANGELOG.md"));
         match &self.screen {
-            Some(screen) => screen.event(Event::ReleaseNotes(notes.to_owned())),
-            None => self.ui.release_notes(notes),
+            Some(screen) => screen.show_report(changelog::whole(self.settings.collapse_changelog)),
+            None => self.ui.release_notes(changelog::released()),
         }
     }
 
@@ -316,9 +315,8 @@ impl Interactive {
             .map_or(0, |since| since.as_millis() as u64);
         let model = self.agent.model();
         if let Some(screen) = &self.screen {
-            let view =
-                super::usage::UsageView::new(&history, &sessions, current, model, now, details);
-            return screen.show_usage(view);
+            let view = super::usage::view(&history, &sessions, current, model, now, details);
+            return screen.show_report(view);
         }
         let report = match details {
             true => super::usage::details(&history, &sessions, current, model, now, None),
@@ -671,17 +669,8 @@ fn session_info(agent: &Agent) -> String {
     info
 }
 
-/// A count with thousands separators, as Scramjet's `toLocaleString` writes it.
 /// The path a command's argument starts with, as Scramjet reads one: up to the first space, or
 /// within quotes; `None` when there is none.
-/// A changelog's released versions: from its first `## <version>` heading on, without its own
-/// heading and the section of what is not released yet.
-fn released(changelog: &str) -> &str {
-    let start = (changelog.match_indices("\n## ").map(|(at, _)| at + 1))
-        .find(|&at| changelog[at + 3..].starts_with(|c: char| c.is_ascii_digit()));
-    start.map_or("", |at| changelog[at..].trim_end())
-}
-
 fn path_argument(argument: &str) -> Option<&str> {
     let quote = argument.chars().next().filter(|c| matches!(c, '"' | '\''));
     let path = match quote {
@@ -691,6 +680,7 @@ fn path_argument(argument: &str) -> Option<&str> {
     Some(path).filter(|path| !path.is_empty())
 }
 
+/// A count with thousands separators, as Scramjet's `toLocaleString` writes it.
 pub(super) fn grouped(count: u64) -> String {
     let digits = count.to_string();
     let mut grouped = String::new();
@@ -806,20 +796,6 @@ mod tests {
             assert_eq!(Builtin::parse(typed), Some(listed), "{typed}");
         }
         assert_eq!(Builtin::parse("/session now"), None);
-    }
-
-    #[test]
-    fn release_notes_start_at_the_first_released_version() {
-        let changelog = "# Changelog\n\nIntro.\n\n## Unreleased\n\n## 1.2.0 — Two\n\n\
-                         - b\n\n## 1.1.0 — One\n\n- a\n";
-        assert_eq!(
-            released(changelog),
-            "## 1.2.0 — Two\n\n- b\n\n## 1.1.0 — One\n\n- a"
-        );
-        assert_eq!(released("# Changelog\n\n## Unreleased\n"), "");
-        let ours = released(include_str!("../../CHANGELOG.md"));
-        let version = format!("## {} — ", env!("CARGO_PKG_VERSION"));
-        assert!(ours.starts_with(&version), "{}", &ours[..80]);
     }
 
     #[test]

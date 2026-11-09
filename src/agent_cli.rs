@@ -1,6 +1,7 @@
 mod args;
 mod background;
 mod banner;
+mod changelog;
 mod children;
 mod clipboard;
 mod completion;
@@ -27,6 +28,7 @@ mod markdown;
 mod packages;
 mod palette;
 mod record;
+mod report;
 mod scope;
 mod screen;
 mod select;

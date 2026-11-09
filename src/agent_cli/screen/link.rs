@@ -7,12 +7,12 @@ use crate::agent_cli::editor::{Editor, Note};
 use crate::agent_cli::footer;
 use crate::agent_cli::keys::{Press, RawMode};
 use crate::agent_cli::record::Event;
+use crate::agent_cli::report::ReportView;
 use crate::agent_cli::select::{Picked, Picker, Routed, Spot};
 use crate::agent_cli::settings::{Delivery, DoubleEscape, Settings};
 use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
 use crate::agent_cli::theme_editor::ThemeEditor;
-use crate::agent_cli::usage::UsageView;
 use crate::agent_cli::{clipboard, console, spelling};
 use scramjet_rs::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
@@ -263,9 +263,9 @@ impl Link {
         }
     }
 
-    /// Shows `/usage`'s reports until the user closes them.
-    pub(in crate::agent_cli) fn show_usage(&self, view: UsageView) {
-        self.ask(Dialog::Usage(Box::new(view)), None);
+    /// Shows a report view, `/usage`'s or `/changelog`'s, until the user closes it.
+    pub(in crate::agent_cli) fn show_report(&self, view: ReportView) {
+        self.ask(Dialog::Report(Box::new(view)), None);
     }
 
     /// The row chosen from `picker`, `None` when cancelled.

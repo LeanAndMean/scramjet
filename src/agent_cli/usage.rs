@@ -3,8 +3,7 @@
 //! session, today and the last days, each day of the last two weeks and each week of the last
 //! twelve, each provider's and each model's requests, tokens and cost, and each model's speed.
 
-use super::keymap::{self, Binding};
-use super::keys::Key;
+use super::report::{ReportView, Tab};
 use super::slash::grouped;
 use super::style;
 use super::terminal;
@@ -975,127 +974,41 @@ the slowest tenth's (p90 and p10); cost is $? where the provider gives no price.
 
 /// `/usage` on the full screen: a summary for each provider, the current one shown first, and
 /// one of them all, shown in the conversation's place one at a time, each with its details a key
-/// away.
-pub(super) struct UsageView {
-    /// Each tab's name, summary and details: every provider's first, then each provider's.
-    tabs: Vec<Tab>,
-    at: usize,
+/// away: the current provider (`model`'s) and then the others that have responses, the costliest
+/// first; `details` shows the details first.
+pub(super) fn view(
+    history: &History,
+    sessions: &Path,
+    current: &Path,
+    model: &str,
+    now: u64,
     details: bool,
-}
-
-struct Tab {
-    name: String,
-    summary: String,
-    details: String,
-}
-
-/// What a key did in the view.
-#[derive(Debug, PartialEq)]
-pub(super) enum Took {
-    Moved,
-    Closed,
-    Nothing,
-}
-
-/// The key that shows a tab's details, and its summary again.
-const DETAILS_KEY: &str = "d";
-
-impl UsageView {
-    /// The summaries and details, as `summary` and `details` make them, for every provider, the
-    /// current provider (`model`'s) and then the others that have responses, the costliest
-    /// first; `details` shows the details first.
-    pub(super) fn new(
-        history: &History,
-        sessions: &Path,
-        current: &Path,
-        model: &str,
-        now: u64,
-        details: bool,
-    ) -> Self {
-        let this = provider(model);
-        let mut names = vec![None, Some(this.to_owned())];
-        let others = grouped_by(history.responses.iter(), |r| provider(&r.model).to_owned());
-        names.extend(
-            (others.into_iter().map(|(name, _)| Some(name)))
-                .filter(|name| name.as_deref() != Some(this)),
-        );
-        let tabs = (names.into_iter())
-            .map(|name| {
-                let only = name.as_deref();
-                Tab {
-                    summary: summary(history, current, model, now, only),
-                    details: self::details(history, sessions, current, model, now, only),
-                    name: name.unwrap_or_else(|| "All".to_owned()),
-                }
-            })
-            .collect();
-        Self {
-            tabs,
-            at: 1,
-            details,
-        }
-    }
-
-    /// The summary or details shown.
-    pub(super) fn report(&self) -> &str {
-        let tab = &self.tabs[self.at];
-        match self.details {
-            true => tab.details.trim_end(),
-            false => tab.summary.trim_end(),
-        }
-    }
-
-    pub(super) fn key(&mut self, key: &Key) -> Took {
-        let count = self.tabs.len();
-        if key.is(Binding::Tab) || key.is(Binding::CursorRight) {
-            self.at = (self.at + 1) % count;
-            Took::Moved
-        } else if key.is(Binding::CursorLeft) {
-            self.at = (self.at + count - 1) % count;
-            Took::Moved
-        } else if matches!(key, Key::Text(text) if text == DETAILS_KEY) {
-            self.details = !self.details;
-            Took::Moved
-        } else if key.is(Binding::SelectCancel) || key.is(Binding::SelectConfirm) {
-            Took::Closed
-        } else {
-            Took::Nothing
-        }
-    }
-
-    /// The dock's rows under the report: its title with the keys, then the tabs, the one shown
-    /// marked, each row within `width`.
-    pub(super) fn lines(&self, width: usize) -> Vec<String> {
-        use style::{MUTED, RESET, SELECTED, SELECTOR_TITLE};
-        let shows = match self.details {
-            true => "summary",
-            false => "details",
-        };
-        let keys = keymap::hint([
-            Some(format!("{DETAILS_KEY} {shows}")),
-            keymap::part(&[Binding::Tab], "provider"),
-            keymap::part(&[Binding::PageUp, Binding::PageDown], "scroll"),
-            keymap::part(&[Binding::SelectCancel], "close"),
-        ]);
-        let title = format!("{SELECTOR_TITLE}Usage{RESET}  {MUTED}{keys}{RESET}");
-        let tabs: Vec<String> = (self.tabs.iter().enumerate())
-            .map(|(index, tab)| match index == self.at {
-                true => format!("{SELECTED} {} {RESET}", tab.name),
-                false => format!("{MUTED} {} {RESET}", tab.name),
-            })
-            .collect();
-        let width = width.saturating_sub(1);
-        vec![
-            super::text::clip(&title, width),
-            super::text::clip(&tabs.join(" "), width),
-        ]
-    }
+) -> ReportView {
+    let this = provider(model);
+    let mut names = vec![None, Some(this.to_owned())];
+    let others = grouped_by(history.responses.iter(), |r| provider(&r.model).to_owned());
+    names.extend(
+        (others.into_iter().map(|(name, _)| Some(name)))
+            .filter(|name| name.as_deref() != Some(this)),
+    );
+    let tabs = (names.into_iter())
+        .map(|name| {
+            let only = name.as_deref();
+            Tab {
+                summary: summary(history, current, model, now, only),
+                details: self::details(history, sessions, current, model, now, only),
+                name: name.unwrap_or_else(|| "All".to_owned()),
+            }
+        })
+        .collect();
+    ReportView::new("Usage", "summary", tabs, 1, details)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cli::keys::{Code, Press};
+    use crate::agent_cli::keys::{Code, Key, Press};
+    use crate::agent_cli::report::Took;
     use scramjet_rs::agent::usage::Summary;
 
     fn response(at: u64, model: &str, cost: Option<f64>, session: usize) -> Response {
@@ -1674,15 +1587,15 @@ mod tests {
     fn the_view_opens_on_the_current_provider_and_tabs_through_the_others() {
         let (now, history) = (NOW, history());
         let current = Path::new("/s/p/2.jsonl");
-        let mut view = UsageView::new(&history, Path::new("/s"), current, "b/new", now, false);
+        let mut view = view(&history, Path::new("/s"), current, "b/new", now, false);
         let names: Vec<&str> = view.tabs.iter().map(|tab| tab.name.as_str()).collect();
         assert_eq!(names, ["All", "b", "a", "unknown"]);
         assert_eq!(
             lines(view.report()),
             ["Usage · b", "", "  No responses saved yet."]
         );
-        let tabs = |view: &UsageView| plain(&view.lines(80)[1]);
-        let keys = |view: &UsageView| plain(&view.lines(80)[0]);
+        let tabs = |view: &ReportView| plain(&view.lines(80)[1]);
+        let keys = |view: &ReportView| plain(&view.lines(80)[0]);
         assert_eq!(tabs(&view), " All   b   a   unknown ");
         assert!(
             keys(&view).starts_with("Usage  d details · "),
@@ -1692,7 +1605,7 @@ mod tests {
         let tab = Key::Press(Press::new(Code::Tab, 0));
         let left = Key::Press(Press::new(Code::Left, 0));
         let details = Key::Text("d".into());
-        let shown = |view: &UsageView| lines(view.report())[0].clone();
+        let shown = |view: &ReportView| lines(view.report())[0].clone();
         assert_eq!(view.key(&tab), Took::Moved);
         assert_eq!(shown(&view), "Usage · a");
         assert_eq!(view.key(&details), Took::Moved);
@@ -1712,7 +1625,7 @@ mod tests {
         assert_eq!(view.key(&Key::Text("x".into())), Took::Nothing);
         let escape = Key::Press(Press::new(Code::Escape, 0));
         assert_eq!(view.key(&escape), Took::Closed);
-        let opened = UsageView::new(&history, Path::new("/s"), current, "b/new", now, true);
+        let opened = super::view(&history, Path::new("/s"), current, "b/new", now, true);
         assert_eq!(shown(&opened), "Usage · b · details");
     }
 }

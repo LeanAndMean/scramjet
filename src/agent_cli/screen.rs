@@ -16,6 +16,7 @@ use super::footer::{self, Footer};
 use super::keymap::{self, Binding};
 use super::keys::{self, Key, Press, RawMode, read_key};
 use super::record::{self, Event};
+use super::report::ReportView;
 use super::select::{Act, Picker, Routed, Spot, Toggle};
 use super::selection::Line;
 use super::settings::{Layout, MarkdownReads};
@@ -23,7 +24,6 @@ use super::slash::{self, Builtin};
 use super::terminal::next_spin;
 use super::theme::Watched;
 use super::theme_editor::{self, ThemeEditor};
-use super::usage::UsageView;
 use super::{external, job, style};
 use scramjet_rs::agent::{self, EffortCycle, Shell, Tokens};
 use std::{
@@ -147,9 +147,9 @@ pub(super) enum Dialog {
     Wait(String, String),
     /// The theme editor, a sample session showing its theme in the conversation's place.
     Theme(Box<ThemeEditor>),
-    /// `/usage`'s reports, one shown in the conversation's place, until Escape (answered
-    /// `Pressed(None)`).
-    Usage(Box<UsageView>),
+    /// A report view, `/usage`'s or `/changelog`'s, shown in the conversation's place until
+    /// Escape (answered `Pressed(None)`).
+    Report(Box<ReportView>),
 }
 
 /// Whether a dialog's text may be left empty.
@@ -263,7 +263,7 @@ enum Shown {
     Press(String, String),
     Wait(String, String),
     Theme(Box<ThemeEditor>),
-    Usage(Box<UsageView>),
+    Report(Box<ReportView>),
 }
 
 struct TextDialog {
@@ -717,7 +717,7 @@ impl App {
                         style::set(&editor.theme());
                         Shown::Theme(editor)
                     }
-                    Dialog::Usage(view) => Shown::Usage(view),
+                    Dialog::Report(view) => Shown::Report(view),
                 };
                 let now = Instant::now();
                 let armed = match self.typed {
@@ -808,7 +808,7 @@ impl App {
                 ..
             }) => Some(None),
             Some(Open {
-                shown: Shown::Usage(view),
+                shown: Shown::Report(view),
                 ..
             }) => Some(Some(view)),
             _ => None,
@@ -816,7 +816,7 @@ impl App {
         match (shown, self.conversation.take()) {
             (Some(usage), None) => {
                 let sample = match usage {
-                    Some(view) => usage_shown(view),
+                    Some(view) => report_shown(view),
                     None => {
                         let mut sample = Transcript::default();
                         for part in theme_editor::sample() {
@@ -843,14 +843,14 @@ impl App {
     }
 
     /// Shows the report `/usage`'s view moved to, from its start.
-    fn usage_moved(&mut self) {
+    fn report_moved(&mut self) {
         if let Some(Open {
-            shown: Shown::Usage(view),
+            shown: Shown::Report(view),
             ..
         }) = &self.dialog
             && self.conversation.is_some()
         {
-            self.transcript = usage_shown(view);
+            self.transcript = report_shown(view);
             self.top = Some(Place::START);
             (self.selection, self.edge) = (None, None);
         }
@@ -904,7 +904,7 @@ impl App {
             Shown::Pick(_) => Answer::Picked(None),
             Shown::Text(_) => Answer::Text(None),
             Shown::Approve(_) => Answer::Approved(agent::Answer::Deny),
-            Shown::Press(..) | Shown::Wait(..) | Shown::Usage(_) => Answer::Pressed(None),
+            Shown::Press(..) | Shown::Wait(..) | Shown::Report(_) => Answer::Pressed(None),
             Shown::Theme(_) => Answer::Theme(None),
         });
         let _ = open.reply.send(answer);
@@ -1173,10 +1173,14 @@ impl Drop for Screen {
     }
 }
 
-/// `view`'s report as the conversation shows a note.
-fn usage_shown(view: &UsageView) -> Transcript {
+/// `view`'s report as the conversation shows a note, or a reply when it is markdown.
+fn report_shown(view: &ReportView) -> Transcript {
     let mut shown = Transcript::default();
-    shown.push(Event::Text(view.report().to_owned()));
+    let report = view.report().to_owned();
+    shown.push(match view.markdown {
+        true => Event::Assistant(report),
+        false => Event::Text(report),
+    });
     shown
 }
 

@@ -8,12 +8,12 @@ use crate::agent_cli::editor::{Action, Note};
 use crate::agent_cli::interactive::effort_note;
 use crate::agent_cli::keymap::Binding;
 use crate::agent_cli::keys::{ByteSource, Code, ESCAPE_WAIT, Key, Press};
+use crate::agent_cli::report::Took;
 use crate::agent_cli::select::Picked;
 use crate::agent_cli::slash::Builtin;
 use crate::agent_cli::style;
 use crate::agent_cli::theme::{self, Theme};
 use crate::agent_cli::theme_editor::Ended;
-use crate::agent_cli::usage::Took;
 use crate::agent_cli::{clipboard, console};
 use scramjet_rs::agent;
 use std::{
@@ -359,12 +359,12 @@ impl App {
             return Flow::Go;
         }
         if let Some(Open {
-            shown: Shown::Usage(view),
+            shown: Shown::Report(view),
             ..
         }) = &mut self.dialog
         {
             match view.key(&key) {
-                Took::Moved => self.usage_moved(),
+                Took::Moved => self.report_moved(),
                 Took::Closed => self.answer(None),
                 Took::Nothing => {}
             }
@@ -420,7 +420,7 @@ impl App {
             },
             Shown::Press(..) => None,
             Shown::Wait(..) if key.is(Binding::SelectCancel) => Some(Answer::Pressed(None)),
-            Shown::Wait(..) | Shown::Theme(_) | Shown::Usage(_) => None,
+            Shown::Wait(..) | Shown::Theme(_) | Shown::Report(_) => None,
         };
         if answer.is_some() {
             self.answer(answer);

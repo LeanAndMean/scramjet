@@ -51,8 +51,6 @@ pub(super) enum Event {
     Styled(Style, String),
     /// The banner a session starts with.
     Banner(Box<Opening>),
-    /// `/release-notes`' changelog.
-    ReleaseNotes(String),
     /// A session before this one in its chain.
     Earlier(Box<Earlier>),
 }
@@ -116,7 +114,6 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
             ui.said(&text)
         }
         Event::Banner(opening) => ui.banner(opening),
-        Event::ReleaseNotes(notes) => ui.release_notes(notes),
         Event::Earlier(earlier) => ui.earlier(earlier),
     }
 }

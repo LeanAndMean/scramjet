@@ -1,6 +1,7 @@
 //! The interactive session: prompts read from the editor, the full screen or piped lines, the
 //! built-in commands (`slash.rs`), model turns and a completed command's next step.
 use super::banner::{self, Opening};
+use super::changelog;
 use super::completion::Completions;
 use super::editor::Note;
 use super::record::{self, Event};
@@ -227,6 +228,9 @@ impl Interactive {
                 self.ui().notice(notice);
             }
             self.spaced = true;
+        }
+        if !resume && messages.is_empty() && self.agent.conversation().is_empty() {
+            self.whats_new();
         }
         if resume && !resumed {
             self.resume("");
@@ -738,6 +742,31 @@ impl Interactive {
     }
 
     /// Saves Ctrl+T's choice, made at the prompt or in a turn, when it changed.
+    /// What's new, on the full screen at the first start after the version changed; the very
+    /// first start records the version without showing anything, as Scramjet's.
+    fn whats_new(&mut self) {
+        if self.screen.is_none() {
+            return;
+        }
+        let collapse = self.settings.collapse_changelog;
+        let view = match self.settings.last_changelog_version.as_deref() {
+            None => None,
+            Some(last) => match changelog::whats_new(last, collapse) {
+                None => return,
+                view => view,
+            },
+        };
+        if let Err(error) = self
+            .settings
+            .set_last_changelog_version(env!("CARGO_PKG_VERSION"))
+        {
+            self.say(&format!("Error: settings not saved: {error}"));
+        }
+        if let (Some(screen), Some(view)) = (&self.screen, view) {
+            screen.show_report(view);
+        }
+    }
+
     pub(super) fn save_hide_thinking(&mut self) {
         let hide = self.hide_thinking.load(Ordering::Relaxed);
         if let Err(error) = self.settings.set_hide_thinking_block(hide) {

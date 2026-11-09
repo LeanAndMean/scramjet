@@ -7,14 +7,18 @@
     {"until": "View release notes"},
     {"shot": "completion"},
     {"type": "\r"},
-    {"until": "more lines"},
+    {"until": "d titles"},
     {"sleep": 0.3},
     {"shot": "release-notes"},
-    {"type": "\u000f"},
+    {"type": "\u001b[6~"},
+    {"sleep": 0.3},
+    {"shot": "release-notes-scrolled"},
+    {"type": "d"},
+    {"until": "d details"},
+    {"sleep": 0.3},
+    {"shot": "release-notes-titles"},
+    {"type": "\u001b"},
     {"sleep": 0.5},
-    {"shot": "release-notes-whole"},
-    {"type": "\u000f/changelog\r"},
-    {"sleep": 0.5},
-    {"shot": "changelog"}
+    {"shot": "release-notes-closed"}
   ]
 }

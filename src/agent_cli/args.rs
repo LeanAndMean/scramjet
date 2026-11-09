@@ -178,7 +178,7 @@ loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH end
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
 clipboard. /release-notes (or /changelog) shows what changed in each version, the newest
-first. The keys named here are the defaults: keybindings.json beside the settings file
+first; the first start after an update shows What's new since the version run before. The keys named here are the defaults: keybindings.json beside the settings file
 gives actions others; /hotkeys lists those in use and changes them, and /keybindings opens the
 file in your editor. /settings lists the settings, each with what it does, and
 changes them; it also shows each command's next steps, publication approval, and what the
