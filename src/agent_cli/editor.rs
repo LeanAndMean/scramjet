@@ -295,7 +295,7 @@ impl Layout {
         let mut offset = 0;
         for (number, line) in text.split('\n').enumerate() {
             if number > 0 {
-                rows.push(gutter(". "));
+                rows.push(gutter("  "));
             }
             let mut column = INDENT;
             let mut row_has_text = false;
@@ -1203,7 +1203,7 @@ mod tests {
     #[test]
     fn layout_wraps_by_display_width_and_places_the_cursor() {
         let layout = Layout::new("abcdefg\n界界界", 7);
-        assert_eq!(layout.rows, ["> abcd", "  efg", ". 界界", "  界"]);
+        assert_eq!(layout.rows, ["> abcd", "  efg", "  界界", "  界"]);
         let cursor = layout.at(7);
         assert_eq!((cursor.row, cursor.column), (1, 5));
         let wide = layout.at(8 + 6);
@@ -1257,7 +1257,7 @@ mod tests {
         );
         assert_eq!(
             marked("ab\ncd", 80, &[3..5]),
-            ["> ab".to_owned(), format!(". {on}cd{off}")]
+            ["> ab".to_owned(), format!("  {on}cd{off}")]
         );
     }
 
@@ -1288,7 +1288,7 @@ mod tests {
         assert_eq!(Layout::new("   abcdef", 8).rows, [">    ab", "  cdef"]);
         assert_eq!(
             Layout::new("ab 界界\nx y", 8).rows,
-            ["> ab ", "  界界", ". x y"]
+            ["> ab ", "  界界", "  x y"]
         );
     }
 
@@ -1543,7 +1543,7 @@ cd",
         );
         assert_eq!(
             layout.rows,
-            [format!("> a{on}b {end}"), format!(". {on}c{end}d")]
+            [format!("> a{on}b {end}"), format!("  {on}c{end}d")]
         );
         let layout = Layout::marked(
             "ab

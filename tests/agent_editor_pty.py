@@ -734,13 +734,13 @@ def first(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'\x1b[200~one\r\ntwo\x1b[201~')
-    ending(read, output, ['> one', '. two'])
+    ending(read, output, ['> one', '  two'])
     # Shift+Enter, as kitty's protocol sends it, adds a line; the prompt is sent trimmed.
     send(b'\x1b[13;2uthree\x1b[13;2u\r')
     rows = on_screen('Error: provider: cannot connect')
     assert '\n \u203a one\n   two\n   three\n\n\nError: provider' in '\n'.join(rows), rows
     send(b'\x1b[A')
-    ending(read, output, ['> one', '. two', '. three'])
+    ending(read, output, ['> one', '  two', '  three'])
     send(b'\x03')
     ending(read, output, EMPTY)
     send(b'\x03')
@@ -754,10 +754,10 @@ def resumed(read, until, send, output):
     rows = on_screen('\u2500' * 20)
     assert '\n \u203a one\n   two\n   three\n\n\nError: provider' in '\n'.join(rows), rows
     send(b'\x1b[A')
-    ending(read, output, ['> one', '. two', '. three'])
+    ending(read, output, ['> one', '  two', '  three'])
     # A line ending in a backslash goes on in the next.
     send(b'\x03first\\\rsecond')
-    ending(read, output, ['> first', '. second'])
+    ending(read, output, ['> first', '  second'])
     send(b'\x03\x04')
 
 
@@ -1881,7 +1881,7 @@ def edited_in_editor(read, until, send, output):
     send(b'draft')
     on_screen('> draft')
     send(b'\x07')
-    ending(read, output, ['> edited', '. line two'])
+    ending(read, output, ['> edited', '  line two'])
     send(b'\r')
     on_screen('Error: provider: cannot connect')
     send(b'\x04')
@@ -4717,7 +4717,7 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     # Without a selection, a right click pastes the clipboard into the prompt, as the terminal would.
     send(b'x \x1b[<2;5;5M\x1b[<2;5;5m')
     rows = on_screen('second \u2014')
-    assert rows[-2:] == ['> x pasted', '. second \u2014'], rows
+    assert rows[-2:] == ['> x pasted', '  second \u2014'], rows
     send(b'\r')
     on_screen('Row 40 of the reply.')
     rows = ended(read, output)

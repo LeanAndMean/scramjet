@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.121.0 — Prompt rows without dots
+
+### Changed
+
+- The prompt's rows after its first start with two spaces, under the text after `> `, rather than `. `, as in Claude Code and Codex.
+
 ## 0.120.0 — Retries spread out
 
 ### Changed
