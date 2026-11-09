@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.125.0 — The program updates itself from releases
+
+### Added
+
+- `scramjet-rs update self` replaces the program with the newest release of `LeanAndMean/scramjet-rs`, downloaded through `gh` while the repository is private: the archive must match the release's `SHA256SUMS` and the program in it must run and give the release's version before it replaces this one. `scramjet-rs update` now updates the packages, then the program.
+
 ## 0.124.0 — What's new, and the changelog in a view of its own
 
 ### Added

@@ -9,7 +9,7 @@ use scramjet_rs::agent::{Inventory, Problem, Set, inventory, sets_in, shortened}
 use std::path::{Path, PathBuf};
 
 pub(super) const USAGE: &str =
-    "Usage: scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME] | list
+    "Usage: scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
 REPO: git:github.com/USER/REPO[@REF], git:git@github.com:USER/REPO or a git URL";
 
 /// Runs `command` with its `arguments` when it is one of these; `None` when it is not.
@@ -20,7 +20,12 @@ pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), Stri
             Some(source) => source.and_then(install_package),
         },
         ("remove" | "uninstall", [reference]) => remove(reference),
-        ("update", []) => update(None),
+        ("update", []) => {
+            let packages = update(None);
+            let program = super::update::update_self();
+            packages.and(program)
+        }
+        ("update", [this]) if this == "self" || this == "--self" => super::update::update_self(),
         ("update", [reference]) => update(Some(reference)),
         ("list", []) => list(),
         ("install" | "remove" | "uninstall" | "update" | "list", _) => Err(USAGE.to_owned()),

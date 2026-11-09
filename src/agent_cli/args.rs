@@ -13,7 +13,7 @@ pub(super) const USAGE: &str =
 [@FILE...] [MESSAGE...]
        scramjet-rs --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet-rs --version
-       scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME] | list
+       scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
 settings file (by default ~/.config/scramjet-rs/models.json) and in installed command sets, in

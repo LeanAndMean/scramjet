@@ -805,10 +805,30 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
     );
     let branch = git(&work, &["rev-parse", "--abbrev-ref", "HEAD"]);
 
+    // A plain `update` updates the program too: a `gh` whose newest release is older.
+    let programs = scratch.0.join("programs");
+    std::fs::create_dir_all(&programs).unwrap();
+    std::fs::write(programs.join("gh"), "#!/bin/sh\necho v0.0.0\n").unwrap();
+    std::fs::write(programs.join("gh.cmd"), "@echo v0.0.0\r\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let executable = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(programs.join("gh"), executable).unwrap();
+    }
+    let path = std::env::join_paths(
+        std::iter::once(programs).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let up_to_date = format!(
+        "scramjet-rs {} is up to date (newest release v0.0.0)\n",
+        env!("CARGO_PKG_VERSION")
+    );
     let run = |arguments: &[&str]| {
         let output = Command::new(binary())
             .args(arguments)
             .current_dir(&project)
+            .env("PATH", &path)
             .env("HOME", &scratch.0)
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
             .env("XDG_DATA_HOME", scratch.0.join("data"))
@@ -888,7 +908,10 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     std::fs::write(clone.join("README.md"), "Changed here\n").unwrap();
     let (ok, out, err) = run(&["update"]);
     assert!(ok, "{out}{err}");
-    assert_eq!(out, format!("Updated {source}: {first}..{second}\n"));
+    assert_eq!(
+        out,
+        format!("Updated {source}: {first}..{second}\n{up_to_date}")
+    );
     assert_eq!(
         std::fs::read_to_string(clone.join("README.md")).unwrap(),
         "Changed here\n"
@@ -960,7 +983,10 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     );
     let (ok, out, _) = run(&["update"]);
     assert!(ok);
-    assert_eq!(out, format!("{pinned}: pinned to {first}; left as it is\n"));
+    assert_eq!(
+        out,
+        format!("{pinned}: pinned to {first}; left as it is\n{up_to_date}")
+    );
     assert!(run(&["uninstall", &source]).0);
 
     // Clones do not nest, so that removing one does not delete another.
