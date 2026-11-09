@@ -933,7 +933,7 @@ dependencies = [
 
 [[package]]
 name = "scramjet-rs"
-version = "0.125.0"
+version = "0.126.0"
 dependencies = [
  "bytes",
  "flate2",

@@ -30,7 +30,8 @@ pub(super) const FAILED: &str = match cfg!(target_os = "macos") {
 #[cfg(windows)]
 const UNAVAILABLE: &str = "scramjet-rs has no sandbox on Windows yet";
 
-/// Why a command whose credential stores are to be hidden does not run on Windows.
+/// Why a command whose credential stores are to be hidden does not run on Windows. The main
+/// agent's run there with nothing hidden instead (`tools::HIDES_COMMANDS`).
 #[cfg(windows)]
 const NOT_HIDDEN: &str = "scramjet-rs has no sandbox on Windows yet, so it cannot run commands \
     with the credential stores hidden, as the hideCredentials setting asks for this turn (by \

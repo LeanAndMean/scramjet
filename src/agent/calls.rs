@@ -588,7 +588,12 @@ impl Tools<'_> {
             _ => {
                 ui.tool_running(std::time::Instant::now());
                 let named = self.parent.providers.credential_files();
-                let hide = self.hide_credentials || self.sandbox.is_some();
+                let mut hide = self.hide_credentials || self.sandbox.is_some();
+                let command = ["bash", "grep", "find"].contains(&call.name);
+                if hide && self.sandbox.is_none() && !tools::HIDES_COMMANDS && command {
+                    not_hidden(ui);
+                    hide = false;
+                }
                 let hidden = hide.then(|| sandbox::Hidden::current(named));
                 let root = self.parent.root;
                 let progress = &mut |output: &str| ui.tool_output(output);
@@ -609,6 +614,17 @@ impl Tools<'_> {
             output.failed,
         );
         (output, usage)
+    }
+}
+
+/// Says, once a process, that commands run with nothing hidden where scramjet-rs cannot hide it.
+fn not_hidden(ui: &mut dyn AgentUi) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        ui.notice(
+            "Commands run with the credential stores not hidden: scramjet-rs has no sandbox \
+             on Windows yet (setting hideCredentials)",
+        );
     }
 }
 

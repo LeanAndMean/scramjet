@@ -1336,6 +1336,10 @@ fn bash(
     Ok(ran.tool_output())
 }
 
+/// Whether commands run with the credential stores hidden when asked: not on Windows, which has
+/// no sandbox in scramjet-rs yet, where they run as they are (user decision, 2026-11-09).
+pub(super) const HIDES_COMMANDS: bool = cfg!(unix);
+
 /// Pi's `ls`: the entries of a directory, sorted case-insensitively, directories with `/`.
 fn ls(root: &Path, call: &Call) -> Result<String, String> {
     let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
@@ -1450,6 +1454,7 @@ impl Group {
         // Held while spawning, so that none starts once `end_commands` has run.
         let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
         let child = crate::os::own_group(command).spawn()?;
+        crate::os::hold_group(&child);
         let group = child.id();
         groups.push(group);
         Ok((child, Self(group)))
@@ -1479,6 +1484,7 @@ impl Drop for Group {
     fn drop(&mut self) {
         let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
         groups.retain(|&group| group != self.0);
+        crate::os::release_group(self.0);
     }
 }
 
@@ -1991,9 +1997,22 @@ fn left_running(group: u32) -> Option<String> {
     Some(text)
 }
 
-#[cfg(not(unix))]
-fn left_running(_: u32) -> Option<String> {
-    None
+/// What still runs in the job of the command that led it after it ended: each process's id and
+/// program.
+#[cfg(windows)]
+fn left_running(group: u32) -> Option<String> {
+    const LISTED: usize = 20;
+    let processes = crate::os::group_left(group).filter(|left| !left.is_empty())?;
+    let mut text = "Processes it started still run; `taskkill /F /PID PID` stops one \
+                    (`taskkill //F //PID PID` in Git Bash):"
+        .to_owned();
+    for (pid, program) in processes.iter().take(LISTED) {
+        text += &format!("\n{pid} {program}");
+    }
+    if processes.len() > LISTED {
+        text += &format!("\n… and {} more", processes.len() - LISTED);
+    }
+    Some(text)
 }
 
 /// A command that has ended: the end of its output, with a note when earlier output was left out,

@@ -1,0 +1,31 @@
+{
+  "bash": true,
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Ping in the background",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "cmd /c start /b ping -n 301 127.0.0.1 >nul & echo started & ping -n 302 127.0.0.1 >nul",
+          "timeout": 3
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "cmd /c start /b ping -n 303 127.0.0.1 >nul & echo left"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Done."
+      }
+    ]
+  ]
+}

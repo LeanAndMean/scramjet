@@ -395,6 +395,38 @@ pub fn own_group_async(command: &mut tokio::process::Command) -> &mut tokio::pro
     command
 }
 
+/// Keeps track of all that `child`, started by `own_group`, starts, for `kill_group` and
+/// `group_left`, until `release_group`. On Windows it puts the child in a job, which reaches the
+/// processes whose parent has ended, as Git Bash's often have; a process group does on Unix.
+pub fn hold_group(child: &std::process::Child) {
+    #[cfg(windows)]
+    windows::hold(child);
+    #[cfg(unix)]
+    let _ = child;
+}
+
+/// Stops keeping track of the group `hold_group` held as `id`; what still runs in it goes on.
+pub fn release_group(id: u32) {
+    #[cfg(windows)]
+    windows::release(id);
+    #[cfg(unix)]
+    let _ = id;
+}
+
+/// The processes still running in the group `hold_group` held as `id` on Windows: each one's id
+/// and program file name. `None` elsewhere, or where it was not held.
+pub fn group_left(id: u32) -> Option<Vec<(u32, String)>> {
+    #[cfg(windows)]
+    {
+        windows::left(id)
+    }
+    #[cfg(unix)]
+    {
+        let _ = id;
+        None
+    }
+}
+
 /// Kills the process group `own_group` started as `id`, all it started too.
 pub fn kill_group(id: u32) {
     #[cfg(unix)]
@@ -402,7 +434,10 @@ pub fn kill_group(id: u32) {
         let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
     }
     #[cfg(windows)]
-    windows::kill_tree(id);
+    {
+        windows::kill_tree(id);
+        windows::kill_job(id);
+    }
 }
 
 /// Asks the process group `own_group` started as `id` to end: SIGTERM, or Ctrl+Break.
@@ -445,6 +480,122 @@ mod windows {
     };
 
     pub(super) const NEW_GROUP: u32 = CREATE_NEW_PROCESS_GROUP;
+
+    struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+    // SAFETY: a job handle may be used and closed from any thread.
+    unsafe impl Send for Job {}
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: the handle is the job's own, closed once.
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+        }
+    }
+
+    /// The jobs `hold` made, by the id of the process each was made for.
+    static JOBS: std::sync::Mutex<Vec<(u32, Job)>> = std::sync::Mutex::new(Vec::new());
+
+    fn jobs() -> std::sync::MutexGuard<'static, Vec<(u32, Job)>> {
+        JOBS.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Puts `child` in a job of its own. A process it started before this escapes it; a shell
+    /// takes far longer to start one. A job that cannot be made leaves `kill_tree` alone.
+    pub(super) fn hold(child: &std::process::Child) {
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        // SAFETY: no attributes nor name; the handle is checked, and owned by `Job` once made.
+        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if job.is_null() {
+            return;
+        }
+        let job = Job(job);
+        // SAFETY: both handles are open for the call.
+        if unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) } != 0 {
+            jobs().push((child.id(), job));
+        }
+    }
+
+    pub(super) fn release(id: u32) {
+        jobs().retain(|(held, _)| *held != id);
+    }
+
+    pub(super) fn kill_job(id: u32) {
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        if let Some((_, job)) = jobs().iter().find(|(held, _)| *held == id) {
+            // SAFETY: the handle is open while the list is locked.
+            unsafe { TerminateJobObject(job.0, 1) };
+        }
+    }
+
+    pub(super) fn left(id: u32) -> Option<Vec<(u32, String)>> {
+        use windows_sys::Win32::System::JobObjects::{
+            JOBOBJECT_BASIC_PROCESS_ID_LIST, JobObjectBasicProcessIdList, QueryInformationJobObject,
+        };
+        const ROOM: usize = 256;
+        #[repr(C)]
+        struct List {
+            head: JOBOBJECT_BASIC_PROCESS_ID_LIST,
+            more: [usize; ROOM - 1],
+        }
+        // SAFETY: the structure is the call's to fill, with room for ROOM ids as its size says.
+        let mut list: List = unsafe { std::mem::zeroed() };
+        let ids: Vec<u32> = {
+            let jobs = jobs();
+            let (_, job) = jobs.iter().find(|(held, _)| *held == id)?;
+            let got = unsafe {
+                QueryInformationJobObject(
+                    job.0,
+                    JobObjectBasicProcessIdList,
+                    (&raw mut list).cast(),
+                    std::mem::size_of::<List>() as u32,
+                    std::ptr::null_mut(),
+                )
+            };
+            if got == 0 {
+                return None;
+            }
+            let listed = (list.head.NumberOfProcessIdsInList as usize).min(ROOM);
+            // SAFETY: the list's ids run on from its first, within the structure.
+            let first = (&raw const list.head.ProcessIdList).cast::<usize>();
+            (0..listed)
+                .map(|at| unsafe { *first.add(at) } as u32)
+                .collect()
+        };
+        Some(ids.into_iter().map(|pid| (pid, image(pid))).collect())
+    }
+
+    /// The file name of process `pid`'s program, or `?`.
+    fn image(pid: u32) -> String {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+            QueryFullProcessImageNameW,
+        };
+        let mut name = [0u16; 1024];
+        let mut size = name.len() as u32;
+        // SAFETY: the handle is checked and closed once; the buffer's size is given.
+        let got = unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return "?".to_owned();
+            }
+            let got = QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_WIN32,
+                name.as_mut_ptr(),
+                &mut size,
+            );
+            CloseHandle(handle);
+            got
+        };
+        if got == 0 {
+            return "?".to_owned();
+        }
+        let path = String::from_utf16_lossy(&name[..size as usize]);
+        path.rsplit('\\').next().unwrap_or(&path).to_owned()
+    }
 
     /// The volume and index that name a file, as `st_dev` and `st_ino` do.
     pub(super) fn file_id(file: &std::fs::File) -> Option<(u32, u64)> {
@@ -572,6 +723,38 @@ mod tests {
         assert_eq!(found(&[at(&["Program Files"])]), Some(installed));
         let only_wsl = [wsl.parent().unwrap().to_owned()];
         assert_eq!(windows_bash(&[], &only_wsl, Some(&windows)), None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn killing_a_group_ends_what_it_started_whose_parent_has_ended() {
+        let pings = |left: &[(u32, String)]| {
+            left.iter()
+                .filter(|(_, program)| program.eq_ignore_ascii_case("ping.exe"))
+                .count()
+        };
+        let mut command = Command::new("cmd");
+        command.args([
+            "/c",
+            "cmd /c start /b ping -n 30 127.0.0.1 >nul & ping -n 30 127.0.0.1 >nul",
+        ]);
+        let mut child = own_group(&mut command).spawn().unwrap();
+        hold_group(&child);
+        let id = child.id();
+        let started = std::time::Instant::now();
+        while pings(&group_left(id).unwrap()) < 2 {
+            assert!(started.elapsed().as_secs() < 10, "{:?}", group_left(id));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        kill_group(id);
+        child.wait().unwrap();
+        let started = std::time::Instant::now();
+        while !group_left(id).unwrap().is_empty() {
+            assert!(started.elapsed().as_secs() < 10, "{:?}", group_left(id));
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        release_group(id);
+        assert_eq!(group_left(id), None);
     }
 
     #[test]

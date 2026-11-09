@@ -7,10 +7,10 @@
 
 int main(int argc, char **argv) {
     const char *command = getenv("SCRAMJET_RS_COMMAND");
-    if (argc == 3 && strcmp(argv[1], "-c") == 0 && command) {
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "-c") == 0 && command) {
         fflush(stdout);
         return system(command);
     }
-    fprintf(stderr, "stand-in bash: only -c with SCRAMJET_RS_COMMAND\n");
+    fprintf(stderr, "stand-in bash: only -c SCRIPT [NAME] with SCRAMJET_RS_COMMAND\n");
     return 2;
 }

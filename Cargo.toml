@@ -1,6 +1,6 @@
 [package]
 name = "scramjet-rs"
-version = "0.125.0"
+version = "0.126.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "An independent Rust terminal coding harness"
@@ -38,4 +38,4 @@ futures-util = { version = "=0.3.34", default-features = false, features = ["std
 rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Threading"] }
+windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }

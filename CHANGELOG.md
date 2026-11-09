@@ -4,6 +4,17 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.126.0 — Windows: stopped commands end whole, and unattended turns run them
+
+### Changed
+
+- On Windows, turns nobody started (`-p`, autopilot, a next step that runs by itself) run bash, grep and find with the credential stores not hidden, saying so once, instead of refusing them: scramjet-rs has no sandbox there yet. Subagents' commands stay refused.
+- On Windows, a bash call whose shell ended while programs it started still run lists them, with how to stop one.
+
+### Fixed
+
+- On Windows, Escape or a timeout now ends every program a bash call started, also those whose parent had already ended (as `sleep` under Git Bash): each call runs in a job of its own.
+
 ## 0.125.0 — The program updates itself from releases
 
 ### Added
