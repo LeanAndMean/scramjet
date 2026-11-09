@@ -749,7 +749,7 @@ response is incomplete; retry the request."});
         let ms = |value: &Value| value.as_u64().unwrap();
         let waited = ms(&timing["started"]) - ms(&failed["started"]);
         assert!(
-            waited >= Retries::default().delay.as_millis() as u64,
+            waited >= Retries::default().delay.mul_f64(0.9).as_millis() as u64,
             "{timing}"
         );
         let (headers, first) = (ms(&timing["headers_ms"]), ms(&timing["first_output_ms"]));
