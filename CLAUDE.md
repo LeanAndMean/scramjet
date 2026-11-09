@@ -58,10 +58,11 @@ When asking, give the decision, the relevant evidence, the options and a recomme
 - The private provider package ([design](docs/DESIGN.md#packages-providers-and-mcp-2026-11-04)) lives in its own local repository, `~/repos/scramjet-rs-provider-proxy` (working name), without a remote; the loop creates and develops it as it does this one. Proxy's details go there, not into this repository.
 - Not yet approved: live requests to other providers (GitHub Copilot, OpenAI Codex). Ask when that work needs them; the user does the login.
 - Ask before pushing, publishing, creating remote issues/PRs, destructive operations outside scratch directories, or other desktop/clipboard automation.
+- Releases (user decision, 2026-11-09): for a version the user asks to release, push `main` and its tag to the private `origin` (`LeanAndMean/scramjet-rs`), add or change its workflows, and create the GitHub release there. It stays private until the user decides otherwise. Spend about $5 a month of its Actions compute at most (macOS costs about 10× Linux): workflows run on a tag or by hand, never on every push.
 - Don't read credentials or personal data. Don't upload unpublished code to external services.
 - Python tooling: use `uv` with an isolated environment; never install into the system Python.
 - Approved on 2026-11-07: `rustup target add aarch64-apple-darwin x86_64-apple-darwin`, to type-check and lint the macOS code paths here; Docker on this machine, for checks such as Wayland's clipboard against a headless compositor in a container.
 - Web research (user suggestion, 2026-11-06): from `/tmp`, run `scramjet-rs -p --no-session --tools mcp_search,mcp_call --model anthropic/claude-sonnet-5 '<question>'`. It reaches the user's Tavily MCP server for search snippets and has no other tools: no page fetch, no shell, no files. Verify a consequential claim by fetching its primary page yourself (`curl`). It was checked on 2026-11-06: 21 searches in 8 requests, $0.45; that day the `claude` CLI route in `~/AGENTS.md` kept failing its API retries. Its answer is evidence to check, not text to adopt, and a query never carries unpublished code.
 - `~/repos/pi_agent_rust` has a restrictive license rider: do not copy or port its implementation.
 
-Supported platform today: Linux/WSL2 Ubuntu. macOS is a target but untested.
+Supported platform today: Linux/WSL2 Ubuntu. macOS, native Windows and the Raspberry Pi 5 (aarch64 Linux) are targets, not yet tried by the user.

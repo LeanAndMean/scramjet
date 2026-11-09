@@ -5,7 +5,7 @@ Established 2026-10-08 from the founding discussion. This file owns product dire
 ## Agreed scope
 
 - Build an independent Rust product under Apache-2.0, not a Rust port of the Pi package structure.
-- Make Ubuntu Linux, macOS, and WSL Ubuntu first-class. Native Windows comes after macOS, before the scale work (user decision, 2026-11-07).
+- Make Ubuntu Linux, macOS, and WSL Ubuntu first-class. Native Windows comes after macOS, before the scale work (user decision, 2026-11-07). The Raspberry Pi 5 (64-bit Linux on aarch64) is supported too (user decision, 2026-11-09).
 - Improve current usage first: independent project tabs, a main agent, and efficient parallel subagents.
 - Preserve valuable Scramjet outcomes: coding tools, reusable commands/agents/skills, project instructions, command composition and continuation, graduated autonomy, informed approval, model selection, and useful session continuity.
 - Keep the retained alternate-screen experience: browse unfinished output, edit while browsing, expand tool/agent details, and copy selected text without disrupting live work.
@@ -153,6 +153,15 @@ User decisions from `/rs:steer` on 2026-11-09. Users of other harnesses move to 
 - **Out of scope here:** any listening port, HTTP or WebSocket server, authentication or pairing, TLS, web or JavaScript dependencies: the terminal binary has no network-facing surface. Also out of scope: a daemon with the full screen as one of its clients (Codex 0.166's app-server daemon, `codex remote-control`, `codex agents`). The full screen stays in-process; a daemon would be a separate decision, which the user signs off.
 - **Long term, elsewhere:** a browser front end reachable from other devices (phones over Tailscale), in a repository of its own: a server that starts `scramjet-rs --mode rpc` and depends only on the protocol, never on scramjet-rs's Rust code. Its threat model (who can reach it, cross-site WebSocket requests and DNS rebinding, script injection and image exfiltration through the transcript, approvals on a small screen, tokens at rest) is that repository's. The protocol must not foreclose its mitigations: nothing secret in its output, approvals carrying what is needed to decide on a small screen, the whole state on request.
 - **Open:** checking from another device on a session started in the terminal ([the task list](TASKS.md), Open questions).
+
+### Releases, updates and going public (2026-11-09)
+
+User decisions from `/rs:steer` on 2026-11-09:
+
+- **Releases for early testing** on the private `LeanAndMean/scramjet-rs`, with executables for every supported platform: Linux x86_64 (WSL included), the Raspberry Pi 5 (aarch64), macOS and Windows, each checked by CI within reason before it is published. A release is made only for a version the user asks for, so that they have time to try it; continuous releases of every pushed version are explored once the repository is public and the development rhythm is good.
+- **Going public** once scramjet-rs is known to work on all those platforms and the issues to fix before publishing are fixed (Proxy out of the tracked files and history among them). Until then CI spends little (about $5 a month of the private repository's included compute); public repositories' standard runners are free.
+- **Updates as Scramjet's:** `scramjet-rs update` updates the packages and the program, `update self` the program only. While private, the download goes through `gh`, whose token scramjet-rs never reads; the archive is checked against the release's checksums before it replaces the binary. A newer release is mentioned at start, at most once a day.
+- **"What's new" and `/changelog`:** after an update, the first interactive start shows the changelog's entries since the version last run, in a view of its own with its own scroll, as `/changelog` shows the whole history; neither goes into the conversation.
 
 ## Essential responsibilities and invariants
 
