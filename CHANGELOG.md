@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.122.0 — Project command sets approve their own publications again
+
+### Changed
+
+- A command set inside a project (`.scramjet/<set>/`) may again mark its own commands' publications `auto-approve` in its `autonomy-defaults.yaml`, as in Scramjet; 0.97.7 had ignored that with a warning. A project's `autonomy.yaml` still cannot set publications.
+
 ## 0.121.0 — Prompt rows without dots
 
 ### Changed

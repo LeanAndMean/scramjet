@@ -329,8 +329,8 @@ impl Commands {
     /// The suggested edges and publication defaults of `set`'s `autonomy-defaults.yaml`, as
     /// Scramjet keeps them: edges for any command, a set before it suggesting one first, and
     /// publication defaults only for the set's own top-level commands and the tools their
-    /// `allowed-tools` name. A project's sets cannot approve publications, as a project's
-    /// `autonomy.yaml` cannot set them.
+    /// `allowed-tools` name. A project's sets may approve their own publications, as in
+    /// Scramjet, though a project's `autonomy.yaml` cannot set any.
     fn add_defaults(&mut self, set: &Set) {
         let path = set.directory.join("autonomy-defaults.yaml");
         let text = match fs::read_to_string(&path) {
@@ -383,18 +383,6 @@ impl Commands {
             };
             let (kept, undeclared): (Vec<_>, Vec<_>) =
                 tools.into_iter().partition(|(tool, _)| declared(tool));
-            let project = set.origin == Origin::Project;
-            let (kept, approved): (Vec<_>, Vec<_>) = (kept.into_iter())
-                .partition(|(_, setting)| !project || *setting != Publication::Auto);
-            for (tool, _) in approved {
-                self.warnings.push(Problem::in_file(
-                    format!(
-                        "{shown}: ignored auto-approve for {name} → {tool}: a project's command \
-                         set cannot approve its own publications"
-                    ),
-                    &path,
-                ));
-            }
             for (tool, _) in undeclared {
                 self.warnings.push(Problem::in_file(
                     format!(
@@ -1230,7 +1218,7 @@ other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n
         windows,
         ignore = "command files are named with `:`, which Windows cannot hold"
     )]
-    fn a_project_set_cannot_approve_its_own_publications_but_its_other_defaults_hold() {
+    fn a_project_set_may_approve_its_own_publications() {
         let scratch = Scratch::new("project-publication-defaults");
         let project = scratch.0.join("project");
         scratch.file(
@@ -1244,17 +1232,11 @@ auto-approve\n    add_issue_comment: require-approval\n",
         );
         let commands = Commands::discover(&project_sets(&project));
         let default = |tool| commands.publication_default("rs:post", tool);
-        assert_eq!(default("create_issue"), None);
+        assert_eq!(default("create_issue"), Some(Publication::Auto));
         assert_eq!(default("add_issue_comment"), Some(Publication::Ask));
         let edge = commands.suggested("rs:post", "rs:post").map(|s| s.edge);
         assert_eq!(edge, Some(Edge::Chain));
-        let file = project.join("rs/autonomy-defaults.yaml");
-        let text = format!(
-            "{}: ignored auto-approve for rs:post → create_issue: a project's command set \
-             cannot approve its own publications",
-            file.display()
-        );
-        assert_eq!(commands.warnings(), [Problem::in_file(text, &file)]);
+        assert_eq!(commands.warnings(), []);
     }
 
     #[test]
