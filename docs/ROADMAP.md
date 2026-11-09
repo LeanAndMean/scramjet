@@ -82,7 +82,9 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 **Exit evidence:** daily-use journeys pass; native acceptance is tied to the exact candidate and tested matrix, not inherited from the probe. Completion of the selected offline milestone does not complete all S4. Known gaps are visible; no platform is described as first-class merely because it compiles.
 
-**Platforms (user decision, 2026-11-07):** macOS (Terminal.app, and Homebrew's xterm under XQuartz), then native Windows, both before what is left of S3's parallel work and S5. No platform is called supported until it has been used there.
+**Platforms (user decisions, 2026-11-07 and 2026-11-09):** native Windows, in daily use since 2026-11-09, then macOS (Terminal.app, and Homebrew's xterm under XQuartz), both before what is left of S3's parallel work and S5. No platform is called supported until it has been used there.
+
+**Command sets' home (user decision, 2026-11-09):** Mach 12 in a repository of its own, the `scramjet` set, its authoring skill and a built-in lint in this one, in file names that work on Windows and in Claude Code ([design](DESIGN.md#command-sets-home-and-scramjets-sunset-2026-11-09)), so that scramjet-rs needs nothing from Scramjet's repository, which will likely be sunset.
 
 **Releases (user decision, 2026-11-09):** after the user's tries of the private package and of Windows, releases with executables for every supported platform (the Raspberry Pi 5 joins them) on the private repository, checked by CI, for the versions the user asks for ([design](DESIGN.md#releases-updates-and-going-public-2026-11-09)); `scramjet-rs update` updates the program from them, and "What's new" and `/changelog` show the changelog. The repository goes public once every platform works and the issues to fix before publishing are fixed.
 
