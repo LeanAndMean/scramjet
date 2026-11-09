@@ -37,6 +37,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 - `docs/ROADMAP.md`: rough stages.
 - `CHANGELOG.md`: what changed in each version, for users, newest first (Workflow).
 - `docs/TERMINALS.md`: what each terminal does with copying, pasting and keys, with the version and source each entry was checked against.
+- `docs/RPC.md`: RPC mode's protocol and core-loop proposal, for the user's sign-off.
 - `docs/TASKS.md`: pending work only: the current focus, next candidates with their obstacles, known issues, open questions and the `Last steer:` commit. Remove what is finished.
 
 ## When to stop for the user

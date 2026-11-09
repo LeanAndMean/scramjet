@@ -153,6 +153,7 @@ User decisions from `/rs:steer` on 2026-11-09. Users of other harnesses move to 
 - **Out of scope here:** any listening port, HTTP or WebSocket server, authentication or pairing, TLS, web or JavaScript dependencies: the terminal binary has no network-facing surface. Also out of scope: a daemon with the full screen as one of its clients (Codex 0.166's app-server daemon, `codex remote-control`, `codex agents`). The full screen stays in-process; a daemon would be a separate decision, which the user signs off.
 - **Long term, elsewhere:** a browser front end reachable from other devices (phones over Tailscale), in a repository of its own: a server that starts `scramjet-rs --mode rpc` and depends only on the protocol, never on scramjet-rs's Rust code. Its threat model (who can reach it, cross-site WebSocket requests and DNS rebinding, script injection and image exfiltration through the transcript, approvals on a small screen, tokens at rest) is that repository's. The protocol must not foreclose its mitigations: nothing secret in its output, approvals carrying what is needed to decide on a small screen, the whole state on request.
 - **Open:** checking from another device on a session started in the terminal ([the task list](TASKS.md), Open questions).
+- **Proposal:** [RPC.md](RPC.md) (2026-11-09), awaiting sign-off.
 
 ### Releases, updates and going public (2026-11-09)
 
