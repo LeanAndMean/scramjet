@@ -112,10 +112,13 @@ pub(super) trait ByteSource {
     fn byte(&mut self, wait: Option<Duration>) -> io::Result<Option<u8>>;
 }
 
-/// Whether the terminal is Windows Terminal, which sends Ctrl+Backspace as a lone `0x08` that
-/// other terminals send for Backspace; not over ssh, where the variable may be stale, as Scramjet.
+/// Whether a lone `0x08` is Ctrl+Backspace, which other terminals send for Backspace: in Windows
+/// Terminal, and in Windows' own consoles, which send Backspace as `0x7f` (conhost and Windows
+/// Terminal 1.24's OpenConsole, 2026-11-09) and leave `WT_SESSION` unset when Windows Terminal
+/// takes over a console started elsewhere. Not over ssh, where the terminal is another's.
 pub(super) fn windows_terminal() -> bool {
-    std::env::var_os("WT_SESSION").is_some_and(|value| !value.is_empty()) && !clipboard::remote()
+    (cfg!(windows) || std::env::var_os("WT_SESSION").is_some_and(|value| !value.is_empty()))
+        && !clipboard::remote()
 }
 
 /// The next key; `windows_terminal` reads a lone `0x08` as Ctrl+Backspace (`windows_terminal()`).

@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.126.1 — Ctrl+Backspace on native Windows, selections across a wrapped row
+
+### Fixed
+
+- In the native Windows program, Ctrl+Backspace deletes a word also when Windows Terminal took over a console started elsewhere (its default-terminal handoff, which leaves `WT_SESSION` unset).
+- Shift+Left and Shift+Right across the end of a wrapped row in the prompt no longer show stray characters on both rows.
+
 ## 0.126.0 — Windows: stopped commands end whole, and unattended turns run them
 
 ### Changed

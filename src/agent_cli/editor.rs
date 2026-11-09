@@ -383,7 +383,8 @@ impl Layout {
                 let last = rows.last_mut().unwrap();
                 let selecting = selected.contains(&at);
                 match misspelled.peek().is_some_and(|range| range.start <= at) {
-                    _ if selecting => pick(last, shown, after_selected),
+                    // A word may move to the next row from its start, which a join would cross.
+                    _ if selecting => pick(last, shown, after_selected && !starts_word),
                     // Each grapheme closes its underline, so that a word moved to the next row
                     // or broken across rows carries its own; neighbors join again.
                     true => {
@@ -1526,6 +1527,20 @@ mod tests {
         assert_eq!(
             layout.rows[0],
             format!("> a{selected}b {end}{underline}cd{end}")
+        );
+    }
+
+    #[test]
+    fn a_selection_across_a_wrap_shows_whole_on_both_rows() {
+        let (on, end) = (style::SELECTION.get(), style::RESET);
+        let rows = |selected| Layout::marked("aaaa bbbb", 10, false, &[], Some(selected)).rows;
+        assert_eq!(
+            rows(4..6),
+            [format!("> aaaa{on} {end}"), format!("  {on}b{end}bbb")]
+        );
+        assert_eq!(
+            rows(3..9),
+            [format!("> aaa{on}a {end}"), format!("  {on}bbbb{end}")]
         );
     }
 
