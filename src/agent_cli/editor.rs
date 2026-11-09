@@ -847,7 +847,7 @@ impl Editor {
                 *completion = self.complete_command(before);
                 match file_search::Mention::find(before) {
                     Some(mention) if completion.is_none() => {
-                        *lookup = Lookup::start(&self.root, mention, buffer, true);
+                        *lookup = Some(Lookup::start(&self.root, mention, buffer, true));
                     }
                     _ => {
                         *completion = completion
@@ -953,7 +953,7 @@ impl Editor {
                 let kept =
                     list.filter(|list| list.kind == Kind::File && list.start == mention.start);
                 if !pending {
-                    *lookup = Lookup::start(&self.root, mention, buffer, false);
+                    *lookup = Some(Lookup::start(&self.root, mention, buffer, false));
                 }
                 kept
             }

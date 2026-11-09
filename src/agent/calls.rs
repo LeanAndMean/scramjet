@@ -120,6 +120,10 @@ impl Agent {
             agent_directory: self.agent_directory.clone(),
             approvals: self.approvals.clone(),
             rates: self.rates.clone(),
+            coding_tools: match self.command_line_tools() {
+                Some(tools) => tools.into_iter().map(str::to_owned).collect(),
+                None => self.config.tools.clone(),
+            },
             hide_credentials: self.hide_credentials,
             sandbox: self.config.sandbox,
             mcp: self.mcp.clone(),
@@ -511,6 +515,8 @@ struct Kit {
     agent_directory: Option<PathBuf>,
     approvals: Option<PathBuf>,
     rates: Option<PathBuf>,
+    /// The coding tools of this run, which children take by default.
+    coding_tools: Vec<String>,
     hide_credentials: bool,
     sandbox: Option<Sandbox>,
     mcp: Option<Arc<mcp::Servers>>,
@@ -536,6 +542,7 @@ impl Kit {
                 agent_directory: self.agent_directory.as_deref(),
                 approvals: self.approvals.as_deref(),
                 rates: self.rates.as_deref(),
+                tools: &self.coding_tools,
             },
             hide_credentials: self.hide_credentials,
             sandbox: self.sandbox,
@@ -1481,9 +1488,6 @@ files is added or changed.",
 
     #[test]
     fn the_configured_coding_tools_are_offered_and_only_they_run() {
-        if cfg!(windows) && crate::agent::tests::missing("rg") {
-            return;
-        }
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "grep", json!({"pattern":"needle","path":"src"})),
             tool_call("call_2", "ls", json!({"path":"src"})),

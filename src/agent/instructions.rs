@@ -527,7 +527,7 @@ mod tests {
         let root = Path::new("/nonexistent/scramjet-rs-instructions");
         let commands = Commands::default();
         let tools = super::super::tools::offered(
-            &super::super::tools::DEFAULT_TOOLS.map(String::from),
+            &["read", "bash", "edit", "write"].map(String::from),
             None,
             false,
         );

@@ -95,6 +95,7 @@ mod tests {
             name: "p".into(),
             description: "P".into(),
             tools: None,
+            disallowed: Vec::new(),
             model: None,
             prompt: String::new(),
             source: "project",

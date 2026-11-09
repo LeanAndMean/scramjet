@@ -456,7 +456,6 @@ async fn exchange(
 pub(super) struct Fetched {
     pub status: u16,
     pub body: Vec<u8>,
-    pub location: Option<String>,
 }
 
 const FETCHED_BYTES: usize = 4 << 20;
@@ -535,9 +534,6 @@ pub(super) async fn fetch_within(
             Failure::new(format!("request to {} failed: {e}", route.authority), true)
         })?;
         let status = response.status().as_u16();
-        let location = (response.headers().get("location"))
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
         let mut body = response.into_body();
         let mut bytes = Vec::new();
         while let Some(frame) = body.frame().await {
@@ -556,7 +552,6 @@ pub(super) async fn fetch_within(
         Ok(Fetched {
             status,
             body: bytes,
-            location,
         })
     };
     match tokio::time::timeout(timeout, exchange).await {

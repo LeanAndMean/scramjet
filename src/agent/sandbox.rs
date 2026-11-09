@@ -20,12 +20,6 @@ pub(super) const PROGRAM: &str = "the sandbox";
 #[cfg(not(any(target_os = "macos", windows)))]
 pub(super) const PROGRAM: &str = "bwrap";
 
-/// How the sandbox's program starts its own error messages.
-pub(super) const FAILED: &str = match cfg!(target_os = "macos") {
-    true => "sandbox-exec:",
-    false => "bwrap:",
-};
-
 /// Why nothing runs confined on Windows, where scramjet-rs has no sandbox yet.
 #[cfg(windows)]
 const UNAVAILABLE: &str = "scramjet-rs has no sandbox on Windows yet";
@@ -329,7 +323,7 @@ const WSLG_DISTRO: &str = "/mnt/wslg/distro";
 
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
 /// as empty and a hidden directory has no entries, both read-only.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub(super) struct Hidden {
     files: Vec<PathBuf>,
     directories: Vec<PathBuf>,
@@ -480,6 +474,23 @@ impl Hidden {
         }
     }
 
+    /// Whether a walk that follows no symlinks came to a store: an entry of `metadata` (not
+    /// followed) whose real path is `real`. By identity, so another mount or a hard link is
+    /// caught too; on Windows, which has none to compare, by the real path.
+    pub(super) fn is_store(&self, real: &Path, metadata: &std::fs::Metadata) -> bool {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let _ = real;
+            self.identities.contains(&(metadata.dev(), metadata.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = metadata;
+            (self.files.iter().chain(&self.directories)).any(|store| real.starts_with(store))
+        }
+    }
+
     /// `file`, opened at `path`, refused as `check` refuses a path, checked on the file opened: a
     /// symlink swapped in after a check by path (by a bash call running alongside) cannot lead a
     /// read or write into a store.
@@ -584,7 +595,7 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
 
 /// `bash -c command` in `root`, confined.
 pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Result<Command, String> {
-    let mut process = confined(root, None, hidden, None, None)?;
+    let mut process = confined(root, hidden, None, None)?;
     process.arg(super::tools::shell_program()?);
     super::tools::bash_runs(&mut process, command);
     Ok(process)
@@ -597,7 +608,7 @@ pub(super) fn sandboxed(
     hidden: &Hidden,
     sandbox: Sandbox,
 ) -> Result<Command, String> {
-    let mut process = confined(root, None, hidden, Some(sandbox), None)?;
+    let mut process = confined(root, hidden, Some(sandbox), None)?;
     process.arg(super::tools::shell_program()?);
     super::tools::bash_runs(&mut process, command);
     Ok(process)
@@ -617,7 +628,7 @@ pub(super) fn server(
     let cache = (cache.ok())
         .filter(|cache| std::fs::create_dir_all(cache).is_ok())
         .and_then(|cache| std::fs::canonicalize(cache).ok());
-    let mut process = confined(root, None, hidden, Some(sandbox), cache.as_deref())?;
+    let mut process = confined(root, hidden, Some(sandbox), cache.as_deref())?;
     if let Some(cache) = &cache {
         process
             .env("XDG_CACHE_HOME", cache)
@@ -665,52 +676,24 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
     Ok(process)
 }
 
-/// `program` (its arguments to follow) confined as `command` is, with `path`, which it reads,
-/// mounted again too.
-#[cfg(windows)]
-pub(super) fn program(_: &Path, _: &Path, _: &Path, _: &Hidden) -> Result<Command, String> {
-    Err(NOT_HIDDEN.to_owned())
-}
-
-/// `program` (its arguments to follow) confined as `command` is, with `path`, which it reads,
-/// mounted again too.
-#[cfg(unix)]
-pub(super) fn program(
-    root: &Path,
-    path: &Path,
-    program: &Path,
-    hidden: &Hidden,
-) -> Result<Command, String> {
-    let mut process = confined(root, Some(path), hidden, None, None)?;
-    process.arg(program);
-    Ok(process)
-}
-
 /// Bubblewrap up to the program to run. Its own namespaces keep the program off the network
 /// and let a cancellation kill everything it started; a new session keeps it from typing into
 /// the terminal; an empty `/run` and `/mnt/wslg` hide the session's sockets (D-Bus, WSL interop,
-/// WSLg) through which a command could act outside, and WSL's second mount of `/`. `root` and
-/// `also` are mounted again by their real paths (bubblewrap cannot mount over an absolute
-/// symlink) in case they are under `/tmp` or `/run`, before what is hidden, so that it stays
+/// WSLg) through which a command could act outside, and WSL's second mount of `/`. `root` is
+/// mounted again by its real path (bubblewrap cannot mount over an absolute
+/// symlink) in case it is under `/tmp` or `/run`, before what is hidden, so that it stays
 /// hidden in them. A `sandbox` makes `root` writable in `workspace-write`, but what stays
 /// protected in it, and shares the network as it says, with the name servers that
 /// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's). `writable_too`, a real
 /// path, is mounted writable last.
 #[cfg(windows)]
-fn confined(
-    _: &Path,
-    _: Option<&Path>,
-    _: &Hidden,
-    _: Option<Sandbox>,
-    _: Option<&Path>,
-) -> Result<Command, String> {
+fn confined(_: &Path, _: &Hidden, _: Option<Sandbox>, _: Option<&Path>) -> Result<Command, String> {
     Err(UNAVAILABLE.to_owned())
 }
 
 #[cfg(unix)]
 fn confined(
     root: &Path,
-    also: Option<&Path>,
     hidden: &Hidden,
     sandbox: Option<Sandbox>,
     writable_too: Option<&Path>,
@@ -759,10 +742,6 @@ fn confined(
     };
     for directory in pinned(&real_root, &kept) {
         process.arg("--bind").arg(&directory).arg(&directory);
-    }
-    if let Some(path) = also {
-        let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-        process.arg("--ro-bind").arg(&real).arg(&real);
     }
     if Path::new(WSLG).is_dir() {
         process.args(["--tmpfs", WSLG]);

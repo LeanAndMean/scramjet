@@ -253,13 +253,11 @@ impl AgentUi for Watching {
     }
 }
 
-/// Whether `program` (`bash`, `python3`, `rg`, `fd`…), which a test runs, is missing, as on Windows
+/// Whether `program` (`bash`, `python3`…), which a test runs, is missing, as on Windows
 /// without Git Bash or Python; the test then says so and is passed over.
 pub(crate) fn missing(program: &str) -> bool {
     let found = match program {
         "bash" => crate::os::bash().is_ok(),
-        "rg" => super::tools::search_program("grep").is_some(),
-        "fd" => super::tools::search_program("find").is_some(),
         _ => std::process::Command::new(program)
             .args(["-c", ""])
             .stdout(std::process::Stdio::null())

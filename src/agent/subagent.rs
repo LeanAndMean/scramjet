@@ -1,8 +1,8 @@
 //! Scramjet's `subagent` tool (`subagent/index.ts`): the model hands tasks to agents defined in
 //! markdown files, each run with a context of its own and its final reply as the result. Here
 //! the children run in this process with the parent's endpoint, and get read-only tools only:
-//! `read` and `ls`, and bash, `grep` and `find` in the read-only sandbox, none of which shows
-//! the user's credential stores.
+//! `read`, `grep`, `find` and `ls`, and bash in the read-only sandbox, none of which shows the
+//! user's credential stores.
 
 use super::yaml;
 use super::{
@@ -87,6 +87,9 @@ pub(super) struct Definition {
     pub description: String,
     /// The tools its frontmatter lists; `None` for the default ones.
     pub tools: Option<Vec<String>>,
+    /// The tools its `disallowedTools` lists, as Claude Code's, left out of `tools` or the
+    /// default ones.
+    pub disallowed: Vec<String>,
     pub model: Option<String>,
     /// The file's body, added to the child's instructions.
     pub prompt: String,
@@ -375,7 +378,7 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
         ));
     }
     let mut diagnostics = Vec::new();
-    let tools = match &frontmatter["tools"] {
+    let mut list = |key: &str| match &frontmatter[key] {
         Yaml::String(list) => Some(
             list.split(',')
                 .map(str::trim)
@@ -386,10 +389,12 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
         .filter(|tools| !tools.is_empty()),
         Yaml::BadValue => None,
         _ => {
-            diagnostics.push(format!("{shown}: ignoring non-string tools frontmatter"));
+            diagnostics.push(format!("{shown}: ignoring non-string {key} frontmatter"));
             None
         }
     };
+    let tools = list("tools");
+    let disallowed = list("disallowedTools").unwrap_or_default();
     let model = match &frontmatter["model"] {
         Yaml::String(model) => Some(model.trim().to_owned()).filter(|model| !model.is_empty()),
         Yaml::BadValue => None,
@@ -402,6 +407,7 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
         name: name.to_owned(),
         description: description.to_owned(),
         tools,
+        disallowed,
         model,
         prompt: body,
         source,
@@ -624,6 +630,8 @@ pub(super) struct Parent<'a> {
     pub approvals: Option<&'a Path>,
     /// Where replies' output rates are kept (`rates::path`).
     pub rates: Option<&'a Path>,
+    /// The agent's coding tools, whose read-only ones a child whose file lists none has.
+    pub tools: &'a [String],
 }
 
 /// A task given to an agent, ready to run.
@@ -652,7 +660,7 @@ impl<'a> Job<'a> {
     ) -> Self {
         let agent = agents.iter().find(|agent| agent.name == task.agent);
         let (tools, warnings) = agent
-            .map(|agent| child_tools(agent, sandbox))
+            .map(|agent| child_tools(agent, parent.tools, sandbox))
             .unwrap_or_default();
         let model = agent.map_or("", |agent| agent.model.as_deref().unwrap_or(parent.model));
         let info = match model == parent.model {
@@ -1126,22 +1134,26 @@ fn child_effort(requested: Option<&str>, parent: Option<&str>) -> Option<String>
     Some(if effort == "off" { "none" } else { effort }.to_owned())
 }
 
-/// The child's tools: those of the agent's (by default Scramjet's `read`, `bash`, `edit` and
-/// `write`) that are read-only and available, with warnings about the others.
+/// The child's tools: those its file lists, or else the read-only ones of the parent's `inherited`,
+/// that are read-only and available, but those it disallows, with warnings about the others.
 fn child_tools(
     agent: &Definition,
+    inherited: &[String],
     sandbox: &Result<(), String>,
 ) -> (Vec<&'static str>, Vec<String>) {
-    let default = tools::DEFAULT_TOOLS.map(str::to_owned);
-    let listed = agent.tools.as_deref().unwrap_or(&default);
+    let inherited: Vec<String> = (inherited.iter())
+        .filter(|tool| READ_ONLY.contains(&tool.as_str()))
+        .cloned()
+        .collect();
+    let listed = agent.tools.as_deref().unwrap_or(&inherited);
+    let listed = listed
+        .iter()
+        .filter(|tool| !agent.disallowed.contains(tool));
     let mut tools = Vec::new();
     let (mut writers, mut unconfined, mut missing) = (Vec::new(), Vec::new(), Vec::new());
     for tool in listed {
         match READ_ONLY.iter().find(|known| *known == tool) {
-            Some(&("bash" | "grep" | "find")) if sandbox.is_err() => unconfined.push(tool.as_str()),
-            Some(&("grep" | "find")) if tools::search_program(tool).is_none() => {
-                missing.push(tool.as_str())
-            }
+            Some(&"bash") if sandbox.is_err() => unconfined.push(tool.as_str()),
             Some(known) if !tools.contains(known) => tools.push(*known),
             Some(_) => {}
             None if matches!(tool.as_str(), "write" | "edit") => writers.push(tool.as_str()),
@@ -1162,12 +1174,6 @@ fn child_tools(
             "{}: left out, as the read-only sandbox is unavailable ({error})",
             unconfined.join(", ")
         ));
-    }
-    for (tool, program) in [("grep", "ripgrep (rg)"), ("find", "fd")] {
-        if missing.contains(&tool) {
-            warnings.push(format!("{tool}: left out, as {program} is not installed"));
-            missing.retain(|missing| *missing != tool);
-        }
     }
     if !missing.is_empty() {
         warnings.push(format!(
@@ -1343,7 +1349,8 @@ mod tests {
         let path = Path::new("/a/x.md");
         let agent = parse(
             path,
-            "\u{feff}---\nname: x\ndescription:  Does x \ntools: read, , ls ,bash\nmodel: m2\n---\n\nBody\n",
+            "\u{feff}---\nname: x\ndescription:  Does x \ntools: read, , ls ,bash\nmodel: m2\n\
+disallowedTools: bash\n---\n\nBody\n",
             "user",
         )
         .unwrap();
@@ -1360,18 +1367,21 @@ mod tests {
             Some(vec!["read".into(), "ls".into(), "bash".into()])
         );
         assert_eq!(agent.model.as_deref(), Some("m2"));
+        assert_eq!(agent.disallowed, ["bash"]);
         assert!(agent.diagnostics.is_empty());
         let odd = parse(
             path,
-            "---\nname: x\ndescription: d\ntools: [read]\nmodel: 3\n---\n",
+            "---\nname: x\ndescription: d\ntools: [read]\nmodel: 3\ndisallowedTools: 1\n---\n",
             "user",
         )
         .unwrap();
         assert_eq!((odd.tools, odd.model), (None, None));
+        assert!(odd.disallowed.is_empty());
         assert_eq!(
             odd.diagnostics,
             [
                 "/a/x.md: ignoring non-string tools frontmatter",
+                "/a/x.md: ignoring non-string disallowedTools frontmatter",
                 "/a/x.md: ignoring non-string model frontmatter"
             ]
         );
@@ -1590,10 +1600,13 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- z:a: z:a 
     #[test]
     #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn children_get_only_the_read_only_tools_they_list() {
-        let agent = |tools: Option<&str>| Definition {
+        let agent = |tools: Option<&str>, disallowed: &str| Definition {
             name: "x".into(),
             description: "d".into(),
             tools: tools.map(|list| list.split(", ").map(str::to_owned).collect()),
+            disallowed: (disallowed.split(", ").filter(|tool| !tool.is_empty()))
+                .map(str::to_owned)
+                .collect(),
             model: None,
             prompt: String::new(),
             source: "user",
@@ -1602,30 +1615,42 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- z:a: z:a 
             diagnostics: vec!["noted".into()],
         };
         let sandbox = Ok(());
-        let (tools, warnings) = child_tools(&agent(None), &sandbox);
-        assert_eq!(tools, ["read", "bash"]);
+        let all = tools::DEFAULT_TOOLS.map(str::to_owned);
+        // A file listing none takes the parent's read-only tools, without a word of the others.
+        let (tools, warnings) = child_tools(&agent(None, ""), &all, &sandbox);
+        assert_eq!(tools, ["read", "bash", "grep", "find", "ls"]);
+        assert_eq!(warnings, ["noted"]);
+        let narrowed = ["read", "edit", "grep"].map(str::to_owned);
+        let (tools, _) = child_tools(&agent(None, ""), &narrowed, &sandbox);
+        assert_eq!(tools, ["read", "grep"]);
+        let (tools, warnings) = child_tools(&agent(None, "bash, grep"), &all, &sandbox);
         assert_eq!(
-            warnings,
-            [
-                "noted",
-                "edit, write: left out, as subagents run read-only here"
-            ]
+            (tools, warnings),
+            (vec!["read", "find", "ls"], vec!["noted".into()])
         );
         let (tools, warnings) = child_tools(
-            &agent(Some("read, grep, find, ls, bash, read, web")),
+            &agent(Some("read, grep, find, ls, bash, read, web, write"), "find"),
+            &narrowed,
             &sandbox,
         );
-        assert!(tools::search_program("grep").is_some() && tools::search_program("find").is_some());
-        assert_eq!(tools, ["read", "grep", "find", "ls", "bash"]);
-        assert_eq!(warnings, ["noted", "web: not available to subagents here"]);
-        let missing = Err("no bwrap".to_owned());
-        let (tools, warnings) = child_tools(&agent(Some("read, grep, ls, bash")), &missing);
-        assert_eq!(tools, ["read", "ls"]);
+        assert_eq!(tools, ["read", "grep", "ls", "bash"]);
         assert_eq!(
             warnings,
             [
                 "noted",
-                "grep, bash: left out, as the read-only sandbox is unavailable (no bwrap)"
+                "write: left out, as subagents run read-only here",
+                "web: not available to subagents here"
+            ]
+        );
+        let missing = Err("no bwrap".to_owned());
+        let (tools, warnings) =
+            child_tools(&agent(Some("read, grep, ls, bash"), ""), &all, &missing);
+        assert_eq!(tools, ["read", "grep", "ls"]);
+        assert_eq!(
+            warnings,
+            [
+                "noted",
+                "bash: left out, as the read-only sandbox is unavailable (no bwrap)"
             ]
         );
     }

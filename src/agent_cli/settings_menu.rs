@@ -10,7 +10,7 @@ use super::theme_editor::ThemeEditor;
 use super::{background, editor, installed, palette, select, style};
 use scramjet_rs::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
-    Publication, Scope, Setting, agent_directory, shortened, unavailable, write_replacing,
+    Publication, Scope, Setting, agent_directory, shortened, write_replacing,
 };
 use std::{
     path::{Path, PathBuf},
@@ -135,8 +135,8 @@ fn tool_note(tool: &str) -> &'static str {
         "bash" => "Execute bash commands",
         "edit" => "Make precise file edits with exact text replacement",
         "write" => "Create or overwrite files",
-        "grep" => "Search file contents for patterns, with ripgrep",
-        "find" => "Find files by glob pattern, with fd",
+        "grep" => "Search file contents for patterns, as ripgrep",
+        "find" => "Find files by glob pattern, as fd",
         _ => "List directory contents",
     }
 }
@@ -454,7 +454,7 @@ impl Interactive {
     }
 
     /// The coding tools, each switched on or off with Enter; the agent has them from its next
-    /// request on. One whose program is missing and cannot be downloaded stays off.
+    /// request on.
     fn choose_tools(&mut self) {
         let mut at = 0;
         loop {
@@ -462,18 +462,11 @@ impl Interactive {
                 return;
             };
             let on = |tool: &str| self.settings.tools.iter().any(|known| known == tool);
-            let missing = unavailable;
             let rows: Vec<String> = (CODING_TOOLS.iter())
                 .map(|tool| format!("[{}] {tool}", if on(tool) { "x" } else { " " }))
                 .collect();
             let notes = (CODING_TOOLS.iter())
-                .map(|tool| match missing(tool) {
-                    Some(program) => format!(
-                        "Needs {program}, which is not installed and SCRAMJET_OFFLINE keeps from \
-                         downloading."
-                    ),
-                    None => tool_note(tool).to_owned(),
-                })
+                .map(|tool| tool_note(tool).to_owned())
                 .collect();
             let picker = select::Picker::select(
                 "Tools",
@@ -490,9 +483,6 @@ impl Interactive {
             };
             at = index;
             let tool = CODING_TOOLS[index];
-            if !on(tool) && missing(tool).is_some() {
-                continue;
-            }
             let mut tools = self.settings.tools.clone();
             match on(tool) {
                 true => tools.retain(|known| known != tool),

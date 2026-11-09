@@ -2490,11 +2490,11 @@ def settings_menu(read, until, send, output):
                          '  before its next request.'], rows
     send(b'\x1b[B' * 16 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
-    assert '\u203a [x] read' in rows and '  [ ] grep' in rows and rows[-1] == '  Read file contents', rows
+    assert '\u203a [x] read' in rows and '  [x] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
-    on_screen('\u203a [x] grep')
+    on_screen('\u203a [ ] grep')
     send(b'\x1b')
-    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep'))
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find, ls'))
     send(b'\x1b')
     ending(read, output, EMPTY)
     # Typed during a turn, it opens at once while the call runs; the turn's next request has what
@@ -2509,7 +2509,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B' * 23 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
-    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, grep, ls'))
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find'))
     send(b'\x1b')
     on_screen('Replied.')
     send(b'\x04')
@@ -3115,13 +3115,13 @@ run([], settings_menu, serve_items([[tool_call('call_1', 'bash', {'command': 'sl
 assert bodies[0]['reasoning']['effort'] == 'high', bodies
 coding = ('read', 'bash', 'edit', 'write', 'grep', 'find', 'ls')
 tools = lambda body: [tool['name'] for tool in body['tools'] if tool['name'] in coding]
-assert tools(bodies[0]) == ['read', 'bash', 'edit', 'write', 'grep'], bodies[0]['tools']
-assert '\n- grep: Search file contents' in bodies[0]['instructions'], bodies[0]['instructions']
-assert tools(bodies[1]) == ['read', 'bash', 'edit', 'write', 'grep', 'ls'], bodies[1]['tools']
-assert '\n- ls: List directory contents' in bodies[1]['instructions'], bodies[1]['instructions']
+assert tools(bodies[0]) == ['read', 'bash', 'edit', 'write', 'find', 'ls'], bodies[0]['tools']
+assert '\n- grep: Search file contents' not in bodies[0]['instructions'], bodies[0]['instructions']
+assert tools(bodies[1]) == ['read', 'bash', 'edit', 'write', 'find'], bodies[1]['tools']
+assert '\n- ls: List directory contents' not in bodies[1]['instructions'], bodies[1]['instructions']
 assert saved(menu_home) == {
     'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
-    'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'tools': ['read', 'bash', 'edit', 'write', 'grep', 'ls'],
+    'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'tools': ['read', 'bash', 'edit', 'write', 'find'],
 }, open(settings_path(menu_home)).read()
 guide = os.path.join(work, 'guide.md')
 with open(guide, 'w') as file:

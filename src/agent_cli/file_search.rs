@@ -1,18 +1,20 @@
-//! `@` file references in the prompt, as Scramjet's editor completes them: `fd` lists the
-//! entries under the project (or a directory the word names) whose names match what follows the
+//! `@` file references in the prompt, as Scramjet's editor completes them: a walk as Scramjet's
+//! `fd` call makes it lists the entries under the project (or a directory the word names) whose names match what follows the
 //! `@`, and the best matches are offered. The text is sent as typed; the model reads the files.
 
 use super::completion::Suggestion;
 use std::{
-    io::Read,
-    path::Path,
-    process::{Child, Command, Stdio},
-    sync::mpsc::{self, TryRecvError},
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, TryRecvError},
+    },
 };
 
 /// Characters that end a word, as Scramjet's autocomplete counts them.
 pub(super) const DELIMITERS: [char; 5] = [' ', '\t', '"', '\'', '='];
-/// How many entries `fd` may list, and how many of the best are offered, as in Scramjet.
+/// How many entries the walk may list, and how many of the best are offered, as in Scramjet.
 const FOUND: usize = 100;
 const OFFERED: usize = 20;
 
@@ -70,22 +72,21 @@ pub(super) fn open_quote(line: &str) -> Option<usize> {
     (line.matches('"').count() % 2 == 1).then(|| line.rfind('"').expect("counted"))
 }
 
-/// `fd` looking for a mention's entries, until it ends or this is dropped.
+/// A walk looking for a mention's entries, until it ends or this is dropped.
 pub(super) struct Search {
     pub(super) mention: Mention,
-    /// What `fd` looks for: the query, or its last part in the directory the rest names.
+    /// What the walk looks for: the query, or its last part in the directory the rest names.
     query: String,
     /// That directory as typed, ending with `/`.
     directory: Option<String>,
-    child: Child,
-    output: mpsc::Receiver<Vec<u8>>,
+    stop: Arc<AtomicBool>,
+    output: mpsc::Receiver<String>,
 }
 
 impl Search {
-    /// Starts `fd` in `root`, or in the directory the mention's query names, as Scramjet's
-    /// `getFuzzyFileSuggestions` runs it. `None` without `fd`.
-    pub(super) fn start(root: &Path, mention: Mention) -> Option<Self> {
-        let program = scramjet_rs::agent::search_program("find")?;
+    /// Starts looking in `root`, or in the directory the mention's query names, as Scramjet's
+    /// `getFuzzyFileSuggestions` runs `fd`.
+    pub(super) fn start(root: &Path, mention: Mention) -> Self {
         let typed = mention.query.replace('\\', "/");
         let scoped = typed.rfind('/').and_then(|slash| {
             let (shown, query) = typed.split_at(slash + 1);
@@ -100,60 +101,30 @@ impl Search {
             Some((base, query, shown)) => (base, query, Some(shown)),
             None => (root.to_path_buf(), typed.clone(), None),
         };
-        let mut command = Command::new(program);
-        command
-            .arg("--base-directory")
-            .arg(&base)
-            .args(["--max-results", &FOUND.to_string()])
-            .args(["--type", "f", "--type", "d", "--follow", "--hidden"])
-            .args([
-                "--exclude",
-                ".git",
-                "--exclude",
-                ".git/*",
-                "--exclude",
-                ".git/**",
-            ]);
-        if query.contains('/') {
-            command.arg("--full-path");
-        }
-        if !query.is_empty() {
-            command.arg("--").arg(pattern(&query));
-        }
-        let mut child = command
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        let mut stdout = child.stdout.take().expect("piped");
+        let stop = Arc::new(AtomicBool::new(false));
         let (send, output) = mpsc::channel();
+        let (walking, wanted) = (stop.clone(), query.clone());
         std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            let _ = stdout.read_to_end(&mut bytes);
-            let _ = send.send(bytes);
+            let _ = send.send(entries(&base, &wanted, &walking));
         });
-        Some(Self {
+        Self {
             mention,
             query,
             directory,
-            child,
+            stop,
             output,
-        })
+        }
     }
 
-    /// The entries offered once `fd` has ended, best first; none when it failed.
+    /// The entries offered once the walk has ended, best first; none when it failed.
     pub(super) fn poll(&mut self) -> Option<Vec<Suggestion>> {
         let output = match self.output.try_recv() {
             Ok(output) => output,
             Err(TryRecvError::Empty) => return None,
-            Err(TryRecvError::Disconnected) => Vec::new(),
+            Err(TryRecvError::Disconnected) => String::new(),
         };
-        if !self.child.wait().is_ok_and(|status| status.success()) {
-            return Some(Vec::new());
-        }
         Some(offered(
-            &String::from_utf8_lossy(&output),
+            &output,
             &self.query,
             self.directory.as_deref(),
             self.mention.quoted,
@@ -163,13 +134,55 @@ impl Search {
 
 impl Drop for Search {
     fn drop(&mut self) {
-        // Does nothing to a process already waited for.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stop.store(true, Ordering::Relaxed);
     }
 }
 
-/// `fd`'s pattern for `query`, as Scramjet's `buildFdPathQuery` makes it: as typed, or for a
+/// The files and directories under `base` matching `query`, one a line relative to `base`,
+/// directories ending with `/`, as `fd --follow --hidden --type f --type d --exclude .git` lists
+/// them: the ignore files honored, the name matched (the whole path for a query with a `/`) by
+/// `pattern`, ignoring case unless the query has a capital. Empty for a pattern that is not a
+/// regular expression.
+fn entries(base: &Path, query: &str, stop: &AtomicBool) -> String {
+    let regex = regex::RegexBuilder::new(&pattern(query))
+        .case_insensitive(!query.chars().any(char::is_uppercase))
+        .build();
+    let Ok(regex) = regex else {
+        return String::new();
+    };
+    let mut walk = ignore::WalkBuilder::new(base);
+    walk.hidden(false)
+        .follow_links(true)
+        .add_custom_ignore_filename(".fdignore")
+        .sort_by_file_name(Ord::cmp)
+        .filter_entry(|entry| entry.file_name() != ".git");
+    let (mut found, mut listed) = (String::new(), 0);
+    for entry in walk.build().flatten() {
+        if stop.load(Ordering::Relaxed) || listed == FOUND {
+            break;
+        }
+        let Some(kind) = entry.file_type().filter(|_| entry.depth() > 0) else {
+            continue;
+        };
+        if !kind.is_file() && !kind.is_dir() {
+            continue;
+        }
+        let matched: PathBuf = match query.contains('/') {
+            true => entry.path().to_owned(),
+            false => entry.file_name().into(),
+        };
+        if !query.is_empty() && !regex.is_match(&matched.to_string_lossy()) {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(base).unwrap_or(entry.path());
+        found += &relative.to_string_lossy();
+        found += if kind.is_dir() { "/\n" } else { "\n" };
+        listed += 1;
+    }
+    found
+}
+
+/// The pattern for `query`, as Scramjet's `buildFdPathQuery` makes it: as typed, or for a
 /// path, its parts escaped and joined by a separator.
 fn pattern(query: &str) -> String {
     if !query.contains('/') {
@@ -198,7 +211,7 @@ fn pattern(query: &str) -> String {
     pattern
 }
 
-/// The best of `fd`'s `output` for `query`, as Scramjet ranks them: by `score`, at most 20, each
+/// The best of the walk's `output` for `query`, as Scramjet ranks them: by `score`, at most 20, each
 /// shown under `directory` when the query named one, and quoted when it has a space or the
 /// mention opened a quote. Windows' `\` are shown as `/`, as Scramjet shows them.
 fn offered(output: &str, query: &str, directory: Option<&str>, quoted: bool) -> Vec<Suggestion> {
@@ -348,11 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn fd_finds_the_entries_of_the_project_or_a_named_directory() {
-        if cfg!(windows) && scramjet_rs::agent::search_program("find").is_none() {
-            eprintln!("passed over: fd is not here");
-            return;
-        }
+    fn a_walk_finds_the_entries_of_the_project_or_a_named_directory() {
         let root = std::env::temp_dir().join(format!("sjrs-file-search-{}", std::process::id()));
         struct Scratch(PathBuf);
         impl Drop for Scratch {
@@ -372,8 +381,7 @@ mod tests {
             fs::write(root.join(file), "").unwrap();
         }
         let found = |query: &str| {
-            let mut search = Search::start(&root, Mention::find(&format!("@{query}")).unwrap())
-                .expect("fd is installed");
+            let mut search = Search::start(&root, Mention::find(&format!("@{query}")).unwrap());
             loop {
                 if let Some(found) = search.poll() {
                     let mut values: Vec<_> = found.into_iter().map(|item| item.value).collect();

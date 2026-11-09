@@ -6,7 +6,7 @@ A terminal coding agent written in Rust: an independent rewrite of Scramjet that
 
 ## Build and run
 
-You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`) on Linux, and fail without it, and under Seatbelt (`sandbox-exec`, built in) on macOS, not yet tried on a Mac; `@` file completion uses `fd`, and the `grep` and `find` tools ripgrep and `fd`: when they are neither on the `PATH` nor in `~/.scramjet/agent/bin`, scramjet-rs downloads their latest release from GitHub into that directory, as Scramjet does, at the full screen's start or at the tool's first call (`SCRAMJET_OFFLINE=1` turns that off).
+You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`) on Linux, and fail without it, and under Seatbelt (`sandbox-exec`, built in) on macOS, not yet tried on a Mac. The agent has all seven tools by default (read, bash, edit, write, grep, find, ls; `tools` in `/settings` narrows them); `grep`, `find` and `@` file completion are built in, with ripgrep's libraries, so neither ripgrep nor `fd` is needed.
 
 ```sh
 cd /path/to/scramjet-rs
@@ -120,6 +120,6 @@ cargo clippy --offline --locked --all-targets -- -D warnings
 cargo test --offline --locked --no-fail-fast   # about a minute
 ```
 
-The tests need Python 3's standard library, `timeout`, Bubblewrap, ripgrep and `fd`; they use local scripted servers, never a real provider. To look at a display change, `uv run scripts/screens.py scripts/screens/sample.json /tmp/shots --set look=rails` (or `scripts/screens/start.json --set banner=logo` for a start) plays a scripted session on the release build and writes its screens as PNG and ANSI text (`cat` it); `uv` fetches the script's two Python packages on first use. Development runs inside Scramjet as a loop: `/rs:loop` builds and commits one increment per session, `/rs:review` checks risky changes, `/rs:steer` reviews direction with you, including the `Choice:` trailers in commits.
+The tests need Python 3's standard library, `timeout` and Bubblewrap; they use local scripted servers, never a real provider. To look at a display change, `uv run scripts/screens.py scripts/screens/sample.json /tmp/shots --set look=rails` (or `scripts/screens/start.json --set banner=logo` for a start) plays a scripted session on the release build and writes its screens as PNG and ANSI text (`cat` it); `uv` fetches the script's two Python packages on first use. Development runs inside Scramjet as a loop: `/rs:loop` builds and commits one increment per session, `/rs:review` checks risky changes, `/rs:steer` reviews direction with you, including the `Choice:` trailers in commits.
 
 [CLAUDE.md](CLAUDE.md) holds the development rules, [docs/DESIGN.md](docs/DESIGN.md) the direction and invariants, [docs/ROADMAP.md](docs/ROADMAP.md) the stages, and [docs/TASKS.md](docs/TASKS.md) the pending work. [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) inventories the pinned dependencies' licenses. Licensed under [Apache-2.0](LICENSE).

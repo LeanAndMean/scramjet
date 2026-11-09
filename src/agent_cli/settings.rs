@@ -10,7 +10,7 @@ use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
     CODING_TOOLS, Compacting, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Retries, SandboxMode,
-    Set, offline, sets_in, shortened, state_directory, unavailable, write_replacing,
+    Set, offline, sets_in, shortened, state_directory, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -1409,19 +1409,16 @@ impl Settings {
         self.path.as_deref().map(shown)
     }
 
-    /// The coding tools `names` lists that there are and that can run here.
+    /// The coding tools `names` lists that there are.
     fn read_tools(&mut self, path: &str, names: &[Value]) -> Vec<String> {
         let mut tools: Vec<String> = Vec::new();
         for name in names {
             match name.as_str() {
-                Some(tool) if CODING_TOOLS.contains(&tool) => match unavailable(tool) {
-                    Some(program) => self.warnings.push(format!(
-                        "{path}: tools: {tool} left out, as {program} is not installed and \
-                             SCRAMJET_OFFLINE turns its download off"
-                    )),
-                    None if !tools.iter().any(|known| known == tool) => tools.push(tool.to_owned()),
-                    None => {}
-                },
+                Some(tool) if CODING_TOOLS.contains(&tool) => {
+                    if !tools.iter().any(|known| known == tool) {
+                        tools.push(tool.to_owned());
+                    }
+                }
                 _ => self.warnings.push(format!(
                     "{path}: tools: {name} is not one of {}; ignored",
                     CODING_TOOLS.join(", ")
@@ -2026,7 +2023,7 @@ mod tests {
     }
 
     #[test]
-    fn without_a_file_the_defaults_are_scramjets() {
+    fn without_a_file_the_defaults_hold() {
         let scratch = Scratch::new("missing");
         let settings = Settings::read(Some(scratch.0.join("config/settings.json")));
         assert!(!settings.hide_thinking_block);
@@ -2036,7 +2033,7 @@ mod tests {
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert_eq!(settings.default_thinking_level, None);
-        assert_eq!(settings.tools, ["read", "bash", "edit", "write"]);
+        assert_eq!(settings.tools, CODING_TOOLS);
         assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
         assert_eq!(settings.steering_mode, Delivery::All);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
@@ -2365,7 +2362,7 @@ mod tests {
         let none = settings_with(&scratch, r#"{"tools": []}"#);
         assert!(none.tools.is_empty() && none.warnings.is_empty());
         let wrong = settings_with(&scratch, r#"{"tools": "read,grep"}"#);
-        assert_eq!(wrong.tools, ["read", "bash", "edit", "write"]);
+        assert_eq!(wrong.tools, CODING_TOOLS);
         assert_eq!(
             wrong.warnings,
             [format!(

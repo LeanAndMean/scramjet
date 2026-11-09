@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.127.0 — All seven tools by default; grep and find built in
+
+### Changed
+
+- The agent has all seven tools by default: read, bash, edit, write, grep, find and ls (`tools` in `/settings` narrows them).
+- `grep`, `find` and `@` file completion are built in, with ripgrep's libraries: nothing is downloaded into `~/.scramjet/agent/bin` and neither ripgrep nor `fd` is needed. They answer as before, ignore files honored and credential stores left out.
+- A subagent whose file lists no `tools:` gets the read-only ones of the agent's own tools, as Claude Code's inherit; `disallowedTools` in its file removes some. Subagents keep `grep` and `find` where the read-only sandbox is missing, as on Windows.
+
 ## 0.126.1 — Ctrl+Backspace on native Windows, selections across a wrapped row
 
 ### Fixed

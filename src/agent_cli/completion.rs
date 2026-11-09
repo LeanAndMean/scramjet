@@ -139,13 +139,13 @@ impl Lookup {
         mention: file_search::Mention,
         buffer: &Buffer,
         tab: bool,
-    ) -> Option<Self> {
-        Some(Self {
-            search: file_search::Search::start(root, mention)?,
+    ) -> Self {
+        Self {
+            search: file_search::Search::start(root, mention),
             text: buffer.text.clone(),
             cursor: buffer.cursor,
             tab,
-        })
+        }
     }
 }
 

@@ -16,10 +16,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod download;
 mod matching;
+mod search;
 
-pub use download::{download_missing, offline, unavailable};
+/// `SCRAMJET_OFFLINE` (or `PI_OFFLINE`): no downloads or clones, as in Scramjet.
+pub fn offline() -> bool {
+    let value = std::env::var("SCRAMJET_OFFLINE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var("PI_OFFLINE").ok())
+        .unwrap_or_default()
+        .to_lowercase();
+    matches!(value.as_str(), "1" | "true" | "yes")
+}
 
 pub(super) const MAX_LINES: usize = 2000;
 pub(super) const MAX_BYTES: usize = 50 * 1024;
@@ -51,8 +60,9 @@ const DIFF_CONTEXT: usize = 4;
 
 /// The coding tools the agent can be given, in the order the model sees them.
 pub const CODING_TOOLS: [&str; 7] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
-/// Scramjet's, which the agent has unless the settings list others.
-pub const DEFAULT_TOOLS: [&str; 4] = ["read", "bash", "edit", "write"];
+/// What the agent has unless the settings list others: all of them (Scramjet's are the first
+/// four).
+pub const DEFAULT_TOOLS: [&str; 7] = CODING_TOOLS;
 
 /// The harness's own tools, which the model sees after the coding tools, in this order.
 pub const HARNESS_TOOLS: [&str; 12] = [
@@ -301,7 +311,7 @@ impl<'a> Call<'a> {
     }
     /// `progress` receives the end of a running command's output as it grows. With `hidden`, the
     /// tools do not show or change the credential stores: a path in them is refused, `grep` and
-    /// `find` run in the read-only sandbox and bash with the stores hidden.
+    /// `find` leave them out and bash runs with them hidden.
     pub fn run(
         &self,
         root: &Path,
@@ -370,7 +380,7 @@ impl<'a> Call<'a> {
     }
 
     /// As `run` for a subagent's tools, none of which changes a file or shows the credential
-    /// stores `hidden`: bash, `grep` and `find` run in the read-only sandbox.
+    /// stores `hidden`: bash runs in the read-only sandbox.
     pub fn run_read_only(
         &self,
         root: &Path,
@@ -1404,44 +1414,6 @@ fn with_notices(lines: &[String], mut notices: Vec<String>) -> String {
     output
 }
 
-/// Where `rg` (for `grep`) or `fd` (for `find`) is, as Pi finds them: in Scramjet's `bin`
-/// directory, else on the `PATH` (`fd` also as Debian's `fdfind`).
-pub fn search_program(tool: &str) -> Option<PathBuf> {
-    let (binary, names): (&str, &[&str]) = match tool {
-        "grep" => ("rg", &["rg"]),
-        _ => ("fd", &["fd", "fdfind"]),
-    };
-    let executable = |path: &Path| std::fs::metadata(path).is_ok_and(|m| crate::os::executable(&m));
-    let binary = crate::os::program_file(binary);
-    let local = super::subagent::agent_directory().map(|dir| dir.join("bin").join(binary));
-    if let Some(local) = local.filter(|path| executable(path)) {
-        return Some(local);
-    }
-    let path = std::env::var_os("PATH")?;
-    names.iter().find_map(|name| {
-        std::env::split_paths(&path)
-            .map(|directory| directory.join(crate::os::program_file(name)))
-            .find(|candidate| executable(candidate))
-    })
-}
-
-/// `program` searching `path`: confined when there are credential stores to hide.
-fn search(
-    root: &Path,
-    path: &Path,
-    program: &Path,
-    hidden: Option<&Hidden>,
-) -> Result<Command, String> {
-    match hidden {
-        Some(hidden) => sandbox::program(root, path, program, hidden),
-        None => {
-            let mut command = Command::new(program);
-            command.current_dir(root);
-            Ok(command)
-        }
-    }
-}
-
 /// The process groups of the commands running, which `end_commands` kills.
 static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
@@ -1496,73 +1468,9 @@ pub(super) fn end_commands() {
     std::mem::forget(groups);
 }
 
-/// Runs `command` until it ends, `cancel` is set or `line` returns false for a line of its
-/// standard output: its exit status, `None` when `line` stopped it, and the start of its
-/// standard error.
-fn run_lines(
-    mut command: Command,
-    cancel: &AtomicBool,
-    mut line: impl FnMut(&[u8]) -> bool,
-) -> Result<(Option<ExitStatus>, String), String> {
-    use std::{io::BufRead, sync::mpsc};
-    let program = command.get_program().to_string_lossy().into_owned();
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let (mut child, group) =
-        Group::spawn(&mut command).map_err(|e| format!("cannot start {program}: {e}"))?;
-    let kill = || group.kill();
-    let mut errors = child.stderr.take().unwrap();
-    let stderr = std::thread::spawn(move || {
-        let (mut kept, mut buffer) = (Vec::new(), [0u8; 8192]);
-        while let Ok(n) = errors.read(&mut buffer) {
-            if n == 0 {
-                break;
-            }
-            let room = OUTPUT_TAIL_BYTES.saturating_sub(kept.len()).min(n);
-            kept.extend_from_slice(&buffer[..room]);
-        }
-        kept
-    });
-    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
-    let (stopped, cancelled) = std::thread::scope(|scope| {
-        let (finished, wait) = mpsc::channel::<()>();
-        let watcher = scope.spawn(move || {
-            while let Err(mpsc::RecvTimeoutError::Timeout) =
-                wait.recv_timeout(Duration::from_millis(20))
-            {
-                if cancel.load(Ordering::Relaxed) {
-                    kill();
-                    return true;
-                }
-            }
-            false
-        });
-        let (mut buffer, mut stopped) = (Vec::new(), false);
-        while matches!(stdout.read_until(b'\n', &mut buffer), Ok(n) if n > 0) {
-            if !line(&buffer) {
-                kill();
-                stopped = true;
-                break;
-            }
-            buffer.clear();
-        }
-        drop(finished);
-        (stopped, watcher.join().unwrap_or(true))
-    });
-    let status = child.wait().map_err(|e| e.to_string())?;
-    let stderr = String::from_utf8_lossy(&stderr.join().unwrap_or_default()).into_owned();
-    match () {
-        _ if cancelled || cancel.load(Ordering::Relaxed) => Err("Operation aborted".into()),
-        _ if stopped => Ok((None, stderr)),
-        _ => Ok((Some(status), stderr)),
-    }
-}
-
-/// Pi's `grep`: ripgrep's matches as `path:line: text`, context lines read from the file as
-/// `path-line- text`, paths relative to a directory searched. With `hidden`, ripgrep runs in the
-/// read-only sandbox, which hides them.
+/// Pi's `grep`: the matches as `path:line: text`, context lines read from the file as
+/// `path-line- text`, paths relative to a directory searched. With `hidden`, the stores are left
+/// out of the search.
 fn grep(
     root: &Path,
     call: &Call,
@@ -1577,63 +1485,26 @@ fn grep(
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(GREP_LIMIT, |n| n.max(1) as usize);
-    let program = download::ensure_unless("grep", cancel)?;
-    let mut command = search(root, &path, &program, hidden)?;
-    command.args(["--json", "--line-number", "--color=never", "--hidden"]);
-    if call.arguments["ignoreCase"] == true {
-        command.arg("--ignore-case");
-    }
-    if call.arguments["literal"] == true {
-        command.arg("--fixed-strings");
-    }
-    if let Some(glob) = call.arguments["glob"].as_str() {
-        command.arg("--glob").arg(glob);
-    }
-    command.arg("--").arg(pattern).arg(&path);
-    let (mut found, mut limited) = (Vec::new(), false);
-    // rg stops at the match after the last one shown, which tells that there are more.
-    let (status, stderr) = run_lines(command, cancel, |line| {
-        let Ok(event) = serde_json::from_slice::<Value>(line) else {
-            return true;
-        };
-        let data = &event["data"];
-        let (true, Some(file), Some(number)) = (
-            event["type"] == "match",
-            data["path"]["text"].as_str(),
-            data["line_number"].as_u64(),
-        ) else {
-            return true;
-        };
-        if found.len() == limit {
-            limited = true;
-            return false;
-        }
-        let text = data["lines"]["text"].as_str().map(str::to_owned);
-        found.push((file.to_owned(), number as usize, text));
-        true
-    })?;
+    let options = search::Grep {
+        pattern,
+        ignore_case: call.arguments["ignoreCase"] == true,
+        literal: call.arguments["literal"] == true,
+        glob: call.arguments["glob"].as_str(),
+        limit,
+    };
+    let (found, limited) = search::grep(root, &path, &options, hidden, cancel)?;
     if found.is_empty() {
-        return match status.and_then(|status| status.code()) {
-            // The sandbox's own failures exit with 1 too.
-            Some(0 | 1) if !stderr.starts_with(sandbox::FAILED) => Ok("No matches found".into()),
-            code => Err(match stderr.trim() {
-                "" => format!("ripgrep exited with code {}", code.unwrap_or(-1)),
-                error => error.to_owned(),
-            }),
-        };
+        return Ok("No matches found".into());
     }
-    let shown = |file: &str| {
-        let file = Path::new(file);
-        match file.strip_prefix(&path) {
-            Ok(relative) if metadata.is_dir() && !relative.as_os_str().is_empty() => {
-                relative.display().to_string()
-            }
-            _ => file
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
+    let shown = |file: &Path| match file.strip_prefix(&path) {
+        Ok(relative) if metadata.is_dir() && !relative.as_os_str().is_empty() => {
+            relative.display().to_string()
         }
+        _ => file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
     };
     let mut long = false;
     let mut cut = |text: &str| match text.char_indices().nth(GREP_LINE_CHARS) {
@@ -1643,17 +1514,17 @@ fn grep(
         }
         None => text.to_owned(),
     };
-    // As in Pi, a line rg gives as bytes rather than text, and context, come from the file.
-    let mut files: std::collections::HashMap<String, Vec<String>> = Default::default();
+    // As in Pi, context comes from the file.
+    let mut files: std::collections::HashMap<&Path, Vec<String>> = Default::default();
     let mut lines = Vec::new();
-    for (file, number, text) in &found {
-        if let (0, Some(text)) = (context, text) {
+    for search::Matched { file, number, text } in &found {
+        if context == 0 {
             let text = text.trim_end_matches(['\n', '\r']).replace('\r', "");
             lines.push(format!("{}:{number}: {}", shown(file), cut(&text)));
             continue;
         }
-        let content = files.entry(file.clone()).or_insert_with(|| {
-            std::fs::read(file).map_or_else(
+        let content = files.entry(file).or_insert_with(|| {
+            contents(file, hidden).map_or_else(
                 |_| Vec::new(),
                 |bytes| {
                     String::from_utf8_lossy(&bytes)
@@ -1693,8 +1564,8 @@ fn grep(
     Ok(with_notices(&lines, notices))
 }
 
-/// Pi's `find`: fd's paths matching a glob, relative to the directory searched; in the sandbox
-/// with `hidden`, as `grep`.
+/// Pi's `find`: the paths matching a glob, relative to the directory searched; the stores left
+/// out with `hidden`, as `grep`.
 fn find(
     root: &Path,
     call: &Call,
@@ -1709,52 +1580,9 @@ fn find(
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
-    let program = download::ensure_unless("find", cancel)?;
-    let mut command = search(root, &path, &program, hidden)?;
-    command.args([
-        "--glob",
-        "--color=never",
-        "--hidden",
-        "--no-require-git",
-        "--max-results",
-    ]);
-    command.arg(limit.to_string());
-    // As in Pi: fd matches a glob against the base name unless `--full-path` is set, and then
-    // against the absolute path, so a pattern with a `/` gets a leading `**/`.
-    let mut pattern = pattern.to_owned();
-    if pattern.contains('/') {
-        command.arg("--full-path");
-        if !pattern.starts_with('/') && !pattern.starts_with("**/") && pattern != "**" {
-            pattern = format!("**/{pattern}");
-        }
-    }
-    command.arg("--").arg(&pattern).arg(&path);
-    let mut found = Vec::new();
-    let (status, stderr) = run_lines(command, cancel, |line| {
-        let line = String::from_utf8_lossy(line);
-        let line = line.trim();
-        if !line.is_empty() {
-            found.push(match Path::new(line).strip_prefix(&path) {
-                Ok(relative) => {
-                    let slash = if line.ends_with('/') { "/" } else { "" };
-                    format!("{}{slash}", relative.display())
-                }
-                Err(_) => line.to_owned(),
-            });
-        }
-        true
-    })?;
+    let found = search::find(&path, pattern, limit, hidden, cancel)?;
     if found.is_empty() {
-        return match status.filter(ExitStatus::success) {
-            Some(_) => Ok("No files found matching pattern".into()),
-            None => Err(match stderr.trim() {
-                "" => format!(
-                    "fd exited with code {}",
-                    status.and_then(|status| status.code()).unwrap_or(-1)
-                ),
-                error => error.to_owned(),
-            }),
-        };
+        return Ok("No files found matching pattern".into());
     }
     let limited = (found.len() >= limit).then(|| {
         format!(
@@ -2600,11 +2428,6 @@ inline image size limit.]",
 
     #[test]
     fn read_only_search_tools_answer_as_pis_do() {
-        let missing = crate::agent::tests::missing;
-        if cfg!(windows) && (missing("rg") || missing("fd")) {
-            return;
-        }
-        assert!(search_program("grep").is_some() && search_program("find").is_some());
         let root =
             std::env::temp_dir().join(format!("scramjet-agent-search-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
@@ -2634,7 +2457,15 @@ inline image size limit.]",
         let run = |name: &str, arguments: Value| {
             call(name, arguments).run_read_only(&root, &Hidden::current(&[]), &cancel)
         };
-        let text = |name: &str, arguments: Value| run(name, arguments).unwrap().text;
+        // Shown with the system's separator, as rg and fd show them.
+        let text = |name: &str, arguments: Value| {
+            let text = run(name, arguments).unwrap().text;
+            if cfg!(windows) {
+                text.replace('\\', "/")
+            } else {
+                text
+            }
+        };
         assert_eq!(
             text("grep", json!({"pattern":"fn alpha","path":"src"})),
             "a.rs:1: fn alpha() {}"
@@ -2750,6 +2581,31 @@ to see full lines]",
         );
         assert!(run("write", json!({"path":"x","content":""})).is_err());
         assert!(!root.join("x").exists());
+    }
+
+    #[test]
+    fn a_search_walking_past_the_stores_leaves_them_out() {
+        let home = std::env::temp_dir().join(format!("scramjet-agent-walk-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::create_dir_all(home.join("project")).unwrap();
+        std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
+        std::fs::write(home.join(".ssh/id_x"), "SECRET-key\n").unwrap();
+        std::fs::write(home.join("project/a.txt"), "SECRET-not\n").unwrap();
+        let hidden = Hidden::under(&home, Vec::new());
+        let cancel = AtomicBool::new(false);
+        let run = |name: &str, arguments: Value| {
+            let ran = call(name, arguments).run_read_only(&home, &hidden, &cancel);
+            ran.unwrap().text.replace('\\', "/")
+        };
+        assert_eq!(
+            run("grep", json!({"pattern":"SECRET"})),
+            "project/a.txt:1: SECRET-not"
+        );
+        assert_eq!(
+            run("find", json!({"pattern":"*"})),
+            "project/\nproject/a.txt"
+        );
     }
 
     #[cfg(unix)]
@@ -3171,6 +3027,7 @@ to see full lines]",
         std::fs::write(home.join(".ssh/id_x"), "SECRET-key\n").unwrap();
         std::fs::write(root.join("a.txt"), "plain SECRET-not\n").unwrap();
         std::os::unix::fs::symlink(home.join(".netrc"), root.join("link")).unwrap();
+        std::fs::hard_link(home.join(".netrc"), root.join("hard")).unwrap();
         std::fs::create_dir_all(home.join("other")).unwrap();
         std::fs::write(home.join("other/f.txt"), "needle\n").unwrap();
         std::os::unix::fs::symlink(home.join("other"), root.join("abs")).unwrap();
@@ -3241,33 +3098,6 @@ to see full lines]",
             let searched = run("grep", json!({"pattern":"SECRET","path":alias}));
             assert!(!format!("{searched:?}").contains("SECRET-"), "{searched:?}");
         }
-    }
-
-    #[test]
-    #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
-    fn a_search_stops_its_program_when_done_or_cancelled() {
-        let started = Instant::now();
-        let mut command = Command::new("sh");
-        command.args(["-c", "echo one; echo two; sleep 30"]);
-        let mut lines = Vec::new();
-        let (status, _) = run_lines(command, &AtomicBool::new(false), |line| {
-            lines.push(line.to_owned());
-            false
-        })
-        .unwrap();
-        assert_eq!((status, lines), (None, vec![b"one\n".to_vec()]));
-        let cancel = AtomicBool::new(false);
-        let stopped = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(100));
-                cancel.store(true, Ordering::Relaxed);
-            });
-            let mut command = Command::new("sh");
-            command.args(["-c", "sleep 30 & sleep 30"]);
-            run_lines(command, &cancel, |_| true)
-        });
-        assert_eq!(stopped.unwrap_err(), "Operation aborted");
-        assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[test]

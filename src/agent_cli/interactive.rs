@@ -124,15 +124,6 @@ impl Interactive {
                 if let Ok(relisting) = screen.relisting() {
                     super::login::keep_lists_current(relisting, kept.clone());
                 }
-                // As Scramjet's start, which downloads them for grep, find and @ completion.
-                if let Ok(relisting) = screen.relisting() {
-                    std::thread::spawn(move || {
-                        let notes = scramjet_rs::agent::download_missing();
-                        if !notes.is_empty() {
-                            relisting.changed(notes);
-                        }
-                    });
-                }
                 Some(screen)
             }
             false => None,
