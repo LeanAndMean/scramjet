@@ -4,6 +4,14 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.123.0 — Bash calls a model can find and stop
+
+### Changed
+
+- A bash call without a `timeout` now stops after 30 minutes, so a command that hangs for good ends; a longer `timeout` still holds.
+- Each call's shell is named `scramjet-rs-bash-PID-N` (its `$0`, also in its error messages), so `ps` tells the calls apart and `pkill -f` stops one.
+- A call that ends while processes it started still run lists them in its result, with their process group and the `kill -- -GROUP` that stops them all.
+
 ## 0.122.0 — Project command sets approve their own publications again
 
 ### Changed

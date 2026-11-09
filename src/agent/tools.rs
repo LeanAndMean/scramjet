@@ -142,7 +142,7 @@ fn definition(name: &str, sandboxed: bool) -> Value {
          },
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"Bash command to execute"},
-            "timeout":{"type":"integer","description":"Seconds before the command is killed (none by default)"}},
+            "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
           "required":["command"]}}),
         "grep" => json!({"type":"function","name":"grep","strict":false,
         "description":format!("Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to {GREP_LIMIT} matches or {}KB (whichever is hit first). Long lines are truncated to {GREP_LINE_CHARS} chars.", MAX_BYTES / 1024),
@@ -1302,12 +1302,17 @@ pub fn sequence_diff<'a>(old: &[&'a str], new: &[&'a str], ops: &mut Vec<(char, 
     ops.extend(old[old.len() - suffix..].iter().map(|line| (' ', *line)));
 }
 
-/// The call's `timeout`, if positive; none by default, as Scramjet's bash.
+/// How long a bash call runs when it gives no `timeout`: long, but a command that hangs ends.
+const BASH_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// The call's `timeout`, if positive, or `BASH_TIMEOUT`.
 fn timeout(call: &Call) -> Option<Duration> {
-    call.arguments["timeout"]
+    let seconds = call.arguments["timeout"]
         .as_f64()
-        .filter(|&seconds| seconds > 0.0)
-        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+        .filter(|&seconds| seconds > 0.0);
+    Some(seconds.map_or(BASH_TIMEOUT, |seconds| {
+        Duration::try_from_secs_f64(seconds).unwrap_or(Duration::MAX)
+    }))
 }
 
 fn bash(
@@ -1807,13 +1812,18 @@ pub(super) const COMMAND_VARIABLE: &str = "SCRAMJET_RS_COMMAND";
 
 /// Gives `process`, bash or a sandbox about to start it, `-c` and `command` in the environment
 /// rather than in its arguments, so that no process's command line holds it: a `pkill -f` or
-/// `pgrep -f` with a pattern from the command would otherwise find the shell running it.
+/// `pgrep -f` with a pattern from the command would otherwise find the shell running it. Its `$0`,
+/// `scramjet-rs-bash-PID-N`, tells each command's shells apart in `ps`, and lets `pkill -f`
+/// find those it left running.
 pub(super) fn bash_runs(process: &mut Command, command: &str) {
+    static SHELLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let number = SHELLS.fetch_add(1, Ordering::Relaxed);
     process
         .arg("-c")
         .arg(format!(
             "eval \"unset {COMMAND_VARIABLE}; ${COMMAND_VARIABLE}\""
         ))
+        .arg(format!("scramjet-rs-bash-{}-{number}", std::process::id()))
         .env(COMMAND_VARIABLE, prefixed(command));
 }
 
@@ -1915,6 +1925,7 @@ fn run_process(
     while !collector.is_finished() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
+    let left = stopped.is_none().then(|| left_running(group.0)).flatten();
     let bytes = output.lock().unwrap().clone();
     let (mut text, truncated) = tail(&String::from_utf8_lossy(&bytes));
     if truncated || total.load(Ordering::Relaxed) > bytes.len() {
@@ -1930,7 +1941,59 @@ fn run_process(
         stopped,
         status,
         elapsed: started.elapsed(),
+        left,
     })
+}
+
+/// What still runs in process group `group` after the command that led it ended: the group, and
+/// each process's id and command line.
+#[cfg(unix)]
+fn left_running(group: u32) -> Option<String> {
+    const LISTED: usize = 20;
+    let pid = rustix::process::Pid::from_raw(i32::try_from(group).ok()?)?;
+    if rustix::process::test_kill_process_group(pid) == Err(rustix::io::Errno::SRCH) {
+        return None;
+    }
+    let listed = Command::new("ps")
+        .args(["-A", "-o", "pid=", "-o", "pgid=", "-o", "args="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|listed| String::from_utf8_lossy(&listed.stdout).into_owned())
+        .unwrap_or_default();
+    let group_text = group.to_string();
+    let processes: Vec<String> = listed
+        .lines()
+        .filter_map(|line| {
+            let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
+            let (pgid, args) = rest.trim_start().split_once(char::is_whitespace)?;
+            let args = args.trim();
+            let args = match args.char_indices().nth(200) {
+                Some((at, _)) => format!("{}…", &args[..at]),
+                None => args.to_owned(),
+            };
+            (pgid == group_text).then(|| format!("{pid} {args}"))
+        })
+        .collect();
+    let mut text = format!(
+        "Processes it started still run in its process group {group}; \
+         `kill -- -{group}` stops them all"
+    );
+    if !processes.is_empty() {
+        text += ":";
+    }
+    for process in processes.iter().take(LISTED) {
+        text += &format!("\n{process}");
+    }
+    if processes.len() > LISTED {
+        text += &format!("\n… and {} more", processes.len() - LISTED);
+    }
+    Some(text)
+}
+
+#[cfg(not(unix))]
+fn left_running(_: u32) -> Option<String> {
+    None
 }
 
 /// A command that has ended: the end of its output, with a note when earlier output was left out,
@@ -1941,6 +2004,8 @@ pub(super) struct Ran {
     stopped: Option<&'static str>,
     status: ExitStatus,
     elapsed: Duration,
+    /// What it started that still runs after it ended (`left_running`).
+    left: Option<String>,
 }
 
 impl Ran {
@@ -1950,12 +2015,16 @@ impl Ran {
         let ending = match (self.stopped, self.status.code()) {
             (Some(reason), _) => format!("Command {reason} after {}s", self.elapsed.as_secs()),
             (None, Some(0)) => {
+                let mut text = if self.output.is_empty() {
+                    "(no output)".into()
+                } else {
+                    self.output.clone()
+                };
+                if let Some(left) = &self.left {
+                    text = format!("{}\n\n{left}", text.trim_end_matches('\n'));
+                }
                 return Output {
-                    text: if self.output.is_empty() {
-                        "(no output)".into()
-                    } else {
-                        self.output.clone()
-                    },
+                    text,
                     detail: None,
                     failed: false,
                     image: None,
@@ -1964,10 +2033,13 @@ impl Ran {
             (None, Some(code)) => format!("Command exited with code {code}"),
             (None, None) => format!("Command terminated ({})", self.status),
         };
-        let text = match self.output.trim_end_matches('\n') {
+        let mut text = match self.output.trim_end_matches('\n') {
             "" => ending,
             output => format!("{output}\n\n{ending}"),
         };
+        if let Some(left) = &self.left {
+            text = format!("{text}\n\n{left}");
+        }
         Output {
             text,
             detail: None,
@@ -1989,6 +2061,9 @@ impl Ran {
             text += "\n\n(command cancelled)";
         } else if let Some(code) = self.status.code().filter(|code| *code != 0) {
             text += &format!("\n\nCommand exited with code {code}");
+        }
+        if let Some(left) = &self.left {
+            text += &format!("\n\n{left}");
         }
         text
     }
@@ -2407,18 +2482,18 @@ inline image size limit.]",
         let (timed, failed) = bash("echo started; sleep 30");
         assert!(timed.starts_with("started\n\nCommand timed out after ") && failed);
         let limit = |arguments: Value| timeout(&call("bash", arguments));
-        assert_eq!(limit(json!({"command":"x"})), None);
-        assert_eq!(limit(json!({"timeout":0})), None);
-        assert_eq!(limit(json!({"timeout":"60"})), None);
+        assert_eq!(limit(json!({"command":"x"})), Some(BASH_TIMEOUT));
+        assert_eq!(limit(json!({"timeout":0})), Some(BASH_TIMEOUT));
+        assert_eq!(limit(json!({"timeout":"60"})), Some(BASH_TIMEOUT));
         assert_eq!(
-            limit(json!({"timeout":600})),
-            Some(Duration::from_secs(600))
+            limit(json!({"timeout":3600})),
+            Some(Duration::from_secs(3600))
         );
         assert_eq!(
             limit(json!({"timeout":1.5})),
             Some(Duration::from_millis(1500))
         );
-        assert_eq!(limit(json!({"timeout":1e300})), None);
+        assert_eq!(limit(json!({"timeout":1e300})), Some(Duration::MAX));
         let mut shown = Vec::new();
         call(
             "bash",
@@ -2965,6 +3040,70 @@ to see full lines]",
             left.stdout.is_empty(),
             "{}",
             String::from_utf8_lossy(&left.stdout)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_loop_a_command_leaves_running_can_be_found_and_stopped() {
+        let root = std::env::temp_dir().join(format!("scramjet-agent-left-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        let cancel = AtomicBool::new(false);
+        let bash = |command: &str| {
+            call("bash", json!({"command": command}))
+                .run(&root, None, &cancel, &mut |_| {})
+                .unwrap()
+                .text
+        };
+        let name = format!("scramjet-rs-bash-{}-", std::process::id());
+        let (first, second) = (bash("echo $0"), bash("echo $0"));
+        assert!(
+            first.starts_with(&name) && second.starts_with(&name),
+            "{first}"
+        );
+        assert_ne!(first, second);
+        assert_eq!(bash("sleep 0.1 & wait; echo done"), "done\n");
+        let text = bash("while true; do sleep 0.05; done >/dev/null 2>&1 & echo started");
+        let group = text
+            .split("`kill -- -")
+            .nth(1)
+            .and_then(|rest| rest.split('`').next())
+            .expect(&text)
+            .to_owned();
+        assert!(
+            text.starts_with(&format!(
+                "started\n\nProcesses it started still run in its process group {group}; \
+                 `kill -- -{group}` stops them all:\n"
+            )),
+            "{text}"
+        );
+        let shell = text.lines().find(|line| line.contains(&name)).expect(&text);
+        let named = shell.rsplit(' ').next().unwrap().to_owned();
+        assert!(named.starts_with(&name) && named != first.trim(), "{text}");
+        let killed = Command::new("pkill")
+            .args(["-f", &format!("{named}$")])
+            .status()
+            .unwrap();
+        assert!(killed.success(), "{text}");
+        let gone = (0..100).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            left_running(group.parse().unwrap()).is_none()
+        });
+        crate::os::kill_group(group.parse().unwrap());
+        assert!(gone, "{text}");
+        let hidden = call(
+            "bash",
+            json!({"command": "sleep 30 >/dev/null 2>&1 & echo started"}),
+        )
+        .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
+        .unwrap()
+        .text;
+        let group = hidden.split("`kill -- -").nth(1).expect(&hidden);
+        let group: u32 = group.split('`').next().unwrap().parse().unwrap();
+        crate::os::kill_group(group);
+        assert!(
+            hidden.lines().any(|line| line.ends_with(" sleep 30")),
+            "{hidden}"
         );
     }
 
