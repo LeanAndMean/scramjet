@@ -1,0 +1,158 @@
+# Builds, tests and packs scramjet-rs for each platform, and publishes the GitHub release when a
+# version tag (vX.Y.Z) is pushed. Run by hand, it does the same without publishing: a rehearsal
+# whose archives stay a day. Never on every push: macOS minutes cost about ten times Linux's.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      windows-tests:
+        description: Also run the tests on windows-latest (not otherwise run there)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            platform: aarch64-linux
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+      - name: Tools the tests use
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends bubblewrap tmux ripgrep fd-find
+          # Ubuntu 24.04 keeps unprivileged user namespaces, which bubblewrap needs, from programs
+          # AppArmor does not name.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Tests
+        run: cargo test --locked --no-fail-fast
+      - name: Release build for glibc 2.31
+        run: |
+          cargo fetch --locked
+          scripts/build-linux.sh
+      - name: Pack and smoke-test
+        run: |
+          archive=$(scripts/package.sh target/glibc-2.31/release/scramjet-rs ${{ matrix.platform }})
+          python3 scripts/smoke.py "$archive"
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" scramjet-rs-focal \
+            python3 scripts/smoke.py --unhidden "$archive"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/*.tar.gz
+          retention-days: 1
+
+  windows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Release build with MinGW
+        run: |
+          cargo fetch --locked
+          scripts/build-windows.sh --release
+          scripts/package.sh target/x86_64-pc-windows-gnu/release/scramjet-rs.exe x86_64-windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-windows
+          path: dist/*.tar.gz
+          retention-days: 1
+
+  windows-tests:
+    if: github.event_name == 'workflow_dispatch' && inputs.windows-tests
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Tests
+        run: cargo test --locked --no-fail-fast
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Tools the tests use
+        run: brew install tmux ripgrep fd
+      - name: Tests
+        run: cargo test --locked --no-fail-fast
+      - name: Release builds
+        run: |
+          cargo build --locked --release
+          cargo build --locked --release --target x86_64-apple-darwin
+      - name: Sandbox checks
+        # Seatbelt's checks have not run before on a Mac (docs/TASKS.md): their findings are shown
+        # without holding the release back.
+        continue-on-error: true
+        run: python3 scripts/try-sandbox.py --binary target/release/scramjet-rs
+      - name: Pack and smoke-test
+        run: |
+          archive=$(scripts/package.sh target/release/scramjet-rs aarch64-macos)
+          python3 scripts/smoke.py "$archive"
+          scripts/package.sh target/x86_64-apple-darwin/release/scramjet-rs x86_64-macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.tar.gz
+          retention-days: 1
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          if [ "$TAG" != "v$version" ]; then
+            echo "tag $TAG is not Cargo.toml's version $version" >&2
+            exit 1
+          fi
+          ls dist/scramjet-rs-"$version"-*.tar.gz
+          scripts/package.sh sums
+          previous=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // ""')
+          scripts/release-notes.sh "$version" "${previous#v}" >notes.md
+          title=$(sed -n "s/^## $version — //p" CHANGELOG.md)
+          gh release create "$TAG" --verify-tag --title "scramjet-rs $version — $title" \
+            --notes-file notes.md dist/*.tar.gz dist/SHA256SUMS
