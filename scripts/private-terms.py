@@ -8,13 +8,14 @@ repository. Without that file nothing is checked. The spelling dictionaries are 
   private-terms.py              the staged changes' added lines
   private-terms.py --message F  a commit message's file, as the commit-msg hook gives it
   private-terms.py --tree       every tracked file
-  private-terms.py --history    every commit's message and changes
+  private-terms.py --history    the message and changes of every commit on a branch or tag
 """
 import os, re, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TERMS = os.environ.get('SCRAMJET_RS_PRIVATE_TERMS') or os.path.join(os.path.dirname(ROOT), 'scramjet-rs-private', 'terms.tsv')
 PATHS = ['--', '.', ':(exclude)src/agent_cli/spelling']
+REFS = ['--branches', '--tags', '--remotes']
 
 
 def git(*words):
@@ -27,8 +28,8 @@ def texts(mode):
     elif mode == '--tree':
         yield 'tracked files', git('grep', '-I', '-n', '', *PATHS)
     elif mode == '--history':
-        yield 'messages', git('log', '--all', '--format=%h %B')
-        yield 'changes', git('log', '--all', '-p', '--format=commit %h', *PATHS)
+        yield 'messages', git('log', *REFS, '--format=%h %B')
+        yield 'changes', git('log', *REFS, '-p', '--format=commit %h', *PATHS)
     else:
         added = [line for line in git('diff', '--cached', '-U0', *PATHS).split(b'\n')
                  if line.startswith(b'+')]

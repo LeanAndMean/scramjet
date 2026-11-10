@@ -93,6 +93,7 @@ To compare a display with Scramjet's: `scripts/screens.py --binary "$(which scra
 
 Not scheduled; fix them when they matter.
 
+- The old history, before the rewrite of 2026-11-10: GitHub keeps a force-pushed branch's old commits reachable by their ID for a while, so before the repository goes public, have them purged (GitHub's support) or publish to a new repository. Here one stash from 2026-11-06 (`git stash list`; a change to `src/agent/sandbox.rs`, its owner unknown) still holds the old history up to that day, locally only: drop it once the user says it is not needed, then `git gc --prune=now`.
 - `docs/DESIGN.md` is 50,053 bytes (2026-11-10), near the tools' output limit of 51,200: condense it, without dropping a user decision, before it grows past that.
 
 - Replies' markdown departs from Scramjet's in smaller rules: code lines wrap under the block's indent (kept: it reads better); a quote's item holding a quote; a lazy line after a quoted table; a quoted `| t |` over an unquoted `|-|`; setext headings and tables without a leading `|` stream before the line that decides them; code spans across lines. Scramjet's renderer under Node: `new Markdown(text, 0, 0, theme).render(width)` from `~/repos/scramjet/packages/tui/dist/components/markdown.js`.
