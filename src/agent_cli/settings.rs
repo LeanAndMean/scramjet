@@ -10,7 +10,7 @@ use super::tree::Filter;
 use super::{background, theme};
 use scramjet_rs::agent::{
     CODING_TOOLS, Compacting, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Retries, SandboxMode,
-    Set, offline, sets_in, shortened, state_directory, write_replacing,
+    Set, UserShell, offline, sets_in, shortened, state_directory, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -174,6 +174,7 @@ pub(super) enum Row {
     BranchSummary,
     TreeFilter,
     Tools,
+    DefaultShell,
     Credentials,
     Autopilot,
     NextSteps,
@@ -181,7 +182,7 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 29] = [
+pub(super) const ROWS: [Row; 30] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -206,12 +207,20 @@ pub(super) const ROWS: [Row; 29] = [
     Row::BranchSummary,
     Row::TreeFilter,
     Row::Tools,
+    Row::DefaultShell,
     Row::Credentials,
     Row::Autopilot,
     Row::NextSteps,
     Row::Publishing,
     Row::Installed,
 ];
+
+/// The rows `/settings` lists here: `ROWS` without those for another system.
+pub(super) fn rows() -> Vec<Row> {
+    (ROWS.into_iter())
+        .filter(|&row| row != Row::DefaultShell || cfg!(windows))
+        .collect()
+}
 
 impl Row {
     pub(super) fn label(self) -> &'static str {
@@ -240,6 +249,7 @@ impl Row {
             Self::BranchSummary => "Leaving a branch",
             Self::TreeFilter => "Tree entries",
             Self::Tools => "Tools",
+            Self::DefaultShell => "Shell of ! commands",
             Self::Credentials => "Credential stores",
             Self::Autopilot => "Autopilot",
             Self::NextSteps => "Next steps",
@@ -369,6 +379,10 @@ impl Row {
                 return format!("The entries /tree shows when it opens{there}.");
             }
             Self::Tools => "The coding tools the agent has. Subagents have their own.",
+            Self::DefaultShell => {
+                "The shell your ! and !! commands run in: bash (Git for Windows), PowerShell or \
+                 cmd. Unset, bash when found, else PowerShell. The agent's tools are chosen in Tools."
+            }
             Self::Credentials => {
                 "~/.ssh, ~/.netrc and other known stores, kept from the agent's tools: in turns no one \
                  started (a next step run at once, -p), always or never. Subagents never see them."
@@ -478,6 +492,8 @@ pub(super) struct Settings {
     pub(super) shell_path: Option<PathBuf>,
     /// `shellCommandPrefix`: lines run before each command, as Scramjet's.
     pub(super) shell_command_prefix: Option<String>,
+    /// `defaultShell`: the shell of the user's `!` commands on Windows, as Claude Code's key.
+    pub(super) default_shell: Option<UserShell>,
     /// `retry`: how a request that failed transiently is sent again.
     retry: Retries,
     /// `compaction` and `branchSummary.reserveTokens`.
@@ -599,6 +615,7 @@ impl Settings {
             themes: Vec::new(),
             session_dir: None,
             shell_path: None,
+            default_shell: None,
             shell_command_prefix: None,
             retry: Retries::default(),
             compacting: Compacting::default(),
@@ -916,6 +933,15 @@ impl Settings {
             Some(_) => {
                 (self.warnings).push(format!("{path}: shellPath must be a program; ignored"))
             }
+        }
+        match object.get("defaultShell") {
+            None => {}
+            Some(Value::String(name)) if let Some(shell) = UserShell::named(name) => {
+                self.default_shell = Some(shell)
+            }
+            Some(_) => (self.warnings).push(format!(
+                r#"{path}: defaultShell must be "bash", "powershell" or "cmd"; ignored"#
+            )),
         }
         match object.get("shellCommandPrefix") {
             None => {}
@@ -1638,6 +1664,14 @@ impl Settings {
                 .copied()
                 .collect::<Vec<_>>()
                 .join(", "),
+            Row::DefaultShell => {
+                let used = UserShell::used(self.default_shell);
+                match (self.default_shell, scramjet_rs::agent::found(used.name())) {
+                    (None, _) => format!("{} (default)", used.name()),
+                    (Some(_), true) => used.name().into(),
+                    (Some(_), false) => format!("{} (not found)", used.name()),
+                }
+            }
             Row::Credentials => match self.hide_credentials {
                 HideCredentials::Unattended => "hidden when unattended",
                 HideCredentials::Always => "always hidden",
@@ -1767,6 +1801,13 @@ impl Settings {
                 let next = (at.unwrap_or(0) + 1) % Filter::CYCLE.len();
                 self.tree_filter = Filter::CYCLE[next];
                 self.save("treeFilterMode", json!(self.tree_filter.setting()))
+            }
+            Row::DefaultShell => {
+                let used = UserShell::used(self.default_shell);
+                let at = UserShell::ALL.iter().position(|&shell| shell == used);
+                let next = UserShell::ALL[(at.unwrap_or(0) + 1) % UserShell::ALL.len()];
+                self.default_shell = Some(next);
+                self.save("defaultShell", json!(next.name()))
             }
             Row::Credentials => {
                 let (hide, name) = match self.hide_credentials {
@@ -2538,7 +2579,8 @@ mod tests {
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big"}"#,
+                "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big",
+                "defaultShell": "zsh"}"#,
         );
         assert_eq!(settings.banner, Banner::Header);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
@@ -2547,6 +2589,7 @@ mod tests {
         assert_eq!(settings.theme, None);
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert!(!settings.hide_thinking_block);
+        assert_eq!(settings.default_shell, None);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
         assert_eq!(settings.default_thinking_level, None);
         let path = shown(&scratch.0.join("settings.json"));
@@ -2567,6 +2610,7 @@ mod tests {
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
                 format!(r#"{path}: followUpMode must be "all" or "one-at-a-time"; ignored"#),
+                format!(r#"{path}: defaultShell must be "bash", "powershell" or "cmd"; ignored"#),
             ]
         );
     }
@@ -2824,6 +2868,20 @@ mod tests {
             seen(Row::DoubleEscape, &mut settings),
             ["opens /tree", "opens /fork", "does nothing", "opens /tree"]
         );
+        let found = |shell: &str| match scramjet_rs::agent::found(shell) {
+            true => shell.to_owned(),
+            false => format!("{shell} (not found)"),
+        };
+        let bash = scramjet_rs::agent::found("bash");
+        assert_eq!(
+            seen(Row::DefaultShell, &mut settings),
+            [
+                format!("{} (default)", if bash { "bash" } else { "powershell" }),
+                found(if bash { "powershell" } else { "cmd" }),
+                found(if bash { "cmd" } else { "bash" }),
+                found(if bash { "bash" } else { "powershell" }),
+            ]
+        );
         assert_eq!(
             seen(Row::Credentials, &mut settings),
             [
@@ -2957,6 +3015,7 @@ mod tests {
                 "compaction": {"enabled": false},
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
+                "defaultShell": "bash",
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "unattended",
                 "steeringMode": "one-at-a-time",

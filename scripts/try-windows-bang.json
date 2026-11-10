@@ -1,0 +1,28 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "unused",
+  "replies": [],
+  "steps": [
+    {"shot": "started", "wait": 5},
+    {"text": "!Write-Output \"edition $($PSVersionTable.PSEdition)\"; Get-ChildItem -Name"},
+    {"keys": ["Enter"]},
+    {"shot": "! in PowerShell", "wait": 4},
+    {"text": "/settings"},
+    {"keys": ["Enter"]},
+    {"shot": "settings", "wait": 2},
+    {"keys": ["Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down"]},
+    {"shot": "shell row", "wait": 1},
+    {"keys": ["Enter"]},
+    {"shot": "after one Enter", "wait": 1},
+    {"keys": ["Escape"]},
+    {"shot": "settings closed", "wait": 2},
+    {"text": "!echo shell %COMSPEC% & ver"},
+    {"keys": ["Enter"]},
+    {"shot": "! in cmd", "wait": 4},
+    {"host": ["cat", "../config/scramjet-rs/settings.json"]},
+    {"keys": ["C-d"]},
+    {"shot": "after Ctrl+D", "wait": 3}
+  ]
+}

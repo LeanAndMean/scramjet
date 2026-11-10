@@ -429,7 +429,9 @@ impl<'a> Call<'a> {
             }
             "bash" => return bash(root, self, hidden, cancel, progress),
             "powershell" | "cmd" if hidden.is_none() => {
-                let ran = run_windows_shell(root, self, cancel, progress)?;
+                let command = self.str("command")?;
+                let ran =
+                    run_windows_shell(root, self.name, command, timeout(self), cancel, progress)?;
                 return Ok(ran.tool_output());
             }
             "powershell" | "cmd" => {
@@ -1718,6 +1720,61 @@ pub(super) fn run_command(
     run_process(process, "bash", false, timeout, cancel, progress)
 }
 
+/// The shell of the user's `!` commands on Windows, the settings' `defaultShell`; elsewhere bash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UserShell {
+    Bash,
+    PowerShell,
+    Cmd,
+}
+
+impl UserShell {
+    pub const ALL: [UserShell; 3] = [UserShell::Bash, UserShell::PowerShell, UserShell::Cmd];
+
+    /// The name the settings and the tools give it.
+    pub fn name(self) -> &'static str {
+        match self {
+            UserShell::Bash => "bash",
+            UserShell::PowerShell => "powershell",
+            UserShell::Cmd => "cmd",
+        }
+    }
+
+    pub fn named(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|shell| shell.name() == name)
+    }
+
+    /// The shell `!` commands run in: `chosen`, else bash when found, else PowerShell when found.
+    pub fn used(chosen: Option<Self>) -> Self {
+        chosen.unwrap_or(match found("bash") || !found("powershell") {
+            true => UserShell::Bash,
+            false => UserShell::PowerShell,
+        })
+    }
+}
+
+static USER_SHELL: RwLock<Option<UserShell>> = RwLock::new(None);
+
+/// Sets the settings' `defaultShell` (`None`: not set).
+pub fn set_user_shell(shell: Option<UserShell>) {
+    *USER_SHELL.write().unwrap_or_else(|e| e.into_inner()) = shell;
+}
+
+/// Runs the user's `!` command in the shell `UserShell::used` gives (bash outside Windows),
+/// without a time limit.
+pub(super) fn run_user_command(
+    root: &Path,
+    command: &str,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&str),
+) -> Result<Ran, String> {
+    let chosen = USER_SHELL.read().unwrap_or_else(|e| e.into_inner());
+    match UserShell::used(chosen.filter(|_| cfg!(windows))) {
+        UserShell::Bash => run_command(root, command, None, cancel, progress),
+        shell => run_windows_shell(root, shell.name(), command, None, cancel, progress),
+    }
+}
+
 /// The settings' `shellPath` and `shellCommandPrefix`, as Scramjet's: the shell that runs the
 /// agent's and the user's commands, and lines run before each. Process-wide, as the settings are.
 static SHELL: RwLock<(Option<PathBuf>, Option<String>)> = RwLock::new((None, None));
@@ -1771,16 +1828,17 @@ pub(super) fn bash_runs(process: &mut Command, command: &str) {
         .env(COMMAND_VARIABLE, prefixed(command));
 }
 
-/// As `run_command`, the call's command in PowerShell or cmd (`call.name`), each with a console of
-/// its own set to UTF-8, so that what they print reads as bash's does.
+/// As `run_command`, `command` in PowerShell or cmd (`shell`), each with a console of its own set
+/// to UTF-8, so that what they print reads as bash's does.
 fn run_windows_shell(
     root: &Path,
-    call: &Call,
+    shell: &str,
+    command: &str,
+    timeout: Option<Duration>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let command = call.str("command")?;
-    let mut process = match call.name {
+    let mut process = match shell {
         "powershell" => {
             let program = crate::os::powershell().ok_or("no PowerShell was found")?;
             let mut process = Command::new(program);
@@ -1803,13 +1861,13 @@ fn run_windows_shell(
         }
     };
     process.current_dir(root);
-    run_process(process, call.name, true, timeout(call), cancel, progress)
+    run_process(process, shell, true, timeout, cancel, progress)
 }
 
 /// What PowerShell runs: the command from `COMMAND_VARIABLE`, after settings that make what it
 /// prints and writes UTF-8, as Claude Code's, and then its exit code as Claude Code finds it.
 /// Without double quotes, which Windows' quoting of arguments would change.
-const POWERSHELL_BOOTSTRAP: &str = "$scramjetRsCommand = $env:SCRAMJET_RS_COMMAND; \
+pub(super) const POWERSHELL_BOOTSTRAP: &str = "$scramjetRsCommand = $env:SCRAMJET_RS_COMMAND; \
 Remove-Item Env:SCRAMJET_RS_COMMAND; $ProgressPreference = 'SilentlyContinue'; \
 try { $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8' } catch {}; \
 if ($ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage') { \

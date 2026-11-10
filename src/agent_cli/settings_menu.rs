@@ -3,7 +3,7 @@
 use super::interactive::{Interactive, completions};
 use super::palette::Background;
 use super::screen::{Answer, Dialog, Optional};
-use super::settings::{ROWS, Row, scramjet_level};
+use super::settings::{Row, rows, scramjet_level};
 use super::text::clip;
 use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
 use super::theme_editor::ThemeEditor;
@@ -164,12 +164,13 @@ impl Interactive {
             let Some(screen) = &self.screen else {
                 return;
             };
-            let rows = self.setting_rows();
+            let listed = rows();
+            let shown = self.setting_rows();
             let levels = !self.agent.effort_levels().is_empty();
             let problems = self.agent.next_steps().problems;
             let publishing = self.agent.approvals().problem;
             let command_line_tools = self.agent.command_line_tools();
-            let notes = (ROWS.iter())
+            let notes = (listed.iter())
                 .map(|row| match row {
                     Row::ThinkingLevel if !levels => NO_LEVELS.to_owned(),
                     Row::Tools if let Some(tools) = &command_line_tools => format!(
@@ -193,10 +194,10 @@ impl Interactive {
             let picker = select::Picker::select(
                 "Settings",
                 select::VISIBLE,
-                ROWS.len(),
+                listed.len(),
                 at,
                 None,
-                |index, width| clip(&rows[index], width),
+                |index, width| clip(&shown[index], width),
             );
             let picker = picker
                 .noting(select::hint("change", &[], "close"), notes)
@@ -205,7 +206,7 @@ impl Interactive {
                 break;
             };
             at = index;
-            match ROWS[index] {
+            match listed[index] {
                 Row::ThinkingLevel => self.choose_thinking_level(),
                 Row::Tools => self.choose_tools(),
                 Row::Theme => self.choose_theme(),
@@ -227,6 +228,7 @@ impl Interactive {
                 .store(self.settings.hide_thinking_block, Ordering::Relaxed);
             self.agent.set_compacting(self.settings.compacting);
             scramjet_rs::agent::set_images(self.settings.resize_images, self.settings.block_images);
+            scramjet_rs::agent::set_user_shell(self.settings.default_shell);
             self.ui.markdown_reads = self.settings.markdown_reads;
             if let Some(screen) = &mut self.screen {
                 (screen.link).reloaded(completions(&self.agent), &self.settings);
@@ -239,7 +241,12 @@ impl Interactive {
 
     /// `/settings`' rows: each label, as wide as the widest, and its value.
     fn setting_rows(&self) -> Vec<String> {
-        let width = ROWS.iter().map(|row| row.label().len()).max().unwrap_or(0);
+        let listed = rows();
+        let width = listed
+            .iter()
+            .map(|row| row.label().len())
+            .max()
+            .unwrap_or(0);
         let value = |row| match row {
             Row::ThinkingLevel => (self.agent.effort().map(scramjet_level))
                 .unwrap_or("model default")
@@ -255,7 +262,7 @@ impl Interactive {
             }
             row => self.settings.shown(row),
         };
-        (ROWS.iter())
+        (listed.iter())
             .map(|&row| format!("{:width$}  {}", row.label(), value(row)))
             .collect()
     }

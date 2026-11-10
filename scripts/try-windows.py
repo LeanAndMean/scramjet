@@ -15,7 +15,8 @@ printing the pane after each.
 
 A scenario holds "files", "copy" (WSL files or directories, relative to this repository, copied
 to paths under the scratch directory: {"packages/proxy": "../scramjet-rs-provider-proxy/models.json"}),
-"settings", "models" (more of models.json's fields, such as "logins"), "auth" (auth.json's
+"settings", "models" (more of models.json's fields, such as "logins"), "provider" (more of the
+scripted provider's fields, such as an "apiKey" command), "auth" (auth.json's
 credentials), "servers" (WSL commands run from this repository for the run's length; each a list
 of words, or {"run": words, "port": N} waited for), "$WORK" in settings, models and auth standing
 for the scratch directory's Windows path, "args" (more command-line words), "path" (WSL paths
@@ -86,6 +87,7 @@ if scenario.get('bash'):
 base = 'http://%s/v1' % screens.serve(scenario.get('replies', []))
 provider = {'baseUrl': base, 'api': 'openai-responses', 'apiKey': 'scripted',
             'models': [{'id': 'gpt-6-luna', 'reasoning': True, 'contextWindow': 200000}]}
+provider.update(scenario.get('provider', {}))
 config = os.path.join(work, 'config/scramjet-rs')
 open(os.path.join(config, 'models.json'), 'w').write(placed(dict(scenario.get('models', {}), providers={'screens': provider})))
 open(os.path.join(config, 'settings.json'), 'w').write(placed(scenario.get('settings', {})))

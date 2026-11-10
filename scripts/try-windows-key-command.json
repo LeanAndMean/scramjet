@@ -1,0 +1,9 @@
+{
+  "provider": {
+    "apiKey": "!Write-Output \"key-$($PSVersionTable.PSEdition)\""
+  },
+  "prompt": "Say hi",
+  "replies": [
+    [{"text": "Hi: the key came from PowerShell."}]
+  ]
+}

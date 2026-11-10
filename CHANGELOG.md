@@ -4,6 +4,16 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.129.0 — The shell of `!` commands on Windows
+
+### Added
+
+- On Windows, `!` and `!!` commands run in bash when Git Bash is found, else in PowerShell, or in the shell `/settings` → Shell of ! commands chooses (`defaultShell`: `bash`, `powershell` or `cmd`, Claude Code's key). Before, without Git Bash they failed.
+
+### Changed
+
+- On Windows without Git Bash, a `models.json` `!command` value (an `apiKey` or header) runs in PowerShell, as the agent's `powershell` tool does, rather than in cmd.
+
 ## 0.128.0 — PowerShell and cmd tools on Windows
 
 ### Added

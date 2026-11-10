@@ -15,7 +15,7 @@ pub struct Shell {
 }
 
 impl Shell {
-    /// Runs `command` with bash in `root` until it ends or `cancel` is set; `progress` receives
+    /// Runs `command` in the user's shell (`tools::run_user_command`) in `root` until it ends or `cancel` is set; `progress` receives
     /// the end of its output as it grows.
     pub fn run(
         root: &std::path::Path,
@@ -27,7 +27,7 @@ impl Shell {
         Self {
             command: command.to_owned(),
             include,
-            ran: tools::run_command(root, command, None, cancel, progress),
+            ran: tools::run_user_command(root, command, cancel, progress),
         }
     }
 

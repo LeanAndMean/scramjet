@@ -70,7 +70,7 @@ pub(super) async fn headers(
 }
 
 /// What `command` prints, trimmed, run as Scramjet runs it: by `sh` (on Windows Git Bash, else
-/// `cmd.exe`), with no input, its errors not shown, stopped after `LIMIT`.
+/// PowerShell, else `cmd.exe`), with no input, its errors not shown, stopped after `LIMIT`.
 async fn run(command: &str) -> Result<String, String> {
     let mut shell = shell(command);
     shell
@@ -136,6 +136,13 @@ fn shell(command: &str) -> tokio::process::Command {
         Ok(bash) => {
             let mut shell = tokio::process::Command::new(bash);
             shell.arg("-c").arg(command);
+            shell
+        }
+        Err(_) if let Some(powershell) = crate::os::powershell() => {
+            let mut shell = tokio::process::Command::new(powershell);
+            (shell.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]))
+                .arg(super::tools::POWERSHELL_BOOTSTRAP)
+                .env(super::tools::COMMAND_VARIABLE, command);
             shell
         }
         Err(_) => {
