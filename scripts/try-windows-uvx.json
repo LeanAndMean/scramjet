@@ -1,0 +1,111 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "settings": {
+    "mcpServers": {
+      "time": {
+        "command": "uvx",
+        "args": [
+          "mcp-server-time",
+          "--local-timezone",
+          "Europe/Berlin"
+        ],
+        "env": {
+          "UV_NATIVE_TLS": "1",
+          "UV_CACHE_DIR": "$WORK\\uv\\cache",
+          "UV_PYTHON_INSTALL_DIR": "$WORK\\uv\\python",
+          "UV_TOOL_DIR": "$WORK\\uv\\tools"
+        }
+      }
+    }
+  },
+  "prompt": "What time is it in Tokyo?",
+  "replies": [
+    [
+      {
+        "call": "mcp_call",
+        "arguments": {
+          "server": "time",
+          "tool": "get_current_time",
+          "arguments": {
+            "timezone": "Asia/Tokyo"
+          }
+        }
+      }
+    ],
+    [
+      {
+        "text": "Told."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "shot": "started",
+      "wait": 3
+    },
+    {
+      "shot": "a first uvx start downloads a Python",
+      "wait": 30
+    },
+    {
+      "text": "/mcp"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "/mcp",
+      "wait": 3
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "closed",
+      "wait": 1
+    },
+    {
+      "text": "What time is it in Tokyo?"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "replied",
+      "wait": 8
+    },
+    {
+      "host": [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*mcp-server-time*' -and $_.ProcessId -ne $PID } | ForEach-Object { $_.Name }"
+      ]
+    },
+    {
+      "keys": [
+        "C-d"
+      ]
+    },
+    {
+      "shot": "after Ctrl+D",
+      "wait": 4
+    },
+    {
+      "host": [
+        "powershell.exe",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*mcp-server-time*' -and $_.ProcessId -ne $PID } | ForEach-Object { $_.Name }"
+      ]
+    }
+  ]
+}

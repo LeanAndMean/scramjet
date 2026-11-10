@@ -3,7 +3,7 @@
 
 It speaks the `initialize` handshake (2025-11-25 and before) and answers `server/discover` as an
 unknown method, as servers written before 2026-07-28 do. `MCP_TEST_LOG` names a file its process
-id and each message's method are appended to; `MCP_TEST_MODE` is `exit` (it fails at once),
+id and each message's method are appended to (`initialize` with the version it asks for); `MCP_TEST_MODE` is `exit` (it fails at once),
 `silent` (it never answers), `latin1` (its standard error has a byte that is not UTF-8, and each
 message is logged there), `stuck` (it lists its tools once, then never again), `linger` (it
 stays after its input ends, until SIGTERM) or `stubborn` (it stays after its input ends and
@@ -129,7 +129,7 @@ def main():
         method = message.get("method")
         if method is None:
             continue
-        log(method)
+        log(method + (" " + message["params"]["protocolVersion"] if method == "initialize" else ""))
         if mode == "silent":
             continue
         if mode == "latin1":

@@ -767,9 +767,11 @@ impl Running {
     }
 }
 
-/// Starts the server, or reaches it over HTTP, and connects to it as MCP's 2026-07-28 revision
-/// does, or with the `initialize` handshake of those before, as the server answers; then lists
-/// its tools.
+/// Starts the server and connects with the `initialize` handshake, or reaches it over HTTP and
+/// connects as MCP's 2026-07-28 revision does, or with `initialize` as the server answers; then
+/// lists its tools. A program is not probed first, as Claude Code 2.1.259 does not: rmcp waits 10 s
+/// for the probe's answer, which a server still installing (`uvx`, `npx`) gives late, after
+/// `initialize` went out.
 async fn start(
     server: &Arc<Running>,
     root: PathBuf,
@@ -786,6 +788,8 @@ async fn start(
     let service = match &server.config.transport {
         Transport::Program { command, args, env } => {
             let program = (command.as_str(), &args[..], &env[..]);
+            let client = client.with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE);
+            let lifecycle = ClientLifecycleMode::Initialize;
             run(server, program, root, confined, client, lifecycle).await?
         }
         Transport::Http { url, headers } => {

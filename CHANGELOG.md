@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.136.1 — MCP servers that are slow to start the first time
+
+### Fixed
+
+- A program-run MCP server that took more than 10 seconds to answer, as `uvx` or `npx` do the first time while they download it, failed with `conflict initialized response id: expected 1, got 0`. Such servers now get the `initialize` handshake first, as Claude Code sends it, and have the full 30 seconds to start.
+
 ## 0.136.0 — Skills honor ignore files
 
 ### Changed

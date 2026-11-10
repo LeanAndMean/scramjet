@@ -198,8 +198,7 @@ fn a_call_stopped_cancels_its_request_and_ending_the_servers_kills_them() {
     assert_eq!(
         methods,
         [
-            "server/discover",
-            "initialize",
+            "initialize 2025-11-25",
             "notifications/initialized",
             "tools/list",
             "tools/list",
