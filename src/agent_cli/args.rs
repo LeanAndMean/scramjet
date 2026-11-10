@@ -69,8 +69,8 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
                          text, or a file's contents, after the opening; several are joined
                          (default: an APPEND_SYSTEM.md found as SYSTEM.md is)
   -nc, --no-context-files
-                         leave out the AGENTS.md and CLAUDE.md files of ~/.scramjet/agent, the
-                         project and the directories above it
+                         leave out the AGENTS.md, CLAUDE.md and CLAUDE.local.md files of
+                         ~/.scramjet/agent, the project and the directories above it
   --skill PATH           a skill file, or a directory of skills, looked in after the others
                          (repeatable); a relative PATH is from the current directory
   -ns, --no-skills       no skills but those --skill names: none from the skill directories

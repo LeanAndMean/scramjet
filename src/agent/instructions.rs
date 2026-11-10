@@ -433,7 +433,8 @@ pub(super) fn load(
 
 /// The context files, as Scramjet's: those of the `agent_directory`, then those of `root` and
 /// the directories above it, outermost first, with their contents. A directory's `CLAUDE.md` comes
-/// before its `AGENTS.md`, which is left out when it says the same. One in a `hidden` store is
+/// before its `AGENTS.md`, which is left out when it says the same; its `CLAUDE.local.md` comes
+/// last. One in a `hidden` store is
 /// left out, said in `problems`.
 pub(super) fn context_files(
     root: &Path,
@@ -456,14 +457,15 @@ pub(super) fn context_files(
     files
 }
 
-/// The `CLAUDE.md` and `AGENTS.md` (or `.MD`) of `directory`, as Scramjet reads them.
+/// The `CLAUDE.md` and `AGENTS.md` (or `.MD`) of `directory`, as Scramjet reads them, then its
+/// `CLAUDE.local.md`, the user's own notes kept out of version control, as Claude Code reads it.
 fn directory_context(
     directory: &Path,
     hidden: &Hidden,
     problems: &mut Vec<Problem>,
 ) -> Vec<(PathBuf, String)> {
-    let mut first = |names: [&str; 2]| {
-        let path = (names.into_iter().map(|name| directory.join(name))).find(|path| {
+    let mut first = |names: &[&str]| {
+        let path = (names.iter().map(|name| directory.join(name))).find(|path| {
             std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES)
         })?;
         if let Some(owner) = crate::os::stranger(&path) {
@@ -488,13 +490,16 @@ fn directory_context(
         file.read_to_string(&mut contents).ok()?;
         Some((path, contents))
     };
-    let claude = first(["CLAUDE.md", "CLAUDE.MD"]);
-    let agents = first(["AGENTS.md", "AGENTS.MD"]);
-    match (claude, agents) {
+    let claude = first(&["CLAUDE.md", "CLAUDE.MD"]);
+    let agents = first(&["AGENTS.md", "AGENTS.MD"]);
+    let local = first(&["CLAUDE.local.md"]);
+    let mut files = match (claude, agents) {
         (Some(claude), Some(agents)) if claude.1 != agents.1 => vec![claude, agents],
         (Some(claude), _) => vec![claude],
         (None, agents) => agents.into_iter().collect(),
-    }
+    };
+    files.extend(local);
+    files
 }
 
 /// The context `files`, as Pi's `# Project Context`; empty without any.
@@ -816,6 +821,8 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
         write(outer.join("CLAUDE.MD"), "Outer claude.");
         write(root.join("CLAUDE.md"), "Same.");
         write(root.join("AGENTS.md"), "Same.");
+        write(outer.join("CLAUDE.local.md"), "Outer local.");
+        write(root.join("CLAUDE.local.md"), "Same.");
         let found: Vec<(PathBuf, String)> =
             context_files(&root, Some(&home), &Hidden::default(), &mut Vec::new())
                 .into_iter()
@@ -830,7 +837,9 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
             (home.join("AGENTS.md"), "Home."),
             (outer.join(claude), "Outer claude."),
             (outer.join("AGENTS.md"), "Outer agents."),
+            (outer.join("CLAUDE.local.md"), "Outer local."),
             (root.join("CLAUDE.md"), "Same."),
+            (root.join("CLAUDE.local.md"), "Same."),
         ]
         .map(|(path, text)| (path, text.to_owned()));
         assert_eq!(found, expected);

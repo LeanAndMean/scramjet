@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.137.0 — CLAUDE.local.md
+
+### Added
+
+- A `CLAUDE.local.md` beside a `CLAUDE.md` or `AGENTS.md` (in the project, the directories above it or `~/.scramjet/agent`) is read after them, as Claude Code reads it: instructions of your own that stay out of version control. `--no-context-files` leaves it out too.
+
 ## 0.136.2 — Updating on Windows while another session runs
 
 ### Fixed
