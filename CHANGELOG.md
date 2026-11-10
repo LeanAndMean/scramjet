@@ -4,6 +4,10 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+### Added
+
+- The `scramjet` command set lives in this repository, `sets/scramjet`: `/scramjet:troubleshoot` and the six read-only command-authoring agents, in Mach 12's new form (no `:` in file names, Claude Code's tool names, only the `completed` and `abandoned` statuses). Install it with `scramjet-rs install ~/repos/scramjet-rs/sets/scramjet` in place of Scramjet's copy (`scramjet-rs remove scramjet` first).
+
 ## 0.132.0 — `scramjet-rs lint`
 
 ### Added

@@ -297,6 +297,15 @@ mod tests {
     }
 
     #[test]
+    fn this_repositorys_scramjet_set_is_clean() {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sets/scramjet");
+        let set = Set::at(&directory, Origin::Installed).unwrap();
+        let (diagnostics, files) = lint(&set);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(files.len(), 1);
+    }
+
+    #[test]
     fn a_command_with_early_goals_and_framed_arguments_is_clean() {
         assert_eq!(lint_files("clean", &[("commands/do.md", GOOD)]), []);
     }

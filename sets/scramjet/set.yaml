@@ -1,0 +1,5 @@
+name: scramjet
+description: |
+  Scramjet operational commands diagnose command, harness, and tool behavior.
+  Read-only specialists support command authoring and diagnostics while the main
+  agent retains orchestration and side-effect ownership.

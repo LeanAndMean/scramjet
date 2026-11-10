@@ -30,7 +30,8 @@ scramjet-rs -c                               # continue this project's latest se
 scramjet-rs -r                               # choose a session to resume
 scramjet-rs --model opus:high                # the newest Opus, at high effort
 scramjet-rs --list-models                    # the providers' models
-scramjet-rs install ~/repos/scramjet/packages/scramjet/mach12   # a command set, by reference
+scramjet-rs install ~/repos/mach12                              # a command set, by reference
+scramjet-rs install ~/repos/scramjet-rs/sets/scramjet           # this repository's set: /scramjet:troubleshoot, command-authoring agents
 scramjet-rs install ~/repos/scramjet/packages/scramjet          # a package: its sets, skills and themes
 scramjet-rs install git:github.com/LeanAndMean/scramjet          # the sets in a git repository
 scramjet-rs update                           # pull the packages not pinned to a ref, then update the program
