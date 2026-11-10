@@ -1,6 +1,6 @@
-//! Anthropic Messages (`/v1/messages`), which Proxy serves Claude models on. Requests are converted
-//! from the Responses request the agent builds, and replies back into Responses items, so a
-//! session keeps one item format whichever protocol produced its items.
+//! Anthropic Messages (`/v1/messages`), which gateways serve Claude models on. Requests are
+//! converted from the Responses request the agent builds, and replies back into Responses items,
+//! so a session keeps one item format whichever protocol produced its items.
 use super::StreamProgress;
 use super::client::{Failure, LIMITS, Reply};
 use serde_json::{Value, json};
@@ -13,13 +13,13 @@ pub(super) const DEFAULT_MAX_TOKENS: u64 = 32_000;
 const INTERLEAVED_THINKING_BETA: &str = "interleaved-thinking-2025-05-14";
 
 /// The beta that streams tool input as it is written instead of buffering it, which Scramjet's
-/// configuration for Proxy asks for in place of `eager_input_streaming` on each tool.
+/// gateway configuration asks for in place of `eager_input_streaming` on each tool.
 const FINE_GRAINED_TOOL_STREAMING_BETA: &str = "fine-grained-tool-streaming-2025-05-14";
 
 /// Least output space left for a reply when thinking takes a budget, as Scramjet keeps it.
 const MIN_OUTPUT_TOKENS: u64 = 1024;
 
-/// Whether `model` takes adaptive thinking: Claude 4.6 and later (Proxy rewrites budget thinking
+/// Whether `model` takes adaptive thinking: Claude 4.6 and later (gateways rewrite budget thinking
 /// for 4.7 and later, which reject it), also as GitHub Copilot names them (`claude-opus-4.7`).
 pub(super) fn adaptive_thinking(model: &str) -> bool {
     let Some(rest) = model.strip_prefix("claude-") else {

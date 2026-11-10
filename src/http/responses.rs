@@ -354,7 +354,8 @@ pub(crate) fn validate_item(item: &Value) -> Result<(), Outcome> {
     }
     Ok(())
 }
-/// Drops a namespace that is not a text, as Proxy's normalizer does since Foundry sent invalid ones.
+/// Drops a namespace that is not a text, as a gateway's normalizer does since Foundry sent
+/// invalid ones.
 fn without_bad_namespace(mut item: Value) -> Value {
     if let Some(object) = item.as_object_mut()
         && object
@@ -447,7 +448,7 @@ pub(crate) struct ParsedResponse {
     pub(crate) status: String,
 }
 /// Reads a Responses stream as Scramjet's provider package reads the company's raw ones,
-/// tolerating what Proxy's normalizer repairs for stricter clients: items' events before or
+/// tolerating what a gateway's normalizer repairs for stricter clients: items' events before or
 /// without their `output_item.added`, parts without their `.added`, and events without ids.
 pub(crate) struct ResponsesParser {
     pub(crate) failure: ProviderFailure,
@@ -708,9 +709,9 @@ impl ResponsesParser {
             return Ok(());
         };
         let id = nonempty(&item["id"]);
-        // An item added with an id of its own is a new one even at a shared output index (Proxy's
-        // DeepSeek route gave a message and a reasoning item the same one), unless one made for
-        // its earlier events waits there.
+        // An item added with an id of its own is a new one even at a shared output index (a
+        // gateway's DeepSeek route gave a message and a reasoning item the same one), unless one
+        // made for its earlier events waits there.
         let waiting = id.and_then(|id| self.position(id)).or_else(|| {
             self.items.iter().rposition(|s| {
                 s.kind == kind
@@ -850,7 +851,7 @@ impl ResponsesParser {
     }
     /// A content or summary part's event. Parts are made as their events come, as Foundry's
     /// reasoning summaries can lack `reasoning_summary_part.added`, and its `.done` events their
-    /// ids, indexes and text (Proxy's normalizer repairs these for stricter clients).
+    /// ids, indexes and text (a gateway's normalizer repairs these for stricter clients).
     fn part_event(&mut self, event: &Value, kind: &str) -> Result<(), Outcome> {
         self.failure.stage = match kind.ends_with("_part.added") {
             true => ProviderFailureStage::PartAdded,
@@ -891,8 +892,8 @@ impl ResponsesParser {
                 shown = Some(delta.to_owned());
             }
         } else {
-            // A final text replaces what streamed, and what extends it is shown: Proxy's DeepSeek
-            // route sent a reply's text only in its done event.
+            // A final text replaces what streamed, and what extends it is shown: a gateway's
+            // DeepSeek route sent a reply's text only in its done event.
             let text = match kind {
                 _ if kind.ends_with("_text.done") => event["text"].as_str(),
                 _ if kind.ends_with("_part.added") => event["part"]["text"]

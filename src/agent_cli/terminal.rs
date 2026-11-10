@@ -1025,9 +1025,9 @@ impl AgentUi for Terminal {
         }
         let mut text = text.to_owned();
         if !shown.is_empty() {
-            // The deltas missed part of the final text (Proxy's DeepSeek route drops a reply's first
-            // one). As Scramjet replaces the streamed block with the final text, rewrite it while
-            // it is still on screen; otherwise show the final text after it.
+            // The deltas missed part of the final text (a gateway's DeepSeek route drops a reply's
+            // first one). As Scramjet replaces the streamed block with the final text, rewrite it
+            // while it is still on screen; otherwise show the final text after it.
             let height = editor::terminal_size().1;
             let captured = self.capture.is_some();
             let rows = self

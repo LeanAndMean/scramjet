@@ -701,7 +701,7 @@ mod tests {
         let terminal = failed.last_mut().unwrap();
         terminal["type"] = json!("response.failed");
         terminal["response"]["status"] = json!("failed");
-        // Observed through Proxy on 2026-10-30.
+        // Observed through a gateway on 2026-10-30.
         terminal["response"]["error"] = json!({"message": "Upstream model provider failed before \
 the response completed (ReadError: ConnectionResetError(104, 'Connection reset by peer')). The \
 response is incomplete; retry the request."});
@@ -945,7 +945,7 @@ response is incomplete; retry the request."});
         assert!(failure(None, "prompt is too long: 213462 tokens > 200000 maximum").overflow);
         assert!(!failure(None, "Rate limit reached: too many tokens").overflow);
         assert!(!failure(None, "Invalid value for 'input'").overflow);
-        // Scramjet's provider examples, and deepseek-v4.1-flash's gateway through Proxy.
+        // Scramjet's provider examples, and deepseek-v4.1-flash's gateway.
         for overflow in [
             "This model's maximum context length is 327680 tokens. However, you requested 330001",
             "Requested token count exceeds the model's maximum context length of 131,072 tokens",

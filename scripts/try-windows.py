@@ -15,7 +15,7 @@ full screen runs in a tmux pane (a Windows console through WSL interop) and play
 printing the pane after each.
 
 A scenario holds "files", "copy" (WSL files or directories, relative to this repository, copied
-to paths under the scratch directory: {"packages/proxy": "../scramjet-rs-provider-proxy/models.json"}),
+to paths under the scratch directory: {"packages/provider": "../provider-package/models.json"}),
 "settings", "agents" (agent files by name, in the scratch agent directory), "models" (more of models.json's fields, such as "logins"), "provider" (more of the
 scripted provider's fields, such as an "apiKey" command), "auth" (auth.json's
 credentials), "servers" (WSL commands run from this repository for the run's length; each a list

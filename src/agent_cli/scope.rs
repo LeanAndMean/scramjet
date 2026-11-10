@@ -834,7 +834,7 @@ mod tests {
         }
     }
 
-    fn proxy() -> Vec<ModelOption> {
+    fn catalog() -> Vec<ModelOption> {
         vec![
             model(
                 "claude-opus-5-5",
@@ -898,7 +898,7 @@ mod tests {
         assert_eq!(shown("anthropic/claude-haiku-5-5"), shown("local:7b"));
     }
 
-    /// The id of a reference to one of `proxy()`'s models.
+    /// The id of a reference to one of `catalog()`'s models.
     fn id(reference: String) -> String {
         match reference.split_once('/') {
             Some((_, id)) => id.to_owned(),
@@ -908,7 +908,7 @@ mod tests {
 
     fn ids(patterns: &[&str]) -> (Vec<(String, Option<String>)>, Vec<String>) {
         let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();
-        let (scoped, warnings) = resolve(&patterns, &proxy());
+        let (scoped, warnings) = resolve(&patterns, &catalog());
         let ids = scoped.into_iter().map(|s| (id(s.model), s.level)).collect();
         (ids, warnings)
     }
@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn a_reference_names_a_model_by_provider_and_id_or_id_case_aside() {
-        let models = proxy();
+        let models = catalog();
         let found = |reference| exact(reference, &models).map(|model| model.id.as_str());
         assert_eq!(
             found("anthropic/claude-haiku-5-5"),
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn the_model_option_names_one_model_as_scramjets_does() {
-        let models = proxy();
+        let models = catalog();
         let named = |pattern| named(pattern, &models).map(|s| (id(s.model), s.level));
         let at = |id: &str, level: Option<&str>| Some((id.to_owned(), level.map(str::to_owned)));
         assert_eq!(named("Claude-Opus-5-5"), at("claude-opus-5-5", None));
@@ -1020,7 +1020,7 @@ mod tests {
 
     #[test]
     fn the_same_id_from_two_providers_is_two_models_named_by_reference() {
-        let mut models = proxy();
+        let mut models = catalog();
         models.push(model("gpt-6-luna", None, Some("github-copilot")));
         let patterns = |patterns: &[&str]| -> Vec<String> {
             let patterns: Vec<String> = patterns.iter().map(|p| p.to_string()).collect();

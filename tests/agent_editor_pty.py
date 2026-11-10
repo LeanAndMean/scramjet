@@ -341,7 +341,7 @@ def tool_call(call_id, name, arguments):
     return {'type': 'function_call', 'id': 'fc_' + call_id, 'call_id': call_id, 'name': name, 'status': 'completed',
             'arguments': json.dumps(arguments)}
 quiet_reasoning = serve_quiet_reasoning()
-# As from Proxy's DeepSeek route: the first delta lost, then a text sent only in its done event.
+# As from a gateway's DeepSeek route: the first delta lost, then a text sent only in its done event.
 replies = serve_replies([([' of the reply.'], 'The start of the reply.'), ([], 'Only at the end.'),
                          (['Streamed ', 'whole.'], 'Streamed whole.')])
 forking = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.'),

@@ -555,7 +555,7 @@ fn a_namespaced_call_is_unsupported_and_repeated_events_change_nothing() {
 }
 #[test]
 fn items_are_found_by_id_and_a_text_may_arrive_only_in_its_done_event() {
-    // The shape of a deepseek-v4.1-flash reply through Proxy on 2026-10-30.
+    // The shape of a deepseek-v4.1-flash reply through a gateway on 2026-10-30.
     let message = json!({"type":"message","id":"msg_1","role":"assistant","status":"completed",
         "content":[{"type":"output_text","text":"2","annotations":[]}]});
     let reasoning = json!({"type":"reasoning","id":"rs_1","status":"completed",
@@ -622,7 +622,7 @@ fn compatibility_resource_and_malformed_failures_are_distinct() {
         parse(&fixture::wire(&events, false)),
         Err(Outcome::Unsupported)
     ));
-    // A namespace that is not a text is dropped, as Proxy's normalizer drops Foundry's.
+    // A namespace that is not a text is dropped, as a gateway's normalizer drops Foundry's.
     for namespace in [json!(42), Value::Null, json!({"name":"tools"})] {
         events[1]["item"]["namespace"] = namespace.clone();
         events[4]["item"]["namespace"] = namespace;
@@ -863,7 +863,7 @@ fn summary(item: &ProviderItem) -> String {
 
 #[test]
 fn foundry_reasoning_summaries_parse_without_their_added_events_or_ids() {
-    // The shapes Proxy's normalizer (`src/openai-responses-normalizer.ts`) repairs in GPT-5.6's
+    // The shapes a gateway's normalizer repairs in GPT-5.6's
     // raw streams from Foundry, here around a reasoning item and a message as they end.
     let reasoning = json!({"type":"reasoning","id":"rs_1","status":"completed",
         "summary":[{"type":"summary_text","text":"Plan it."}],"encrypted_content":"opaque"});
@@ -1021,7 +1021,7 @@ fn foundry_reasoning_summaries_parse_without_their_added_events_or_ids() {
         assert!(shown.starts_with("Plan it."), "{name}: {shown:?}");
     }
 
-    // A bare done event with two summaries open goes to the last one, as Proxy's normalizer
+    // A bare done event with two summaries open goes to the last one, as a gateway's normalizer
     // cannot tell; only what is shown can differ, as each done copy is kept.
     let second = json!({"type":"reasoning","id":"rs_2","status":"completed",
         "summary":[{"type":"summary_text","text":"Then this."}],"encrypted_content":"opaque-2"});
