@@ -4,8 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.133.0 — Command sets with their own skills, and the command-writing skill
+
 ### Added
 
+- A command set's own skills, in a `skills/<name>/SKILL.md` at its top as a Claude Code plugin's, load with the set; `install`, `list` and `/settings` count them, and `scramjet-rs lint` checks them as they load.
+- The `writing-scramjet-commands` skill comes with the `scramjet` set, rewritten for scramjet-rs: the format it reads (file names without `:`, frontmatter, `next` policies, `autonomy-defaults.yaml`), the `completed` and `abandoned` statuses, and `scramjet-rs lint --strict`. After installing the set, take Scramjet's `~/repos/scramjet/packages/scramjet/skills` out of the `skills` setting, which would otherwise come first.
 - The `scramjet` command set lives in this repository, `sets/scramjet`: `/scramjet:troubleshoot` and the six read-only command-authoring agents, in Mach 12's new form (no `:` in file names, Claude Code's tool names, only the `completed` and `abandoned` statuses). Install it with `scramjet-rs install ~/repos/scramjet-rs/sets/scramjet` in place of Scramjet's copy (`scramjet-rs remove scramjet` first).
 
 ## 0.132.0 — `scramjet-rs lint`

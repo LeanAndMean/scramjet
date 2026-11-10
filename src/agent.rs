@@ -651,12 +651,13 @@ pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inve
     let agents = (discovery.agents.into_iter())
         .map(|agent| (agent.name, agent.path))
         .collect();
+    let skills = Skills::discover(listed, sets.list(), &SkillOptions::default(), root);
     Inventory {
         sets,
         commands,
         agents,
         warnings,
-        skills: Skills::discover(listed, &SkillOptions::default(), root),
+        skills,
     }
 }
 
@@ -966,7 +967,12 @@ impl Agent {
         let config = &self.config;
         self.sets = Sets::for_project(&config.command_sets, &config.root);
         self.commands = Commands::discover(&self.sets);
-        self.skills = Skills::discover(&config.skills, &config.skill_options, &config.root);
+        self.skills = Skills::discover(
+            &config.skills,
+            self.sets.list(),
+            &config.skill_options,
+            &config.root,
+        );
         self.agents_directory = subagent::user_directory();
         self.agent_directory = subagent::agent_directory();
         self.instruct();

@@ -1,10 +1,10 @@
 //! `scramjet-rs lint`: what the harness would say about a command set when loading it, as
 //! errors for files it skips and warnings for what it ignores, then the shape Scramjet's
 //! `scramjet-command-lint` asks of each command: an early `## Goals` list, and its arguments in
-//! one context block.
+//! one context block. The set's skills are checked as they load.
 
 use super::commands::{Commands, Set, Sets};
-use super::{Problem, ProblemFile, subagent};
+use super::{Problem, ProblemFile, Skills, subagent};
 use regex::Regex;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -34,12 +34,14 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// The lint of `set`, and the command files it read.
+/// The lint of `set`, and the command and skill files it read.
 pub fn lint(set: &Set) -> (Vec<Diagnostic>, Vec<PathBuf>) {
     let sets = Sets::only(set.clone());
     let commands = Commands::discover(&sets);
     let mut problems = commands.warnings().to_vec();
     subagent::registered(&sets, &mut problems);
+    let skills = Skills::of_set(&set.directory);
+    problems.extend_from_slice(skills.warnings());
     let mut diagnostics: Vec<Diagnostic> = problems
         .into_iter()
         .map(|problem| loaded(problem, set))
@@ -73,6 +75,7 @@ pub fn lint(set: &Set) -> (Vec<Diagnostic>, Vec<PathBuf>) {
             message,
         }));
     }
+    files.extend(skills.list().iter().map(|skill| skill.path.clone()));
     (diagnostics, files)
 }
 
@@ -302,7 +305,42 @@ mod tests {
         let set = Set::at(&directory, Origin::Installed).unwrap();
         let (diagnostics, files) = lint(&set);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        assert_eq!(files.len(), 1);
+        let names: Vec<_> = (files.iter())
+            .map(|file| file.strip_prefix(&directory).unwrap().to_owned())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "commands/troubleshoot.md",
+                "skills/writing-scramjet-commands/SKILL.md"
+            ]
+            .map(std::path::PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn the_sets_skills_are_checked_as_they_load() {
+        let named = "---\nname: Named\ndescription: D\n---\nBody\n";
+        let found = lint_files(
+            "skills",
+            &[
+                ("commands/do.md", GOOD),
+                ("skills/bare/SKILL.md", "---\nname: bare\n---\nBody\n"),
+                ("skills/named/SKILL.md", named),
+                ("skills/top.md", "Not a skill: only directories are.\n"),
+            ],
+        );
+        let shown: Vec<_> = found
+            .iter()
+            .map(|(file, code, _)| (file.as_str(), *code))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("skills/bare/SKILL.md", "runtime-unrecognized"),
+                ("skills/named/SKILL.md", "runtime-notice"),
+            ]
+        );
     }
 
     #[test]

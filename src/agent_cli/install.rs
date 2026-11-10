@@ -451,7 +451,7 @@ fn here(settings: &Settings) -> Result<Inventory, String> {
     Ok(inventory(&settings.command_sets, &settings.skills, &root))
 }
 
-/// How many of `found`'s commands and agents come from `set`.
+/// How many of `found`'s commands, agents and skills come from `set`.
 fn contents(found: &Inventory, set: &Set) -> String {
     let commands = (found.commands.list().iter())
         .filter(|command| command.path.starts_with(&set.directory))
@@ -463,12 +463,19 @@ fn contents(found: &Inventory, set: &Set) -> String {
         1 => format!("1 {what}"),
         n => format!("{n} {what}s"),
     };
+    let skills = match (found.skills.list().iter())
+        .filter(|skill| skill.path.starts_with(&set.directory))
+        .count()
+    {
+        0 => String::new(),
+        n => format!(", {}", count(n, "skill")),
+    };
     let providers = match set.directory.join("models.json").is_file() {
         true => ", and providers (models.json)",
         false => "",
     };
     format!(
-        "{}, {}{providers}",
+        "{}, {}{skills}{providers}",
         count(commands, "command"),
         count(agents, "agent")
     )

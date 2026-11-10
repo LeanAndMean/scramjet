@@ -2,7 +2,7 @@
 //! `.md` file at the top of a `.scramjet/skills` directory. The instructions list them for the
 //! model to read when a task matches, and `/skill:<name> args` sends one's instructions.
 use super::Problem;
-use super::commands::split_frontmatter;
+use super::commands::{Set, split_frontmatter};
 use super::yaml;
 use std::{
     collections::HashSet,
@@ -52,11 +52,13 @@ enum Place {
 }
 
 /// Where Pi looks, first wins: the project's `.scramjet/skills` and the `.agents/skills` of the
-/// project and the directories above it up to its Git root, the settings' `listed` paths, then
-/// the user's `skills` in Scramjet's agent directory and `~/.agents/skills`; then, as
-/// Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
+/// project and the directories above it up to its Git root, the settings' `listed` paths, the
+/// `skills` directories of the command sets (as a Claude Code plugin's), then the user's
+/// `skills` in Scramjet's agent directory and `~/.agents/skills`; then, as Scramjet's, the
+/// paths `--skill` gives, which are all with `--no-skills`.
 fn places(
     listed: &[PathBuf],
+    sets: &[PathBuf],
     options: &SkillOptions,
     root: &Path,
     agent_directory: Option<&Path>,
@@ -81,6 +83,12 @@ fn places(
         }
     }
     places.extend(listed.iter().map(|path| (path.clone(), Place::Listed)));
+    places.extend(sets.iter().map(|set| {
+        (
+            crate::os::join(set, "skills"),
+            Place::Directory { top_files: false },
+        )
+    }));
     if let Some(directory) = agent_directory {
         places.push((
             directory.join("skills"),
@@ -93,13 +101,15 @@ fn places(
 }
 
 impl Skills {
-    /// The skills of a session in `root`, with the settings' `listed` files and directories and
-    /// the command line's `options`.
-    pub fn discover(listed: &[PathBuf], options: &SkillOptions, root: &Path) -> Self {
+    /// The skills of a session in `root`, with the settings' `listed` files and directories,
+    /// the command `sets`' own and the command line's `options`.
+    pub fn discover(listed: &[PathBuf], sets: &[Set], options: &SkillOptions, root: &Path) -> Self {
         let agent_directory = super::subagent::agent_directory();
         let home = std::env::home_dir();
+        let sets: Vec<PathBuf> = sets.iter().map(|set| set.directory.clone()).collect();
         Self::load(&places(
             listed,
+            &sets,
             options,
             root,
             agent_directory.as_deref(),
@@ -173,6 +183,12 @@ impl Skills {
             directory.to_path_buf(),
             Place::Directory { top_files: true },
         )])
+    }
+
+    /// The skills in the `skills` directory of the command set in `directory`.
+    pub(super) fn of_set(directory: &Path) -> Self {
+        let skills = crate::os::join(directory, "skills");
+        Self::load(&[(skills, Place::Directory { top_files: false })])
     }
 
     pub fn list(&self) -> &[Skill] {
@@ -393,6 +409,7 @@ mod tests {
         let root = Path::new("/nonexistent/repo/sub");
         let found = places(
             &[PathBuf::from("/listed")],
+            &[PathBuf::from("/sets/mach12")],
             &SkillOptions::default(),
             root,
             Some(Path::new("/home/u/.scramjet/agent")),
@@ -413,6 +430,7 @@ mod tests {
                 (PathBuf::from("/nonexistent/.agents/skills"), nested()),
                 (PathBuf::from("/.agents/skills"), nested()),
                 (PathBuf::from("/listed"), Place::Listed),
+                (PathBuf::from("/sets/mach12/skills"), nested()),
                 (
                     PathBuf::from("/home/u/.scramjet/agent/skills"),
                     Place::Directory { top_files: true }
@@ -426,7 +444,14 @@ mod tests {
         let project = home.join("repo/sub");
         fs::create_dir_all(home.join("repo/.git")).unwrap();
         fs::create_dir_all(&project).unwrap();
-        let found = places(&[], &SkillOptions::default(), &project, None, Some(&home));
+        let found = places(
+            &[],
+            &[],
+            &SkillOptions::default(),
+            &project,
+            None,
+            Some(&home),
+        );
         let found: Vec<_> = found.iter().map(|(path, _)| path.clone()).collect();
         assert_eq!(
             found,
@@ -438,7 +463,7 @@ mod tests {
             ]
         );
         // The user's `~/.agents/skills` is never also a project's.
-        let found = places(&[], &SkillOptions::default(), &home, None, Some(&home));
+        let found = places(&[], &[], &SkillOptions::default(), &home, None, Some(&home));
         let user = home.join(".agents/skills");
         assert_eq!(found.iter().filter(|(path, _)| path == &user).count(), 1);
         assert_eq!(found.last().unwrap().0, user);
@@ -583,6 +608,7 @@ hyphens only)",
         };
         let found = places(
             &[PathBuf::from("/listed")],
+            &[PathBuf::from("/set")],
             &given,
             Path::new("/"),
             None,
@@ -606,6 +632,7 @@ hyphens only)",
         };
         let found = places(
             &[PathBuf::from("/listed")],
+            &[PathBuf::from("/set")],
             &only,
             Path::new("/"),
             None,
@@ -620,6 +647,7 @@ hyphens only)",
         );
         assert!(
             places(
+                &[],
                 &[],
                 &SkillOptions {
                     no_skills: true,

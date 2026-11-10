@@ -98,12 +98,19 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
             let agents = (installed.agents.iter())
                 .filter(|agent| agent.source == AgentSource::Set(set.name.clone()))
                 .count();
+            let skills = match (loaded.skills.iter())
+                .filter(|skill| skill.path.starts_with(&set.directory))
+                .count()
+            {
+                0 => String::new(),
+                n => format!(", {}", count(n, "skill")),
+            };
             let providers = match set.directory.join("models.json").is_file() {
                 true => " Its models.json adds providers.",
                 false => "",
             };
             let contents = format!(
-                "{}, {}.{providers}",
+                "{}, {}{skills}.{providers}",
                 count(commands, "command"),
                 count(agents, "agent")
             );
@@ -431,7 +438,7 @@ mod tests {
         write(&settings, "{}");
         let sets = Sets::find(std::slice::from_ref(&set), None, &root.join(".scramjet"));
         let commands = Commands::discover(&sets);
-        let skills = Skills::discover(&[], &Default::default(), &root);
+        let skills = Skills::discover(&[], sets.list(), &Default::default(), &root);
         let agent = |name: &str, path: PathBuf, source| AgentFile {
             name: name.to_owned(),
             description: format!("Does {name}."),

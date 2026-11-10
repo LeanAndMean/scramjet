@@ -2853,7 +2853,7 @@ fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
             sets: &sets,
         };
         let agents = subagent::discover(&sources, &project, subagent::Scope::Both);
-        let skills = Skills::discover(&[], &SkillOptions::default(), &project);
+        let skills = Skills::discover(&[], sets.list(), &SkillOptions::default(), &project);
         let mut said: Vec<String> = (loaded.problems.iter())
             .chain(sets.warnings())
             .chain(&edges.diagnostics)
