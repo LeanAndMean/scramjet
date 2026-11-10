@@ -971,29 +971,29 @@ mod tests {
     #[test]
     fn a_package_is_one_set_or_holds_sets_at_its_top_and_marked_deeper() {
         let scratch = Scratch::new("package");
-        scratch.file("root/commands/root:x.md", "");
-        scratch.file("root/inner/commands/inner:y.md", "");
+        scratch.file("root/commands/x.md", "");
+        scratch.file("root/inner/commands/y.md", "");
         assert_eq!(sets_in(&scratch.0.join("root")), [scratch.0.join("root")]);
 
         let repo = scratch.0.join("repo");
         scratch.file("repo/README.md", "");
-        scratch.file("repo/top/agents/top:a.md", "");
+        scratch.file("repo/top/agents/a.md", "");
         // Code in a `commands` directory, as Scramjet's `src/commands`, is no set.
         scratch.file("repo/src/commands/index.ts", "");
         scratch.file("repo/dist/agents/catalog.js", "");
         scratch.file("repo/providers/models.json", "{}");
         scratch.file("repo/top/nested/set.yaml", "");
-        scratch.file("repo/top/nested/commands/nested:x.md", "");
+        scratch.file("repo/top/nested/commands/x.md", "");
         scratch.file("repo/packages/kit/mach12/set.yaml", "name: mach12\n");
-        scratch.file("repo/packages/kit/mach12/commands/mach12:x.md", "");
+        scratch.file("repo/packages/kit/mach12/commands/x.md", "");
         scratch.file("repo/packages/kit/providers/set.yaml", "");
         scratch.file("repo/packages/kit/providers/models.json", "{}");
-        scratch.file("repo/packages/kit/tests/fixture/commands/fixture:x.md", "");
+        scratch.file("repo/packages/kit/tests/fixture/commands/x.md", "");
         scratch.file("repo/packages/kit/marked/set.yaml", "");
         scratch.file("repo/.hidden/set.yaml", "");
-        scratch.file("repo/.hidden/commands/hidden:x.md", "");
+        scratch.file("repo/.hidden/commands/x.md", "");
         scratch.file("repo/node_modules/dep/set.yaml", "");
-        scratch.file("repo/node_modules/dep/commands/dep:x.md", "");
+        scratch.file("repo/node_modules/dep/commands/x.md", "");
         #[cfg(unix)]
         std::os::unix::fs::symlink(repo.join("packages/kit"), repo.join("link")).unwrap();
         assert_eq!(
@@ -1004,7 +1004,9 @@ mod tests {
                 "providers",
                 "top"
             ]
-            .map(|set| repo.join(set))
+            .map(|set| set
+                .split('/')
+                .fold(repo.clone(), |path, part| path.join(part)))
         );
         assert!(sets_in(&scratch.0.join("missing")).is_empty());
     }

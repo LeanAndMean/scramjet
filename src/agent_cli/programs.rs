@@ -272,7 +272,16 @@ mod tests {
             )
         );
         let program = clone.join("bin/tool");
-        let output = Command::new(&program).output().unwrap();
+        // Another test's child forked during the write holds the file open for a moment.
+        let output = (0..100)
+            .find_map(|_| match Command::new(&program).output() {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    None
+                }
+                output => Some(output.unwrap()),
+            })
+            .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "hello\n");
         assert_eq!(
             fs::metadata(&program).unwrap().permissions().mode() & 0o777,

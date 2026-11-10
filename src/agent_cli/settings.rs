@@ -3073,9 +3073,9 @@ mod tests {
         for directory in ["mach12/commands", "scramjet/agents", "skills/a", "themes"] {
             std::fs::create_dir_all(package.join(directory)).unwrap();
         }
-        std::fs::write(package.join("mach12/commands/mach12:x.md"), "X\n").unwrap();
-        std::fs::write(package.join("scramjet/agents/scramjet:y.md"), "Y\n").unwrap();
-        let other = scratch.0.join("other/scramjet");
+        std::fs::write(package.join("mach12/commands/x.md"), "X\n").unwrap();
+        std::fs::write(package.join("scramjet/agents/y.md"), "Y\n").unwrap();
+        let other = scratch.0.join("other").join("scramjet");
         std::fs::create_dir_all(other.join("commands")).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mach12 = scramjet_rs::os::tilde(&package.join("mach12"));
