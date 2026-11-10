@@ -550,7 +550,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             (name, None) if PUBLICATION_TOOLS.contains(&name) => {
                 styled(preview(output, Shown::All, width))
             }
-            ("bash", None) => styled(preview(
+            (name, None) if scramjet_rs::agent::is_shell(name) => styled(preview(
                 &bash_shown(output, failed),
                 shown(Shown::Last(BASH_LINES)),
                 width,
@@ -567,7 +567,9 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         self.padded(outcome, &gutter, &rows);
         // The other looks say it in the call's heading.
         let took = took.filter(|_| self.design == Design::Classic);
-        if let Some(took) = took.filter(|took| name == "bash" && *took >= Duration::from_secs(1)) {
+        if let Some(took) = took
+            .filter(|took| scramjet_rs::agent::is_shell(name) && *took >= Duration::from_secs(1))
+        {
             let took = self.dim(&format!("Took {:.1}s", took.as_secs_f64()));
             self.err(&format!("{}{took}\n", gutter.rest));
         }
@@ -1089,8 +1091,10 @@ impl AgentUi for Terminal {
         let line = match self.design {
             Design::Classic => self.dim(&call_line(name, &summary, width, self.marked)),
             design => {
-                let took = (took.filter(|took| tool == "bash" && *took >= Duration::from_secs(1)))
-                    .map(|took| format!("{:.1}s", took.as_secs_f64()));
+                let took = (took.filter(|took| {
+                    scramjet_rs::agent::is_shell(tool) && *took >= Duration::from_secs(1)
+                }))
+                .map(|took| format!("{:.1}s", took.as_secs_f64()));
                 design.heading(name, &summary, outcome, took.as_deref(), width, self.marked)
             }
         };

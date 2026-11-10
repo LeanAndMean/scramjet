@@ -2033,7 +2033,7 @@ mod tests {
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert_eq!(settings.default_thinking_level, None);
-        assert_eq!(settings.tools, CODING_TOOLS);
+        assert_eq!(settings.tools, DEFAULT_TOOLS);
         assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
         assert_eq!(settings.steering_mode, Delivery::All);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
@@ -2351,7 +2351,7 @@ mod tests {
         );
         assert_eq!(settings.tools, ["read", "grep", "bash", "ls", "find"]);
         let path = shown(&scratch.0.join("settings.json"));
-        let known = "read, bash, edit, write, grep, find, ls";
+        let known = CODING_TOOLS.join(", ");
         assert_eq!(
             settings.warnings,
             [
@@ -2362,7 +2362,7 @@ mod tests {
         let none = settings_with(&scratch, r#"{"tools": []}"#);
         assert!(none.tools.is_empty() && none.warnings.is_empty());
         let wrong = settings_with(&scratch, r#"{"tools": "read,grep"}"#);
-        assert_eq!(wrong.tools, CODING_TOOLS);
+        assert_eq!(wrong.tools, DEFAULT_TOOLS);
         assert_eq!(
             wrong.warnings,
             [format!(

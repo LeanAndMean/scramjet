@@ -37,6 +37,8 @@ pub(super) fn agent(
         .map(|tool| match tool {
             "read" => "- read: Read file contents",
             "bash" => "- bash: Execute bash commands (ls, grep, find, etc.)",
+            "powershell" => "- powershell: Execute PowerShell commands",
+            "cmd" => "- cmd: Execute cmd.exe command lines (batch files, tools that expect cmd)",
             "edit" => {
                 "- edit: Make precise file edits with exact text replacement, including multiple \
 disjoint edits in one call"
@@ -62,18 +64,22 @@ disjoint edits in one call"
     listed.extend(
         (snippets.filter(|(tool, _)| has(tool))).map(|(tool, text)| format!("- {tool}: {text}")),
     );
-    let mut guidelines = Vec::new();
-    if has("bash") {
-        guidelines.push(match ["grep", "find", "ls"].iter().any(|tool| has(tool)) {
-            true => {
-                "- Prefer grep/find/ls tools over bash for file exploration (faster, respects \
-.gitignore)"
-            }
-            false => {
-                "- Use bash for file operations like ls, rg, find, and for git, builds and tests"
-            }
-        });
-    }
+    let shells: Vec<&str> = (["bash", "powershell", "cmd"].into_iter())
+        .filter(|shell| has(shell))
+        .collect();
+    let shell_guideline = shells.first().map(|shell| {
+        match ["grep", "find", "ls"].iter().any(|tool| has(tool)) {
+            true => format!(
+                "- Prefer grep/find/ls tools over {} for file exploration (faster, respects \
+.gitignore)",
+                shells.join(" or ")
+            ),
+            false => format!(
+                "- Use {shell} for file operations like ls, rg, find, and for git, builds and tests"
+            ),
+        }
+    });
+    let mut guidelines: Vec<&str> = shell_guideline.as_deref().into_iter().collect();
     if has("read") {
         guidelines.push("- Use read to examine files instead of cat or sed.");
     }
@@ -526,11 +532,12 @@ mod tests {
     fn the_tools_and_guidelines_listed_are_the_configured_ones() {
         let root = Path::new("/nonexistent/scramjet-rs-instructions");
         let commands = Commands::default();
-        let tools = super::super::tools::offered(
-            &["read", "bash", "edit", "write"].map(String::from),
-            None,
-            false,
-        );
+        let harness = (super::super::tools::HARNESS_TOOLS.into_iter())
+            .filter(|tool| !mcp::TOOLS.contains(tool));
+        let tools: Vec<&str> = ["read", "bash", "edit", "write"]
+            .into_iter()
+            .chain(harness)
+            .collect();
         let text = agent(
             root,
             &tools,
@@ -573,11 +580,7 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
             mcp::CALL_SNIPPET
         );
         assert!(text.contains(&listed), "{text}");
-        let all = super::super::tools::offered(
-            &super::super::tools::CODING_TOOLS.map(String::from),
-            None,
-            false,
-        );
+        let all = ["read", "bash", "edit", "write", "grep", "find", "ls"];
         let text = agent(
             root,
             &all,
@@ -590,6 +593,18 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
             "Guidelines:\n- Prefer grep/find/ls tools over bash for file exploration (faster, \
 respects .gitignore)\n- Use read"
         ));
+        let text = |tools: &[&str]| {
+            let (skills, loaded) = (Skills::default(), Loaded::default());
+            agent(root, tools, &commands, &[], &skills, &loaded)
+        };
+        let windows = text(&["read", "powershell", "cmd", "grep"]);
+        assert!(
+            !cfg!(windows)
+                || windows.contains("- powershell: Execute PowerShell commands\n- cmd: ")
+        );
+        assert!(windows.contains("- Prefer grep/find/ls tools over powershell or cmd for file"));
+        let alone = text(&["powershell"]);
+        assert!(alone.contains("- Use powershell for file operations like ls, rg, find, and for"));
     }
 
     #[test]

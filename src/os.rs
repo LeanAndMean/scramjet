@@ -344,6 +344,64 @@ fn windows_bash(programs: &[PathBuf], path: &[PathBuf], windows: Option<&Path>) 
         .find(|bash| bash.is_file())
 }
 
+/// The PowerShell that runs the `powershell` tool's commands on Windows, as Claude Code finds it:
+/// `pwsh` 7 on the `PATH`, installed or as a .NET tool, else Windows PowerShell 5.1 on the `PATH`
+/// or in the system's directory. `None` elsewhere, or when there is none.
+pub fn powershell() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let variable = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    let path: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    windows_powershell(
+        &path,
+        variable("ProgramFiles").as_deref(),
+        variable("USERPROFILE").as_deref(),
+        variable("SystemRoot").as_deref(),
+    )
+}
+
+fn windows_powershell(
+    path: &[PathBuf],
+    programs: Option<&Path>,
+    profile: Option<&Path>,
+    windows: Option<&Path>,
+) -> Option<PathBuf> {
+    let on_path = |name: &'static str| path.iter().map(move |directory| directory.join(name));
+    let installed = programs.map(|programs| programs.join("PowerShell").join("7").join("pwsh.exe"));
+    let tool = profile.map(|profile| profile.join(".dotnet").join("tools").join("pwsh.exe"));
+    let system = windows.map(|windows| {
+        let directory = windows.join("System32").join("WindowsPowerShell");
+        directory.join("v1.0").join("powershell.exe")
+    });
+    on_path("pwsh.exe")
+        .chain(installed)
+        .chain(tool)
+        .chain(on_path("powershell.exe"))
+        .chain(system)
+        .find(|program| program.is_file())
+}
+
+/// Whether `powershell` is PowerShell 7 (`pwsh`) rather than Windows PowerShell 5.1.
+pub fn is_pwsh(powershell: &Path) -> bool {
+    let stem = powershell.file_stem().unwrap_or_default();
+    stem.to_string_lossy().eq_ignore_ascii_case("pwsh")
+}
+
+/// `cmd.exe` on Windows: `ComSpec`, else the system's. `None` elsewhere.
+pub fn cmd() -> Option<PathBuf> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let system = std::env::var_os("SystemRoot")
+        .map(|windows| PathBuf::from(windows).join("System32").join("cmd.exe"));
+    (std::env::var_os("ComSpec").map(PathBuf::from).into_iter())
+        .chain(system)
+        .find(|program| program.is_file())
+}
+
 /// The program `name` runs: on Windows, a bare name is looked for in the directories of `path`
 /// (else the `PATH`) with each of `PATHEXT`'s extensions, as `cmd.exe` and Codex find `npx.cmd`,
 /// which `Command` misses (it looks only for `.exe`). Otherwise, or when none is there, `name`.
@@ -383,6 +441,19 @@ pub fn own_group(command: &mut Command) -> &mut Command {
     std::os::unix::process::CommandExt::process_group(command, 0);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(command, windows::NEW_GROUP);
+    command
+}
+
+/// As `own_group`, and on Windows with a console of its own that has no window, so that the code
+/// page it sets, and what it or its programs write to the console rather than their output, stay
+/// out of scramjet-rs's.
+pub fn own_group_and_console(command: &mut Command) -> &mut Command {
+    own_group(command);
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(
+        command,
+        windows::NEW_GROUP | windows::NO_WINDOW,
+    );
     command
 }
 
@@ -480,6 +551,7 @@ mod windows {
     };
 
     pub(super) const NEW_GROUP: u32 = CREATE_NEW_PROCESS_GROUP;
+    pub(super) const NO_WINDOW: u32 = CREATE_NO_WINDOW;
 
     struct Job(windows_sys::Win32::Foundation::HANDLE);
 
@@ -563,7 +635,10 @@ mod windows {
                 .map(|at| unsafe { *first.add(at) } as u32)
                 .collect()
         };
-        Some(ids.into_iter().map(|pid| (pid, image(pid))).collect())
+        // A console's host ends once its programs have; one that serves a program still running
+        // comes with that program, which is listed.
+        let listed = ids.into_iter().map(|pid| (pid, image(pid)));
+        Some((listed.filter(|(_, program)| !program.eq_ignore_ascii_case("conhost.exe"))).collect())
     }
 
     /// The file name of process `pid`'s program, or `?`.
@@ -723,6 +798,40 @@ mod tests {
         assert_eq!(found(&[at(&["Program Files"])]), Some(installed));
         let only_wsl = [wsl.parent().unwrap().to_owned()];
         assert_eq!(windows_bash(&[], &only_wsl, Some(&windows)), None);
+    }
+
+    #[test]
+    fn windows_prefers_powershell_7_to_windows_powershell() {
+        let root = std::env::temp_dir().join(format!("scramjet-rs-pwsh-{}", std::process::id()));
+        let _scratch = Scratch(root.clone());
+        let at = |parts: &[&str]| (parts.iter()).fold(root.clone(), |path, part| path.join(part));
+        let file = |parts: &[&str]| {
+            let path = at(parts);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "").unwrap();
+            path
+        };
+        let (programs, profile, windows) =
+            (at(&["Program Files"]), at(&["Users", "a"]), at(&["W"]));
+        let path = [at(&["bin"])];
+        let found = || windows_powershell(&path, Some(&programs), Some(&profile), Some(&windows));
+        assert_eq!(found(), None);
+        let system = file(&[
+            "W",
+            "System32",
+            "WindowsPowerShell",
+            "v1.0",
+            "powershell.exe",
+        ]);
+        assert_eq!(found(), Some(system.clone()));
+        let tool = file(&["Users", "a", ".dotnet", "tools", "pwsh.exe"]);
+        assert_eq!(found(), Some(tool));
+        let installed = file(&["Program Files", "PowerShell", "7", "pwsh.exe"]);
+        assert_eq!(found(), Some(installed.clone()));
+        let on_path = file(&["bin", "pwsh.exe"]);
+        assert_eq!(found(), Some(on_path.clone()));
+        assert!(is_pwsh(&on_path) && is_pwsh(Path::new("PWSH.EXE")));
+        assert!(!is_pwsh(&system));
     }
 
     #[test]

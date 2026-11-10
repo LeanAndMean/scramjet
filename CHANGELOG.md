@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.128.0 — PowerShell and cmd tools on Windows
+
+### Added
+
+- On Windows the agent has a `powershell` tool, on by default: PowerShell 7 (`pwsh`) where it is installed, else Windows PowerShell 5.1, its description naming the edition and what 5.1 lacks. A `cmd` tool, off by default, runs a cmd.exe command line (`tools` in `/settings`). Both print UTF-8, end whole on Escape or a timeout, and list what they left running.
+- On Windows without Git Bash the `bash` tool is off, and each launch says so and how to get it; `/settings` marks a shell that is not found. `!` commands still need bash there.
+
 ## 0.127.0 — All seven tools by default; grep and find built in
 
 ### Changed

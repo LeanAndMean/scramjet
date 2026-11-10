@@ -1157,6 +1157,9 @@ fn child_tools(
             Some(known) if !tools.contains(known) => tools.push(*known),
             Some(_) => {}
             None if matches!(tool.as_str(), "write" | "edit") => writers.push(tool.as_str()),
+            None if cfg!(windows) && sandbox.is_err() && tools::is_shell(tool) => {
+                unconfined.push(tool.as_str())
+            }
             None => missing.push(tool.as_str()),
         }
     }

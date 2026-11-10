@@ -75,8 +75,9 @@ pub use status::{Completed, FRESH_MARK, Next, Reopened, Routing, Source, Step};
 pub use subagent::agent_directory;
 pub use suggest::Suggested;
 pub use tools::{
-    CODING_TOOLS, DEFAULT_TOOLS, HARNESS_TOOLS, READ_MORE, offline, read_line_too_long,
-    sequence_diff, set_shell, shortened, terminal_line, write_replacing,
+    CODING_TOOLS, DEFAULT_TOOLS, HARNESS_TOOLS, READ_MORE, found, is_shell, missing_shells,
+    offline, read_line_too_long, sequence_diff, set_shell, shortened, terminal_line,
+    write_replacing,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{

@@ -133,6 +133,8 @@ fn tool_note(tool: &str) -> &'static str {
     match tool {
         "read" => "Read file contents",
         "bash" => "Execute bash commands",
+        "powershell" => "Execute PowerShell commands",
+        "cmd" => "Execute cmd.exe command lines",
         "edit" => "Make precise file edits with exact text replacement",
         "write" => "Create or overwrite files",
         "grep" => "Search file contents for patterns, as ripgrep",
@@ -466,7 +468,12 @@ impl Interactive {
                 .map(|tool| format!("[{}] {tool}", if on(tool) { "x" } else { " " }))
                 .collect();
             let notes = (CODING_TOOLS.iter())
-                .map(|tool| tool_note(tool).to_owned())
+                .map(
+                    |tool| match !cfg!(windows) || scramjet_rs::agent::found(tool) {
+                        true => tool_note(tool).to_owned(),
+                        false => format!("{}; not found, so off", tool_note(tool)),
+                    },
+                )
                 .collect();
             let picker = select::Picker::select(
                 "Tools",

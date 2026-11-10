@@ -570,11 +570,13 @@ fn label(item: &TreeItem, paint: &dyn Fn(Style, &str) -> String) -> String {
             assistant(TREE_ERROR, &error)
         }
         TreeItem::Command(command) => paint(TREE_OTHER, &format!("[bash]: {}", clean(command))),
-        TreeItem::Tool(name, summary) | TreeItem::Call(name, summary) if name == "bash" => {
+        TreeItem::Tool(name, summary) | TreeItem::Call(name, summary)
+            if scramjet_rs::agent::is_shell(name) =>
+        {
             let command = text::one_line(summary);
             let call = match command.char_indices().nth(50) {
-                Some((end, _)) => format!("[bash: {}...]", &command[..end]),
-                None => format!("[bash: {command}]"),
+                Some((end, _)) => format!("[{name}: {}...]", &command[..end]),
+                None => format!("[{name}: {command}]"),
             };
             paint(TREE_OTHER, &clean(&call))
         }

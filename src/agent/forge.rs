@@ -113,7 +113,7 @@ impl Exec for System<'_> {
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let Ok((mut child, group)) = super::tools::Group::spawn(&mut command) else {
+        let Ok((mut child, group)) = super::tools::Group::spawn(&mut command, false) else {
             return Ran::default();
         };
         let writer = child.stdin.take().map(|mut stdin| {

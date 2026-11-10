@@ -596,7 +596,7 @@ impl Tools<'_> {
                 ui.tool_running(std::time::Instant::now());
                 let named = self.parent.providers.credential_files();
                 let mut hide = self.hide_credentials || self.sandbox.is_some();
-                let command = ["bash", "grep", "find"].contains(&call.name);
+                let command = tools::is_shell(call.name) || ["grep", "find"].contains(&call.name);
                 if hide && self.sandbox.is_none() && !tools::HIDES_COMMANDS && command {
                     not_hidden(ui);
                     hide = false;

@@ -1,0 +1,107 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "settings": {
+    "tools": [
+      "read",
+      "bash",
+      "powershell",
+      "cmd",
+      "edit",
+      "write",
+      "grep",
+      "find",
+      "ls"
+    ]
+  },
+  "prompt": "Try the shells",
+  "replies": [
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Write-Output 'héllo → ok'; $PSVersionTable.PSVersion.Major; @(Get-ChildItem env:SCRAMJET_RS*).Count; 'x' > out.txt; (Get-Content -Encoding Byte out.txt)[0..2] -join ','"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "cmd /c exit 3"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Get-Item nonexistent"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Write-Output (1 +"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "param()\nexit 5"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Write-Output started; Start-Sleep 30",
+          "timeout": 2
+        }
+      }
+    ],
+    [
+      {
+        "call": "cmd",
+        "arguments": {
+          "command": "echo %OS% & echo héllo → ok & dir /b README.md && echo 100%"
+        }
+      }
+    ],
+    [
+      {
+        "call": "cmd",
+        "arguments": {
+          "command": "echo \"a & b\" & echo c ^& d & set SCRAMJET_RS"
+        }
+      }
+    ],
+    [
+      {
+        "call": "cmd",
+        "arguments": {
+          "command": "exit /b 4"
+        }
+      }
+    ],
+    [
+      {
+        "call": "cmd",
+        "arguments": {
+          "command": "echo one\necho two"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Done."
+      }
+    ]
+  ]
+}

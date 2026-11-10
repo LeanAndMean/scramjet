@@ -260,7 +260,7 @@ fn waits(calls: &[Option<Call>], root: &Path) -> Vec<Vec<usize>> {
     }
     let kinds: Vec<Kind> = (calls.iter())
         .map(|call| match call.as_ref().map(|call| (call.name, call)) {
-            Some(("bash", _)) => Kind::Bash,
+            Some((name, _)) if tools::is_shell(name) => Kind::Bash,
             Some(("edit" | "write", call)) => {
                 let path =
                     tools::resolve(root, call.arguments["path"].as_str().unwrap_or_default());

@@ -315,6 +315,8 @@ fn start(
         })
         .map(|name| format!("--tools: {name} is not one of scramjet-rs's tools; ignored"))
         .collect();
+    let missing_shells =
+        agent::missing_shells(options.only_tools.as_ref().unwrap_or(&settings.tools));
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let skill_options = SkillOptions {
         paths: (options.skills.iter())
@@ -372,6 +374,7 @@ fn start(
     };
     warnings.extend((scope_warnings.iter()).map(|warning| format!("{source}: {warning}")));
     warnings.extend(unknown_tools);
+    warnings.extend(missing_shells);
     agent.set_model_scope(scoped.iter().map(|scoped| scoped.model.clone()).collect());
     let new = !chosen && agent.last_model().is_none();
     let remembered = new

@@ -58,11 +58,78 @@ const GREP_LINE_CHARS: usize = 500;
 /// Unchanged lines shown around each change in an edit diff, as in Scramjet.
 const DIFF_CONTEXT: usize = 4;
 
-/// The coding tools the agent can be given, in the order the model sees them.
+/// The coding tools the agent can be given, in the order the model sees them: on Windows the
+/// `powershell` and `cmd` shells too (user decision, 2026-11-09).
+#[cfg(not(windows))]
 pub const CODING_TOOLS: [&str; 7] = ["read", "bash", "edit", "write", "grep", "find", "ls"];
+#[cfg(windows)]
+pub const CODING_TOOLS: [&str; 9] = [
+    "read",
+    "bash",
+    "powershell",
+    "cmd",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+];
 /// What the agent has unless the settings list others: all of them (Scramjet's are the first
-/// four).
+/// four) but `cmd`. A shell that is not found is not offered (`found`).
+#[cfg(not(windows))]
 pub const DEFAULT_TOOLS: [&str; 7] = CODING_TOOLS;
+#[cfg(windows)]
+pub const DEFAULT_TOOLS: [&str; 8] = [
+    "read",
+    "bash",
+    "powershell",
+    "edit",
+    "write",
+    "grep",
+    "find",
+    "ls",
+];
+
+/// Whether tool `name` runs commands in a shell.
+pub fn is_shell(name: &str) -> bool {
+    matches!(name, "bash" | "powershell" | "cmd")
+}
+
+/// Whether the program a coding tool needs is there: a shell's.
+pub fn found(tool: &str) -> bool {
+    match tool {
+        "bash" => shell_program().is_ok(),
+        "powershell" => crate::os::powershell().is_some(),
+        "cmd" => crate::os::cmd().is_some(),
+        _ => true,
+    }
+}
+
+/// What a launch says of the shells among `tools` that are not found.
+pub fn missing_shells(tools: &[String]) -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let listed = |tool: &str| tools.iter().any(|listed| listed == tool);
+    let mut missing = Vec::new();
+    if listed("bash")
+        && let Err(error) = shell_program()
+    {
+        let instead = ["powershell", "cmd"]
+            .into_iter()
+            .find(|shell| listed(shell) && found(shell));
+        missing.push(match instead {
+            Some(shell) => format!("The bash tool is off: {error}. Commands run in {shell}"),
+            None => format!("The bash tool is off: {error}"),
+        });
+    }
+    for shell in ["powershell", "cmd"] {
+        if listed(shell) && !found(shell) {
+            missing.push(format!("The {shell} tool is off: no {shell}.exe was found"));
+        }
+    }
+    missing
+}
 
 /// The harness's own tools, which the model sees after the coding tools, in this order.
 pub const HARNESS_TOOLS: [&str; 12] = [
@@ -85,7 +152,9 @@ pub const HARNESS_TOOLS: [&str; 12] = [
 /// `only` (`--tools`), those it names alone, as Scramjet's allowlist.
 pub(super) fn offered(coding: &[String], only: Option<&[String]>, mcp: bool) -> Vec<&'static str> {
     let named = |names: &[String], tool: &str| names.iter().any(|name| name == tool);
-    let coding = (CODING_TOOLS.into_iter()).filter(|tool| named(only.unwrap_or(coding), tool));
+    let coding = (CODING_TOOLS.into_iter())
+        .filter(|tool| named(only.unwrap_or(coding), tool))
+        .filter(|tool| !cfg!(windows) || found(tool));
     let harness = (HARNESS_TOOLS.into_iter())
         .filter(|tool| only.is_none_or(|only| named(only, tool)))
         .filter(|tool| mcp || !super::mcp::TOOLS.contains(tool));
@@ -154,6 +223,18 @@ fn definition(name: &str, sandboxed: bool) -> Value {
             "command":{"type":"string","description":"Bash command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
           "required":["command"]}}),
+        "powershell" => json!({"type":"function","name":"powershell","strict":false,
+         "description":format!("Run a PowerShell command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output. {}", powershell_edition()),
+         "parameters":{"type":"object","properties":{
+            "command":{"type":"string","description":"PowerShell command to execute"},
+            "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
+          "required":["command"]}}),
+        "cmd" => json!({"type":"function","name":"cmd","strict":false,
+         "description":"Run a command line with cmd.exe in the project directory, for batch files and tools that expect cmd. One line: join commands with &, && or ||. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
+         "parameters":{"type":"object","properties":{
+            "command":{"type":"string","description":"cmd.exe command line to execute"},
+            "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
+          "required":["command"]}}),
         "grep" => json!({"type":"function","name":"grep","strict":false,
         "description":format!("Search file contents for a pattern. Returns matching lines with file paths and line numbers. Respects .gitignore. Output is truncated to {GREP_LIMIT} matches or {}KB (whichever is hit first). Long lines are truncated to {GREP_LINE_CHARS} chars.", MAX_BYTES / 1024),
         "parameters":{"type":"object","properties":{
@@ -177,6 +258,18 @@ fn definition(name: &str, sandboxed: bool) -> Value {
         "parameters":{"type":"object","properties":{
             "path":{"type":"string","description":"Directory to list (default: current directory)"},
             "limit":{"type":"integer","description":format!("Maximum number of entries to return (default: {LS_LIMIT})")}}}}),
+    }
+}
+
+/// What the `powershell` tool's description says of the PowerShell found, as Claude Code's.
+fn powershell_edition() -> &'static str {
+    match crate::os::powershell().is_some_and(|program| crate::os::is_pwsh(&program)) {
+        true => {
+            "This is PowerShell 7 (pwsh): `&&`, `||`, `?:`, `??` and `?.` work; files are written as UTF-8 without a BOM."
+        }
+        false => {
+            "This is Windows PowerShell 5.1 (powershell.exe): `&&`, `||`, `?:`, `??` and `?.` do not parse (run B after A succeeds with `A; if ($?) { B }`; use if/else and `$null -eq` checks). Don't redirect a native program's stderr with `2>&1`: it wraps each line in an error record and fails the command even when the program succeeded; stderr is captured already. `>`, `>>` and `Out-File` write UTF-8 with a BOM; pass `-Encoding utf8` to `Set-Content` and `Add-Content`. `ConvertFrom-Json` has no `-AsHashtable`."
+        }
     }
 }
 
@@ -213,7 +306,7 @@ impl<'a> Call<'a> {
     /// A one-line description for display.
     pub fn summary(&self) -> String {
         match self.name {
-            "bash" => self.arguments["command"].as_str().unwrap_or("").to_owned(),
+            name if is_shell(name) => self.arguments["command"].as_str().unwrap_or("").to_owned(),
             "ls" => shortened(self.arguments["path"].as_str().unwrap_or(".")),
             "grep" | "find" => {
                 let pattern = self.arguments["pattern"].as_str().unwrap_or("");
@@ -287,7 +380,7 @@ impl<'a> Call<'a> {
                 self.arguments["server"].as_str().unwrap_or("")
             )),
             // The call line above the question shows the whole command.
-            "bash" => Approval::Ask(format!("Run in {}", root.display())),
+            name if is_shell(name) => Approval::Ask(format!("Run in {}", root.display())),
             "write" | "edit" => {
                 let given = self.arguments["path"].as_str().unwrap_or("");
                 let path = resolve(root, given);
@@ -335,6 +428,16 @@ impl<'a> Call<'a> {
                 };
             }
             "bash" => return bash(root, self, hidden, cancel, progress),
+            "powershell" | "cmd" if hidden.is_none() => {
+                let ran = run_windows_shell(root, self, cancel, progress)?;
+                return Ok(ran.tool_output());
+            }
+            "powershell" | "cmd" => {
+                return Err(format!(
+                    "{} cannot run with the credential stores hidden",
+                    self.name
+                ));
+            }
             other => return Err(format!("Tool {other} not found")),
         };
         Ok(Output {
@@ -371,7 +474,7 @@ impl<'a> Call<'a> {
                 let process = sandbox::sandboxed(root, self.str("command")?, hidden, sandbox)?;
                 let timeout = timeout(self);
                 Ok(
-                    run_process(process, sandbox::PROGRAM, timeout, cancel, progress)?
+                    run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress)?
                         .tool_output(),
                 )
             }
@@ -414,10 +517,10 @@ impl<'a> Call<'a> {
         })
     }
 
-    /// Refuses a path argument in a hidden credential store; bash has none.
+    /// Refuses a path argument in a hidden credential store; the shells have none.
     fn check_path(&self, root: &Path, hidden: &Hidden) -> Result<(), String> {
         match self.name {
-            "bash" => Ok(()),
+            name if is_shell(name) => Ok(()),
             _ => hidden.check(&resolve(
                 root,
                 self.arguments["path"].as_str().unwrap_or("."),
@@ -1338,9 +1441,9 @@ fn bash(
         None => run_command(root, command, timeout, cancel, progress)?,
         Some(hidden) => {
             let process = sandbox::hiding(root, command, hidden)?;
-            run_process(process, sandbox::PROGRAM, timeout, cancel, progress).map_err(|error| {
-                format!("{error}; it hides the credential stores from this command")
-            })?
+            run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress).map_err(
+                |error| format!("{error}; it hides the credential stores from this command"),
+            )?
         }
     };
     Ok(ran.tool_output())
@@ -1422,10 +1525,17 @@ static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 pub(super) struct Group(u32);
 
 impl Group {
-    pub(super) fn spawn(command: &mut Command) -> io::Result<(std::process::Child, Self)> {
+    /// `own_console`: with a console of its own (`os::own_group_and_console`).
+    pub(super) fn spawn(
+        command: &mut Command,
+        own_console: bool,
+    ) -> io::Result<(std::process::Child, Self)> {
         // Held while spawning, so that none starts once `end_commands` has run.
         let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
-        let child = crate::os::own_group(command).spawn()?;
+        let child = match own_console {
+            true => crate::os::own_group_and_console(command).spawn()?,
+            false => crate::os::own_group(command).spawn()?,
+        };
         crate::os::hold_group(&child);
         let group = child.id();
         groups.push(group);
@@ -1605,7 +1715,7 @@ pub(super) fn run_command(
     let mut process = Command::new(shell_program()?);
     bash_runs(&mut process, command);
     process.current_dir(root);
-    run_process(process, "bash", timeout, cancel, progress)
+    run_process(process, "bash", false, timeout, cancel, progress)
 }
 
 /// The settings' `shellPath` and `shellCommandPrefix`, as Scramjet's: the shell that runs the
@@ -1661,6 +1771,70 @@ pub(super) fn bash_runs(process: &mut Command, command: &str) {
         .env(COMMAND_VARIABLE, prefixed(command));
 }
 
+/// As `run_command`, the call's command in PowerShell or cmd (`call.name`), each with a console of
+/// its own set to UTF-8, so that what they print reads as bash's does.
+fn run_windows_shell(
+    root: &Path,
+    call: &Call,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(&str),
+) -> Result<Ran, String> {
+    let command = call.str("command")?;
+    let mut process = match call.name {
+        "powershell" => {
+            let program = crate::os::powershell().ok_or("no PowerShell was found")?;
+            let mut process = Command::new(program);
+            (process.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]))
+                .arg(POWERSHELL_BOOTSTRAP)
+                .env(COMMAND_VARIABLE, command);
+            process
+        }
+        _ => {
+            if command.contains(['\n', '\r']) {
+                return Err(
+                    "cmd runs one line: join its commands with &, && or ||, or write \
+                            them to a batch file and run that"
+                        .into(),
+                );
+            }
+            let mut process = Command::new(crate::os::cmd().ok_or("no cmd.exe was found")?);
+            cmd_runs(&mut process, command);
+            process
+        }
+    };
+    process.current_dir(root);
+    run_process(process, call.name, true, timeout(call), cancel, progress)
+}
+
+/// What PowerShell runs: the command from `COMMAND_VARIABLE`, after settings that make what it
+/// prints and writes UTF-8, as Claude Code's, and then its exit code as Claude Code finds it.
+/// Without double quotes, which Windows' quoting of arguments would change.
+const POWERSHELL_BOOTSTRAP: &str = "$scramjetRsCommand = $env:SCRAMJET_RS_COMMAND; \
+Remove-Item Env:SCRAMJET_RS_COMMAND; $ProgressPreference = 'SilentlyContinue'; \
+try { $PSDefaultParameterValues['Out-File:Encoding'] = 'utf8' } catch {}; \
+if ($ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage') { \
+try { $OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {}; \
+if ($null -ne $PSStyle) { try { $PSStyle.OutputRendering = 'PlainText' } catch {} } }; \
+try { $scramjetRsCommand = [scriptblock]::Create($scramjetRsCommand + [char]10 + \
+'; $scramjetRsExit = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } elseif ($?) { 0 } else { 1 }; \
+exit $scramjetRsExit') } \
+catch { [Console]::Error.WriteLine($_.Exception.InnerException.Message); exit 1 }; \
+. $scramjetRsCommand";
+
+/// Gives cmd `command` as typed at its prompt, in UTF-8 (`chcp 65001`) in its own console. cmd
+/// reads the code page as a line starts, so a second cmd started after `chcp` runs the command,
+/// from `COMMAND_VARIABLE` through delayed expansion, which the first neither expands further nor
+/// parses, so that the second parses it as its own command line: its `%VARIABLES%` expand.
+fn cmd_runs(process: &mut Command, command: &str) {
+    let line = format!("/d /v:on /s /c \"chcp 65001 >nul & cmd /d /s /c !{COMMAND_VARIABLE}!\"");
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::raw_arg(process, line);
+    #[cfg(not(windows))]
+    process.arg(line);
+    let unset = format!("set \"{COMMAND_VARIABLE}=\" & ");
+    process.env(COMMAND_VARIABLE, format!("\"{unset}{command}\""));
+}
+
 /// As `run_command`, inside the read-only sandbox.
 pub(super) fn run_sandboxed(
     root: &Path,
@@ -1671,7 +1845,7 @@ pub(super) fn run_sandboxed(
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
     let process = sandbox::command(root, command, hidden)?;
-    run_process(process, sandbox::PROGRAM, timeout, cancel, progress)
+    run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress)
 }
 
 /// `path` with `bin` first, unless it has it already, as Scramjet's `getShellEnv` puts the
@@ -1687,9 +1861,12 @@ fn with_first(bin: &Path, path: &std::ffi::OsStr) -> Option<std::ffi::OsString> 
     std::env::join_paths(std::iter::once(bin.to_owned()).chain(entries)).ok()
 }
 
+/// Runs `process` until it ends, `cancel` is set or, if given, `timeout` passes; `own_console`
+/// as `Group::spawn`.
 fn run_process(
     mut process: Command,
     program: &str,
+    own_console: bool,
     timeout: Option<Duration>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
@@ -1705,7 +1882,7 @@ fn run_process(
             .stdin(Stdio::null())
             .stdout(writer.try_clone().map_err(|e| e.to_string())?)
             .stderr(writer);
-        let spawned = Group::spawn(&mut process);
+        let spawned = Group::spawn(&mut process, own_console);
         // It holds the pipe's write ends, which must close for the output to end.
         drop(process);
         spawned.map_err(|e| format!("cannot start {program}: {e}"))?
@@ -3095,8 +3272,15 @@ to see full lines]",
                 !shown.contains("SECRET") && !shown.contains("id_x\n"),
                 "{shown}"
             );
-            let searched = run("grep", json!({"pattern":"SECRET","path":alias}));
-            assert!(!format!("{searched:?}").contains("SECRET-"), "{searched:?}");
+            let searched = format!(
+                "{:?}",
+                run("grep", json!({"pattern":"SECRET","path":alias}))
+            );
+            let stores = ["SECRET-netrc", "SECRET-key", "SECRET-auth"];
+            assert!(
+                !stores.iter().any(|store| searched.contains(store)),
+                "{searched}"
+            );
         }
     }
 

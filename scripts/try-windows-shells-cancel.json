@@ -1,0 +1,171 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "settings": {
+    "tools": [
+      "read",
+      "bash",
+      "powershell",
+      "cmd",
+      "edit",
+      "write",
+      "grep",
+      "find",
+      "ls"
+    ]
+  },
+  "prompt": "Ping for a minute",
+  "replies": [
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Write-Output waiting; ping -n 60 127.0.0.1"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Start-Process ping -ArgumentList '-n','20','127.0.0.1' -NoNewWindow; Write-Output started"
+        }
+      }
+    ],
+    [
+      {
+        "text": "It still pings."
+      }
+    ],
+    [
+      {
+        "call": "cmd",
+        "arguments": {
+          "command": "echo waiting & ping -n 60 127.0.0.1"
+        }
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "shot": "started",
+      "wait": 5
+    },
+    {
+      "text": "Ping for a minute"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "powershell running",
+      "wait": 5
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "after Escape",
+      "wait": 3
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "text": "Ping in the background"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "left running",
+      "wait": 6
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "host": [
+        "taskkill.exe",
+        "/F",
+        "/IM",
+        "PING.EXE"
+      ]
+    },
+    {
+      "text": "Ping with cmd"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "cmd running",
+      "wait": 5
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "cmd after Escape",
+      "wait": 3
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq PING.EXE",
+        "/NH"
+      ]
+    },
+    {
+      "text": "!echo hi"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "! without bash",
+      "wait": 3
+    },
+    {
+      "keys": [
+        "C-d"
+      ]
+    },
+    {
+      "shot": "after Ctrl+D",
+      "wait": 3
+    }
+  ]
+}
