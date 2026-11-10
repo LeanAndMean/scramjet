@@ -435,6 +435,15 @@ fn windows_program(name: &str, path: &[PathBuf], extensions: &[&str]) -> Option<
         .find(|program| program.is_file())
 }
 
+/// Keeps scramjet-rs's own standard input, output and error from every program it starts, and
+/// from theirs: on Windows a child inherits each inheritable handle, so a program a command left
+/// running would hold `-p`'s output open after scramjet-rs exits. A child given them by
+/// `Stdio::inherit` (the default) gets copies made for it.
+pub fn keep_own_handles() {
+    #[cfg(windows)]
+    windows::keep_own_handles();
+}
+
 /// Starts `command` in a process group of its own, which `kill_group` and `end_group` reach.
 pub fn own_group(command: &mut Command) -> &mut Command {
     #[cfg(unix)]
@@ -549,6 +558,17 @@ mod windows {
             Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW},
         },
     };
+
+    pub(super) fn keep_own_handles() {
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
+        for which in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: a handle missing or not settable fails the call, which changes nothing.
+            unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
+        }
+    }
 
     pub(super) const NEW_GROUP: u32 = CREATE_NEW_PROCESS_GROUP;
     pub(super) const NO_WINDOW: u32 = CREATE_NO_WINDOW;

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.134.1 — Windows: `-p` no longer waits on a program left running
+
+### Fixed
+
+- On Windows, a program a command left running in the background (`start /b`, `&`) no longer holds `-p`'s output open after scramjet-rs exits, so a script or pipe reading it ends with the run.
+
 ## 0.134.0 — A package's programs from its releases
 
 ### Added

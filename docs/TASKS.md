@@ -92,7 +92,6 @@ To compare a display with Scramjet's: `scripts/screens.py --binary "$(which scra
 
 Not scheduled; fix them when they matter.
 
-- On Windows a child inherits every inheritable handle of scramjet-rs, its own stdout among them, so a background program a bash call left keeps a pipe reading `-p`'s output open after scramjet-rs exits (seen through WSL interop, `scripts/try-windows-orphan.json`).
 - Two tests fail on Windows (`scripts/test-windows.sh`, 2026-11-09): `a_package_is_one_set_or_holds_sets_at_its_top_and_marked_deeper` and `a_directory_holding_sets_skills_or_themes_is_installed_as_a_package` (paths with `/` against `\`).
 - `docs/DESIGN.md` is 49.9 KB (2026-11-09, at the third steer), near the tools' 50 KB output limit: condense it, without dropping a user decision, before it grows past that.
 
