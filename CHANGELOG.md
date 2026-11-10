@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.134.0 — A package's programs from its releases
+
+### Added
+
+- A git package's `models.json` can name a program in `release` (`{"repository": "OWNER/REPO", "program": "PATH"}`): `install`, `update` and a start that clones the package download it for this machine from the release of the clone's newest `vX.Y.Z` tag through `gh`, check it against the release's `SHA256SUMS` and unpack it to PATH, so the package's users need no compiler. The private provider package does so from its 0.3.0 for Linux and Windows on x86_64.
+
 ## 0.133.0 — Command sets with their own skills, and the command-writing skill
 
 ### Added

@@ -28,6 +28,7 @@ mod login;
 mod markdown;
 mod packages;
 mod palette;
+mod programs;
 mod record;
 mod report;
 mod scope;

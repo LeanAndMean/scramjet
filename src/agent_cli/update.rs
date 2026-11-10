@@ -37,18 +37,17 @@ pub(super) fn update_self() -> Result<(), String> {
     Ok(())
 }
 
-/// The release archive for `version` on this platform, as `scripts/package.sh` names it.
-fn archive_name(version: &str, arch: &str) -> String {
-    format!(
-        "scramjet-rs-{version}-{arch}-{}.tar.gz",
-        std::env::consts::OS
-    )
+/// The release archive of `program` for `version` on this platform, as `scripts/package.sh`
+/// names scramjet-rs's.
+pub(super) fn archive_name(program: &str, version: &str, arch: &str) -> String {
+    format!("{program}-{version}-{arch}-{}.tar.gz", std::env::consts::OS)
 }
 
 fn replace(gh: &Path, program: &Path, current: &str, arch: &str) -> Result<String, String> {
     let view = ["release", "view", "--repo", REPOSITORY];
     let tag = run_gh(
         gh,
+        REPOSITORY,
         view.iter()
             .chain(&["--json", "tagName", "--jq", ".tagName"]),
     )?;
@@ -62,44 +61,8 @@ fn replace(gh: &Path, program: &Path, current: &str, arch: &str) -> Result<Strin
             "scramjet-rs {current} is up to date (newest release {tag})"
         ));
     }
-    let name = archive_name(latest, arch);
-    let scratch = Scratch::new()?;
-    let download = [
-        OsStr::new("release"),
-        OsStr::new("download"),
-        OsStr::new(tag),
-        OsStr::new("--repo"),
-        OsStr::new(REPOSITORY),
-        OsStr::new("--pattern"),
-        OsStr::new(&name),
-        OsStr::new("--pattern"),
-        OsStr::new("SHA256SUMS"),
-        OsStr::new("--dir"),
-        scratch.0.as_os_str(),
-    ];
-    run_gh(gh, download)?;
-    let read = |file: &str| {
-        fs::read(scratch.0.join(file))
-            .map_err(|error| format!("release {tag} has no {file} for this platform: {error}"))
-    };
-    let sums = String::from_utf8_lossy(&read("SHA256SUMS")?).into_owned();
-    let archive = read(&name)?;
-    let expected = sums
-        .lines()
-        .find_map(|line| {
-            let (hash, file) = line.split_once(char::is_whitespace)?;
-            (file.trim_start().trim_start_matches('*') == name).then(|| hash.to_ascii_lowercase())
-        })
-        .ok_or_else(|| format!("SHA256SUMS of release {tag} does not list {name}"))?;
-    let actual: String = Sha256::digest(&archive)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    if actual != expected {
-        return Err(format!(
-            "{name} does not match its checksum in SHA256SUMS; nothing was replaced"
-        ));
-    }
+    let name = archive_name("scramjet-rs", latest, arch);
+    let archive = download(gh, REPOSITORY, tag, &name)?;
     let bytes = unpacked(&archive, PROGRAM)
         .ok_or_else(|| format!("{name} holds no {PROGRAM}; nothing was replaced"))?;
     let new = program.with_file_name(format!(".{PROGRAM}.new-{}", std::process::id()));
@@ -117,8 +80,74 @@ fn replace(gh: &Path, program: &Path, current: &str, arch: &str) -> Result<Strin
     ))
 }
 
+/// The archive `name` of `repository`'s release `tag`, downloaded through `gh` and checked
+/// against the release's `SHA256SUMS`.
+pub(super) fn download(
+    gh: &Path,
+    repository: &str,
+    tag: &str,
+    name: &str,
+) -> Result<Vec<u8>, String> {
+    let assets = [
+        "release",
+        "view",
+        tag,
+        "--repo",
+        repository,
+        "--json",
+        "assets",
+        "--jq",
+        ".assets[].name",
+    ];
+    let assets = run_gh(gh, repository, assets)?;
+    if !assets.lines().any(|asset| asset.trim() == name) {
+        return Err(format!(
+            "release {tag} of {repository} has no {name} for this platform"
+        ));
+    }
+    let scratch = Scratch::new()?;
+    let download = [
+        OsStr::new("release"),
+        OsStr::new("download"),
+        OsStr::new(tag),
+        OsStr::new("--repo"),
+        OsStr::new(repository),
+        OsStr::new("--pattern"),
+        OsStr::new(name),
+        OsStr::new("--pattern"),
+        OsStr::new("SHA256SUMS"),
+        OsStr::new("--dir"),
+        scratch.0.as_os_str(),
+    ];
+    run_gh(gh, repository, download)?;
+    let read = |file: &str| {
+        fs::read(scratch.0.join(file))
+            .map_err(|error| format!("{file} of release {tag} did not download: {error}"))
+    };
+    let sums = String::from_utf8_lossy(&read("SHA256SUMS")?).into_owned();
+    let archive = read(name)?;
+    let expected = sums
+        .lines()
+        .find_map(|line| {
+            let (hash, file) = line.split_once(char::is_whitespace)?;
+            (file.trim_start().trim_start_matches('*') == name).then(|| hash.to_ascii_lowercase())
+        })
+        .ok_or_else(|| format!("SHA256SUMS of release {tag} does not list {name}"))?;
+    let actual: String = Sha256::digest(&archive)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if actual != expected {
+        return Err(format!(
+            "{name} does not match its checksum in SHA256SUMS; nothing was replaced"
+        ));
+    }
+    Ok(archive)
+}
+
 fn run_gh<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     gh: &Path,
+    repository: &str,
     args: I,
 ) -> Result<String, String> {
     let args: Vec<S> = args.into_iter().collect();
@@ -134,15 +163,14 @@ fn run_gh<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         .stderr(Stdio::inherit())
         .output();
     match output {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(
-            "updates download through GitHub's CLI while the repository is private: install `gh` \
-             and run `gh auth login` with an account that can read LeanAndMean/scramjet-rs"
-                .into(),
-        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(format!(
+            "downloads from {repository}'s releases go through GitHub's CLI while it is private: \
+             install `gh` and run `gh auth login` with an account that can read {repository}"
+        )),
         Err(error) => Err(format!("gh: {error}")),
         Ok(output) if !output.status.success() => Err(format!(
             "gh {what} failed; `gh auth status` shows whether it is logged in to an account that \
-             can read {REPOSITORY}"
+             can read {repository}"
         )),
         Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
     }
@@ -155,7 +183,7 @@ fn parsed(version: &str) -> Option<(u64, u64, u64)> {
 }
 
 /// The file `name` in a gzipped tar archive, at its top or in a directory.
-fn unpacked(archive: &[u8], name: &str) -> Option<Vec<u8>> {
+pub(super) fn unpacked(archive: &[u8], name: &str) -> Option<Vec<u8>> {
     let mut tar = Vec::new();
     GzDecoder::new(archive).read_to_end(&mut tar).ok()?;
     let mut rest = tar.as_slice();
@@ -181,7 +209,7 @@ fn unpacked(archive: &[u8], name: &str) -> Option<Vec<u8>> {
     None
 }
 
-fn write_program(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(super) fn write_program(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -294,7 +322,7 @@ mod tests {
             fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         };
         executable(&stage.join(PROGRAM), &format!("#!/bin/sh\necho {says}\n"));
-        let name = archive_name(tag.trim_start_matches('v'), "x86_64");
+        let name = archive_name("scramjet-rs", tag.trim_start_matches('v'), "x86_64");
         let made = Command::new("tar")
             .arg("-czf")
             .arg(assets.join(&name))
@@ -318,9 +346,10 @@ mod tests {
         executable(
             &gh,
             &format!(
-                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1 $2\" in\n\
-                 'release view') echo {tag} ;;\n\
-                 'release download') while [ $# -gt 0 ]; do [ \"$1\" = --dir ] && cp '{assets}'/* \"$2\"; shift; done ;;\n\
+                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n\
+                 *assets*) ls '{assets}' ;;\n\
+                 'release view'*) echo {tag} ;;\n\
+                 'release download'*) while [ $# -gt 0 ]; do [ \"$1\" = --dir ] && cp '{assets}'/* \"$2\"; shift; done ;;\n\
                  esac\n",
                 log = log.display(),
                 assets = assets.display(),
@@ -366,6 +395,8 @@ mod tests {
         assert!(
             calls.starts_with(
                 "release view --repo LeanAndMean/scramjet-rs --json tagName --jq .tagName\n\
+             release view v0.10.0 --repo LeanAndMean/scramjet-rs --json assets --jq \
+             .assets[].name\n\
              release download v0.10.0 --repo LeanAndMean/scramjet-rs --pattern \
              scramjet-rs-0.10.0-x86_64-"
             ),

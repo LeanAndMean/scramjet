@@ -1199,6 +1199,18 @@ impl Settings {
             if self.cloning && !directory.exists() {
                 eprintln!("Cloning {} into {}…", source.written, shown(&directory));
                 failed = packages::clone(source, &directory, root).err();
+                if failed.is_none() {
+                    let (downloaded, missing) = super::programs::fetch(&directory);
+                    for line in downloaded {
+                        eprintln!("{line}");
+                    }
+                    for why in missing {
+                        (self.warnings).push(format!(
+                            "{}: not downloaded: {why}; `scramjet-rs update {}` tries again",
+                            source.written, source.written
+                        ));
+                    }
+                }
             }
             match directory.is_dir() {
                 false => self.warnings.push(format!(

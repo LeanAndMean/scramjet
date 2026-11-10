@@ -180,6 +180,14 @@ pub(super) fn pull(directory: &Path) -> Result<(String, String), String> {
     Ok((before, head()?))
 }
 
+/// The clone's newest `vX.Y.Z` tag that its checked-out commit holds, if any.
+pub(super) fn newest_tag(directory: &Path) -> Result<Option<String>, String> {
+    let mut command = git(Some(directory));
+    command.args(["tag", "--merged", "HEAD", "--list", "v[0-9]*"]);
+    let tags = run(command.arg("--sort=-version:refname"), "tag")?;
+    Ok(tags.lines().next().map(str::to_owned))
+}
+
 /// Deletes the clone in `directory`, then the directories it leaves empty, up to `root`, the
 /// directory of clones. Only a git clone inside `root` is deleted.
 pub(super) fn delete(directory: &Path, root: &Path) -> Result<(), String> {

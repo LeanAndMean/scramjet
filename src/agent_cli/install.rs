@@ -205,6 +205,16 @@ fn install_package(source: Source) -> Result<(), String> {
         }
     }
     print_extras(&found, skills, themes);
+    let (downloaded, failed) = super::programs::fetch(&directory);
+    for line in downloaded {
+        println!("{line}");
+    }
+    for why in failed {
+        println!(
+            "Not downloaded: {why}; `scramjet-rs update {}` tries again",
+            source.written
+        );
+    }
     let programs: Vec<String> = sets
         .iter()
         .filter_map(|set| program(set, &directory))
@@ -351,6 +361,18 @@ fn update(reference: Option<&str>) -> Result<(), String> {
                 })
             }
         };
+        let result = result.and_then(|(line, updated)| {
+            let (downloaded, failed) = super::programs::fetch(&directory);
+            let updated = updated || !downloaded.is_empty();
+            let lines = std::iter::once(line).chain(downloaded).collect::<Vec<_>>();
+            match failed.is_empty() {
+                true => Ok((lines.join("\n"), updated)),
+                false => {
+                    println!("{}", lines.join("\n"));
+                    Err(format!("not downloaded: {}", failed.join("; ")))
+                }
+            }
+        });
         match result {
             Ok((line, updated)) => {
                 println!("{line}");
