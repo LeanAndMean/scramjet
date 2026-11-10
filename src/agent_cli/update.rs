@@ -251,13 +251,29 @@ fn check_version(new: &Path, latest: &str) -> Result<(), String> {
     }
 }
 
-/// Renames `new` over `program`; Windows keeps a running `.exe` from being replaced, not from
-/// being renamed, so it is moved aside first to `.old`, removed at the next update.
+/// Renames `new` over `program`; Windows keeps a running `.exe` from being replaced or removed,
+/// not from being renamed, so it is moved aside first to a free `.old` name. Those left by
+/// earlier updates are removed here once no session still runs them.
 fn swap(new: &Path, program: &Path) -> Result<(), String> {
     let failed = |error: io::Error| format!("cannot replace {}: {error}", program.display());
     if cfg!(windows) {
-        let old = program.with_file_name(format!("{PROGRAM}.old"));
-        let _ = fs::remove_file(&old);
+        let name = program.file_name().unwrap_or_default().to_string_lossy();
+        let aside = |n: usize| match n {
+            0 => program.with_file_name(format!("{name}.old")),
+            n => program.with_file_name(format!("{name}.old-{n}")),
+        };
+        for n in 0..100 {
+            let _ = fs::remove_file(aside(n));
+        }
+        let old = (0..100)
+            .map(aside)
+            .find(|old| fs::symlink_metadata(old).is_err())
+            .ok_or_else(|| {
+                format!(
+                    "cannot replace {}: 100 earlier copies still run",
+                    program.display()
+                )
+            })?;
         fs::rename(program, &old).map_err(failed)?;
         if let Err(error) = fs::rename(new, program) {
             let _ = fs::rename(&old, program);
@@ -482,5 +498,73 @@ mod tests {
         assert_eq!(parsed("1.2"), None);
         assert_eq!(parsed("1.2.3-rc1"), None);
         assert_eq!(parsed("1.2.3.4"), None);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// Each copy of `PING.EXE` started stands for a session still running that program.
+    #[test]
+    fn the_running_program_is_moved_aside_while_earlier_ones_still_run() {
+        let directory =
+            std::env::temp_dir().join(format!("scramjet-rs-swap-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let ping = Path::new(&std::env::var_os("SystemRoot").unwrap()).join(r"System32\PING.EXE");
+        let program = directory.join(PROGRAM);
+        let new = directory.join("new");
+        let start = || {
+            Command::new(&program)
+                .args(["-n", "60", "127.0.0.1"])
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let names = || {
+            let mut names: Vec<String> = fs::read_dir(&directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        fs::copy(&ping, &program).unwrap();
+        let mut running = vec![start()];
+        for _ in 0..2 {
+            fs::copy(&ping, &new).unwrap();
+            swap(&new, &program).unwrap();
+            running.push(start());
+        }
+        assert_eq!(
+            names(),
+            [
+                PROGRAM,
+                &format!("{PROGRAM}.old"),
+                &format!("{PROGRAM}.old-1")
+            ]
+        );
+        running.remove(0).kill().unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        fs::copy(&ping, &new).unwrap();
+        swap(&new, &program).unwrap();
+        assert_eq!(
+            names(),
+            [
+                PROGRAM,
+                &format!("{PROGRAM}.old"),
+                &format!("{PROGRAM}.old-1")
+            ]
+        );
+        for mut child in running {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        fs::copy(&ping, &new).unwrap();
+        swap(&new, &program).unwrap();
+        assert_eq!(names(), [PROGRAM, &format!("{PROGRAM}.old")]);
+        let _ = fs::remove_dir_all(&directory);
     }
 }

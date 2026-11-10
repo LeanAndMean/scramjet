@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.136.2 — Updating on Windows while another session runs
+
+### Fixed
+
+- On Windows, `scramjet-rs update self` failed with `Access is denied` when a session started before the previous update was still running, as the copy moved aside then could be neither removed nor replaced. Each update now moves the running program to a free `scramjet-rs.exe.old` name and removes those no session runs any more.
+
 ## 0.136.1 — MCP servers that are slow to start the first time
 
 ### Fixed
