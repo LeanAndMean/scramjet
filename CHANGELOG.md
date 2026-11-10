@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.136.0 — Skills honor ignore files
+
+### Changed
+
+- Skill discovery leaves out what the `.gitignore`, `.ignore` and `.fdignore` files in a skills directory and its subdirectories ignore, as Pi does, so drafts and build output kept beside skills are not loaded; `scramjet-rs lint` skips them too. The rules read as git reads them: a pattern without a `/` matches at any depth, and the nearest file's rule wins.
+
 ## 0.135.0 — Windows: subagents run commands, read-only
 
 ### Changed

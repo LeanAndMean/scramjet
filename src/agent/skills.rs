@@ -4,6 +4,7 @@
 use super::Problem;
 use super::commands::{Set, split_frontmatter};
 use super::yaml;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::{
     collections::HashSet,
     fs,
@@ -262,40 +263,89 @@ SKILL.md / dirname of the path) and use that absolute path in tool commands.
 
 /// The skill files under `directory`, as Pi finds them: its `SKILL.md`, which ends the search
 /// there, else the `.md` files at its top when `top_files`, and those found in its directories,
-/// leaving out hidden entries and `node_modules`. Links are followed, each directory once.
+/// leaving out hidden entries, `node_modules` and what the `.gitignore`, `.ignore` and
+/// `.fdignore` files met on the way ignore. Links are followed, each directory once.
 fn skill_files(directory: &Path, top_files: bool) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    walk(directory, top_files, &mut HashSet::new(), &mut files);
+    let mut walk = Walk {
+        seen: HashSet::new(),
+        ignores: Vec::new(),
+        files: &mut files,
+    };
+    walk.directory(directory, top_files);
     files
 }
 
-fn walk(directory: &Path, top_files: bool, seen: &mut HashSet<PathBuf>, files: &mut Vec<PathBuf>) {
-    let Ok(real) = directory.canonicalize() else {
-        return;
-    };
-    if !seen.insert(real) {
-        return;
-    }
-    let skill = directory.join("SKILL.md");
-    if skill.is_file() {
-        files.push(skill);
-        return;
-    }
-    let Ok(entries) = fs::read_dir(directory) else {
-        return;
-    };
-    let mut entries: Vec<(String, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| Some((entry.file_name().into_string().ok()?, entry.path())))
-        .filter(|(name, _)| !name.starts_with('.') && name != "node_modules")
-        .collect();
-    entries.sort();
-    for (name, path) in entries {
-        if path.is_dir() {
-            walk(&path, false, seen, files);
-        } else if top_files && name.ends_with(".md") && path.is_file() {
-            files.push(path);
+struct Walk<'a> {
+    seen: HashSet<PathBuf>,
+    ignores: Vec<Gitignore>,
+    files: &'a mut Vec<PathBuf>,
+}
+
+impl Walk<'_> {
+    fn directory(&mut self, directory: &Path, top_files: bool) {
+        let Ok(real) = directory.canonicalize() else {
+            return;
+        };
+        if !self.seen.insert(real) {
+            return;
         }
+        let mut rules = GitignoreBuilder::new(directory);
+        for name in [".gitignore", ".ignore", ".fdignore"] {
+            let file = directory.join(name);
+            if file.is_file() {
+                rules.add(file);
+            }
+        }
+        let rules = rules.build().ok().filter(|rules| !rules.is_empty());
+        let pushed = rules.is_some();
+        self.ignores.extend(rules);
+        self.entries(directory, top_files);
+        if pushed {
+            self.ignores.pop();
+        }
+    }
+
+    fn entries(&mut self, directory: &Path, top_files: bool) {
+        let skill = directory.join("SKILL.md");
+        if skill.is_file() {
+            if !self.ignored(&skill, false) {
+                self.files.push(skill);
+            }
+            return;
+        }
+        let Ok(entries) = fs::read_dir(directory) else {
+            return;
+        };
+        let mut entries: Vec<(String, PathBuf)> = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| Some((entry.file_name().into_string().ok()?, entry.path())))
+            .filter(|(name, _)| !name.starts_with('.') && name != "node_modules")
+            .collect();
+        entries.sort();
+        for (name, path) in entries {
+            if path.is_dir() {
+                if !self.ignored(&path, true) {
+                    self.directory(&path, false);
+                }
+            } else if top_files
+                && name.ends_with(".md")
+                && path.is_file()
+                && !self.ignored(&path, false)
+            {
+                self.files.push(path);
+            }
+        }
+    }
+
+    /// Whether the deepest rule matching `path` ignores it, as git and Pi decide.
+    fn ignored(&self, path: &Path, is_dir: bool) -> bool {
+        self.ignores
+            .iter()
+            .rev()
+            .map(|rules| rules.matched(path, is_dir))
+            .find(|found| !found.is_none())
+            .is_some_and(|found| found.is_ignore())
     }
 }
 
@@ -720,6 +770,47 @@ hyphens only)",
         std::os::unix::fs::symlink(&scratch.0, scratch.0.join("a/up")).unwrap();
         let files = skill_files(&scratch.0, true);
         assert_eq!(files, [scratch.0.join("a/one/SKILL.md")]);
+    }
+
+    #[test]
+    fn ignore_files_met_on_the_way_leave_skills_out_deepest_rule_first() {
+        let scratch = scratch("ignored");
+        let top = &scratch.0;
+        for (name, text) in [
+            (".gitignore", "build/\ndraft.md\n"),
+            (".ignore", "/private\nold\n"),
+            ("group/.fdignore", "!old\n"),
+            ("group/later/.gitignore", "SKILL.md\n"),
+        ] {
+            write(&top.join(name), text);
+        }
+        for path in [
+            "top.md",
+            "draft.md",
+            "build/made/SKILL.md",
+            "private/SKILL.md",
+            "old/SKILL.md",
+            "group/build/SKILL.md",
+            "group/private/SKILL.md",
+            "group/old/SKILL.md",
+            "group/new/SKILL.md",
+            "group/later/SKILL.md",
+        ] {
+            write(&top.join(path), &skill("x", "X."));
+        }
+        let files = skill_files(top, true);
+        let found: Vec<_> = files.iter().map(|f| f.strip_prefix(top).unwrap()).collect();
+        // As in git: unanchored rules reach every depth, `/private` only the top, and the
+        // nearest file's `!old` lets group/old back in.
+        assert_eq!(
+            found,
+            [
+                Path::new("group/new/SKILL.md"),
+                Path::new("group/old/SKILL.md"),
+                Path::new("group/private/SKILL.md"),
+                Path::new("top.md"),
+            ]
+        );
     }
 
     #[test]
