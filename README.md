@@ -36,6 +36,7 @@ scramjet-rs install git:github.com/LeanAndMean/scramjet          # the sets in a
 scramjet-rs update                           # pull the packages not pinned to a ref, then update the program
 scramjet-rs update self                      # only the program: the newest release, through `gh` while private
 scramjet-rs list                             # the command sets and skills loaded here, and problems
+scramjet-rs lint --strict ~/repos/mach12     # check a command set before using it
 ```
 
 Other main options: `--thinking LEVEL` (or `--effort`), `--models PATTERNS` (the models Ctrl+P cycles through), `--no-session` (save nothing), `--ask` (ask before shell commands and writes outside the project), `--tools LIST`, `--system-prompt` and `--append-system-prompt`, and `--project DIR`.

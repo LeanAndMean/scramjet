@@ -14,6 +14,7 @@ pub(super) const USAGE: &str =
        scramjet-rs --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet-rs --version
        scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
+       scramjet-rs lint [--strict] [--json] DIR...
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
 settings file (by default ~/.config/scramjet-rs/models.json) and in installed command sets, in
@@ -211,7 +212,8 @@ git:git@github.com:USER/REPO, or an https://, ssh://, git:// or file:// URL) int
 $XDG_DATA_HOME/scramjet-rs/git, recorded in the settings' packages: its sets are its top
 directory when that is a set, else the sets at its top and those with a set.yaml deeper, and
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
-and `remove REPO` deletes the clone.
+and `remove REPO` deletes the clone. `lint DIR...` checks the sets in DIR as the harness loads
+them and as Scramjet's scramjet-command-lint does (`lint --help`).
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'
 compaction.enabled is false (Auto-compact in /settings).

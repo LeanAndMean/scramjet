@@ -215,6 +215,14 @@ impl Sets {
         Self::find(installed, global_root().as_deref(), &root.join(".scramjet"))
     }
 
+    /// `set` alone, as if installed by itself.
+    pub(super) fn only(set: Set) -> Self {
+        Self {
+            list: vec![set],
+            warnings: Vec::new(),
+        }
+    }
+
     pub fn list(&self) -> &[Set] {
         &self.list
     }

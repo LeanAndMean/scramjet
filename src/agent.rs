@@ -18,6 +18,7 @@ mod delegate;
 mod forge;
 mod image;
 mod instructions;
+mod lint;
 mod listed;
 pub mod login;
 mod mcp;
@@ -55,6 +56,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use image::set_images;
+pub use lint::{Diagnostic, Severity, lint};
 pub use listed::Listing;
 pub use mcp::{
     CALL as MCP_CALL, SEARCH as MCP_SEARCH, Server as McpServer, State as McpState,

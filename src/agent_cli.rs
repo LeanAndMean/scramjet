@@ -23,6 +23,7 @@ mod interactive;
 mod job;
 mod keymap;
 mod keys;
+mod lint;
 mod login;
 mod markdown;
 mod packages;
@@ -75,6 +76,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             return result;
         }
         if let Some(result) = install::run(command, &rest) {
+            return result;
+        }
+        if let Some(result) = lint::run(command, &rest) {
             return result;
         }
     }

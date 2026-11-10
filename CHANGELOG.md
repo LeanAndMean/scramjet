@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.132.0 — `scramjet-rs lint`
+
+### Added
+
+- `scramjet-rs lint [--strict] [--json] DIR...` checks a command set, or a package's sets, in place of Scramjet's Node `scramjet-command-lint`, in its output format: as errors the files the harness would skip (commands and agents), as warnings what it would ignore and commands without an early `## Goals` list or with their arguments outside one `<user-context>` (delegate-only: `<caller-context>`) block. It accepts files named without `:`, so Mach 12's own repository passes. The agent's instructions name it.
+
 ## 0.131.0 — Agent files with Claude Code's tool names
 
 ### Added

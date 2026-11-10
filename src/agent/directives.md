@@ -38,7 +38,7 @@ not carry Scramjet command framing. A legacy command without explicit Goals stil
 infer its intended outcomes from the complete command and invocation rather than refusing.
 
 When creating or editing Scramjet command files, proactively run
-`scramjet-command-lint --strict <command-set-root>`. Resolve errors; address warnings or explain
+`scramjet-rs lint --strict <command-set-root>`. Resolve errors; address warnings or explain
 intentional legacy exceptions. If the executable is unavailable, report that rather than
 installing anything or silently claiming verification.
 
