@@ -1,5 +1,5 @@
-//! Command sets: directories with `commands/<set>:<command>.md` and `agents/<set>:<agent>.md`,
-//! installed by reference or found under Scramjet's global root and the project's `.scramjet`
+//! Command sets: directories with `commands/<command>.md` and `agents/<agent>.md` (or, as in
+//! Scramjet, `<set>:<command>.md` and `<set>:<agent>.md`), installed by reference or found under Scramjet's global root and the project's `.scramjet`
 //! directory. A prompt `/<set>:<command> args` runs one of their commands as Scramjet sends it:
 //! the arguments are substituted into the body and the result is wrapped in `<scramjet-command>`.
 
@@ -36,7 +36,7 @@ impl Origin {
 /// A command set: its commands are named `<name>:…`, and so are its agents.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {
-    /// The directory's name, as Scramjet names a set.
+    /// `set.yaml`'s `name`, else the directory's name, as Scramjet names a set.
     pub name: String,
     pub directory: PathBuf,
     pub origin: Origin,
@@ -65,13 +65,38 @@ impl Set {
                 }
             ));
         }
-        let name = directory.file_name().and_then(|name| name.to_str());
-        let name = name.ok_or_else(|| format!("{shown} has no usable name"))?;
+        let name = match declared_name(directory)? {
+            Some(name) => name,
+            None => (directory.file_name().and_then(|name| name.to_str()))
+                .ok_or_else(|| format!("{shown} has no usable name"))?
+                .to_owned(),
+        };
         Ok(Self {
-            name: name.to_owned(),
+            name,
             directory: directory.to_path_buf(),
             origin,
         })
+    }
+}
+
+/// The `name` of the `set.yaml` in `directory`, `None` without one or without a `name`.
+fn declared_name(directory: &Path) -> Result<Option<String>, String> {
+    let path = directory.join("set.yaml");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("could not read {}: {error}", path.display())),
+    };
+    let shown = path.display();
+    let yaml = yaml::first(&text).map_err(|error| format!("{shown}: {error}"))?;
+    match &yaml["name"] {
+        Yaml::BadValue | Yaml::Null => Ok(None),
+        Yaml::String(name) if !name.is_empty() && !name.contains([':', '/', '\\', ' ']) => {
+            Ok(Some(name.clone()))
+        }
+        _ => Err(format!(
+            "{shown}: name must be a word without spaces, ':' or slashes"
+        )),
     }
 }
 
@@ -544,6 +569,16 @@ fn set_directories(root: &Path) -> Vec<String> {
     names
 }
 
+/// `name` in set `set`: `<set>:<name>` for a bare one, as given when it already starts with
+/// `<set>:`, `None` when it names another set.
+pub(super) fn qualified(set: &str, name: &str) -> Option<String> {
+    match name.split_once(':') {
+        None => Some(format!("{set}:{name}")),
+        Some((prefix, _)) if prefix == set => Some(name.to_owned()),
+        Some(_) => None,
+    }
+}
+
 /// The `.md` files in `directory` with their contents, by file name. Unreadable files are skipped.
 fn command_files(directory: &Path) -> Vec<(String, String)> {
     let Ok(entries) = fs::read_dir(directory) else {
@@ -572,10 +607,8 @@ fn parse(
     content: &str,
     notices: &mut Vec<String>,
 ) -> Result<Command, String> {
-    let name = file.strip_suffix(".md").unwrap_or(file);
-    if !name.starts_with(&format!("{set}:")) {
-        return Err(format!("{file}: filename must start with \"{set}:\""));
-    }
+    let name = qualified(set, file.strip_suffix(".md").unwrap_or(file))
+        .ok_or_else(|| format!("{file}: filename must not name another set than \"{set}\""))?;
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let (frontmatter, body) = split_frontmatter(content);
     let frontmatter = yaml::first(&frontmatter)
@@ -611,7 +644,7 @@ fn parse(
     };
     let allowed_tools = allowed_tools(&frontmatter["allowed-tools"], file, notices);
     Ok(Command {
-        name: name.to_owned(),
+        name,
         path: PathBuf::from(file),
         description,
         described: described.is_some(),
@@ -1049,6 +1082,69 @@ or agents directory, nor a models.json",
     }
 
     #[test]
+    fn a_set_named_in_its_set_yaml_takes_files_named_without_it() {
+        let scratch = Scratch::new("plain");
+        let set = scratch.0.join("repo");
+        scratch.file("repo/set.yaml", "name: kit\ndescription: A kit\n");
+        scratch.file(
+            "repo/commands/plan.md",
+            "---\ndescription: Plan\n---\nPlan $1\n",
+        );
+        let agent = "---\nname: mapper\ndescription: Maps\n---\nMap.\n";
+        scratch.file("repo/agents/mapper.md", agent);
+        let sets = Sets::find(std::slice::from_ref(&set), None, &scratch.0.join("none"));
+        assert_eq!(sets.warnings(), []);
+        assert_eq!(sets.list()[0].name, "kit");
+        let commands = Commands::discover(&sets);
+        assert_eq!(names(&commands), ["kit:plan"]);
+        assert_eq!(commands.list()[0].path, set.join("commands/plan.md"));
+        assert_eq!(
+            commands.expand("/kit:plan now"),
+            Some("<scramjet-command name=\"kit:plan\">\nPlan now\n</scramjet-command>".into())
+        );
+        let agents = crate::agent::subagent::registered(&sets, &mut Vec::new());
+        let agents: Vec<&str> = agents.iter().map(|agent| agent.name.as_str()).collect();
+        assert_eq!(agents, ["kit:mapper"]);
+        // A name that is not a word is refused, with the set.
+        scratch.file("repo/set.yaml", "name: a:b\n");
+        let sets = Sets::find(std::slice::from_ref(&set), None, &scratch.0.join("none"));
+        assert_eq!(sets.list(), []);
+        let yaml = set.join("set.yaml");
+        let text = format!(
+            "skipping installed command set: {}: name must be a word without spaces, ':' or \
+             slashes",
+            yaml.display()
+        );
+        assert_eq!(sets.warnings(), [Problem::in_settings(text)]);
+    }
+
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "command files are named with `:`, which Windows cannot hold"
+    )]
+    fn a_name_given_both_ways_is_registered_once_with_a_warning() {
+        let scratch = Scratch::new("both");
+        let set = scratch.0.join("kit");
+        scratch.file("kit/commands/plan.md", "New\n");
+        scratch.file("kit/commands/kit:plan.md", "Old\n");
+        let sets = Sets::find(std::slice::from_ref(&set), None, &scratch.0.join("none"));
+        let commands = Commands::discover(&sets);
+        assert_eq!(names(&commands), ["kit:plan"]);
+        let (kept, skipped) = (
+            set.join("commands/kit:plan.md"),
+            set.join("commands/plan.md"),
+        );
+        assert_eq!(commands.list()[0].path, kept);
+        let text = format!(
+            "skipping installed command kit:plan at {}: name already registered from {}",
+            skipped.display(),
+            kept.display()
+        );
+        assert_eq!(commands.warnings(), [Problem::in_file(text, &skipped)]);
+    }
+
+    #[test]
     #[cfg_attr(
         windows,
         ignore = "command files are named with `:`, which Windows cannot hold"
@@ -1069,7 +1165,10 @@ or agents directory, nor a models.json",
             "global/rs/commands/rs:odd.md",
             "---\ndescription: Odd\nargument-hint: \"  <x>  \"\ndelegate-only: \"yes\"\n---\nOdd\n",
         );
-        scratch.file("global/rs/commands/notes.md", "---\n---\nNo prefix\n");
+        scratch.file(
+            "global/rs/commands/other:notes.md",
+            "---\n---\nAnother set's\n",
+        );
         scratch.file("global/rs/commands/rs:notes.txt", "not markdown\n");
         scratch.file("global/rs/commands/rs:folder.md/inner.txt", "not a file\n");
         scratch.file("global/other/commands/rs:wrong-set.md", "Wrong set\n");
@@ -1092,7 +1191,7 @@ or agents directory, nor a models.json",
         assert_eq!(review.next, Some(Policy::Ask { hint }));
         let skipped = |file: &str, set: &str| {
             let path = global.join(format!("{set}/commands/{file}"));
-            let error = format!("{file}: filename must start with \"{set}:\"");
+            let error = format!("{file}: filename must not name another set than \"{set}\"");
             Problem::in_file(format!("skipping {}: {error}", path.display()), &path)
         };
         let project_review = project.join("rs/commands/rs:review.md");
@@ -1100,7 +1199,7 @@ or agents directory, nor a models.json",
             commands.warnings(),
             [
                 skipped("rs:wrong-set.md", "other"),
-                skipped("notes.md", "rs"),
+                skipped("other:notes.md", "rs"),
                 Problem::in_file(
                     "rs:odd.md: \"delegate-only\" must be exactly true when present (got \
                      \"yes\"; treated as absent)",
@@ -1320,7 +1419,13 @@ auto-approve\n    add_issue_comment: require-approval\n",
         let long = format!("\n\n{}é tail\nsecond\n", "x".repeat(59));
         let command = parse("rs", "rs:x.md", &long, &mut Vec::new()).unwrap();
         assert_eq!(command.description, format!("{}é...", "x".repeat(59)));
-        assert!(parse("rs", "other.md", "Body", &mut Vec::new()).is_err());
+        assert_eq!(
+            parse("rs", "bare.md", "Body", &mut Vec::new())
+                .unwrap()
+                .name,
+            "rs:bare"
+        );
+        assert!(parse("rs", "other:x.md", "Body", &mut Vec::new()).is_err());
         // As YAML, a folded description is one line, and a non-string one is not a description.
         let folded = parse(
             "rs",

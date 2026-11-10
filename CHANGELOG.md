@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.130.0 — Command set files without `:` in their names
+
+### Added
+
+- A command set's files may be named `commands/<name>.md` and `agents/<name>.md` (an agent's frontmatter `name:` without its set too), still run as `/<set>:<name>`: Git for Windows cannot check out a name with `:`. `<set>:<name>.md` keeps working; a name given both ways is registered once, with a warning.
+- A set's name comes from its `set.yaml`'s `name`, else from its directory's, so a repository's clone can hold a set under any directory name.
+
 ## 0.129.0 — The shell of `!` commands on Windows
 
 ### Added

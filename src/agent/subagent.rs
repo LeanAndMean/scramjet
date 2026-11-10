@@ -297,8 +297,8 @@ command set {}",
     agents
 }
 
-/// The agents of `sets`, as Scramjet's `buildAgentRegistry`: `<set>/agents/<set>:<name>.md`,
-/// the first of a name kept.
+/// The agents of `sets`, as Scramjet's `buildAgentRegistry`: `<set>/agents/<name>.md` or
+/// `<set>:<name>.md`, a bare `name` in either taken as `<set>:<name>`; the first of a name kept.
 pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<Problem>) -> Vec<Definition> {
     let mut agents: Vec<Definition> = Vec::new();
     for set in sets.list() {
@@ -315,7 +315,6 @@ pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<Problem>) -> Vec<Def
         files.sort();
         for path in files {
             let file = path.file_name().unwrap_or_default().to_string_lossy();
-            let prefix = format!("{}:", set.name);
             let skipping = |error: String| {
                 Problem::in_file(format!("skipping agent {}: {error}", path.display()), &path)
             };
@@ -323,9 +322,10 @@ pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<Problem>) -> Vec<Def
                 diagnostics.push(skipping(format!("{file}: not a markdown file")));
                 continue;
             };
-            if !stem.starts_with(&prefix) {
+            if commands::qualified(&set.name, stem).is_none() {
                 diagnostics.push(skipping(format!(
-                    "{file}: filename must start with \"{prefix}\""
+                    "{file}: filename must not name another set than \"{}\"",
+                    set.name
                 )));
                 continue;
             }
@@ -333,13 +333,16 @@ pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<Problem>) -> Vec<Def
                 continue;
             };
             let agent = match parse(&path, &content, scope) {
-                Ok(agent) if agent.name.starts_with(&prefix) => agent,
-                Ok(_) => {
-                    diagnostics.push(skipping(format!(
-                        "{file}: name must start with \"{prefix}\""
-                    )));
-                    continue;
-                }
+                Ok(agent) => match commands::qualified(&set.name, &agent.name) {
+                    Some(name) => Definition { name, ..agent },
+                    None => {
+                        diagnostics.push(skipping(format!(
+                            "{file}: name must not name another set than \"{}\"",
+                            set.name
+                        )));
+                        continue;
+                    }
+                },
                 Err(error) => {
                     diagnostics.push(skipping(error));
                     continue;
@@ -1492,6 +1495,7 @@ disallowedTools: bash\n---\n\nBody\n",
                 "shared user",
                 "mach12:reviewer installed",
                 "x:c global",
+                "x:e global",
                 "z:a project"
             ]
         );
@@ -1533,11 +1537,7 @@ belong to the installed command set {}",
                 ),
                 claimed("renamed.md", "x", "global", global.join("x")),
                 format!(
-                    "skipping agent {}: x:e.md: name must start with \"x:\"",
-                    shown(global.join("x/agents/x:e.md"))
-                ),
-                format!(
-                    "skipping agent {}: y:d.md: filename must start with \"x:\"",
+                    "skipping agent {}: y:d.md: filename must not name another set than \"x\"",
                     shown(global.join("x/agents/y:d.md"))
                 ),
                 format!(
@@ -1554,6 +1554,7 @@ belong to the installed command set {}",
                 "shared project",
                 "mach12:reviewer installed",
                 "x:c global",
+                "x:e global",
                 "z:a project"
             ]
         );
@@ -1567,6 +1568,7 @@ belong to the installed command set {}",
                 "b project",
                 "mach12:reviewer installed",
                 "x:c global",
+                "x:e global",
                 "z:a project"
             ]
         );
@@ -1575,7 +1577,7 @@ belong to the installed command set {}",
         assert_eq!(
             catalog(&agents),
             "# Available subagents\n\nThe following agents can be dispatched via the `subagent` \
-tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- z:a: z:a agent"
+tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e agent\n- z:a: z:a agent"
         );
         assert_eq!(catalog(&[]), "");
     }
