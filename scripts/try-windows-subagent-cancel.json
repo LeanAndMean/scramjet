@@ -1,0 +1,60 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "bash": true,
+  "agents": {
+    "reader": "---\nname: reader\ndescription: Reads the project\ntools: Read, Bash, PowerShell\n---\nRead and report.\n"
+  },
+  "prompt": "Have a subagent wait",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "reader",
+          "task": "Wait"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "type README.md & echo x> b.txt & echo bash-done"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Write-Output waiting; ping -n 60 127.0.0.1"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Child done."
+      }
+    ],
+    [
+      {
+        "text": "Finished."
+      }
+    ]
+  ],
+  "steps": [
+    {"shot": "started", "wait": 5},
+    {"text": "Have a subagent wait"},
+    {"keys": ["Enter"]},
+    {"shot": "ping running", "wait": 8},
+    {"host": ["tasklist.exe", "/FI", "IMAGENAME eq PING.EXE", "/NH"]},
+    {"keys": ["Escape"]},
+    {"shot": "after Escape", "wait": 4},
+    {"host": ["tasklist.exe", "/FI", "IMAGENAME eq PING.EXE", "/NH"]},
+    {"host": ["ls", "/mnt/c/Users/User/AppData/LocalLow/scramjet-rs-tmp"]},
+    {"keys": ["C-d"]},
+    {"shot": "after Ctrl+D", "wait": 3}
+  ]
+}

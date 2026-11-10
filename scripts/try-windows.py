@@ -15,7 +15,7 @@ printing the pane after each.
 
 A scenario holds "files", "copy" (WSL files or directories, relative to this repository, copied
 to paths under the scratch directory: {"packages/proxy": "../scramjet-rs-provider-proxy/models.json"}),
-"settings", "models" (more of models.json's fields, such as "logins"), "provider" (more of the
+"settings", "agents" (agent files by name, in the scratch agent directory), "models" (more of models.json's fields, such as "logins"), "provider" (more of the
 scripted provider's fields, such as an "apiKey" command), "auth" (auth.json's
 credentials), "servers" (WSL commands run from this repository for the run's length; each a list
 of words, or {"run": words, "port": N} waited for), "$WORK" in settings, models and auth standing
@@ -26,7 +26,7 @@ bash.exe, scripts/try-windows-bash.c built with build-windows.sh's image, put on
 runs commands through cmd.exe), "prompt", "replies", each
 reply as in scripts/screens.py, and "steps", each one of {"text": typed}, {"keys": [tmux key
 names]}, {"resize": [columns, rows]}, {"host": [a WSL command run in the project]} and
-{"shot": label, "wait": seconds}.
+{"shot": label, "wait": seconds}. TRY_WINDOWS_LOG names a file each request's body is appended to.
 """
 import argparse, atexit, json, os, shlex, shutil, socket, subprocess, sys, time
 
@@ -59,6 +59,9 @@ for target, source in scenario.get('copy', {}).items():
     source, target = os.path.join(ROOT, source), os.path.join(work, target)
     os.makedirs(os.path.dirname(target), exist_ok=True)
     (shutil.copytree if os.path.isdir(source) else shutil.copy)(source, target)
+for name, text in scenario.get('agents', {}).items():
+    os.makedirs(os.path.join(work, 'agent/agents'), exist_ok=True)
+    open(os.path.join(work, 'agent/agents', name + '.md'), 'w').write(text)
 servers = []
 for server in scenario.get('servers', []):
     server = server if isinstance(server, dict) else {'run': server}
@@ -84,7 +87,7 @@ if scenario.get('bash'):
                     'scramjet-rs-mingw', 'x86_64-w64-mingw32-gcc-posix', '-O2', '-o', '/out/bash.exe',
                     '/src/try-windows-bash.c'], check=True)
     scenario['path'] = scenario.get('path', []) + ['standin']
-base = 'http://%s/v1' % screens.serve(scenario.get('replies', []))
+base = 'http://%s/v1' % screens.serve(scenario.get('replies', []), log=os.environ.get('TRY_WINDOWS_LOG'))
 provider = {'baseUrl': base, 'api': 'openai-responses', 'apiKey': 'scripted',
             'models': [{'id': 'gpt-6-luna', 'reasoning': True, 'contextWindow': 200000}]}
 provider.update(scenario.get('provider', {}))

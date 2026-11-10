@@ -178,18 +178,32 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     Value::Array(tools)
 }
 
-/// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls` and `bash`.
+/// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls` and the
+/// shells.
 pub(super) fn child_definitions(names: &[&str]) -> Value {
-    let tools = ["read", "grep", "find", "ls", "bash"]
+    let tools = ["read", "grep", "find", "ls", "bash", "powershell", "cmd"]
         .into_iter()
         .filter(|tool| names.contains(tool))
         .map(|tool| definition(tool, true));
     Value::Array(tools.collect())
 }
 
-/// Pi's definition of the coding tool `name`; `sandboxed`: a bash that runs in the read-only
+/// What a subagent's shell tools say of how they are confined on Windows.
+pub(super) const LOW_INTEGRITY: &str = "It runs at Windows' low integrity level: it cannot change \
+files on this computer's disks, except in a TEMP of its own that is discarded when the command \
+ends.";
+
+/// Pi's definition of the coding tool `name`; `sandboxed`: a shell that runs in the read-only
 /// sandbox.
 fn definition(name: &str, sandboxed: bool) -> Value {
+    let confined = match sandboxed && cfg!(windows) {
+        true => format!(" {LOW_INTEGRITY}"),
+        false => String::new(),
+    };
+    let directory = match sandboxed {
+        true => "working",
+        false => "project",
+    };
     match name {
         "read" => json!({"type":"function","name":"read","strict":false,
          "description":"Read a text file or an image (jpg, png, gif, webp), which is sent as an attachment. Text is truncated to 2000 lines or 50KB; use offset/limit (1-based line numbers) to read large files in parts.",
@@ -215,22 +229,22 @@ fn definition(name: &str, sandboxed: bool) -> Value {
                 "newText":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["oldText","newText"]}}},
           "required":["path","edits"]}}),
         "bash" => json!({"type":"function","name":"bash","strict":false,
-         "description":match sandboxed {
-            true => "Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in a private /tmp that is discarded when the command ends. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
-            false => "Run a bash command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
+         "description":match sandboxed && !cfg!(windows) {
+            true => "Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in a private /tmp that is discarded when the command ends. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.".to_owned(),
+            false => format!("Run a bash command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output."),
          },
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"Bash command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
           "required":["command"]}}),
         "powershell" => json!({"type":"function","name":"powershell","strict":false,
-         "description":format!("Run a PowerShell command in the project directory. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output. {}", powershell_edition()),
+         "description":format!("Run a PowerShell command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output. {}", powershell_edition()),
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"PowerShell command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
           "required":["command"]}}),
         "cmd" => json!({"type":"function","name":"cmd","strict":false,
-         "description":"Run a command line with cmd.exe in the project directory, for batch files and tools that expect cmd. One line: join commands with &, && or ||. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.",
+         "description":format!("Run a command line with cmd.exe in the {directory} directory, for batch files and tools that expect cmd. One line: join commands with &, && or ||.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output."),
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"cmd.exe command line to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
@@ -430,8 +444,15 @@ impl<'a> Call<'a> {
             "bash" => return bash(root, self, hidden, cancel, progress),
             "powershell" | "cmd" if hidden.is_none() => {
                 let command = self.str("command")?;
-                let ran =
-                    run_windows_shell(root, self.name, command, timeout(self), cancel, progress)?;
+                let ran = run_windows_shell(
+                    root,
+                    self.name,
+                    command,
+                    false,
+                    timeout(self),
+                    cancel,
+                    progress,
+                )?;
                 return Ok(ran.tool_output());
             }
             "powershell" | "cmd" => {
@@ -504,6 +525,20 @@ impl<'a> Call<'a> {
                     self.str("command")?,
                     hidden,
                     timeout(self),
+                    cancel,
+                    &mut |_| {},
+                )?;
+                return Ok(ran.tool_output());
+            }
+            "powershell" | "cmd" if cfg!(windows) => {
+                let command = self.str("command")?;
+                let timeout = timeout(self);
+                let ran = run_windows_shell(
+                    root,
+                    self.name,
+                    command,
+                    true,
+                    timeout,
                     cancel,
                     &mut |_| {},
                 )?;
@@ -1771,7 +1806,7 @@ pub(super) fn run_user_command(
     let chosen = USER_SHELL.read().unwrap_or_else(|e| e.into_inner());
     match UserShell::used(chosen.filter(|_| cfg!(windows))) {
         UserShell::Bash => run_command(root, command, None, cancel, progress),
-        shell => run_windows_shell(root, shell.name(), command, None, cancel, progress),
+        shell => run_windows_shell(root, shell.name(), command, false, None, cancel, progress),
     }
 }
 
@@ -1829,19 +1864,33 @@ pub(super) fn bash_runs(process: &mut Command, command: &str) {
 }
 
 /// As `run_command`, `command` in PowerShell or cmd (`shell`), each with a console of its own set
-/// to UTF-8, so that what they print reads as bash's does.
+/// to UTF-8, so that what they print reads as bash's does; `confined`: in the read-only sandbox.
 fn run_windows_shell(
     root: &Path,
     shell: &str,
     command: &str,
+    confined: bool,
     timeout: Option<Duration>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
+    let start = |program: PathBuf| -> Result<Command, String> {
+        if !confined {
+            return Ok(Command::new(program));
+        }
+        #[cfg(windows)]
+        {
+            let mut process = sandbox::low(root)?;
+            process.arg(program);
+            Ok(process)
+        }
+        #[cfg(not(windows))]
+        Err("PowerShell and cmd run confined only on Windows".to_owned())
+    };
     let mut process = match shell {
         "powershell" => {
             let program = crate::os::powershell().ok_or("no PowerShell was found")?;
-            let mut process = Command::new(program);
+            let mut process = start(program)?;
             (process.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]))
                 .arg(POWERSHELL_BOOTSTRAP)
                 .env(COMMAND_VARIABLE, command);
@@ -1855,13 +1904,17 @@ fn run_windows_shell(
                         .into(),
                 );
             }
-            let mut process = Command::new(crate::os::cmd().ok_or("no cmd.exe was found")?);
+            let mut process = start(crate::os::cmd().ok_or("no cmd.exe was found")?)?;
             cmd_runs(&mut process, command);
             process
         }
     };
     process.current_dir(root);
-    run_process(process, shell, true, timeout, cancel, progress)
+    let program = match confined {
+        true => sandbox::PROGRAM,
+        false => shell,
+    };
+    run_process(process, program, true, timeout, cancel, progress)
 }
 
 /// What PowerShell runs: the command from `COMMAND_VARIABLE`, after settings that make what it

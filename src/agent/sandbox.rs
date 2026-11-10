@@ -3,7 +3,9 @@
 //! the user's credential stores hidden; the main agent's commands in it too under `--sandbox`,
 //! with the project writable in `workspace-write` and the network as `sandboxNetwork` says; and
 //! otherwise the main agent's commands with only the credential stores hidden. On macOS the
-//! same through Seatbelt (`seatbelt`).
+//! same through Seatbelt (`seatbelt`). On Windows, subagents' commands run at the low integrity
+//! level (`os::low_integrity`), which keeps them from changing the user's files on local disks
+//! but hides nothing, and the rest is refused.
 
 #[cfg(unix)]
 mod seatbelt;
@@ -16,13 +18,13 @@ use std::{
 #[cfg(target_os = "macos")]
 pub(super) const PROGRAM: &str = seatbelt::PROGRAM;
 #[cfg(windows)]
-pub(super) const PROGRAM: &str = "the sandbox";
+pub(super) const PROGRAM: &str = "the low-integrity helper";
 #[cfg(not(any(target_os = "macos", windows)))]
 pub(super) const PROGRAM: &str = "bwrap";
 
-/// Why nothing runs confined on Windows, where scramjet-rs has no sandbox yet.
+/// Why `--sandbox` is refused on Windows, where scramjet-rs has only subagents' read-only one.
 #[cfg(windows)]
-const UNAVAILABLE: &str = "scramjet-rs has no sandbox on Windows yet";
+const UNAVAILABLE: &str = "scramjet-rs has no sandbox for the main agent on Windows yet";
 
 /// Why a command whose credential stores are to be hidden does not run on Windows. The main
 /// agent's run there with nothing hidden instead (`tools::HIDES_COMMANDS`).
@@ -141,6 +143,9 @@ pub struct Sandbox {
 impl Sandbox {
     /// Whether bubblewrap can confine commands here; otherwise why not.
     pub fn check() -> Result<(), String> {
+        #[cfg(windows)]
+        return Err(format!("the sandbox cannot start: {UNAVAILABLE}"));
+        #[cfg(unix)]
         available().map_err(|error| format!("the sandbox cannot start: {error}"))
     }
 
@@ -687,8 +692,26 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
 /// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's). `writable_too`, a real
 /// path, is mounted writable last.
 #[cfg(windows)]
-fn confined(_: &Path, _: &Hidden, _: Option<Sandbox>, _: Option<&Path>) -> Result<Command, String> {
-    Err(UNAVAILABLE.to_owned())
+fn confined(
+    root: &Path,
+    _: &Hidden,
+    sandbox: Option<Sandbox>,
+    _: Option<&Path>,
+) -> Result<Command, String> {
+    if sandbox.is_some() {
+        return Err(UNAVAILABLE.to_owned());
+    }
+    low(root)
+}
+
+/// scramjet-rs started again in `root` to run, at the low integrity level, the program to follow.
+#[cfg(windows)]
+pub(super) fn low(root: &Path) -> Result<Command, String> {
+    let program = std::env::current_exe()
+        .map_err(|error| format!("cannot find scramjet-rs's own program: {error}"))?;
+    let mut process = Command::new(program);
+    process.arg(crate::os::LOW_INTEGRITY).current_dir(root);
+    Ok(process)
 }
 
 #[cfg(unix)]
@@ -877,6 +900,24 @@ fn empty_in(directory: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// Whether commands can run in the sandbox here; otherwise why not.
+#[cfg(windows)]
+pub(super) fn available() -> Result<(), String> {
+    let output = low(Path::new("/"))?
+        .stdin(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("cannot start {PROGRAM}: {error}"))?;
+    match output.stdout == crate::os::LOWERED.as_bytes() {
+        true => Ok(()),
+        false => Err(format!(
+            "{PROGRAM} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+    }
+}
+
+/// Whether commands can run in the sandbox here; otherwise why not.
+#[cfg(unix)]
 pub(super) fn available() -> Result<(), String> {
     let output = command(Path::new("/"), "true", &Hidden::current(&[]))?
         .stdin(Stdio::null())

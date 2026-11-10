@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.135.0 — Windows: subagents run commands, read-only
+
+### Changed
+
+- On Windows, subagents get their shells (bash, PowerShell, cmd) instead of none, so Mach 12's reviewers can run `git` and `gh`. Their commands run at Windows' low integrity level: they can read, but cannot change files on this computer's disks, and get a `TEMP` of their own that is removed after each command. Unlike Linux's sandbox they keep the network and can read the credential stores, and they can still write to WSL's files and network drives; a notice says so once per run. An agent listing `Bash` gets PowerShell where Git Bash is not installed.
+
 ## 0.134.1 — Windows: `-p` no longer waits on a program left running
 
 ### Fixed

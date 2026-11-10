@@ -1,0 +1,54 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "agents": {
+    "reader": "---\nname: reader\ndescription: Reads the project\ntools: Read, Bash, cmd\n---\nRead and report.\n"
+  },
+  "prompt": "Have a subagent look",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "reader",
+          "task": "Look at the project"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "Get-Content README.md; try { Set-Content README.md changed -ErrorAction Stop; 'WROTE README' } catch { 'write refused' }; try { New-Item new.txt -ErrorAction Stop | Out-Null; 'CREATED new.txt' } catch { 'create refused' }; Set-Content \"$env:TEMP\\t.txt\" temp-ok; Get-Content \"$env:TEMP\\t.txt\"; $env:TEMP; (whoami /groups | Select-String 'Mandatory Label').ToString().Trim().Substring(0, 37)"
+        }
+      }
+    ],
+    [
+      {
+        "call": "cmd",
+        "arguments": {
+          "command": "type README.md & echo x> c.txt & echo %TEMP%"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "exit 7"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Child done."
+      }
+    ],
+    [
+      {
+        "text": "Finished."
+      }
+    ]
+  ]
+}

@@ -266,6 +266,8 @@ pub(super) fn child(
             "grep" => "- grep: Search file contents for patterns (respects .gitignore)",
             "find" => "- find: Find files by glob pattern (respects .gitignore)",
             "ls" => "- ls: List directory contents",
+            "powershell" => "- powershell: Execute PowerShell commands in a read-only sandbox",
+            "cmd" => "- cmd: Execute cmd.exe command lines in a read-only sandbox",
             _ => "- bash: Execute bash commands (ls, grep, find, etc.) in a read-only sandbox",
         })
         .collect();
@@ -273,22 +275,29 @@ pub(super) fn child(
     let explores = ["grep", "find", "ls"]
         .iter()
         .any(|tool| tools.contains(tool));
-    if tools.contains(&"bash") {
+    let shells: Vec<&str> = (tools.iter().copied())
+        .filter(|tool| super::tools::is_shell(tool))
+        .collect();
+    if let Some(shell) = shells.first() {
         guidelines.push(match explores {
-            true => {
-                "- Prefer grep/find/ls tools over bash for file exploration (faster, respects \
+            true => format!(
+                "- Prefer grep/find/ls tools over {shell} for file exploration (faster, respects \
 .gitignore)"
-            }
-            false => "- Use bash for file operations like ls, rg, find",
+            ),
+            false => format!("- Use {shell} for file operations like ls, rg, find"),
         });
-        guidelines.push(
-            "- bash runs in a read-only sandbox without network, whose only writable directory \
-is a private /tmp discarded after each command",
-        );
+        guidelines.push(match cfg!(windows) {
+            true => "- Commands run at Windows' low integrity level: no file on this computer's \
+disks can be changed, except in a TEMP of their own discarded after each command"
+                .to_owned(),
+            false => "- bash runs in a read-only sandbox without network, whose only writable \
+directory is a private /tmp discarded after each command"
+                .to_owned(),
+        });
     }
-    guidelines.push("- No file can be changed: you only read and report");
-    guidelines.push("- Be concise in your responses");
-    guidelines.push("- Show file paths clearly when working with files");
+    guidelines.push("- No file can be changed: you only read and report".to_owned());
+    guidelines.push("- Be concise in your responses".to_owned());
+    guidelines.push("- Show file paths clearly when working with files".to_owned());
     let mut text = format!(
         "You are a subagent of scramjet-rs, a coding agent: you are given a task, and your final \
 reply is its result.

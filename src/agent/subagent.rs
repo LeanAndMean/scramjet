@@ -44,8 +44,12 @@ const MAX_CONCURRENCY: usize = 4;
 static CHILDREN: slots::Slots = slots::Slots::new(8);
 /// Scramjet's thinking levels, lowest first.
 const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-/// The tools a child can have; none of them changes a file.
+/// The tools a child can have; none of them changes a file, the shells being in the read-only
+/// sandbox.
+#[cfg(not(windows))]
 const READ_ONLY: [&str; 5] = ["read", "grep", "find", "ls", "bash"];
+#[cfg(windows)]
+const READ_ONLY: [&str; 7] = ["read", "grep", "find", "ls", "bash", "powershell", "cmd"];
 
 pub(super) fn definition() -> Value {
     let effort = json!({"type":"string","enum":LEVELS,
@@ -950,8 +954,13 @@ is added or changed.",
         },
         runs: Vec::new(),
     };
-    let mut runner =
-        |jobs: &[Job], shown: &mut Children| run_jobs(jobs, parent, &unknown, ui, shown, cancel);
+    let mut runner = |jobs: &[Job], shown: &mut Children| {
+        let shells = jobs.iter().flat_map(|job| &job.tools);
+        if cfg!(windows) && shells.into_iter().any(|tool| tools::is_shell(tool)) {
+            low_integrity_said(ui);
+        }
+        run_jobs(jobs, parent, &unknown, ui, shown, cancel)
+    };
     let (text, failed, runs) = match &mode {
         Mode::Single(task) => {
             let runs = runner(&[job(task, task.task.clone())], &mut shown);
@@ -1152,6 +1161,19 @@ fn child_effort(requested: Option<&str>, parent: Option<&str>) -> Option<String>
     Some(if effort == "off" { "none" } else { effort }.to_owned())
 }
 
+/// Says once what the low integrity level that subagents' commands run at on Windows leaves
+/// within their reach (user decision, 2026-11-10).
+fn low_integrity_said(ui: &mut dyn AgentUi) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, Ordering::Relaxed) {
+        ui.notice(
+            "Subagents' commands run at Windows' low integrity level: they cannot change files \
+             on this computer's disks, but can read the credential stores, use the network, and \
+             write WSL's files and network drives",
+        );
+    }
+}
+
 /// The child's tools: those its file lists, or else the read-only ones of the parent's `inherited`,
 /// that are read-only and available, but those it disallows, with warnings about the others.
 fn child_tools(
@@ -1170,15 +1192,20 @@ fn child_tools(
     let mut tools = Vec::new();
     let (mut writers, mut unconfined, mut missing) = (Vec::new(), Vec::new(), Vec::new());
     for tool in listed {
-        match READ_ONLY.iter().find(|known| *known == tool) {
-            Some(&"bash") if sandbox.is_err() => unconfined.push(tool.as_str()),
+        // Windows without Git Bash: PowerShell for an agent's shell.
+        let tool = match tool.as_str() {
+            "bash" if cfg!(windows) && !tools::found("bash") && tools::found("powershell") => {
+                "powershell"
+            }
+            tool => tool,
+        };
+        match READ_ONLY.iter().find(|known| **known == tool) {
+            Some(known) if tools::is_shell(known) && sandbox.is_err() => unconfined.push(tool),
+            Some(known) if !tools::found(known) => missing.push(tool),
             Some(known) if !tools.contains(known) => tools.push(*known),
             Some(_) => {}
-            None if matches!(tool.as_str(), "write" | "edit") => writers.push(tool.as_str()),
-            None if cfg!(windows) && sandbox.is_err() && tools::is_shell(tool) => {
-                unconfined.push(tool.as_str())
-            }
-            None => missing.push(tool.as_str()),
+            None if matches!(tool, "write" | "edit") => writers.push(tool),
+            None => missing.push(tool),
         }
     }
     let mut warnings = agent.diagnostics.clone();
@@ -1627,10 +1654,9 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
         }
     }
 
-    #[test]
-    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
-    fn children_get_only_the_read_only_tools_they_list() {
-        let agent = |tools: Option<&str>, disallowed: &str| Definition {
+    /// An agent listing `tools`, if any, but `disallowed`, with a diagnostic.
+    fn agent(tools: Option<&str>, disallowed: &str) -> Definition {
+        Definition {
             name: "x".into(),
             description: "d".into(),
             tools: tools.map(|list| list.split(", ").map(str::to_owned).collect()),
@@ -1643,7 +1669,12 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             path: PathBuf::from("/x.md"),
             digest: String::new(),
             diagnostics: vec!["noted".into()],
-        };
+        }
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "Windows' shells differ: children_on_windows_…")]
+    fn children_get_only_the_read_only_tools_they_list() {
         let sandbox = Ok(());
         let all = tools::DEFAULT_TOOLS.map(str::to_owned);
         // A file listing none takes the parent's read-only tools, without a word of the others.
@@ -1683,6 +1714,36 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
                 "bash: left out, as the read-only sandbox is unavailable (no bwrap)"
             ]
         );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn children_on_windows_get_its_shells_with_powershell_for_a_bash_not_found() {
+        let shell = match tools::found("bash") {
+            true => "bash",
+            false => "powershell",
+        };
+        let (tools, warnings) = child_tools(&agent(Some("read, bash, cmd"), ""), &[], &Ok(()));
+        assert_eq!(
+            (tools, warnings),
+            (vec!["read", shell, "cmd"], vec!["noted".into()])
+        );
+        let missing = Err("x".to_owned());
+        let listed = agent(Some("read, powershell, cmd"), "");
+        let (tools, warnings) = child_tools(&listed, &[], &missing);
+        assert_eq!(tools, ["read"]);
+        assert_eq!(
+            warnings,
+            [
+                "noted",
+                "powershell, cmd: left out, as the read-only sandbox is unavailable (x)"
+            ]
+        );
+        let described = tools::child_definitions(&["bash", "powershell", "cmd"]);
+        for tool in described.as_array().unwrap() {
+            let description = tool["description"].as_str().unwrap();
+            assert!(description.contains(tools::LOW_INTEGRITY), "{description}");
+        }
     }
 
     #[test]

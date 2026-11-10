@@ -435,6 +435,29 @@ fn windows_program(name: &str, path: &[PathBuf], extensions: &[&str]) -> Option<
         .find(|program| program.is_file())
 }
 
+/// The first argument that starts scramjet-rs as `low_integrity`'s helper.
+pub const LOW_INTEGRITY: &str = "__low-integrity";
+
+/// What the helper prints when lowered without a program to run.
+pub const LOWERED: &str = "lowered";
+
+/// On Windows, when the command line starts with `LOW_INTEGRITY`, never returns: lowers this
+/// process to Windows' low integrity level, at which no file or registry key the user's programs
+/// made can be changed, then runs the program the rest of the command line gives, with a `TEMP`
+/// of its own, and exits with its code; without a program, prints `LOWERED`. Run before
+/// anything else, as the read-only sandbox of subagents' commands there.
+pub fn low_integrity() {
+    #[cfg(windows)]
+    {
+        let arguments: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+        if let Some((first, rest)) = arguments.split_first()
+            && first == LOW_INTEGRITY
+        {
+            windows::low_integrity(rest)
+        }
+    }
+}
+
 /// Keeps scramjet-rs's own standard input, output and error from every program it starts, and
 /// from theirs: on Windows a child inherits each inheritable handle, so a program a command left
 /// running would hold `-p`'s output open after scramjet-rs exits. A child given them by
@@ -568,6 +591,136 @@ mod windows {
             // SAFETY: a handle missing or not settable fails the call, which changes nothing.
             unsafe { SetHandleInformation(GetStdHandle(which), HANDLE_FLAG_INHERIT, 0) };
         }
+    }
+
+    pub(super) fn low_integrity(arguments: &[std::ffi::OsString]) -> ! {
+        if let Err(error) = lower() {
+            eprintln!("scramjet-rs: cannot lower the integrity level, so nothing runs: {error}");
+            std::process::exit(125);
+        }
+        let Some((program, rest)) = arguments.split_first() else {
+            print!("{}", super::LOWERED);
+            std::process::exit(0)
+        };
+        let temporary = temporary();
+        let mut command = std::process::Command::new(program);
+        command.args(rest);
+        if let Some(temporary) = &temporary {
+            command.env("TEMP", temporary).env("TMP", temporary);
+        }
+        // Ctrl+Break is for the program, whose code this passes on once it ends.
+        unsafe extern "system" fn ignore(_: u32) -> windows_sys::core::BOOL {
+            1
+        }
+        // SAFETY: the handler is a function for the process's lifetime.
+        unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(ignore), 1) };
+        let code = match command.status() {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(error) => {
+                eprintln!("scramjet-rs: cannot start {}: {error}", program.display());
+                127
+            }
+        };
+        if let Some(temporary) = temporary {
+            let _ = std::fs::remove_dir_all(temporary);
+        }
+        std::process::exit(code)
+    }
+
+    /// Sets this process's token to the low integrity level, and checks that it took.
+    fn lower() -> std::io::Result<()> {
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            Security::{
+                CreateWellKnownSid, GetSidSubAuthority, GetSidSubAuthorityCount,
+                GetTokenInformation, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES,
+                SetTokenInformation, TOKEN_ADJUST_DEFAULT, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+                TokenIntegrityLevel, WinLowLabelSid,
+            },
+            System::{
+                SystemServices::{SE_GROUP_INTEGRITY, SECURITY_MANDATORY_LOW_RID},
+                Threading::{GetCurrentProcess, OpenProcessToken},
+            },
+        };
+        let failed = std::io::Error::last_os_error;
+        let mut token = std::ptr::null_mut();
+        // SAFETY: the token is checked and closed once; each buffer's size is given to the call
+        // that fills it, and the label read back points into its own buffer.
+        unsafe {
+            if OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ADJUST_DEFAULT | TOKEN_QUERY,
+                &mut token,
+            ) == 0
+            {
+                return Err(failed());
+            }
+            let result = (|| {
+                let mut sid = [0usize; SECURITY_MAX_SID_SIZE as usize / 8 + 1];
+                let mut size = std::mem::size_of_val(&sid) as u32;
+                let sid = sid.as_mut_ptr().cast();
+                if CreateWellKnownSid(WinLowLabelSid, std::ptr::null_mut(), sid, &mut size) == 0 {
+                    return Err(failed());
+                }
+                let label = TOKEN_MANDATORY_LABEL {
+                    Label: SID_AND_ATTRIBUTES {
+                        Sid: sid,
+                        Attributes: SE_GROUP_INTEGRITY as u32,
+                    },
+                };
+                let length = std::mem::size_of::<TOKEN_MANDATORY_LABEL>() as u32 + size;
+                if SetTokenInformation(
+                    token,
+                    TokenIntegrityLevel,
+                    (&raw const label).cast(),
+                    length,
+                ) == 0
+                {
+                    return Err(failed());
+                }
+                let mut read = [0usize; 16];
+                let mut needed = 0;
+                let room = std::mem::size_of_val(&read) as u32;
+                if GetTokenInformation(
+                    token,
+                    TokenIntegrityLevel,
+                    read.as_mut_ptr().cast(),
+                    room,
+                    &mut needed,
+                ) == 0
+                {
+                    return Err(failed());
+                }
+                let sid = (*read.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()).Label.Sid;
+                let count = u32::from(*GetSidSubAuthorityCount(sid));
+                match count > 0
+                    && *GetSidSubAuthority(sid, count - 1) <= SECURITY_MANDATORY_LOW_RID as u32
+                {
+                    true => Ok(()),
+                    false => Err(std::io::Error::other("the token kept a higher level")),
+                }
+            })();
+            CloseHandle(token);
+            result
+        }
+    }
+
+    /// A directory of this process's own under `LocalLow`, which processes at the low level can
+    /// write, after removing those of helpers no longer running.
+    fn temporary() -> Option<std::path::PathBuf> {
+        let local = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
+        let base = local.parent()?.join("LocalLow").join("scramjet-rs-tmp");
+        for entry in std::fs::read_dir(&base).into_iter().flatten().flatten() {
+            let pid = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse().ok());
+            if pid.is_some_and(|pid| !process_runs(pid)) {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
+        let own = base.join(std::process::id().to_string());
+        std::fs::create_dir_all(&own).ok().map(|()| own)
     }
 
     pub(super) const NEW_GROUP: u32 = CREATE_NEW_PROCESS_GROUP;
