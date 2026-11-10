@@ -288,12 +288,11 @@ mod tests {
         let (diagnostics, _) = lint(&set);
         (diagnostics.into_iter())
             .map(|d| {
-                let file = d
-                    .path
-                    .strip_prefix(&directory)
-                    .unwrap()
-                    .display()
-                    .to_string();
+                let relative = d.path.strip_prefix(&directory).unwrap();
+                let parts: Vec<_> = (relative.iter())
+                    .map(|part| part.to_string_lossy())
+                    .collect();
+                let file = parts.join("/");
                 (file, d.code, d.line)
             })
             .collect()
@@ -301,7 +300,8 @@ mod tests {
 
     #[test]
     fn this_repositorys_scramjet_set_is_clean() {
-        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("sets/scramjet");
+        let manifest = std::env::var_os("CARGO_MANIFEST_DIR").unwrap();
+        let directory = crate::os::join(std::path::Path::new(&manifest), "sets/scramjet");
         let set = Set::at(&directory, Origin::Installed).unwrap();
         let (diagnostics, files) = lint(&set);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");

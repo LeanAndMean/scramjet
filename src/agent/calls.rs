@@ -714,10 +714,6 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_delegates_to_another_once_per_turn_for_the_same_arguments() {
         let delegate = |id: &str, args: &str| {
             let arguments = json!({"command":"rs:read","args":args});
@@ -739,9 +735,9 @@ mod tests {
         let (mut agent, _scratch) = agent(endpoint, "delegate");
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
-        std::fs::write(commands.join("rs:top.md"), "Read the issues.\n").unwrap();
+        std::fs::write(commands.join("top.md"), "Read the issues.\n").unwrap();
         let helper = "---\ndelegate-only: true\n---\nRead issue $1.\n";
-        std::fs::write(commands.join("rs:read.md"), helper).unwrap();
+        std::fs::write(commands.join("read.md"), helper).unwrap();
         project_sets(&mut agent);
         agent.autonomy = None;
         let mut ui = Recorder::default();

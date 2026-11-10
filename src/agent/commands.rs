@@ -1012,21 +1012,17 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn sets_are_the_installed_ones_then_the_global_and_project_ones() {
         let scratch = Scratch::new("sets");
         let (global, project) = (scratch.0.join("global"), scratch.0.join("project"));
-        scratch.file("installed/mach12/commands/mach12:x.md", "Installed\n");
-        scratch.file("installed/agents-only/agents/agents-only:a.md", "");
-        scratch.file("elsewhere/mach12/commands/mach12:x.md", "Elsewhere\n");
+        scratch.file("installed/mach12/commands/x.md", "Installed\n");
+        scratch.file("installed/agents-only/agents/a.md", "");
+        scratch.file("elsewhere/mach12/commands/x.md", "Elsewhere\n");
         scratch.file("installed/empty/notes.txt", "");
-        scratch.file("global/mach12/commands/mach12:x.md", "Global\n");
-        scratch.file("global/rs/commands/rs:a.md", "A\n");
+        scratch.file("global/mach12/commands/x.md", "Global\n");
+        scratch.file("global/rs/commands/a.md", "A\n");
         scratch.file("global/plain/notes.md", "Not a set\n");
-        scratch.file("project/rs/commands/rs:b.md", "B\n");
+        scratch.file("project/rs/commands/b.md", "B\n");
         scratch.file("project/agents/reviewer.md", "A loose agent\n");
         let installed = [
             "mach12",
@@ -1049,14 +1045,14 @@ mod tests {
                 "rs project"
             ]
         );
-        let shown = |path: &str| scratch.0.join(path).display().to_string();
+        let shown = |path: &str| crate::os::join(&scratch.0, path).display().to_string();
         // The settings list the installed ones, so the problem is there.
         assert_eq!(
             sets.warnings(),
             [
                 Problem::in_settings(format!(
                     "skipping installed command set {}: mach12 is installed from {}",
-                    shown("installed/../elsewhere/mach12"),
+                    installed[2].display(),
                     shown("installed/mach12")
                 )),
                 Problem::in_settings(format!(
@@ -1252,22 +1248,18 @@ or agents directory, nor a models.json",
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_sets_publication_defaults_hold_for_its_own_commands_and_their_declared_tools() {
         let scratch = Scratch::new("publication-defaults");
         let global = scratch.0.join("global");
         scratch.file(
-            "global/rs/commands/rs:post.md",
+            "global/rs/commands/post.md",
             "---\nallowed-tools: [create_issue, add_issue_comment]\n---\nPost\n",
         );
         scratch.file(
-            "global/rs/commands/rs:helper.md",
+            "global/rs/commands/helper.md",
             "---\ndelegate-only: true\nallowed-tools: [create_pr]\n---\nHelp\n",
         );
-        scratch.file("global/other/commands/other:x.md", "X\n");
+        scratch.file("global/other/commands/x.md", "X\n");
         scratch.file(
             "global/rs/autonomy-defaults.yaml",
             "publications:\n  rs:post:\n    create_issue: auto-approve\n    add_issue_comment: \
@@ -1323,15 +1315,11 @@ other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_project_set_may_approve_its_own_publications() {
         let scratch = Scratch::new("project-publication-defaults");
         let project = scratch.0.join("project");
         scratch.file(
-            "project/rs/commands/rs:post.md",
+            "project/rs/commands/post.md",
             "---\nallowed-tools: [create_issue, add_issue_comment]\n---\nPost\n",
         );
         scratch.file(
@@ -1349,13 +1337,9 @@ auto-approve\n    add_issue_comment: require-approval\n",
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_project_command_is_found_without_a_global_root() {
         let scratch = Scratch::new("no-global");
-        scratch.file("project/rs/commands/rs:only.md", "Only\n");
+        scratch.file("project/rs/commands/only.md", "Only\n");
         let commands = Commands::discover(&project_sets(&scratch.0.join("project")));
         assert_eq!(names(&commands), ["rs:only"]);
         assert_eq!(
@@ -1365,19 +1349,15 @@ auto-approve\n    add_issue_comment: require-approval\n",
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_edited_since_discovery_runs_as_edited() {
         let scratch = Scratch::new("edited");
-        scratch.file("project/rs/commands/rs:loop.md", "Old\n");
+        scratch.file("project/rs/commands/loop.md", "Old\n");
         let mut commands = Commands::discover(&project_sets(&scratch.0.join("project")));
         let framed = |body: &str| {
             format!("<scramjet-command name=\"rs:loop\">\n{body}\n</scramjet-command>")
         };
         scratch.file(
-            "project/rs/commands/rs:loop.md",
+            "project/rs/commands/loop.md",
             "---\nnext:\n  mode: forced\n  target: rs:loop\n---\nNew $1\n",
         );
         let delegated = super::super::delegate::run(
@@ -1395,12 +1375,9 @@ auto-approve\n    add_issue_comment: require-approval\n",
         assert_eq!(commands.get("rs:loop").unwrap().next, Some(forced.clone()));
 
         // A file that no longer reads as the command leaves it as last found.
-        scratch.file(
-            "project/rs/commands/rs:loop.md",
-            "---\nnext: [\n---\nBroken\n",
-        );
+        scratch.file("project/rs/commands/loop.md", "---\nnext: [\n---\nBroken\n");
         commands.refresh("/rs:loop");
-        std::fs::remove_file(scratch.0.join("project/rs/commands/rs:loop.md")).unwrap();
+        std::fs::remove_file(scratch.0.join("project/rs/commands/loop.md")).unwrap();
         commands.refresh("/rs:loop");
         assert_eq!(commands.expand("/rs:loop"), Some(framed("New ")));
         assert_eq!(commands.get("rs:loop").unwrap().next, Some(forced));
@@ -1608,15 +1585,11 @@ at byte 14 line 1 column 15"
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_prompt_runs_a_command_only_when_it_names_one() {
         let scratch = Scratch::new("expand");
-        scratch.file("project/rs/commands/rs:echo.md", "Say $1 and ${@:2}");
+        scratch.file("project/rs/commands/echo.md", "Say $1 and ${@:2}");
         scratch.file(
-            "project/rs/commands/rs:wrapped.md",
+            "project/rs/commands/wrapped.md",
             "<scramjet-command name=\"x\">\nDone",
         );
         let commands = Commands::discover(&project_sets(&scratch.0.join("project")));

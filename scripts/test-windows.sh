@@ -27,8 +27,8 @@ temp=$(cd /mnt/c && cmd.exe /c 'echo %TEMP%' | tr -d '\r')
 directory=$(wslpath -u "$temp")/scramjet-rs-tests
 mkdir -p "$directory"
 status=0
-# The integration tests read their fixtures from the repository the tests name.
-rm -rf "$directory/tests" && mkdir -p "$directory/tests" && cp -r tests/tls "$directory/tests/"
+# The tests read their fixtures and this repository's sets from the repository the tests name.
+rm -rf "$directory/tests" "$directory/sets" && mkdir -p "$directory/tests" && cp -r tests/tls "$directory/tests/" && cp -r sets "$directory/"
 export SCRAMJET_RS_BINARY="$temp\\scramjet-rs-tests\\scramjet-rs.exe"
 export CARGO_MANIFEST_DIR="$temp\\scramjet-rs-tests"
 export WSLENV="${WSLENV:+$WSLENV:}SCRAMJET_RS_BINARY:CARGO_MANIFEST_DIR"

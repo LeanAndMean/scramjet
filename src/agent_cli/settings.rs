@@ -3027,7 +3027,7 @@ mod tests {
                 "compaction": {"enabled": false},
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
-                "defaultShell": "bash",
+                "defaultShell": if bash { "bash" } else { "powershell" },
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "unattended",
                 "steeringMode": "one-at-a-time",

@@ -1051,10 +1051,6 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn sets_suggest_next_steps_which_hold_once_applied_where_nothing_is_set() {
         let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
             "scramjet-autonomy-suggested-{}",
@@ -1067,25 +1063,25 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
             std::fs::write(path, text).unwrap();
         };
         file(
-            "sets/rs/commands/rs:loop.md",
+            "sets/rs/commands/loop.md",
             "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:loop\n    - name: rs:steer\n    \
              - name: rs:review\n---\nLoop",
         );
-        file("sets/rs/commands/rs:steer.md", "Steer");
-        file("sets/rs/commands/rs:review.md", "Review");
+        file("sets/rs/commands/steer.md", "Steer");
+        file("sets/rs/commands/review.md", "Review");
         file(
             "sets/rs/autonomy-defaults.yaml",
             "edges:\n  rs:loop:\n    rs:steer: chain\n    rs:loop: chain\n    rs:review: pause\n    \
              '*': pause\n  rs:gone:\n    rs:loop: chain\n",
         );
         // A set before it suggests first.
-        file("sets/a/commands/a:x.md", "X");
+        file("sets/a/commands/x.md", "X");
         file(
             "sets/a/autonomy-defaults.yaml",
             "edges:\n  rs:loop:\n    rs:steer: pause\n",
         );
         let commands = Commands::discover(&super::super::Sets::find(&[], None, &root.join("sets")));
-        let defaults = root.join("sets/rs/autonomy-defaults.yaml");
+        let defaults = crate::os::join(root, "sets/rs/autonomy-defaults.yaml");
         let text = format!("{}: unknown source command \"rs:gone\"", defaults.display());
         assert_eq!(commands.warnings(), [Problem::in_file(text, &defaults)]);
         let global = root.join("config/autonomy.yaml");
@@ -1161,10 +1157,6 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn approvals_list_each_publishing_commands_tools_with_who_says_what() {
         let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
             "scramjet-autonomy-approvals-{}",
@@ -1177,14 +1169,14 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
             std::fs::write(path, text).unwrap();
         };
         file(
-            "sets/rs/commands/rs:post.md",
+            "sets/rs/commands/post.md",
             "---\nallowed-tools: [add_pr_comment, read, create_issue]\n---\nPost",
         );
         file(
-            "sets/rs/commands/rs:helper.md",
+            "sets/rs/commands/helper.md",
             "---\ndelegate-only: true\nallowed-tools: [create_pr]\n---\nHelp",
         );
-        file("sets/rs/commands/rs:plain.md", "Plain");
+        file("sets/rs/commands/plain.md", "Plain");
         file(
             "sets/rs/autonomy-defaults.yaml",
             "publications:\n  rs:post:\n    create_issue: require-approval\n    add_pr_comment: auto-approve\n",
@@ -1253,7 +1245,7 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
         );
         let problem = approvals.problem.unwrap();
         assert!(
-            problem.starts_with(&format!("{}: autonomy.yaml:", global.display())),
+            problem.starts_with(&format!("{}: autonomy.yaml:", crate::os::tilde(&global))),
             "{problem}"
         );
     }

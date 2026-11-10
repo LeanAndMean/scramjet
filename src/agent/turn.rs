@@ -494,11 +494,10 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_paused_turn_goes_on_where_it_stopped_with_what_the_session_changed() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", json!({"command":"true"})),
             stream(&fixture::text_events("worked", fixture::known_usage())),
@@ -511,7 +510,7 @@ mod tests {
         let (mut agent, _scratch) = agent(endpoint, "paused");
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
-        std::fs::write(commands.join("rs:work.md"), "Work on $1.\n").unwrap();
+        std::fs::write(commands.join("work.md"), "Work on $1.\n").unwrap();
         project_sets(&mut agent);
         agent.autonomy = None;
         // While the call runs, and before the status check's request.
@@ -772,10 +771,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_queued_during_a_turn_starts_there_in_place_of_the_one_running() {
         let report = |id: &str, next: &str| {
             let next = json!([{"message":next,"fresh_session":false,"reason":"More."}]);
@@ -794,7 +789,7 @@ mod tests {
         std::fs::create_dir_all(&commands).unwrap();
         for name in ["work", "other"] {
             std::fs::write(
-                commands.join(format!("rs:{name}.md")),
+                commands.join(format!("{name}.md")),
                 format!("---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:{name}\n---\nDo $1.\n"),
             )
             .unwrap();
@@ -828,10 +823,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_prompt_sends_its_expansion_and_is_recalled_as_typed() {
         let (endpoint, server) = serve(vec![
             stream(&fixture::text_events("one", fixture::known_usage())),
@@ -849,7 +840,7 @@ mod tests {
         let commands = root.join(".scramjet/sjrstest/commands");
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(
-            commands.join("sjrstest:echo.md"),
+            commands.join("echo.md"),
             "---\ndescription: Echo\n---\nSay $1 to ${@:2}\n",
         )
         .unwrap();
@@ -1048,10 +1039,6 @@ scramjet-rs\n",
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_resumed_session_keeps_its_command_waiting_for_the_user() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let completed = json!({"summary":"Done.","status":"completed"});
@@ -1078,7 +1065,7 @@ scramjet-rs\n",
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(
-            commands.join("rs:work.md"),
+            commands.join("work.md"),
             "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:work\n---\nWork.\n",
         )
         .unwrap();
@@ -1193,10 +1180,6 @@ scramjet-rs\n",
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn autopilot_is_saved_restored_and_told_to_the_model() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let events = fixture::call_events(
@@ -1214,7 +1197,7 @@ scramjet-rs\n",
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(
-            commands.join("rs:work.md"),
+            commands.join("work.md"),
             "---\nnext:\n  mode: closed\n  candidates:\n    - name: rs:work\n---\nWork.\n",
         )
         .unwrap();
@@ -1499,10 +1482,6 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_suggestion_waits_for_the_turns_end_unless_the_user_goes_on_or_it_stops() {
         let suggest = |id: &str| {
             let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
@@ -1611,8 +1590,8 @@ auto-dispatches it only when its message is a slash command."
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
         let work = format!("---\nnext:\n{next}---\nWork on $1.\n");
-        std::fs::write(commands.join("rs:work.md"), work).unwrap();
-        std::fs::write(commands.join("rs:other.md"), "Other.\n").unwrap();
+        std::fs::write(commands.join("work.md"), work).unwrap();
+        std::fs::write(commands.join("other.md"), "Other.\n").unwrap();
         project_sets(&mut agent);
         agent.autonomy = None;
         (agent, scratch)
@@ -1633,10 +1612,6 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_is_reported_inline_or_after_a_status_check() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let next = json!([{"message":"/rs:work again","fresh_session":true,"reason":"More."}]);
@@ -1747,10 +1722,6 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn status_checks_stop_after_three_in_a_row_without_the_users_input() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let confirm = json!({"type":"confirm","message":"Use a.txt?"});
@@ -1794,10 +1765,6 @@ did not finish or ask you anything. Reply to continue.";
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_without_the_status_tool_waits_for_the_user_unchecked() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let (endpoint, server) = serve(vec![reply("worked"), reply("more")]);
@@ -1820,10 +1787,6 @@ among this run's tools, so it cannot finish and is not checked on. Reply to cont
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_no_longer_installed_ends_with_its_turn() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let freetext = json!({"type":"freetext","message":"Which file?"});
@@ -1836,7 +1799,7 @@ among this run's tools, so it cannot finish and is not checked on. Reply to cont
         let cancel = AtomicBool::new(false);
         agent.turn("/rs:work", &mut ui, &cancel).unwrap();
         assert_eq!(agent.lifecycle.active(), Some("rs:work"));
-        std::fs::remove_file(agent.root().join(".scramjet/rs/commands/rs:work.md")).unwrap();
+        std::fs::remove_file(agent.root().join(".scramjet/rs/commands/work.md")).unwrap();
         project_sets(&mut agent);
         agent.turn("a.txt", &mut ui, &cancel).unwrap();
         assert_eq!(agent.lifecycle.active(), None);
@@ -1853,10 +1816,6 @@ among this run's tools, so it cannot finish and is not checked on. Reply to cont
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_reply_with_neither_text_nor_tool_calls_gets_the_status_check() {
         let empty = messages_stream(&[
             json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}),
@@ -1888,10 +1847,6 @@ among this run's tools, so it cannot finish and is not checked on. Reply to cont
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_command_is_abandoned_only_once_the_user_confirms() {
         let abandoned = json!({"summary":"Half **done**.","status":"abandoned",
             "next_steps":[{"message":"/rs:other","fresh_session":false}]});
@@ -1939,10 +1894,6 @@ will run.";
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_message_after_a_report_keeps_it_and_a_skill_is_a_reply_to_the_command() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let freetext = json!({"type":"freetext","message":"Which file?"});

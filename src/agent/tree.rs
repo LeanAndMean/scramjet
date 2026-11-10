@@ -731,10 +731,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "command files are named with `:`, which Windows cannot hold"
-    )]
     fn a_freetext_question_kept_after_one_asked_again_leaves_the_command_waiting() {
         let select = json!({"type":"select","message":"Which?",
             "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]});
@@ -752,7 +748,7 @@ mod tests {
         let (mut agent, _scratch) = agent(endpoint, "tree-freetext");
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
-        std::fs::write(commands.join("rs:work.md"), "Work on $1.\n").unwrap();
+        std::fs::write(commands.join("work.md"), "Work on $1.\n").unwrap();
         project_sets(&mut agent);
         agent.autonomy = None;
         let cancel = AtomicBool::new(false);
