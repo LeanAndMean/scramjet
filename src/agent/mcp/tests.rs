@@ -28,6 +28,17 @@ fn test_server(name: &str, env: &[(&str, String)]) -> Server {
     program(name, "python3", vec![SERVER.to_owned()], env)
 }
 
+/// `name` on the host outside `/tmp`, which the sandbox replaces with its own: in this checkout's
+/// `target`, or in the home directory when the checkout is under `/tmp`.
+fn outside_tmp(name: &str) -> PathBuf {
+    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+    let base = match target.starts_with("/tmp") {
+        true => std::env::home_dir().unwrap(),
+        false => target,
+    };
+    base.join(format!("{name}-{}", std::process::id()))
+}
+
 /// `configs` started in `root` and settled, each given ten seconds.
 fn started(configs: &[Server], root: &Path) -> Servers {
     confined(configs, root, None)
@@ -300,8 +311,14 @@ fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
         network: false,
     };
     let inside = project.join("log");
+    // In the project, as the server's script may be under `/tmp`, hidden in the sandbox.
+    let script = project.join("mcp_server.py");
+    std::fs::copy(SERVER, &script).unwrap();
+    let server = |env: &[(&str, String)]| {
+        program("test", "python3", vec![script.display().to_string()], env)
+    };
     let servers = confined(
-        &[test_server("test", &log(&inside))],
+        &[server(&log(&inside))],
         &project,
         Some(sandbox(SandboxMode::WorkspaceWrite)),
     );
@@ -321,19 +338,12 @@ fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
         "{logged}"
     );
     drop(servers);
-    // Outside `/tmp`, which is the sandbox's own.
-    let outside = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join(format!("sjrs-mcp-outside-{}", std::process::id()));
+    let outside = outside_tmp("sjrs-mcp-outside");
     for (mode, path) in [
         (SandboxMode::WorkspaceWrite, outside),
         (SandboxMode::ReadOnly, inside),
     ] {
-        let servers = confined(
-            &[test_server("test", &log(&path))],
-            &project,
-            Some(sandbox(mode)),
-        );
+        let servers = confined(&[server(&log(&path))], &project, Some(sandbox(mode)));
         let [(_, State::Failed(why))] = &servers.states()[..] else {
             panic!("{mode:?}: {:?}", servers.states());
         };
@@ -359,10 +369,7 @@ fn a_server_started_again_in_the_sandbox_cannot_read_a_store_made_since() {
         return;
     }
     let scratch = scratch("store-since");
-    // Outside `/tmp`, which is the sandbox's own.
-    let store = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join(format!("sjrs-mcp-store-{}", std::process::id()));
+    let store = outside_tmp("sjrs-mcp-store");
     let _ = std::fs::remove_file(&store);
     let script = format!("cat '{}' >&2; exit 1", store.display());
     let server = program("cat", "bash", vec!["-c".to_owned(), script], &[]);
