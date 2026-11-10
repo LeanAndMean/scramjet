@@ -194,7 +194,7 @@ A thread reads stdin. During a turn:
 
 - Each stage: scripted clients in Python (standard library) over pipes against the release build and a local scripted provider (`serve` in `src/agent/tests.rs`). They check framing (U+2028 inside strings, `\r\n`, a bad line), every command's response, the events of a turn with parallel calls, approvals answered, cancelled and at EOF, a next-step list with the countdown and with `hold_request`, a fresh-session step, a client attaching mid-turn, and the redaction.
 - Stage 1: the full screen unchanged, through the PTY journeys and the scripted screens.
-- 1–5 live requests through Proxy for the streamed events (claude-haiku-5-5, gpt-6-luna).
+- 1–5 live requests through the company's proxy for the streamed events (claude-haiku-5-5, gpt-6-luna).
 
 ## Decisions for the sign-off
 

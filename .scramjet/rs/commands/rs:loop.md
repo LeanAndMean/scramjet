@@ -40,7 +40,7 @@ Follow `CLAUDE.md`. Preserve unrelated uncommitted work; if its ownership is unc
 
 A focus given above replaces any current focus recorded in `docs/TASKS.md`; record it there until it is finished, so later fresh sessions keep it. Work toward the recorded focus if there is one, otherwise on the most useful item in `docs/TASKS.md` in light of what you find in the code. Add problems discovered along the way to the list. When the list runs low or a milestone completes, refill it from `docs/DESIGN.md` and `docs/ROADMAP.md`.
 
-The increment is done when it works when actually used, through Proxy when the provider is involved, and formatting, Clippy and the relevant tests pass. Commit it, with what changed and how it was verified in the message, and remove what it finished from `docs/TASKS.md`. If the item is too large for one session, commit working partial progress and record the continuation in `docs/TASKS.md`.
+The increment is done when it works when actually used, through the company's proxy when the provider is involved, and formatting, Clippy and the relevant tests pass. Commit it, with what changed and how it was verified in the message, and remove what it finished from `docs/TASKS.md`. If the item is too large for one session, commit working partial progress and record the continuation in `docs/TASKS.md`.
 
 When an item stops making progress, change the approach or switch to another item within this run, and record the obstacle in one line in `docs/TASKS.md`. Do not repeat an approach that an earlier recorded obstacle shows failed. A run that only documents a blocker is not progress.
 

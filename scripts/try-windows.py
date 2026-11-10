@@ -26,7 +26,8 @@ of directories put ahead of Windows' own PATH, relative ones from %TEMP%\\scramj
 bash.exe, scripts/try-windows-bash.c built with build-windows.sh's image, put on the PATH; it
 runs commands through cmd.exe), "prompt", "replies", each
 reply as in scripts/screens.py, and "steps", each one of {"text": typed}, {"keys": [tmux key
-names]}, {"resize": [columns, rows]}, {"host": [a WSL command run in the project]} and
+names]}, {"resize": [columns, rows]}, {"host": [a WSL command run in the project, "$PROFILE"
+standing for the WSL path of Windows' %USERPROFILE%]} and
 {"shot": label, "wait": seconds}. TRY_WINDOWS_LOG names a file each request's body is appended to.
 """
 import argparse, atexit, json, os, shlex, shutil, socket, subprocess, sys, time
@@ -48,6 +49,8 @@ scenario['path'] = scenario.get('path', []) + [os.path.abspath(directory) for di
 temp = subprocess.run(['cmd.exe', '/c', 'echo %TEMP%'], capture_output=True, text=True, cwd='/mnt/c').stdout.strip()
 win = subprocess.run(['wslpath', '-u', temp], capture_output=True, text=True).stdout.strip()
 win = os.path.join(win, 'scramjet-rs-try')
+profile = subprocess.run(['cmd.exe', '/c', 'echo %USERPROFILE%'], capture_output=True, text=True, cwd='/mnt/c').stdout.strip()
+profile = subprocess.run(['wslpath', '-u', profile], capture_output=True, text=True).stdout.strip()
 work = os.path.join(win, 'work')
 shutil.rmtree(work, ignore_errors=True)
 for directory in ['config/scramjet-rs', 'state', 'data', 'proj']:
@@ -149,7 +152,8 @@ try:
         elif 'resize' in step:
             subprocess.run(tmux + ['resize-window', '-x', str(step['resize'][0]), '-y', str(step['resize'][1])])
         elif 'host' in step:
-            ran = subprocess.run(step['host'], cwd=project, capture_output=True, text=True)
+            words = [word.replace('$PROFILE', profile) for word in step['host']]
+            ran = subprocess.run(words, cwd=project, capture_output=True, text=True)
             print('=====', ' '.join(step['host'])[:60], '->', ran.returncode)
             print((ran.stdout + ran.stderr).rstrip('\n'))
         else:

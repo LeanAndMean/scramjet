@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enabled with: git config core.hooksPath scripts/hooks
+root=$(git rev-parse --show-toplevel)
+python3 "$root/scripts/private-terms.py" && python3 "$root/scripts/private-terms.py" --message "$1"

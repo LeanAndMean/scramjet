@@ -53,7 +53,7 @@
     {"keys": ["Escape"]},
     {"shot": "after Escape", "wait": 4},
     {"host": ["tasklist.exe", "/FI", "IMAGENAME eq PING.EXE", "/NH"]},
-    {"host": ["ls", "/mnt/c/Users/User/AppData/LocalLow/scramjet-rs-tmp"]},
+    {"host": ["ls", "$PROFILE/AppData/LocalLow/scramjet-rs-tmp"]},
     {"keys": ["C-d"]},
     {"shot": "after Ctrl+D", "wait": 3}
   ]
