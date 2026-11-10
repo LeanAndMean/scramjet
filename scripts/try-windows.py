@@ -7,6 +7,7 @@ server streaming a scenario's replies, in a scratch project under the Windows te
 WSL's mirrored networking lets the Windows process reach the server on 127.0.0.1.
 
     uv run scripts/try-windows.py SCENARIO.json [--screen] [--binary target/…/scramjet-rs.exe]
+                                  [--path DIR]...
 
 Without --screen it runs `-p PROMPT` and prints the output and the project's files. With it, the
 full screen runs in a tmux pane (a Windows console through WSL interop) and plays the scenario's
@@ -38,8 +39,11 @@ parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
 parser.add_argument('scenario')
 parser.add_argument('--screen', action='store_true')
 parser.add_argument('--binary', default=os.path.join(ROOT, 'target/x86_64-pc-windows-gnu/release/scramjet-rs.exe'))
+parser.add_argument('--path', action='append', default=[], help="a WSL directory put ahead of Windows' PATH, "
+                    "as the scenario's \"path\": a portable Git for Windows' cmd directory, say")
 options = parser.parse_args()
 scenario = json.load(open(options.scenario))
+scenario['path'] = scenario.get('path', []) + [os.path.abspath(directory) for directory in options.path]
 
 temp = subprocess.run(['cmd.exe', '/c', 'echo %TEMP%'], capture_output=True, text=True, cwd='/mnt/c').stdout.strip()
 win = subprocess.run(['wslpath', '-u', temp], capture_output=True, text=True).stdout.strip()

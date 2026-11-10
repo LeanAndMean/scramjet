@@ -1,0 +1,104 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "agents": {
+    "reader": "---\nname: reader\ndescription: Reads the project\ntools: Read, Bash\n---\nRead and report.\n"
+  },
+  "prompt": "Have a subagent wait",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "reader",
+          "task": "Wait"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "cmd //c 'whoami /groups' | grep -o 'Mandatory Label.\\{0,30\\}'; echo waiting; sleep 300 & sleep 301"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Child done."
+      }
+    ],
+    [
+      {
+        "text": "Finished."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "shot": "started",
+      "wait": 5
+    },
+    {
+      "text": "Have a subagent wait"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "shot": "sleep running",
+      "wait": 8
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq sleep.exe",
+        "/NH"
+      ]
+    },
+    {
+      "keys": [
+        "Escape"
+      ]
+    },
+    {
+      "shot": "after Escape",
+      "wait": 4
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq sleep.exe",
+        "/NH"
+      ]
+    },
+    {
+      "host": [
+        "tasklist.exe",
+        "/FI",
+        "IMAGENAME eq bash.exe",
+        "/NH"
+      ]
+    },
+    {
+      "host": [
+        "ls",
+        "/mnt/c/Users/User/AppData/LocalLow/scramjet-rs-tmp"
+      ]
+    },
+    {
+      "keys": [
+        "C-d"
+      ]
+    },
+    {
+      "shot": "after Ctrl+D",
+      "wait": 3
+    }
+  ]
+}

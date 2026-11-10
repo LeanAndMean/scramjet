@@ -1,0 +1,54 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "agents": {
+    "reader": "---\nname: reader\ndescription: Reads the project\ntools: Read, Bash\n---\nRead and report.\n"
+  },
+  "prompt": "Have a subagent look",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo MAIN $BASH_VERSION; git init -q && git add . && git -c user.name=t -c user.email=t@t commit -qm init && git log --oneline | wc -l"
+        }
+      }
+    ],
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "reader",
+          "task": "Look at the project"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo CHILD $BASH_VERSION; \"$SYSTEMROOT/System32/whoami.exe\" //groups | grep -o 'Mandatory Label.\\{0,30\\}'; cat README.md | tr a-z A-Z; echo t > \"$TEMP/t.txt\" && cat \"$TEMP/t.txt\"; echo TEMP=$(cd \"$TEMP\" && pwd -W); echo x > new.txt && echo CREATED || echo create refused; git --version; git log --oneline; git status --short; echo status=$?"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo HOME=$HOME; sleep 1 & wait; echo bg-ok; exit 3"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Child done."
+      }
+    ],
+    [
+      {
+        "text": "Finished."
+      }
+    ]
+  ]
+}
