@@ -198,7 +198,8 @@ Scramjet's names of the commands named otherwise here are accepted too (/new, /q
 /session, /clone), and so are Claude Code's /reset, /config, /continue and /help, and
 Codex's /keymap.
 As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
-commands/SET:COMMAND.md is sent with the arguments substituted, inside <scramjet-command>. The
+commands/COMMAND.md (or SET:COMMAND.md) is sent with the arguments substituted, inside
+<scramjet-command>. Agent files may name tools as Claude Code does (Read, Grep, Glob, Bash). The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)
 and the project's .scramjet. `scramjet-rs install DIR` installs the set in DIR by reference,
 recorded in the settings' commandSets (~ for the home directory), or, as Pi installs a local

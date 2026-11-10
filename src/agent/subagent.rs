@@ -80,6 +80,21 @@ under every scope."},
             "effort":effort}}})
 }
 
+/// The name here of a tool an agent file names as Claude Code does, so that one file serves both.
+fn ours(tool: &str) -> &str {
+    match tool {
+        "Read" => "read",
+        "Write" => "write",
+        "Edit" | "MultiEdit" => "edit",
+        "Bash" => "bash",
+        "PowerShell" => "powershell",
+        "Grep" => "grep",
+        "Glob" => "find",
+        "LS" => "ls",
+        other => other,
+    }
+}
+
 /// An agent a task can be given to, from its markdown file.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Definition {
@@ -386,7 +401,7 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
             list.split(',')
                 .map(str::trim)
                 .filter(|tool| !tool.is_empty())
-                .map(str::to_owned)
+                .map(|tool| ours(tool).to_owned())
                 .collect::<Vec<_>>(),
         )
         .filter(|tools| !tools.is_empty()),
@@ -1383,6 +1398,16 @@ disallowedTools: bash\n---\n\nBody\n",
         .unwrap();
         assert_eq!((odd.tools, odd.model), (None, None));
         assert!(odd.disallowed.is_empty());
+        let claude = parse(
+            path,
+            "---\nname: x\ndescription: d\ntools: Read, Grep, Glob, LS, Bash, WebFetch\n\
+disallowedTools: Write, MultiEdit\n---\n",
+            "user",
+        )
+        .unwrap();
+        let tools = ["read", "grep", "find", "ls", "bash", "WebFetch"];
+        assert_eq!(claude.tools, Some(tools.map(str::to_owned).to_vec()));
+        assert_eq!(claude.disallowed, ["write", "edit"]);
         assert_eq!(
             odd.diagnostics,
             [

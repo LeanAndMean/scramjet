@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.131.0 — Agent files with Claude Code's tool names
+
+### Added
+
+- An agent file's `tools` and `disallowedTools` may name tools as Claude Code does: `Read`, `Write`, `Edit` (and `MultiEdit`), `Bash`, `PowerShell`, `Grep`, `Glob` (scramjet-rs's `find`) and `LS`, so one agent file serves both. Mach 12's own repository names them so.
+
 ## 0.130.0 — Command set files without `:` in their names
 
 ### Added
