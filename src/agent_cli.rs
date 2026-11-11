@@ -364,6 +364,9 @@ fn start(
             "--provider {provider} chooses no model without --model; ignored"
         ));
     }
+    let (retention, wrong) = cache_retention(options.cache_retention);
+    agent::set_cache_retention(retention);
+    warnings.extend(wrong);
     if providers.options().is_empty() {
         let file = (providers.files().first())
             .map_or("models.json".into(), |file| file.display().to_string());
@@ -505,6 +508,32 @@ fn named_model(
         };
         format!("{named} models (--list-models lists them)")
     })
+}
+
+/// The cache retention of the run's requests, as Scramjet 1 finds it: `given` by
+/// `--cache-retention`, else the variable SCRAMJET_CACHE_RETENTION's or PI_CACHE_RETENTION's,
+/// else long. Also says when the variable's is none of them.
+fn cache_retention(
+    given: Option<agent::CacheRetention>,
+) -> (agent::CacheRetention, Option<String>) {
+    if let Some(given) = given {
+        return (given, None);
+    }
+    let set = ["SCRAMJET_CACHE_RETENTION", "PI_CACHE_RETENTION"]
+        .into_iter()
+        .find_map(|name| Some((name, std::env::var(name).ok().filter(|v| !v.is_empty())?)));
+    let Some((name, value)) = set else {
+        return (agent::CacheRetention::Long, None);
+    };
+    match agent::CacheRetention::parse(&value) {
+        Some(retention) => (retention, None),
+        None => (
+            agent::CacheRetention::Long,
+            Some(format!(
+                "{name} {value:?} is not none, short or long; long is used"
+            )),
+        ),
+    }
 }
 
 /// The model a new session starts with when nothing chooses one: the first provider's

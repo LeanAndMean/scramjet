@@ -69,6 +69,7 @@ pub use problem::{Problem, ProblemFile};
 pub use providers::{KeyFrom, Providers};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
+pub use request::{CacheRetention, set_cache_retention};
 pub use sandbox::{Sandbox, SandboxMode};
 pub use session::{
     Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,

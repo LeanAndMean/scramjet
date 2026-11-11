@@ -56,8 +56,8 @@ pub(super) struct Compat {
     anthropic_cache_control: bool,
     pub(super) session_affinity: bool,
     long_cache_retention: bool,
-    /// `prompt_cache_key` is sent: OpenAI's own servers, or long retention.
-    cache_key: bool,
+    /// OpenAI's own servers, which take `prompt_cache_key` whatever the retention.
+    at_openai: bool,
     /// The model's `thinkingLevelMap` names a level for `off`, which is then sent.
     off_named: bool,
 }
@@ -123,7 +123,7 @@ impl Compat {
             anthropic_cache_control: name == "openrouter" && model.starts_with("anthropic/"),
             session_affinity: false,
             long_cache_retention,
-            cache_key: at("api.openai.com") || long_cache_retention,
+            at_openai: at("api.openai.com"),
             off_named,
         }
     }
@@ -218,15 +218,27 @@ impl Compat {
                 _ => return Err(format!("compat.{key} is not a Chat Completions setting")),
             }
         }
-        compat.cache_key = base_url.contains("api.openai.com") || compat.long_cache_retention;
         Ok(compat)
     }
 }
 
 /// The Chat Completions request for a Responses `request` built by the agent, to the model
 /// `info` describes, as Scramjet's `buildParams` makes it.
+#[cfg(test)]
 pub(super) fn request(request: &Value, info: &ModelInfo) -> Value {
+    request_retaining(request, info, super::CacheRetention::Long)
+}
+
+/// `request`'s, its prefix cached as `retention` asks: a `prompt_cache_key` and 24 hours, and
+/// Anthropic's markers for an hour, for long where the server takes it; none of the markers for
+/// none, whose request carries no key.
+pub(super) fn request_retaining(
+    request: &Value,
+    info: &ModelInfo,
+    retention: super::CacheRetention,
+) -> Value {
     let compat = &info.compat;
+    let long = retention == super::CacheRetention::Long && compat.long_cache_retention;
     let items = request["input"].as_array().map_or(&[][..], Vec::as_slice);
     let mut messages = Vec::new();
     if let Some(instructions) = request["instructions"]
@@ -247,12 +259,12 @@ pub(super) fn request(request: &Value, info: &ModelInfo) -> Value {
     if compat.store {
         body["store"] = json!(false);
     }
-    if compat.cache_key
+    if (compat.at_openai || long)
         && let Some(key) = request["prompt_cache_key"].as_str()
     {
         body["prompt_cache_key"] = json!(key);
     }
-    if compat.long_cache_retention {
+    if long {
         body["prompt_cache_retention"] = json!("24h");
     }
     if let Some(tokens) = request["max_output_tokens"].as_u64().or(info.output) {
@@ -286,9 +298,9 @@ pub(super) fn request(request: &Value, info: &ModelInfo) -> Value {
         }
         None => {}
     }
-    if compat.anthropic_cache_control {
+    if compat.anthropic_cache_control && retention != super::CacheRetention::None {
         let mut control = json!({"type":"ephemeral"});
-        if compat.long_cache_retention {
+        if long {
             control["ttl"] = json!("1h");
         }
         cache_control(&mut body, &control);
@@ -868,6 +880,7 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::CacheRetention;
 
     fn model(url: &str, entry: Value) -> ModelInfo {
         let compat = Compat::read("local", url, &entry, [None, entry.get("compat")]).unwrap();
@@ -1091,6 +1104,38 @@ mod tests {
             json!([{"type":"text","text":"And now?","cache_control":control}])
         );
         assert_eq!(body["tools"][0]["cache_control"], control);
+        assert_eq!(body["prompt_cache_key"], "session-1");
+        assert_eq!(body["prompt_cache_retention"], "24h");
+
+        // Short retention asks for the servers' default; none for no markers.
+        let mut request = json!({"model":"m","instructions":"Be brief.","input":history(),
+            "tools":[tool()],"prompt_cache_key":"session-1"});
+        let body = request_retaining(&request, &info, CacheRetention::Short);
+        let control = json!({"type":"ephemeral"});
+        assert_eq!(body["tools"][0]["cache_control"], control);
+        assert_eq!(body["messages"][0]["content"][0]["cache_control"], control);
+        assert!(body.get("prompt_cache_key").is_none());
+        assert!(body.get("prompt_cache_retention").is_none());
+        // None's request has no key (`request::body`).
+        request.as_object_mut().unwrap().remove("prompt_cache_key");
+        let body = request_retaining(&request, &info, CacheRetention::None);
+        assert!(!body.to_string().contains("cache_control"), "{body}");
+        assert_eq!(body["messages"][0]["content"], "Be brief.");
+        assert!(body.get("prompt_cache_key").is_none());
+    }
+
+    #[test]
+    fn openai_takes_the_cache_key_at_any_retention_and_24_hours_at_long() {
+        let info = model("https://api.openai.com/v1", json!({"id":"m"}));
+        let request = json!({"model":"m","input":history(),"prompt_cache_key":"s"});
+        for (retention, kept) in [
+            (CacheRetention::Long, Some("24h")),
+            (CacheRetention::Short, None),
+        ] {
+            let body = request_retaining(&request, &info, retention);
+            assert_eq!(body["prompt_cache_key"], "s");
+            assert_eq!(body["prompt_cache_retention"].as_str(), kept);
+        }
     }
 
     #[test]

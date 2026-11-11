@@ -1,11 +1,11 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
-use scramjet::agent::{HARNESS_TOOLS, SandboxMode, SystemPrompt};
+use scramjet::agent::{CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt};
 use std::{ffi::OsString, path::PathBuf};
 
 pub(super) const USAGE: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
-[--thinking LEVEL] [--max-output-tokens N] [--retries N]
+[--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
 [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
@@ -51,6 +51,13 @@ but to NO_PROXY's hosts and this machine.
   --max-output-tokens N  the most tokens a reply may have (default: the model's limit)
   --retries N            resend a request that failed transiently up to N times (default:
                          the settings' retry.maxRetries, else 3)
+  --cache-retention short|long
+                         how long providers keep the conversation's start cached for the next
+                         request, as in Scramjet 1: long asks for an hour where the provider
+                         takes it (24 hours on Chat Completions servers that do), short for
+                         their default, 5 minutes on Anthropic's (default: the variable
+                         SCRAMJET_CACHE_RETENTION or PI_CACHE_RETENTION, which may also be
+                         none, for no caching asked, else long)
   -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
   --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
@@ -299,6 +306,8 @@ pub(super) struct Options {
     pub(super) sandbox: Option<Option<SandboxMode>>,
     /// `--retries`, over the settings' `retry.maxRetries`.
     pub(super) retries: Option<u32>,
+    /// `--cache-retention`, over the variables.
+    pub(super) cache_retention: Option<CacheRetention>,
     /// `-p`: run the messages and exit.
     pub(super) print: bool,
     /// `@FILE` arguments, without the `@`: sent with the first message.
@@ -334,6 +343,7 @@ impl Options {
             ask: false,
             sandbox: None,
             retries: None,
+            cache_retention: None,
             print: false,
             files: Vec::new(),
             messages: Vec::new(),
@@ -422,6 +432,18 @@ models.json (an environment variable's name or a !command), or /login"
                 }
                 Some("--retries") => {
                     options.retries = Some(value()?.parse().map_err(|_| "invalid --retries")?)
+                }
+                // As Scramjet 1's: `none` only from the variables.
+                Some("--cache-retention") => {
+                    let given = value()?;
+                    let retention = CacheRetention::parse(&given)
+                        .filter(|retention| *retention != CacheRetention::None);
+                    let Some(retention) = retention else {
+                        return Err(format!(
+                            "invalid --cache-retention {given:?}: valid values are short and long"
+                        ));
+                    };
+                    options.cache_retention = Some(retention)
                 }
                 Some("-c" | "--continue") => {
                     chosen.push("--continue");

@@ -146,8 +146,8 @@ Other differences:
 - Looks: `panels` by default, each prompt and call on the theme's backgrounds; `/settings`' Look row also offers `classic`, `rails` and `margin` (the `look` setting), each showing prompts, reasoning, tool calls and replies its own way.
 - Banners: `header` by default, as Scramjet 1's; `/settings`' Banner row also offers `plain` start lines, `card` and `logo`, Scramjet 1's logo (the `banner` setting). Ctrl+O expands them to every key and what was loaded.
 - Keys: `~/.config/scramjet/keybindings.json` gives an action other keys, in Scramjet 1's format and with its action ids (`{"app.message.followUp": "ctrl+q"}`); `[]` leaves an action without keys. `tui.viewport.pageUp` and `pageDown` are Page Up and Page Down; scramjet-rs adds `tui.viewport.top` and `bottom` (Ctrl+Home, Ctrl+End) and `tui.select.first` and `last` (Home, End). `/hotkeys` writes it as you change keys; after editing it yourself, `/reload` reads it again.
-- Command lines: Scramjet 1's options work as they did, `--provider P --model M` and `update --extensions`, `--extension` and `--force` included; `--verbose`, `--mode text`, `--no-extensions` and `--no-prompt-templates` change nothing. Those with nothing to do in Scramjet 2 (`--mode json` and `rpc`, `--extension`, `--prompt-template`, `--api-key`, `--model-definition`) stop it, saying why.
-- Not yet: images shown in the terminal, GitLab publications, `--mode json` and `rpc`, `--cache-retention`.
+- Command lines: Scramjet 1's options work as they did, `--provider P --model M`, `--cache-retention` (and `SCRAMJET_CACHE_RETENTION`) and `update --extensions`, `--extension` and `--force` included; `--verbose`, `--mode text`, `--no-extensions` and `--no-prompt-templates` change nothing. Those with nothing to do in Scramjet 2 (`--mode json` and `rpc`, `--extension`, `--prompt-template`, `--api-key`, `--model-definition`) stop it, saying why.
+- Not yet: images shown in the terminal, GitLab publications, `--mode json` and `rpc`.
 
 ## Coming from Claude Code or Codex
 

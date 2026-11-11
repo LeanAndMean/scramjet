@@ -138,6 +138,34 @@ pub(super) fn request(
     Ok(body)
 }
 
+/// `body` with the cache markers `request` puts on the system prompt and the last message as
+/// `retention` asks: an hour's for long, Anthropic's default five minutes for short, none for none.
+pub(super) fn retained(mut body: Value, retention: super::CacheRetention) -> Value {
+    if retention == super::CacheRetention::Long {
+        return body;
+    }
+    let retain = |block: &mut Value| match retention {
+        super::CacheRetention::None => {
+            (block.as_object_mut()).map(|block| block.remove("cache_control"));
+        }
+        _ => {
+            let control = block
+                .get_mut("cache_control")
+                .and_then(Value::as_object_mut);
+            control.map(|control| control.remove("ttl"));
+        }
+    };
+    body["system"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .for_each(retain);
+    let messages = body["messages"].as_array_mut().into_iter().flatten();
+    (messages.flat_map(|message| message["content"].as_array_mut().into_iter().flatten()))
+        .for_each(retain);
+    body
+}
+
 /// Responses items as Messages: consecutive items of one role share a message, and as in
 /// Scramjet, a tool call without a result (a turn cancelled between calls) gets an error result.
 fn messages(items: &[Value]) -> Vec<Value> {
@@ -590,6 +618,7 @@ impl Stream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::CacheRetention;
 
     #[test]
     fn adaptive_thinking_is_for_claude_4_6_and_later() {
@@ -995,5 +1024,31 @@ call it was making did not run"
             Some("fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14")
         );
         assert_eq!(betas(&request("claude-opus-5-5", json!([]))), None);
+    }
+
+    #[test]
+    fn short_retention_drops_the_hour_and_none_the_markers() {
+        let request = json!({"model":"claude-test","instructions":"Be brief.","input":[
+            {"type":"message","role":"user","content":[{"type":"input_text","text":"Hi"}]}],
+            "tools":[{"name":"t","description":"d","parameters":{"type":"object",
+                "properties":{"cache_control":{"type":"string"}}}}]});
+        let body = super::request(&request, 1000, false, None).unwrap();
+        let hour = json!({"type":"ephemeral","ttl":"1h"});
+        let marks = |body: &Value| {
+            let last = &body["messages"][0]["content"][0];
+            (
+                body["system"][0].get("cache_control").cloned(),
+                last.get("cache_control").cloned(),
+            )
+        };
+        assert_eq!(marks(&body), (Some(hour.clone()), Some(hour)));
+        let schema = body["tools"].clone();
+        let short = retained(body.clone(), CacheRetention::Short);
+        let default = json!({"type":"ephemeral"});
+        assert_eq!(marks(&short), (Some(default.clone()), Some(default)));
+        let none = retained(body.clone(), CacheRetention::None);
+        assert_eq!(marks(&none), (None, None));
+        assert_eq!(none["tools"], schema);
+        assert_eq!(retained(body.clone(), CacheRetention::Long), body);
     }
 }

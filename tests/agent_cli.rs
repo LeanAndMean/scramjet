@@ -286,6 +286,133 @@ fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
     }
 }
 
+/// A server answering each request with an error that is not retried, sending on each body.
+fn serve_refusals() -> (u16, std::sync::mpsc::Receiver<serde_json::Value>) {
+    use std::io::{BufRead, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sent, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let line = line.trim_end().to_ascii_lowercase();
+                if line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line.strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let _ = sent.send(serde_json::from_slice(&body).unwrap());
+            let refusal =
+                r#"{"type":"error","error":{"type":"invalid_request_error","message":"no"}}"#;
+            let reply = format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\n\
+content-length: {}\r\nconnection: close\r\n\r\n{refusal}",
+                refusal.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+    (port, received)
+}
+
+#[test]
+fn cache_retention_marks_requests_as_scramjet_1s() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-retention-{}", std::process::id())),
+    );
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let (port, bodies) = serve_refusals();
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let run = |arguments: &[&str], variables: &[(&str, &str)]| {
+        let output = program(&binary())
+            .args(["-p", "--no-session", "--retries", "0"])
+            .args(arguments)
+            .arg("hi")
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("SCRAMJET_OFFLINE", "1")
+            .env_remove("SCRAMJET_CACHE_RETENTION")
+            .env_remove("PI_CACHE_RETENTION")
+            .envs(variables.iter().copied())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let body = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        // The system prompt's marker and the last message's, whose last block is the prompt's.
+        let last = body["messages"].as_array().unwrap().last().unwrap()["content"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        let marked = (
+            body["system"][0].get("cache_control").cloned(),
+            last.get("cache_control").cloned(),
+        );
+        (marked, stderr)
+    };
+    let long = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+    let short = serde_json::json!({"type": "ephemeral"});
+    let both = |control: &serde_json::Value| (Some(control.clone()), Some(control.clone()));
+    for (arguments, variables, marked) in [
+        (&[][..], &[][..], both(&long)),
+        (&["--cache-retention", "short"], &[], both(&short)),
+        (&[], &[("SCRAMJET_CACHE_RETENTION", "short")], both(&short)),
+        (&[], &[("PI_CACHE_RETENTION", "none")], (None, None)),
+        (
+            &[],
+            &[
+                ("SCRAMJET_CACHE_RETENTION", "none"),
+                ("PI_CACHE_RETENTION", "short"),
+            ],
+            (None, None),
+        ),
+        (
+            &["--cache-retention", "long"],
+            &[("SCRAMJET_CACHE_RETENTION", "none")],
+            both(&long),
+        ),
+    ] {
+        let (given, stderr) = run(arguments, variables);
+        assert_eq!(given, marked, "{arguments:?} {variables:?}: {stderr}");
+    }
+    let (given, stderr) = run(&[], &[("SCRAMJET_CACHE_RETENTION", "forever")]);
+    assert_eq!(given, both(&long));
+    assert!(
+        stderr.starts_with(
+            "SCRAMJET_CACHE_RETENTION \"forever\" is not none, short or long; long is used\n"
+        ),
+        "{stderr}"
+    );
+    for refused in ["none", "medium"] {
+        let output = program(&binary())
+            .args(["--cache-retention", refused])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!(
+                "scramjet: invalid --cache-retention \"{refused}\": valid values are short and long\n"
+            )
+        );
+    }
+}
+
 #[test]
 fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
     let scratch =

@@ -12,11 +12,47 @@ use std::{
     collections::VecDeque,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc,
     },
     time::{Duration, Instant, SystemTime},
 };
+
+/// How long providers are asked to keep a request's prefix cached, as Scramjet 1's
+/// `cacheRetention`: not at all, their default (5 minutes for Anthropic's), or longer where
+/// they take it (an hour; 24 hours on Chat Completions servers that say so).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheRetention {
+    None,
+    Short,
+    Long,
+}
+
+impl CacheRetention {
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "none" => Some(Self::None),
+            "short" => Some(Self::Short),
+            "long" => Some(Self::Long),
+            _ => None,
+        }
+    }
+}
+
+static RETENTION: AtomicU8 = AtomicU8::new(CacheRetention::Long as u8);
+
+/// Sets the cache retention of every request the process sends from now on.
+pub fn set_cache_retention(retention: CacheRetention) {
+    RETENTION.store(retention as u8, Ordering::Relaxed);
+}
+
+fn cache_retention() -> CacheRetention {
+    match RETENTION.load(Ordering::Relaxed) {
+        0 => CacheRetention::None,
+        1 => CacheRetention::Short,
+        _ => CacheRetention::Long,
+    }
+}
 
 impl Agent {
     pub(super) fn request(&self) -> Value {
@@ -311,6 +347,15 @@ type Headers = Vec<(&'static str, String)>;
 /// The body `request` is sent as to the model `info` describes, in its protocol, with the headers
 /// that protocol adds; the effort in it is sent as the model's `thinkingLevelMap` names it.
 fn body(request: &Value, info: &ModelInfo) -> Result<(Vec<u8>, Headers), AgentError> {
+    body_retaining(request, info, cache_retention())
+}
+
+/// `body`'s, its prefix cached as `retention` asks.
+fn body_retaining(
+    request: &Value,
+    info: &ModelInfo,
+    retention: CacheRetention,
+) -> Result<(Vec<u8>, Headers), AgentError> {
     let note = match (image::blocked(), info.images) {
         (true, _) => Some(BLOCKED),
         (false, false) => Some(UNSUPPORTED),
@@ -318,6 +363,16 @@ fn body(request: &Value, info: &ModelInfo) -> Result<(Vec<u8>, Headers), AgentEr
     };
     let without_images = note.and_then(|note| without_images(request, note));
     let request = without_images.as_ref().unwrap_or(request);
+    // As Scramjet 1's, no retention sends no cache key, nor the headers made of it, but to
+    // ChatGPT's backend, which takes its session from it.
+    let uncached = (retention == CacheRetention::None && info.protocol != Protocol::Codex)
+        .then(|| request.get("prompt_cache_key").map(|_| request.clone()))
+        .flatten()
+        .map(|mut request| {
+            (request.as_object_mut()).map(|object| object.remove("prompt_cache_key"));
+            request
+        });
+    let request = uncached.as_ref().unwrap_or(request);
     let mut headers = Vec::new();
     let body = match info.protocol {
         Protocol::Responses | Protocol::Codex => {
@@ -348,6 +403,7 @@ fn body(request: &Value, info: &ModelInfo) -> Result<(Vec<u8>, Headers), AgentEr
                 renamed,
             )
             .map_err(AgentError::Provider)?;
+            let body = messages::retained(body, retention);
             headers.extend(messages::betas(&body).map(|betas| ("anthropic-beta", betas)));
             serde_json::to_vec(&body)
         }
@@ -358,7 +414,7 @@ fn body(request: &Value, info: &ModelInfo) -> Result<(Vec<u8>, Headers), AgentEr
                     headers.push((name, session.to_owned()));
                 }
             }
-            serde_json::to_vec(&completions::request(request, info))
+            serde_json::to_vec(&completions::request_retaining(request, info, retention))
         }
     };
     Ok((body.map_err(std::io::Error::from)?, headers))
@@ -643,6 +699,29 @@ mod tests {
         for key in ["tools", "tool_choice", "parallel_tool_calls"] {
             assert!(request.get(key).is_none(), "{key}");
         }
+    }
+
+    #[test]
+    fn no_cache_retention_sends_no_cache_key_but_to_chatgpt() {
+        let request = json!({"model":"m","input":[],"prompt_cache_key":"s-1"});
+        let key = |protocol, retention| {
+            let info = ModelInfo {
+                protocol,
+                ..ModelInfo::guess("m")
+            };
+            let (body, _) = body_retaining(&request, &info, retention).unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            body.get("prompt_cache_key").cloned()
+        };
+        let kept = Some(json!("s-1"));
+        for retention in [CacheRetention::Long, CacheRetention::Short] {
+            assert_eq!(key(Protocol::Responses, retention), kept);
+        }
+        assert_eq!(key(Protocol::Responses, CacheRetention::None), None);
+        assert_eq!(
+            key(Protocol::Codex, CacheRetention::None),
+            key(Protocol::Codex, CacheRetention::Long)
+        );
     }
 
     #[test]

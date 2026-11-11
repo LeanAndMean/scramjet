@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.154.0 — Cache retention
+
+### Added
+
+- `--cache-retention short|long` and the variable `SCRAMJET_CACHE_RETENTION` (or `PI_CACHE_RETENTION`; also `none`), as in Scramjet 1: `short` asks providers for their default caching (5 minutes on Anthropic's) instead of an hour, `none` for no caching. Long stays the default.
+
 ## 2.153.0 — Scramjet 1's command lines
 
 ### Added
