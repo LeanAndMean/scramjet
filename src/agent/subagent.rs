@@ -112,7 +112,7 @@ pub(super) struct Definition {
     pub model: Option<String>,
     /// The file's body, added to the child's instructions.
     pub prompt: String,
-    /// `user` or `project` for a loose agent; a command set's scope (`global` or `project`).
+    /// `user` or `project` for a loose agent; a command set's origin (`installed`, `project` or `built in`).
     pub source: &'static str,
     pub path: PathBuf,
     /// The SHA-256 of the file's text, which the user's approval of a project agent records.
@@ -1486,20 +1486,11 @@ disallowedTools: Write, MultiEdit\n---\n",
         write(&global.join("x/agents/y:d.md"), &agent_file("y:d", ""));
         write(&global.join("x/agents/x:e.md"), &agent_file("e", ""));
         write(
-            &global.join("mach12/agents/mach12:kept.md"),
-            &agent_file("mach12:kept", ""),
-        );
-        write(
-            &root.join(".scramjet/x/agents/x:c.md"),
-            &agent_file("x:c", ""),
-        );
-        write(
             &root.join(".scramjet/z/agents/z:a.md"),
             &agent_file("z:a", ""),
         );
         let sets = Sets::find(
-            std::slice::from_ref(&installed),
-            Some(&global),
+            &[installed.clone(), global.join("x")],
             &root.join(".scramjet"),
         );
         let sources = Sources {
@@ -1533,8 +1524,8 @@ disallowedTools: Write, MultiEdit\n---\n",
                 "mach10:old user",
                 "shared user",
                 "mach12:reviewer installed",
-                "x:c global",
-                "x:e global",
+                "x:c installed",
+                "x:e installed",
                 "z:a project"
             ]
         );
@@ -1574,15 +1565,10 @@ belong to the installed command set {}",
                     shown(user.join("a.md")),
                     shown(installed.clone())
                 ),
-                claimed("renamed.md", "x", "global", global.join("x")),
+                claimed("renamed.md", "x", "installed", global.join("x")),
                 format!(
                     "skipping agent {}: y:d.md: filename must not name another set than \"x\"",
                     shown(global.join("x/agents/y:d.md"))
-                ),
-                format!(
-                    "skipping project agent x:c at {}: name already registered from {}",
-                    shown(root.join(".scramjet/x/agents/x:c.md")),
-                    shown(global.join("x/agents/x:c.md"))
                 ),
             ]
         );
@@ -1592,8 +1578,8 @@ belong to the installed command set {}",
                 "b project",
                 "shared project",
                 "mach12:reviewer installed",
-                "x:c global",
-                "x:e global",
+                "x:c installed",
+                "x:e installed",
                 "z:a project"
             ]
         );
@@ -1606,8 +1592,8 @@ belong to the installed command set {}",
                 "shared project",
                 "b project",
                 "mach12:reviewer installed",
-                "x:c global",
-                "x:e global",
+                "x:c installed",
+                "x:e installed",
                 "z:a project"
             ]
         );

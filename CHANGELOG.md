@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.160.0 — No command sets from ~/.local/share/scramjet
+
+### Changed
+
+- Command sets in `~/.local/share/scramjet` (or `SCRAMJET_CACHE`), where an old Scramjet 1 install seeded Mach 12, are no longer read: a stale copy there no longer runs. Each one found is named in a warning at start and in `scramjet list`, with what to do instead (for Mach 12, `scramjet install git:github.com/LeanAndMean/mach12`).
+
 ## 2.159.0 — The progress indicator means the agent is working
 
 ### Changed

@@ -354,7 +354,7 @@ talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 approved = serve_call('echo approved-$((6*7)); sleep 30')
 pausing = serve_call('sleep 2')
-env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'),
+env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'cache'),
            XDG_CONFIG_HOME=os.path.join(work, 'config'), XDG_DATA_HOME=os.path.join(work, 'data'),
            XDG_RUNTIME_DIR=os.path.join(work, 'runtime'), SCRAMJET_OFFLINE='1')
 os.makedirs(env['XDG_RUNTIME_DIR'], mode=0o700)
@@ -3333,8 +3333,8 @@ def installed_view(read, until, send, output):
     builtin = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'sets', 'scramjet')
     home = os.path.expanduser('~')
     builtin = '~' + builtin[len(home):] if builtin.startswith(home + os.sep) else builtin
-    assert rows[at + 5:at + 8] == ['    tools     global    ' + os.path.join(work, 'commands', 'tools'),
-                                   '    demo      project   ' + os.path.join(project, '.scramjet', 'demo'),
+    assert rows[at + 5:at + 8] == ['    demo      project   ' + os.path.join(project, '.scramjet', 'demo'),
+                                   '    tools     project   ' + os.path.join(project, '.scramjet', 'tools'),
                                    '    scramjet  built in  ' + builtin], rows
     # The note under the list says the whole problem, which the row cuts, and that Enter opens the
     # settings file, which has it.
@@ -3846,7 +3846,7 @@ os.makedirs(greet)
 with open(os.path.join(greet, 'demo:greet.md'), 'w') as file:
     file.write('---\ndescription: Greet someone\nargument-hint: "<name>"\n---\n'
                'Greet $1 warmly.\n\n<user-context>\n$ARGUMENTS\n</user-context>\n')
-echo = os.path.join(work, 'commands', 'tools', 'commands')
+echo = os.path.join(project, '.scramjet', 'tools', 'commands')
 os.makedirs(echo)
 with open(os.path.join(echo, 'tools:echo.md'), 'w') as file:
     file.write('Echo $@')

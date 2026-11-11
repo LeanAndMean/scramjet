@@ -587,7 +587,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
 
 /// Gives `agent` the command sets of its project's `.scramjet` directory alone.
 pub(super) fn project_sets(agent: &mut Agent) {
-    agent.sets = Sets::find(&[], None, &agent.root().join(".scramjet"));
+    agent.sets = Sets::find(&[], &agent.root().join(".scramjet"));
     agent.commands = Commands::discover(&agent.sets);
 }
 
@@ -2891,7 +2891,7 @@ fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
             None,
             &sandbox::Hidden::default(),
         );
-        let sets = Sets::find(&[], None, &project.join(".scramjet"));
+        let sets = Sets::find(&[], &project.join(".scramjet"));
         let commands = Commands::discover(&sets);
         let edges = autonomy::Edges::load(None, &project, &commands);
         let sources = subagent::Sources {

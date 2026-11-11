@@ -1,5 +1,5 @@
 //! Command sets: directories with `commands/<command>.md` and `agents/<agent>.md` (or, as in
-//! Scramjet, `<set>:<command>.md` and `<set>:<agent>.md`), installed by reference or found under Scramjet's global root and the project's `.scramjet`
+//! Scramjet, `<set>:<command>.md` and `<set>:<agent>.md`), installed by reference or found in the project's `.scramjet`
 //! directory. A prompt `/<set>:<command> args` runs one of their commands as Scramjet sends it:
 //! the arguments are substituted into the body and the result is wrapped in `<scramjet-command>`.
 
@@ -18,8 +18,6 @@ use yaml_rust2::Yaml;
 pub enum Origin {
     /// Installed by reference (`scramjet install`), listed in the settings.
     Installed,
-    /// Under Scramjet's global root.
-    Global,
     /// Under the project's `.scramjet` directory.
     Project,
     /// Carried by the program (`builtin`).
@@ -30,7 +28,6 @@ impl Origin {
     pub fn name(self) -> &'static str {
         match self {
             Self::Installed => "installed",
-            Self::Global => "global",
             Self::Project => "project",
             Self::BuiltIn => "built in",
         }
@@ -168,23 +165,18 @@ pub struct Sets {
 }
 
 impl Sets {
-    /// The `installed` sets in their order, then the sets under `global` and under `project`
-    /// (the project's `.scramjet` directory), each by name; other directories there are not sets.
-    /// A set under a root whose name an installed set has is skipped with a warning, as is an
-    /// installed one that is missing.
-    pub fn find(installed: &[PathBuf], global: Option<&Path>, project: &Path) -> Self {
-        Self::find_besides(installed, global, project, None)
+    /// The `installed` sets in their order, then the sets under `project` (the project's
+    /// `.scramjet` directory), each by name; other directories there are not sets. A project set
+    /// whose name an installed set has is skipped with a warning, as is an installed one that is
+    /// missing.
+    pub fn find(installed: &[PathBuf], project: &Path) -> Self {
+        Self::find_besides(installed, project, None)
     }
 
     /// As `find`, never taking `scramjet_1`, Scramjet 1's agent directory, for a project set:
     /// in the home directory, the project's `.scramjet` is Scramjet 1's, and its `agent`
     /// directory, with its `agents`, looks like one.
-    fn find_besides(
-        installed: &[PathBuf],
-        global: Option<&Path>,
-        project: &Path,
-        scramjet_1: Option<&Path>,
-    ) -> Self {
+    fn find_besides(installed: &[PathBuf], project: &Path, scramjet_1: Option<&Path>) -> Self {
         let scramjet_1 = scramjet_1.map(|v1| std::fs::canonicalize(v1).unwrap_or(v1.to_path_buf()));
         let mut sets = Self::default();
         for directory in installed {
@@ -204,57 +196,49 @@ impl Sets {
             }
         }
         let installed = sets.list.len();
-        let roots = global.map(|global| (global, Origin::Global));
-        for (root, origin) in roots.into_iter().chain([(project, Origin::Project)]) {
-            for name in set_directories(root) {
-                let directory = root.join(name);
-                if origin == Origin::Project
-                    && scramjet_1.as_deref().is_some_and(|v1| {
-                        directory == v1 || std::fs::canonicalize(&directory).is_ok_and(|d| d == v1)
-                    })
-                {
-                    continue;
-                }
-                let Ok(set) = Set::at(&directory, origin) else {
-                    continue;
-                };
-                if origin == Origin::Project
-                    && let Some(owner) = crate::os::stranger(&directory)
-                {
-                    let text = crate::os::left_out(&directory, owner);
-                    sets.warnings.push(Problem::in_file(text, &directory));
-                    continue;
-                }
-                match sets.list[..installed]
-                    .iter()
-                    .find(|known| known.name == set.name)
-                {
-                    Some(known) => sets.warnings.push(Problem::new(format!(
-                        "skipping {} command set {}: {} is installed from {}",
-                        origin.name(),
-                        set.directory.display(),
-                        set.name,
-                        known.directory.display()
-                    ))),
-                    None => sets.list.push(set),
-                }
+        for name in set_directories(project) {
+            let directory = project.join(name);
+            if scramjet_1.as_deref().is_some_and(|v1| {
+                directory == v1 || std::fs::canonicalize(&directory).is_ok_and(|d| d == v1)
+            }) {
+                continue;
+            }
+            let Ok(set) = Set::at(&directory, Origin::Project) else {
+                continue;
+            };
+            if let Some(owner) = crate::os::stranger(&directory) {
+                let text = crate::os::left_out(&directory, owner);
+                sets.warnings.push(Problem::in_file(text, &directory));
+                continue;
+            }
+            match sets.list[..installed]
+                .iter()
+                .find(|known| known.name == set.name)
+            {
+                Some(known) => sets.warnings.push(Problem::new(format!(
+                    "skipping project command set {}: {} is installed from {}",
+                    set.directory.display(),
+                    set.name,
+                    known.directory.display()
+                ))),
+                None => sets.list.push(set),
             }
         }
         sets
     }
 
-    /// The sets of a session in `root`: the `installed` ones, then those under Scramjet's global
-    /// root and the project's `.scramjet` directory, then the program's own `scramjet` set unless
-    /// one of them has its name, as one installed from a checkout does.
+    /// The sets of a session in `root`: the `installed` ones, then those in the project's
+    /// `.scramjet` directory, then the program's own `scramjet` set unless one of them has its
+    /// name, as one installed from a checkout does. Sets left in Scramjet 1's global root are
+    /// not read, each said in a warning.
     pub fn for_project(installed: &[PathBuf], root: &Path) -> Self {
         let project = root.join(".scramjet");
-        let (global, scramjet_1) = (global_root(), scramjet_1_directory());
-        let mut sets = Self::find_besides(
-            installed,
-            global.as_deref(),
-            &project,
-            scramjet_1.as_deref(),
-        );
+        let scramjet_1 = scramjet_1_directory();
+        let mut sets = Self::find_besides(installed, &project, scramjet_1.as_deref());
+        if let Some(global) = global_root() {
+            let unread = sets.unread(&global);
+            sets.warnings.extend(unread);
+        }
         if cfg!(test) {
             return sets;
         }
@@ -266,6 +250,43 @@ impl Sets {
             ))),
         }
         sets
+    }
+
+    /// What to do about each set under `root`, Scramjet 1's global root, which Scramjet 2 does
+    /// not read: an old npm install of Scramjet 1 seeded Mach 12 there, a snapshot that would
+    /// otherwise run in place of the current one.
+    fn unread(&self, root: &Path) -> Vec<Problem> {
+        let mut problems = Vec::new();
+        for name in set_directories(root) {
+            let directory = root.join(name);
+            let Ok(set) = Set::at(&directory, Origin::Project) else {
+                continue;
+            };
+            let known = self.list.iter().find(|known| known.name == set.name);
+            let instead = match (known, set.name.as_str()) {
+                (Some(known), _) => format!(
+                    "{} is loaded from {}, so this copy can be removed",
+                    set.name,
+                    known.directory.display()
+                ),
+                (None, "scramjet") => {
+                    "the scramjet set comes with the program, so this copy can be removed".into()
+                }
+                (None, "mach12") => {
+                    "install Mach 12 with `scramjet install git:github.com/LeanAndMean/mach12`"
+                        .into()
+                }
+                (None, _) => {
+                    "install it with `scramjet install DIR`, from where you keep it".into()
+                }
+            };
+            problems.push(Problem::new(format!(
+                "command set {} is not read: Scramjet 2 reads no command sets from {}; {instead}",
+                directory.display(),
+                root.display()
+            )));
+        }
+        problems
     }
 
     /// `set` alone, as if installed by itself.
@@ -349,8 +370,6 @@ pub struct Commands {
     suggestions: Vec<(String, String, Suggestion)>,
 }
 
-/// Scramjet's global root for command sets: `$SCRAMJET_CACHE`, else `$XDG_DATA_HOME/scramjet`,
-/// else `~/.local/share/scramjet`.
 /// Scramjet 1's directory: `SCRAMJET_CODING_AGENT_DIR` (a leading `~` expanded, as Scramjet 1
 /// does), else `~/.scramjet/agent`.
 pub fn scramjet_1_directory() -> Option<PathBuf> {
@@ -364,6 +383,8 @@ pub fn scramjet_1_directory() -> Option<PathBuf> {
     }
 }
 
+/// Scramjet 1's global root for command sets: `$SCRAMJET_CACHE`, else `$XDG_DATA_HOME/scramjet`,
+/// else `~/.local/share/scramjet`.
 fn global_root() -> Option<PathBuf> {
     if let Some(cache) = std::env::var_os("SCRAMJET_CACHE") {
         return Some(PathBuf::from(cache));
@@ -374,7 +395,7 @@ fn global_root() -> Option<PathBuf> {
 
 impl Commands {
     /// The commands of `sets`, with their warnings first. The first file registered under a
-    /// name wins, so a global command shadows a project one of the same name, as in Scramjet.
+    /// name wins, so an installed command shadows a project one of the same name, as in Scramjet.
     /// Files that are not `<set>:` commands, or whose frontmatter Scramjet would reject, are
     /// skipped with a warning.
     pub fn discover(sets: &Sets) -> Self {
@@ -1030,9 +1051,9 @@ mod tests {
         commands.list().iter().map(|c| c.name.as_str()).collect()
     }
 
-    /// The sets of `project` alone, as a session without installed sets or a global root.
+    /// The sets of `project` alone, as a session without installed sets.
     fn project_sets(project: &Path) -> Sets {
-        Sets::find(&[], None, project)
+        Sets::find(&[], project)
     }
 
     #[test]
@@ -1050,7 +1071,7 @@ mod tests {
         };
         assert_eq!(names(&project_sets(&home)), ["agent", "mine"]);
         let v1 = home.join("agent");
-        let besides = Sets::find_besides(&[], None, &home, Some(&v1));
+        let besides = Sets::find_besides(&[], &home, Some(&v1));
         assert_eq!(names(&besides), ["mine"]);
         assert!(besides.warnings().is_empty());
         // Also when Scramjet 1's directory is reached through a link.
@@ -1059,7 +1080,7 @@ mod tests {
             let link = scratch.0.join("v1");
             std::os::unix::fs::symlink(&v1, &link).unwrap();
             assert_eq!(
-                names(&Sets::find_besides(&[], None, &home, Some(&link))),
+                names(&Sets::find_besides(&[], &home, Some(&link))),
                 ["mine"]
             );
         }
@@ -1136,7 +1157,8 @@ mod tests {
     }
 
     #[test]
-    fn sets_are_the_installed_ones_then_the_global_and_project_ones() {
+    fn sets_are_the_installed_ones_then_the_project_ones_and_scramjet_1s_global_ones_are_not_read()
+    {
         let scratch = Scratch::new("sets");
         let (global, project) = (scratch.0.join("global"), scratch.0.join("project"));
         scratch.file("installed/mach12/commands/x.md", "Installed\n");
@@ -1145,8 +1167,12 @@ mod tests {
         scratch.file("installed/empty/notes.txt", "");
         scratch.file("global/mach12/commands/x.md", "Global\n");
         scratch.file("global/rs/commands/a.md", "A\n");
+        scratch.file("global/scramjet/agents/a.md", "");
+        scratch.file("global/other/commands/a.md", "");
         scratch.file("global/plain/notes.md", "Not a set\n");
+        scratch.file("global/git/github.com/u/r/commands/a.md", "");
         scratch.file("project/rs/commands/b.md", "B\n");
+        scratch.file("project/mach12/commands/x.md", "Project\n");
         scratch.file("project/agents/reviewer.md", "A loose agent\n");
         let installed = [
             "mach12",
@@ -1156,18 +1182,13 @@ mod tests {
             "empty",
         ]
         .map(|name| scratch.0.join("installed").join(name));
-        let sets = Sets::find(&installed, Some(&global), &project);
+        let sets = Sets::find(&installed, &project);
         let found: Vec<String> = (sets.list().iter())
             .map(|set| format!("{} {}", set.name, set.origin.name()))
             .collect();
         assert_eq!(
             found,
-            [
-                "mach12 installed",
-                "agents-only installed",
-                "rs global",
-                "rs project"
-            ]
+            ["mach12 installed", "agents-only installed", "rs project"]
         );
         let shown = |path: &str| crate::os::join(&scratch.0, path).display().to_string();
         // The settings list the installed ones, so the problem is there.
@@ -1189,21 +1210,63 @@ or agents directory, nor a models.json",
                     shown("installed/empty")
                 )),
                 Problem::new(format!(
-                    "skipping global command set {}: mach12 is installed from {}",
-                    shown("global/mach12"),
+                    "skipping project command set {}: mach12 is installed from {}",
+                    shown("project/mach12"),
                     shown("installed/mach12")
                 )),
             ]
+        );
+        let unread = |set: &str, instead: &str| {
+            Problem::new(format!(
+                "command set {} is not read: Scramjet 2 reads no command sets from {}; {instead}",
+                shown(&format!("global/{set}")),
+                global.display()
+            ))
+        };
+        assert_eq!(
+            sets.unread(&global),
+            [
+                unread(
+                    "mach12",
+                    &format!(
+                        "mach12 is loaded from {}, so this copy can be removed",
+                        shown("installed/mach12")
+                    )
+                ),
+                unread(
+                    "other",
+                    "install it with `scramjet install DIR`, from where you keep it"
+                ),
+                unread(
+                    "rs",
+                    &format!(
+                        "rs is loaded from {}, so this copy can be removed",
+                        shown("project/rs")
+                    )
+                ),
+                unread(
+                    "scramjet",
+                    "the scramjet set comes with the program, so this copy can be removed"
+                ),
+            ]
+        );
+        let alone = Sets::find(&[], &scratch.0.join("none")).unread(&global);
+        assert_eq!(
+            alone[0],
+            unread(
+                "mach12",
+                "install Mach 12 with `scramjet install git:github.com/LeanAndMean/mach12`"
+            )
         );
         assert_eq!(
             sets.owner("mach12:code-reviewer").unwrap().origin,
             Origin::Installed
         );
-        assert_eq!(sets.owner("rs:x").unwrap().origin, Origin::Global);
+        assert_eq!(sets.owner("rs:x").unwrap().origin, Origin::Project);
         assert_eq!(sets.owner("other:x"), None);
         assert_eq!(sets.owner("reviewer"), None);
         let commands = Commands::discover(&sets);
-        assert_eq!(names(&commands), ["mach12:x", "rs:a", "rs:b"]);
+        assert_eq!(names(&commands), ["mach12:x", "rs:b"]);
         assert_eq!(&commands.warnings()[..4], sets.warnings());
         assert_eq!(
             commands.expand("/mach12:x"),
@@ -1222,7 +1285,7 @@ or agents directory, nor a models.json",
         );
         let agent = "---\nname: mapper\ndescription: Maps\n---\nMap.\n";
         scratch.file("repo/agents/mapper.md", agent);
-        let sets = Sets::find(std::slice::from_ref(&set), None, &scratch.0.join("none"));
+        let sets = Sets::find(std::slice::from_ref(&set), &scratch.0.join("none"));
         assert_eq!(sets.warnings(), []);
         assert_eq!(sets.list()[0].name, "kit");
         let commands = Commands::discover(&sets);
@@ -1237,7 +1300,7 @@ or agents directory, nor a models.json",
         assert_eq!(agents, ["kit:mapper"]);
         // A name that is not a word is refused, with the set.
         scratch.file("repo/set.yaml", "name: a:b\n");
-        let sets = Sets::find(std::slice::from_ref(&set), None, &scratch.0.join("none"));
+        let sets = Sets::find(std::slice::from_ref(&set), &scratch.0.join("none"));
         assert_eq!(sets.list(), []);
         let yaml = set.join("set.yaml");
         let text = format!(
@@ -1258,7 +1321,7 @@ or agents directory, nor a models.json",
         let set = scratch.0.join("kit");
         scratch.file("kit/commands/plan.md", "New\n");
         scratch.file("kit/commands/kit:plan.md", "Old\n");
-        let sets = Sets::find(std::slice::from_ref(&set), None, &scratch.0.join("none"));
+        let sets = Sets::find(std::slice::from_ref(&set), &scratch.0.join("none"));
         let commands = Commands::discover(&sets);
         assert_eq!(names(&commands), ["kit:plan"]);
         let (kept, skipped) = (
@@ -1279,52 +1342,52 @@ or agents directory, nor a models.json",
         windows,
         ignore = "command files are named with `:`, which Windows cannot hold"
     )]
-    fn discovery_takes_global_then_project_and_skips_what_scramjet_skips() {
+    fn discovery_takes_the_first_set_of_a_name_and_skips_what_scramjet_skips() {
         let scratch = Scratch::new("discover");
-        let global = scratch.0.join("global");
         let project = scratch.0.join("project");
         scratch.file(
-            "global/rs/commands/rs:review.md",
-            "---\ndescription: Global review\nargument-hint: \"[commits or area]\"\nnext:\n  mode: ask\n  hint: nested\n---\nGlobal $1\n",
+            "project/rs/commands/rs:review.md",
+            "---\ndescription: First review\nargument-hint: \"[commits or area]\"\nnext:\n  mode: ask\n  hint: nested\n---\nFirst $1\n",
         );
         scratch.file(
-            "global/rs/commands/rs:helper.md",
+            "project/rs/commands/rs:helper.md",
             "---\ndelegate-only: true\n---\n\nHelp with <caller-context>$ARGUMENTS</caller-context>\n",
         );
         scratch.file(
-            "global/rs/commands/rs:odd.md",
+            "project/rs/commands/rs:odd.md",
             "---\ndescription: Odd\nargument-hint: \"  <x>  \"\ndelegate-only: \"yes\"\n---\nOdd\n",
         );
         scratch.file(
-            "global/rs/commands/other:notes.md",
+            "project/rs/commands/other:notes.md",
             "---\n---\nAnother set's\n",
         );
-        scratch.file("global/rs/commands/rs:notes.txt", "not markdown\n");
-        scratch.file("global/rs/commands/rs:folder.md/inner.txt", "not a file\n");
-        scratch.file("global/other/commands/rs:wrong-set.md", "Wrong set\n");
+        scratch.file("project/rs/commands/rs:notes.txt", "not markdown\n");
+        scratch.file("project/rs/commands/rs:folder.md/inner.txt", "not a file\n");
+        scratch.file("project/other/commands/rs:wrong-set.md", "Wrong set\n");
         scratch.file(
-            "project/rs/commands/rs:review.md",
+            "project/rs-copy/commands/rs:review.md",
             "---\ndescription: Project review\n---\nProject\n",
         );
-        scratch.file("project/rs/commands/rs:loop.md", "Loop $ARGUMENTS\n");
+        scratch.file("project/rs-copy/commands/rs:loop.md", "Loop $ARGUMENTS\n");
+        scratch.file("project/rs-copy/set.yaml", "name: rs\n");
 
-        let commands = Commands::discover(&Sets::find(&[], Some(&global), &project));
+        let commands = Commands::discover(&Sets::find(&[], &project));
         assert_eq!(
             names(&commands),
             ["rs:helper", "rs:loop", "rs:odd", "rs:review"]
         );
         let review = &commands.list()[3];
-        assert_eq!(review.description, "Global review");
-        assert_eq!(review.path, global.join("rs/commands/rs:review.md"));
+        assert_eq!(review.description, "First review");
+        assert_eq!(review.path, project.join("rs/commands/rs:review.md"));
         assert_eq!(review.argument_hint.as_deref(), Some("[commits or area]"));
         let hint = Some("nested".to_owned());
         assert_eq!(review.next, Some(Policy::Ask { hint }));
         let skipped = |file: &str, set: &str| {
-            let path = global.join(format!("{set}/commands/{file}"));
+            let path = project.join(format!("{set}/commands/{file}"));
             let error = format!("{file}: filename must not name another set than \"{set}\"");
             Problem::in_file(format!("skipping {}: {error}", path.display()), &path)
         };
-        let project_review = project.join("rs/commands/rs:review.md");
+        let project_review = project.join("rs-copy/commands/rs:review.md");
         assert_eq!(
             commands.warnings(),
             [
@@ -1333,7 +1396,7 @@ or agents directory, nor a models.json",
                 Problem::in_file(
                     "rs:odd.md: \"delegate-only\" must be exactly true when present (got \
                      \"yes\"; treated as absent)",
-                    &global.join("rs/commands/rs:odd.md")
+                    &project.join("rs/commands/rs:odd.md")
                 ),
                 Problem::in_file(
                     format!(
@@ -1350,14 +1413,13 @@ or agents directory, nor a models.json",
         assert_eq!(
             commands.catalog(),
             "# Available commands\n\nThe following slash commands can be invoked directly:\n\n\
-- /rs:loop\n- /rs:odd <x>: Odd\n- /rs:review [commits or area]: Global review"
+- /rs:loop\n- /rs:odd <x>: Odd\n- /rs:review [commits or area]: First review"
         );
         assert_eq!(Commands::default().catalog(), "");
         assert_eq!(
             commands.expand("/rs:review HEAD~2.."),
             Some(
-                "<scramjet-command name=\"rs:review\">\nGlobal HEAD~2..\n</scramjet-command>"
-                    .into()
+                "<scramjet-command name=\"rs:review\">\nFirst HEAD~2..\n</scramjet-command>".into()
             )
         );
         // A delegate-only command runs when typed in full, as in Scramjet.
@@ -1391,7 +1453,8 @@ require-approval\n    create_pr: auto-approve\n  rs:helper:\n    create_pr: auto
 other:x:\n    create_pr: auto-approve\n  rs:gone:\n    create_pr: auto-approve\n",
         );
         scratch.file("global/other/autonomy-defaults.yaml", "publications: [\n");
-        let commands = Commands::discover(&Sets::find(&[], Some(&global), &scratch.0.join("none")));
+        let installed = ["other", "rs"].map(|set| global.join(set));
+        let commands = Commands::discover(&Sets::find(&installed, &scratch.0.join("none")));
         let default = |command: &str, tool: &str| commands.publication_default(command, tool);
         assert_eq!(default("rs:post", "create_issue"), Some(Publication::Auto));
         assert_eq!(
@@ -1458,18 +1521,6 @@ auto-approve\n    add_issue_comment: require-approval\n",
         let edge = commands.suggested("rs:post", "rs:post").map(|s| s.edge);
         assert_eq!(edge, Some(Edge::Chain));
         assert_eq!(commands.warnings(), []);
-    }
-
-    #[test]
-    fn a_project_command_is_found_without_a_global_root() {
-        let scratch = Scratch::new("no-global");
-        scratch.file("project/rs/commands/only.md", "Only\n");
-        let commands = Commands::discover(&project_sets(&scratch.0.join("project")));
-        assert_eq!(names(&commands), ["rs:only"]);
-        assert_eq!(
-            commands.expand("/rs:only"),
-            Some("<scramjet-command name=\"rs:only\">\nOnly\n\n</scramjet-command>".into())
-        );
     }
 
     #[test]

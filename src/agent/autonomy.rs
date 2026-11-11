@@ -1080,7 +1080,7 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
             "sets/a/autonomy-defaults.yaml",
             "edges:\n  rs:loop:\n    rs:steer: pause\n",
         );
-        let commands = Commands::discover(&super::super::Sets::find(&[], None, &root.join("sets")));
+        let commands = Commands::discover(&super::super::Sets::find(&[], &root.join("sets")));
         let defaults = crate::os::join(root, "sets/rs/autonomy-defaults.yaml");
         let text = format!("{}: unknown source command \"rs:gone\"", defaults.display());
         assert_eq!(commands.warnings(), [Problem::in_file(text, &defaults)]);
@@ -1182,8 +1182,7 @@ publications:\n  rs:loop:\n    create_pr: auto-approve\n"
             "publications:\n  rs:post:\n    create_issue: require-approval\n    add_pr_comment: auto-approve\n",
         );
         let commands = Commands::discover(&super::super::Sets::find(
-            &[],
-            Some(&root.join("sets")),
+            &[root.join("sets/rs")],
             &root.join("none"),
         ));
         let global = root.join("autonomy.yaml");

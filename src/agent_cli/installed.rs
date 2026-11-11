@@ -124,7 +124,6 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                     ),
                     None => "Installed by reference.".to_owned(),
                 },
-                Origin::Global => "Found in Scramjet's directory of command sets.".to_owned(),
                 Origin::Project => "Found in this project's .scramjet directory.".to_owned(),
                 Origin::BuiltIn => {
                     "Comes with Scramjet; a set installed under its name replaces it.".to_owned()
@@ -435,7 +434,7 @@ mod tests {
         );
         let settings = scramjet::os::join(&base, "config/settings.json");
         write(&settings, "{}");
-        let sets = Sets::find(std::slice::from_ref(&set), None, &root.join(".scramjet"));
+        let sets = Sets::find(std::slice::from_ref(&set), &root.join(".scramjet"));
         let commands = Commands::discover(&sets);
         let skills = Skills::discover(&[], sets.list(), &Default::default(), &root);
         let agent = |name: &str, path: PathBuf, source| AgentFile {
