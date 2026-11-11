@@ -35,7 +35,7 @@ scramjet install ~/repos/scramjet-rs/sets/scramjet           # this repository's
 scramjet install ~/repos/scramjet/packages/scramjet          # a package: its sets, skills and themes
 scramjet install git:github.com/LeanAndMean/scramjet          # the sets in a git repository
 scramjet update                           # pull the packages not pinned to a ref, then update the program
-scramjet update self                      # only the program: the newest release, over HTTPS
+scramjet update self                      # only the program: the newest release, over HTTPS (the start says when one is out)
 scramjet list                             # the command sets and skills loaded here, and problems
 scramjet lint --strict ~/repos/mach12     # check a command set before using it
 ```

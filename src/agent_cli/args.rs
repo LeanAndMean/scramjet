@@ -212,7 +212,9 @@ git:git@github.com:USER/REPO, or an https://, ssh://, git:// or file:// URL) int
 $XDG_DATA_HOME/scramjet/git, recorded in the settings' packages: its sets are its top
 directory when that is a set, else the sets at its top and those with a set.yaml deeper, and
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
-and `remove REPO` deletes the clone. `lint DIR...` checks the sets in DIR as the harness loads
+and `remove REPO` deletes the clone. `update self` replaces the program with the newest
+release of LeanAndMean/scramjet; the full screen's start says when one newer than this is out,
+looking at most once a day (not with SCRAMJET_OFFLINE set). `lint DIR...` checks the sets in DIR as the harness loads
 them and as Scramjet 1's scramjet-command-lint does (`lint --help`).
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'

@@ -14,7 +14,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
-    time::Duration,
+    thread::JoinHandle,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 const REPOSITORY: &str = "LeanAndMean/scramjet";
@@ -25,11 +26,76 @@ const PROGRAM: &str = if cfg!(windows) {
     "scramjet"
 };
 
+const CHECK_EVERY: u64 = 24 * 60 * 60;
+
 /// `SCRAMJET_RELEASES` names another release list, for tests and rehearsals.
+fn releases() -> String {
+    std::env::var("SCRAMJET_RELEASES").unwrap_or_else(|_| RELEASES.to_owned())
+}
+
+/// What the full screen's start says of a newer release, from what the last check found in
+/// `version.json` (state directory), and a check in the background when that one is a day old,
+/// unless `SCRAMJET_OFFLINE` is set. Its finding shows at the next start, as Codex's.
+pub(super) fn start_check() -> Option<String> {
+    if scramjet::agent::offline() {
+        return None;
+    }
+    let file = scramjet::agent::state_directory()
+        .ok()?
+        .join("version.json");
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    start_check_in(&file, &releases(), env!("CARGO_PKG_VERSION"), now).0
+}
+
+fn start_check_in(
+    file: &Path,
+    releases: &str,
+    current: &str,
+    now: u64,
+) -> (Option<String>, Option<JoinHandle<()>>) {
+    let last: Value = fs::read(file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let due = match last["checked"].as_u64() {
+        Some(checked) => checked > now || now - checked >= CHECK_EVERY,
+        None => true,
+    };
+    let check = due.then(|| {
+        let (file, releases) = (file.to_owned(), releases.to_owned());
+        let latest = last["latest"].clone();
+        std::thread::spawn(move || check(&file, &releases, now, latest))
+    });
+    let newer = || {
+        let latest = Version::parse(last["latest"].as_str()?).ok()?;
+        let running = Version::parse(current).ok()?;
+        latest.cmp_precedence(&running).is_gt().then(|| {
+            format!("Update available: scramjet {latest} (this is {current}); `scramjet update self` installs it")
+        })
+    };
+    (newer(), check)
+}
+
+/// Records the newest release's version; a failed check keeps the version found before and
+/// says why, so that it is tried again a day later rather than at each start.
+fn check(file: &Path, releases: &str, now: u64, before: Value) {
+    let what = format!("{REPOSITORY}'s release list");
+    let found = get(&what, releases, 16 << 20, Duration::from_secs(10)).and_then(|listed| {
+        let listed: Value = serde_json::from_slice(&listed)
+            .map_err(|error| format!("{what} is not JSON: {error}"))?;
+        Ok(newest(&listed).map(|(version, _)| version.to_string()))
+    });
+    let record = match found {
+        Ok(latest) => serde_json::json!({"checked": now, "latest": latest}),
+        Err(error) => serde_json::json!({"checked": now, "latest": before, "error": error}),
+    };
+    let _ = scramjet::agent::write_replacing(file, &format!("{record:#}\n"));
+}
+
 pub(super) fn update_self() -> Result<(), String> {
     let program =
         std::env::current_exe().map_err(|error| format!("cannot find this program: {error}"))?;
-    let releases = std::env::var("SCRAMJET_RELEASES").unwrap_or_else(|_| RELEASES.to_owned());
+    let releases = releases();
     println!(
         "{}",
         replace(
@@ -581,6 +647,51 @@ mod tests {
             "LeanAndMean/scramjet's release list answered HTTP 404"
         );
         assert_eq!(fs::read_to_string(&release.program).unwrap(), "old");
+    }
+
+    #[test]
+    fn the_start_says_what_the_last_daily_check_found() {
+        let release = release("start", "v2.142.0", "2.142.0", str::to_owned);
+        let file = release.directory.join("state/version.json");
+        let read = || serde_json::from_slice::<Value>(&fs::read(&file).unwrap()).unwrap();
+        let at = |now: u64, current: &str| start_check_in(&file, &release.releases, current, now);
+        let (said, check) = at(1000, "2.141.0");
+        assert_eq!(said, None);
+        check.unwrap().join().unwrap();
+        assert_eq!(
+            read(),
+            serde_json::json!({"checked": 1000, "latest": "2.142.0"})
+        );
+        let (said, check) = at(1000 + CHECK_EVERY - 1, "2.141.0");
+        assert_eq!(
+            said.unwrap(),
+            "Update available: scramjet 2.142.0 (this is 2.141.0); `scramjet update self` installs it"
+        );
+        assert!(check.is_none());
+        for current in ["2.142.0", "2.143.0", "not a version"] {
+            assert_eq!(at(2000, current).0, None, "{current}");
+        }
+        assert_eq!(requests(&release), ["/releases"]);
+        let gone = release.releases.replace("/releases", "/gone");
+        let (said, check) = start_check_in(&file, &gone, "2.141.0", 1000 + CHECK_EVERY);
+        assert!(said.is_some());
+        check.unwrap().join().unwrap();
+        assert_eq!(
+            read(),
+            serde_json::json!({
+                "checked": 1000 + CHECK_EVERY,
+                "latest": "2.142.0",
+                "error": "LeanAndMean/scramjet's release list answered HTTP 404",
+            })
+        );
+        let (_, check) = at(500, "2.141.0");
+        assert!(check.is_some(), "a clock set back checks again");
+        check.unwrap().join().unwrap();
+        fs::write(&file, "{not json").unwrap();
+        let (said, check) = at(600, "2.141.0");
+        assert_eq!(said, None);
+        check.unwrap().join().unwrap();
+        assert_eq!(read()["latest"], "2.142.0");
     }
 
     #[test]

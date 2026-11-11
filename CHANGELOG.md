@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.142.0 — The start says when a newer release is out
+
+### Added
+
+- The full screen's start says when a release newer than the running one is out, and that `scramjet update self` installs it. It looks at `LeanAndMean/scramjet`'s release list at most once a day, in the background, so what it finds shows at the next start; `SCRAMJET_OFFLINE` turns it off. The last finding is kept in `~/.local/state/scramjet/version.json`.
+
 ## 2.141.0 — scramjet-rs's versions under their own heading
 
 ### Changed

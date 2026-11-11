@@ -11,7 +11,9 @@ use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
 use super::theme::{ThemeOptions, Themes, Watched};
-use super::{editor, footer, installed, keymap, scope, select, settings, style, terminal, tree};
+use super::{
+    editor, footer, installed, keymap, scope, select, settings, style, terminal, tree, update,
+};
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, EarlierSession, Installed,
     Next, Problem, Reopened, Source, Step, Suggested,
@@ -211,6 +213,9 @@ impl Interactive {
             self.show_resumed();
         }
         notices.splice(0..0, self.problem_notices());
+        if self.screen.is_some() {
+            notices.extend(update::start_check());
+        }
         if !notices.is_empty() {
             if !std::mem::take(&mut self.spaced) {
                 self.blank();
