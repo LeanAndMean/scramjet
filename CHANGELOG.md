@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.158.0 — Provider packages listed as providers
+
+### Changed
+
+- A package that brings only providers (a `models.json`, with no commands, agents or skills), such as a company's provider package, is listed under `[Providers]` when a session starts, no longer under `[Command sets]`, and is not counted as a command set.
+
 ## 2.157.1 — No Scramjet 1 warnings in the home directory
 
 ### Fixed

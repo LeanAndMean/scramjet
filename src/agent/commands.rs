@@ -47,6 +47,15 @@ pub struct Set {
 }
 
 impl Set {
+    /// Whether the set brings providers (a `models.json`) and no commands, agents or skills.
+    pub fn providers_only(&self) -> bool {
+        let directory = &self.directory;
+        directory.join("models.json").is_file()
+            && !markdown_in(directory, "commands")
+            && !markdown_in(directory, "agents")
+            && super::Skills::of_set(directory).list().is_empty()
+    }
+
     /// The set in `directory`, or why it is none: it must have a `commands` or an `agents`
     /// directory, or, when installed, a `models.json` of providers (`Providers`).
     pub fn at(directory: &Path, origin: Origin) -> Result<Self, String> {
@@ -140,14 +149,15 @@ pub fn sets_in(root: &Path) -> Vec<PathBuf> {
 
 /// Whether `set` has a `models.json`, or markdown files in its `commands` or `agents`.
 fn has_markdown(set: &Path) -> bool {
-    let markdown = |directory: &str| {
-        (fs::read_dir(set.join(directory))
-            .into_iter()
-            .flatten()
-            .flatten())
-        .any(|entry| entry.path().extension().is_some_and(|e| e == "md"))
-    };
-    set.join("models.json").is_file() || markdown("commands") || markdown("agents")
+    set.join("models.json").is_file() || markdown_in(set, "commands") || markdown_in(set, "agents")
+}
+
+fn markdown_in(set: &Path, directory: &str) -> bool {
+    (fs::read_dir(set.join(directory))
+        .into_iter()
+        .flatten()
+        .flatten())
+    .any(|entry| entry.path().extension().is_some_and(|e| e == "md"))
 }
 
 /// The command sets of a session, in the order their commands and agents are registered.
@@ -1096,6 +1106,33 @@ mod tests {
                 .fold(repo.clone(), |path, part| path.join(part)))
         );
         assert!(sets_in(&scratch.0.join("missing")).is_empty());
+    }
+
+    #[test]
+    fn a_set_with_a_models_json_and_nothing_else_brings_only_providers() {
+        let scratch = Scratch::new("providers-only");
+        let only = |path: &str| {
+            let set = Set::at(&scratch.0.join(path), Origin::Installed).unwrap();
+            set.providers_only()
+        };
+        scratch.file("provider/models.json", "{}");
+        scratch.file("provider/src/main.rs", "");
+        scratch.file("provider/commands/README.txt", "");
+        assert!(only("provider"));
+        scratch.file("commands/models.json", "{}");
+        scratch.file("commands/commands/x.md", "");
+        assert!(!only("commands"));
+        scratch.file("agents/models.json", "{}");
+        scratch.file("agents/agents/x.md", "");
+        assert!(!only("agents"));
+        scratch.file("skills/models.json", "{}");
+        scratch.file(
+            "skills/skills/pdf/SKILL.md",
+            "---\nname: pdf\ndescription: PDFs\n---\n",
+        );
+        assert!(!only("skills"));
+        scratch.file("plain/commands/x.md", "");
+        assert!(!only("plain"));
     }
 
     #[test]

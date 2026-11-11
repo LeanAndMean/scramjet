@@ -53,8 +53,10 @@ pub(super) struct Opening {
     pub(super) session: Option<PathBuf>,
     /// The context files, as Scramjet lists them: relative to the project when in it.
     pub(super) context: Vec<PathBuf>,
-    /// The command sets and the skills, by name, with where each is.
+    /// The command sets, the packages bringing only providers and the skills, by name, with
+    /// where each is.
     pub(super) sets: Vec<(String, PathBuf)>,
+    pub(super) providers: Vec<(String, PathBuf)>,
     pub(super) skills: Vec<(String, PathBuf)>,
     pub(super) commands: usize,
     pub(super) agents: usize,
@@ -287,6 +289,7 @@ fn sections(opening: &Opening, width: usize, full: bool) -> Vec<String> {
     for (heading, listed) in [
         ("Context", context),
         ("Command sets", named(&opening.sets)),
+        ("Providers", named(&opening.providers)),
         ("Skills", named(&opening.skills)),
     ] {
         if listed.is_empty() {
@@ -341,9 +344,16 @@ fn card(opening: &Opening, width: usize, full: bool, marks: Marks) -> Vec<String
         fields.push(("loaded", counts, " · ", style::NONE));
     }
     if full {
-        let listed = opening.sets.iter().chain(&opening.skills);
+        let listed = (opening.sets.iter())
+            .chain(&opening.providers)
+            .chain(&opening.skills);
         let widest = listed.map(|(name, _)| columns(name)).max().unwrap_or(0);
-        for (label, listed) in [("sets", &opening.sets), ("skills", &opening.skills)] {
+        let lists = [
+            ("sets", &opening.sets),
+            ("providers", &opening.providers),
+            ("skills", &opening.skills),
+        ];
+        for (label, listed) in lists {
             for (index, (name, path)) in listed.iter().enumerate() {
                 let label = if index == 0 { label } else { "" };
                 let row = format!("{name:<widest$}  {}", shown(path));
@@ -452,6 +462,7 @@ mod tests {
             session: Some("/state/sessions/1.jsonl".into()),
             context: vec!["/home/AGENTS.md".into(), "/work/words/CLAUDE.md".into()],
             sets: vec![("mach12".into(), "/sets/mach12".into())],
+            providers: Vec::new(),
             skills: vec![("writing".into(), "/skills/writing/SKILL.md".into())],
             commands: 14,
             agents: 3,
@@ -546,6 +557,35 @@ mod tests {
         );
         assert!(
             rows.contains(&"  mach12  /sets/mach12".to_owned()),
+            "{rows:#?}"
+        );
+    }
+
+    #[test]
+    fn packages_bringing_only_providers_are_listed_apart_from_command_sets() {
+        let mut opening = sample();
+        opening.providers = vec![("company".into(), "/packages/company".into())];
+        let rows = shown(Banner::Header, &opening, 100, false);
+        assert_eq!(
+            rows[6..],
+            [
+                "[Command sets]",
+                "  mach12",
+                "",
+                "[Providers]",
+                "  company",
+                "",
+                "[Skills]",
+                "  writing"
+            ]
+        );
+        let rows = shown(Banner::Card, &opening, 100, true);
+        assert!(
+            rows.iter().any(|row| row.contains("providers  company")),
+            "{rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|row| row.contains("1 command set ·")),
             "{rows:#?}"
         );
     }

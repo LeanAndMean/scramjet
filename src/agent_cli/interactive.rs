@@ -801,6 +801,11 @@ impl Interactive {
             session: (self.agent.session_saved()).then(|| self.agent.session_path().to_path_buf()),
             context: installed.context_files,
             sets: (installed.sets.iter())
+                .filter(|set| !set.providers_only())
+                .map(|set| named(&set.name, &set.directory))
+                .collect(),
+            providers: (installed.sets.iter())
+                .filter(|set| set.providers_only())
                 .map(|set| named(&set.name, &set.directory))
                 .collect(),
             skills: (self.agent.skills().list().iter())
