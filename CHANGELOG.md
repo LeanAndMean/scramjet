@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.150.0 — MCP servers start again when used
+
+### Changed
+
+- An MCP server that failed to start or ended starts again when the model next uses it, a minute or more later, as in Scramjet 1; until then its tool calls say when. `/mcp reconnect` still starts it at once.
+
 ## 2.149.0 — Requests through HTTPS_PROXY
 
 ### Added

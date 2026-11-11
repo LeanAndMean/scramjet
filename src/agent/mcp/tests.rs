@@ -429,7 +429,16 @@ fn servers_that_cannot_start_say_why_once_and_the_others_run() {
         .search(&json!({"query": "echo"}), &AtomicBool::new(false))
         .unwrap();
     assert!(found.starts_with("1 tool matches \"echo\":"), "{found}");
-    assert!(found.ends_with(&format!("\n\nNot available:\n- exits: exits is not available: it ended before it answered\n- missing: missing is not available: could not run /nonexistent/mcp-server: {absent}")), "{found}");
+    // The seconds left vary.
+    let digitless = |text: &str| text.replace(|c: char| c.is_ascii_digit(), "");
+    let again = "; it is started again if used  s from now or later";
+    let expected = format!(
+        "\n\nNot available:\n- exits: exits is not available: it ended before it answered{again}\n- missing: missing is not available: could not run /nonexistent/mcp-server: {absent}{again}"
+    );
+    assert!(
+        digitless(&found).ends_with(&digitless(&expected)),
+        "{found}"
+    );
     let arguments = json!({"server": "missing", "tool": "echo"});
     let refused = servers
         .call(&arguments, &AtomicBool::new(false))
@@ -855,6 +864,51 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
         section.ends_with("mcp_call.\n- a: Tools for scramjet-rs's tests (7 tools)"),
         "{section}"
     );
+}
+
+#[test]
+fn a_server_that_ended_starts_again_when_used_a_minute_later() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
+    let scratch = scratch("revive");
+    let log = scratch.0.join("test.log");
+    let servers = started(
+        &[test_server(
+            "test",
+            &[("MCP_TEST_LOG", log.display().to_string())],
+        )],
+        &scratch.0,
+    );
+    let first = pids(&log);
+    kill(first[0]);
+    until(|| matches!(servers.states()[0].1, State::Failed(_)));
+    assert_eq!(servers.unreported_failures().len(), 1);
+    let refused = call(&servers, "echo", json!({"text": "one"})).unwrap_err();
+    assert!(
+        refused.starts_with("test is not available: it ended ("),
+        "{refused}"
+    );
+    assert!(refused.ends_with("s from now or later"), "{refused}");
+    assert_eq!(pids(&log).len(), 1);
+
+    let due = || *lock(&servers.servers[0].failed_at) = Some(Instant::now() - RETRY);
+    due();
+    let echoed = call(&servers, "echo", json!({"text": "two"})).unwrap();
+    assert_eq!(echoed.text, "echo: two");
+    let second = pids(&log);
+    assert_eq!(second.len(), 2);
+    assert!(matches!(servers.states()[0].1, State::Ready { .. }));
+
+    // Ended again, it is said again, and a search starts it too.
+    kill(second[1]);
+    until(|| matches!(servers.states()[0].1, State::Failed(_)));
+    assert_eq!(servers.unreported_failures().len(), 1);
+    due();
+    let found = servers.search(&json!({"query": "echo"}), &AtomicBool::new(false));
+    assert!(found.unwrap().contains("echo"));
+    assert_eq!(pids(&log).len(), 3);
+    assert!(matches!(servers.states()[0].1, State::Ready { .. }));
 }
 
 #[test]

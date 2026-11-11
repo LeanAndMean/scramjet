@@ -70,7 +70,7 @@ Order agreed at the steers of 2026-11-09 and 2026-11-10 (Current focus).
     - Servers from packages and command sets (a `.mcp.json` at their top, with a variable for the package's directory).
     - Direct tools: a model with no known window gets none; names that do not read back (`.`, `__`) stay behind the search; a switch to a smaller model keeps the set until `/reload`.
     - An event over 16 MB fails as a broken stream, so rmcp reconnects and a resuming server can loop a call until Escape (from rmcp's `client_side_sse.rs`; not seen).
-    - A stdio server whose process ends stays unavailable until `/mcp reconnect` or `/reload`. `disabledMcpServers` is global, where Claude Code keeps one per project (waits for project settings).
+    - `disabledMcpServers` is global, where Claude Code keeps one per project (waits for project settings).
     - Servers in `/settings`' loaded list and the banners; MCP prompts, resources, sampling, elicitation and roots.
 4. **Command sets.** Left, each waiting for a need: `install -l` (no project settings yet; the only project settings file in the user's repositories lists a Pi package, checked 2026-11-04); GitLab publications (Scramjet's `glab api`, draft-title rule and note checks; the user's repositories are all on GitHub and `glab` is not installed, checked 2026-11-03).
 8. **Images in prompts.** Left: images shown in terminals with an image protocol (kitty, Ghostty, WezTerm, iTerm2; none under tmux), waiting for a need: the user runs Windows Terminal, which has neither (checked 2026-11-04). Ctrl+V and right-click do not paste a clipboard image in Windows Terminal, on WSL or native; Alt+V does (user, 2026-11-09; low priority).

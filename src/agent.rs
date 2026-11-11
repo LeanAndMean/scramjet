@@ -960,7 +960,10 @@ impl Agent {
             }
         }
         for (name, why) in mcp.unreported_failures() {
-            ui.notice(&format!("MCP server {name} is not available: {why}"));
+            ui.notice(&format!(
+                "MCP server {name} is not available: {why}\nIt starts again when used a minute \
+                 after it stopped, or now with /mcp reconnect."
+            ));
         }
         Ok(())
     }

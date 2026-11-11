@@ -31,7 +31,7 @@ use std::{
         Arc, Condvar, Mutex, MutexGuard, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::io::AsyncReadExt;
 
@@ -59,6 +59,9 @@ const START: Duration = Duration::from_secs(30);
 /// How long a program stopped has to exit, after its input closes and again after SIGTERM: the
 /// MCP SDK's stdio client in Claude Code 2.1.259.
 const QUIT: Duration = Duration::from_secs(2);
+/// How long after a server failed or ended its next use starts it again: Scramjet 1's MCP
+/// adapter's `FAILURE_BACKOFF_MS`.
+const RETRY: Duration = Duration::from_secs(60);
 /// How long listing a server's tools again for a search may take before its last list is used.
 const LIST: Duration = Duration::from_secs(10);
 /// The last lines of a server's standard error kept to say why it failed.
@@ -198,6 +201,8 @@ pub(super) struct Servers {
     listing: Mutex<Option<Arc<Listing>>>,
     /// The sandbox the servers that run as programs start in.
     confined: Option<Arc<Confined>>,
+    /// The directory they run in.
+    root: PathBuf,
 }
 
 struct Listing {
@@ -222,6 +227,8 @@ struct Running {
     service: Mutex<Option<RunningService<RoleClient, ClientConfig>>>,
     /// Whether the user was told it failed.
     reported: AtomicBool,
+    /// When it last failed or ended.
+    failed_at: Mutex<Option<Instant>>,
 }
 
 enum Status {
@@ -268,6 +275,7 @@ impl Servers {
             within,
             listing: Mutex::new(None),
             confined,
+            root: root.to_owned(),
         };
         match runtime {
             Ok(runtime) => servers.runtime = Some(runtime),
@@ -290,6 +298,7 @@ impl Servers {
     /// that ended, and kills those it no longer lists.
     pub fn update(&mut self, configs: &[Server], root: &Path, confined: Option<Confined>) {
         self.confined = confined.map(Arc::new);
+        self.root = root.to_owned();
         if self.runtime.is_none() {
             *self = Self::start_within(configs, root, self.within, self.confined.clone());
             return;
@@ -322,6 +331,7 @@ impl Servers {
         if let Some(name) = name {
             self.named(name)?;
         }
+        self.root = root.to_owned();
         if self.runtime.is_none() {
             let configs: Vec<Server> = (self.servers.iter())
                 .map(|server| server.config.clone())
@@ -357,6 +367,47 @@ impl Servers {
     /// Starts `config`'s server in the background.
     fn launch(&self, config: &Server, root: &Path) -> Arc<Running> {
         let server = Running::new(config);
+        self.spawn_start(&server, root);
+        server
+    }
+
+    /// Starts `server` again if it failed or ended at least `RETRY` ago and nothing of its last
+    /// process is left to wait for, as Scramjet 1 does at a server's next use.
+    fn revive(&self, server: &Arc<Running>) {
+        if self.runtime.is_none() {
+            return;
+        }
+        let mut state = lock(&server.state);
+        let due = lock(&server.failed_at).is_none_or(|at| at.elapsed() >= RETRY);
+        let waited = lock(&server.watcher)
+            .as_ref()
+            .is_none_or(|w| w.is_finished());
+        if !matches!(*state, Status::Failed(_)) || !due || !waited {
+            return;
+        }
+        *state = Status::Starting;
+        drop(state);
+        lock(&server.stderr).clear();
+        drop(lock(&server.service).take());
+        server.killed.store(false, Ordering::Relaxed);
+        self.spawn_start(server, &self.root);
+    }
+
+    /// `server` once it is not starting, started again first if due, or why it is not available.
+    fn available(&self, server: &Arc<Running>, cancel: &AtomicBool) -> Result<Arc<Ready>, String> {
+        self.revive(server);
+        let mut state = lock(&server.state);
+        while matches!(*state, Status::Starting) && !cancel.load(Ordering::Relaxed) {
+            state = (server.changed)
+                .wait_timeout(state, Duration::from_millis(50))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        drop(state);
+        server.ready()
+    }
+
+    fn spawn_start(&self, server: &Arc<Running>, root: &Path) {
         let runtime = self.runtime.as_ref().expect("launched on a runtime");
         let (started, root, within) = (server.clone(), root.to_owned(), self.within);
         let confined = self.confined.clone();
@@ -377,9 +428,12 @@ impl Servers {
                     Status::Failed(format!("it did not start within {} s", within.as_secs()))
                 }
             };
+            // One that ends again is said again.
+            if matches!(status, Status::Ready(_)) {
+                started.reported.store(false, Ordering::Relaxed);
+            }
             started.set(status);
         });
-        server
     }
 
     /// Stops `servers` as MCP's stdio shutdown does: closes their connections, which closes a
@@ -572,6 +626,8 @@ others' with {SEARCH}, which shows how to call each, then run one with {CALL}."
         let searched: Vec<&Arc<Running>> = (self.servers.iter())
             .filter(|server| only.is_none_or(|name| server.config.name == name))
             .collect();
+        // Those due start again together.
+        searched.iter().for_each(|server| self.revive(server));
         let mut tools = Vec::new();
         let mut unavailable = Vec::new();
         for server in &searched {
@@ -610,7 +666,7 @@ others' with {SEARCH}, which shows how to call each, then run one with {CALL}."
             _ => return Err("`arguments` must be an object".to_owned()),
         };
         let server = self.named(name)?;
-        let ready = server.ready()?;
+        let ready = self.available(server, cancel)?;
         let known = |tools: &[Value]| tools.iter().any(|listed| listed["name"] == tool);
         if !known(&lock(&ready.tools)) {
             let listed = self.listed(server, cancel)?;
@@ -652,8 +708,8 @@ others' with {SEARCH}, which shows how to call each, then run one with {CALL}."
 
     /// The server's tools, listed again (the client keeps a list until the server says it
     /// changed), or as last listed when it does not answer in time or `cancel` is set.
-    fn listed(&self, server: &Running, cancel: &AtomicBool) -> Result<Vec<Value>, String> {
-        let ready = server.ready()?;
+    fn listed(&self, server: &Arc<Running>, cancel: &AtomicBool) -> Result<Vec<Value>, String> {
+        let ready = self.available(server, cancel)?;
         let runtime = self
             .runtime
             .as_ref()
@@ -716,10 +772,14 @@ impl Running {
             watcher: Mutex::new(None),
             service: Mutex::new(None),
             reported: AtomicBool::new(false),
+            failed_at: Mutex::new(None),
         })
     }
 
     fn set(&self, status: Status) {
+        if matches!(status, Status::Failed(_)) {
+            *lock(&self.failed_at) = Some(Instant::now());
+        }
         *lock(&self.state) = status;
         self.changed.notify_all();
     }
@@ -728,7 +788,15 @@ impl Running {
         match &*lock(&self.state) {
             Status::Ready(ready) => Ok(ready.clone()),
             Status::Starting => Err(format!("{} is still starting", self.config.name)),
-            Status::Failed(why) => Err(format!("{} is not available: {why}", self.config.name)),
+            Status::Failed(why) => {
+                let since = lock(&self.failed_at).map_or(RETRY, |at| at.elapsed());
+                let left = RETRY.saturating_sub(since).as_secs().max(1);
+                Err(format!(
+                    "{} is not available: {why}; it is started again if used {left} s from now \
+                     or later",
+                    self.config.name
+                ))
+            }
         }
     }
 
