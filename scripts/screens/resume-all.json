@@ -4,7 +4,7 @@
   "prompt": "Make another project's session",
   "replies": [
     [
-      {"call": "bash", "arguments": {"command": "d=\"$XDG_STATE_HOME/scramjet-rs/sessions/work-other\" && mkdir -p \"$d\" && printf '%s\\n' '{\"type\":\"session\",\"version\":1,\"root\":\"/work/other\"}' '{\"role\":\"user\",\"content\":\"Fix the parser in the other project\"}' '{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"The parser is fixed.\"}]}' > \"$d/1700000000000-1.jsonl\" && echo made"}}
+      {"call": "bash", "arguments": {"command": "d=\"$XDG_STATE_HOME/scramjet/sessions/work-other\" && mkdir -p \"$d\" && printf '%s\\n' '{\"type\":\"session\",\"version\":1,\"root\":\"/work/other\"}' '{\"role\":\"user\",\"content\":\"Fix the parser in the other project\"}' '{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"The parser is fixed.\"}]}' > \"$d/1700000000000-1.jsonl\" && echo made"}}
     ],
     [{"text": "Made it."}],
     [{"text": "Continuing the other project's work here."}]

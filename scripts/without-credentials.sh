@@ -44,7 +44,7 @@ state=${XDG_STATE_HOME:-}
 case "$state" in /*) ;; *) state="$HOME/.local/state" ;; esac
 real() { (cd "$1" 2>/dev/null && pwd -P); }
 mkdir -m 700 "$sockets" 2>/dev/null || true
-if [ -d "$sockets" ] && [ "$(real "$sockets")" != "$(real "$state/scramjet-rs/tmux/tmux-$(id -u)")" ]; then
+if [ -d "$sockets" ] && [ "$(real "$sockets")" != "$(real "$state/scramjet/tmux/tmux-$(id -u)")" ]; then
   args="$args --tmpfs $sockets --remount-ro $sockets"
 fi
 own=$(mktemp -d "${TMPDIR:-/tmp}/without-credentials-tmux.XXXXXX")

@@ -4,6 +4,12 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.138.1 — Scramjet 1's agent directory under a ~
+
+### Fixed
+
+- A `SCRAMJET_CODING_AGENT_DIR` starting with `~` keeps that directory's `auth.json` hidden from the agent's tools, as before 0.138.0.
+
 ## 0.138.0 — Scramjet 2's directories
 
 ### Changed

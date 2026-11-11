@@ -4,7 +4,7 @@
   "prompt": "Make another project's session",
   "replies": [
     [
-      {"call": "bash", "arguments": {"command": "o=\"$(cd .. && pwd)/other\" && mkdir -p \"$o\" && echo 'Their rules.' > \"$o/AGENTS.md\" && d=\"$XDG_STATE_HOME/scramjet-rs/sessions/other\" && mkdir -p \"$d\" && printf '%s\\n' \"{\\\"type\\\":\\\"session\\\",\\\"version\\\":1,\\\"root\\\":\\\"$o\\\"}\" '{\"role\":\"user\",\"content\":\"Fix the parser in the other project\"}' '{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"The parser is fixed.\"}]}' > \"$d/1700000000000-1.jsonl\" && echo made"}}
+      {"call": "bash", "arguments": {"command": "o=\"$(cd .. && pwd)/other\" && mkdir -p \"$o\" && echo 'Their rules.' > \"$o/AGENTS.md\" && d=\"$XDG_STATE_HOME/scramjet/sessions/other\" && mkdir -p \"$d\" && printf '%s\\n' \"{\\\"type\\\":\\\"session\\\",\\\"version\\\":1,\\\"root\\\":\\\"$o\\\"}\" '{\"role\":\"user\",\"content\":\"Fix the parser in the other project\"}' '{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"The parser is fixed.\"}]}' > \"$d/1700000000000-1.jsonl\" && echo made"}}
     ],
     [{"text": "Made it."}],
     [{"call": "bash", "arguments": {"command": "pwd && cat AGENTS.md"}}],

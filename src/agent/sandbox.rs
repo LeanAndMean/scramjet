@@ -76,7 +76,16 @@ fn relocated(variable: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathB
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-    let mut stores: Vec<PathBuf> = set("SCRAMJET_CODING_AGENT_DIR")
+    // Scramjet 1 expands a leading `~` in it, as its getAgentDir does.
+    let agent = variable("SCRAMJET_CODING_AGENT_DIR").filter(|value| !value.is_empty());
+    let mut stores: Vec<PathBuf> = agent
+        .map(|agent| {
+            let agent = agent.to_string_lossy();
+            match crate::os::after_tilde(&agent).zip(std::env::home_dir()) {
+                Some((rest, home)) => home.join(rest),
+                None => PathBuf::from(&*agent),
+            }
+        })
         .map(|agent| agent.join("auth.json"))
         .into_iter()
         .collect();
@@ -1411,6 +1420,10 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             relocated,
             expected.map(std::path::PathBuf::from).collect::<Vec<_>>()
         );
+        let home = std::env::home_dir().unwrap();
+        let tilde =
+            super::relocated(|name| (name == "SCRAMJET_CODING_AGENT_DIR").then(|| "~/v1".into()));
+        assert_eq!(tilde, [home.join("v1").join("auth.json")]);
     }
 
     #[test]

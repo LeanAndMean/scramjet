@@ -8,11 +8,11 @@
     {"shot": "started", "wait": 5},
     {"text": "First"}, {"keys": ["Enter"]},
     {"shot": "replied", "wait": 4},
-    {"host": ["sh", "-c", "for f in ../state/scramjet-rs/sessions/*/*.jsonl; do printf '{\"role\":\"us' >> \"$f\"; done"]},
+    {"host": ["sh", "-c", "for f in ../state/scramjet/sessions/*/*.jsonl; do printf '{\"role\":\"us' >> \"$f\"; done"]},
     {"text": "Second"}, {"keys": ["Enter"]},
     {"shot": "replied after a cut line", "wait": 4},
     {"keys": ["C-d"]},
     {"shot": "after Ctrl+D", "wait": 3},
-    {"host": ["sh", "-c", "for f in ../state/scramjet-rs/sessions/*/*.jsonl; do python3 -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1])]; print(\"every line reads\")' \"$f\"; grep -c Second \"$f\"; done"]}
+    {"host": ["sh", "-c", "for f in ../state/scramjet/sessions/*/*.jsonl; do python3 -c 'import json,sys; [json.loads(l) for l in open(sys.argv[1])]; print(\"every line reads\")' \"$f\"; grep -c Second \"$f\"; done"]}
   ]
 }

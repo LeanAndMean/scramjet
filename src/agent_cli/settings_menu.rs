@@ -359,8 +359,8 @@ impl Interactive {
     }
 
     /// The theme editor `editor`, on a new theme or on `own`, the name and file of a theme it
-    /// made; a theme saved from it is named, written to the `themes` directory of Scramjet's
-    /// agent directory, where Scramjet finds it too, or over `own`'s file when saved under its
+    /// made; a theme saved from it is named, written to the `themes` directory of
+    /// `config_directory`, or over `own`'s file when saved under its
     /// name, and used. Escape on the name goes back to the editor as it was; Escape in the
     /// editor goes back to the theme in use.
     fn make_theme(

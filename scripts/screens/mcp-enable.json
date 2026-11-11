@@ -29,7 +29,7 @@
     {"sleep": 0.3},
     {"type": "\r"},
     {"until": "Enabled MCP server clock"},
-    {"type": "!!cat \"$XDG_CONFIG_HOME/scramjet-rs/settings.json\"\r"},
+    {"type": "!!cat \"$XDG_CONFIG_HOME/scramjet/settings.json\"\r"},
     {"until": "theme"},
     {"sleep": 0.3},
     {"shot": "enabled"},

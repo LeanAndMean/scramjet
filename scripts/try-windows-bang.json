@@ -21,7 +21,7 @@
     {"text": "!echo shell %COMSPEC% & ver"},
     {"keys": ["Enter"]},
     {"shot": "! in cmd", "wait": 4},
-    {"host": ["cat", "../config/scramjet-rs/settings.json"]},
+    {"host": ["cat", "../config/scramjet/settings.json"]},
     {"keys": ["C-d"]},
     {"shot": "after Ctrl+D", "wait": 3}
   ]
