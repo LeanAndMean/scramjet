@@ -701,7 +701,7 @@ pub fn read_earlier(path: &Path) -> io::Result<Earlier> {
     })
 }
 
-/// `$XDG_STATE_HOME/scramjet-rs/sessions/<project path with / as ->` (and on Windows `\` and
+/// `$XDG_STATE_HOME/scramjet/sessions/<project path with / as ->` (and on Windows `\` and
 /// `:`, so that `C:\…` names a directory there rather than itself).
 pub fn directory(root: &Path) -> io::Result<PathBuf> {
     Ok(projects_directory()?.join(slug(&root.to_string_lossy())))
@@ -712,7 +712,7 @@ fn slug(root: &str) -> String {
     root.trim_matches(replaced).replace(replaced, "-")
 }
 
-/// `$XDG_STATE_HOME/scramjet-rs/sessions`, holding each project's sessions' directory.
+/// `$XDG_STATE_HOME/scramjet/sessions`, holding each project's sessions' directory.
 pub fn projects_directory() -> io::Result<PathBuf> {
     Ok(state_directory()?.join("sessions"))
 }
@@ -745,7 +745,7 @@ impl Unsaved {
         crate::os::private_directory(&mut builder);
         let mut n = 0u64;
         loop {
-            let name = format!("scramjet-rs-unsaved-{}-{n}", std::process::id());
+            let name = format!("scramjet-unsaved-{}-{n}", std::process::id());
             let path = std::env::temp_dir().join(name);
             match builder.create(&path) {
                 Ok(()) => return Ok(Self::named(path)),
@@ -785,11 +785,11 @@ impl Drop for Unsaved {
     }
 }
 
-/// `$XDG_STATE_HOME/scramjet-rs`, by default `~/.local/state/scramjet-rs`.
+/// `$XDG_STATE_HOME/scramjet`, by default `~/.local/state/scramjet`.
 pub fn state_directory() -> io::Result<PathBuf> {
     let state = crate::os::base_directory("XDG_STATE_HOME", ".local/state")
         .ok_or_else(|| io::Error::other("neither XDG_STATE_HOME nor HOME is set"))?;
-    Ok(state.join("scramjet-rs"))
+    Ok(state.join("scramjet"))
 }
 
 impl Drop for Session {

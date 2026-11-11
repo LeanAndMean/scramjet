@@ -1,0 +1,7 @@
+# Whatever cargo runs (tests, the scripts they start, `cargo run`) keeps its configuration, state and
+# packages in scratch directories under target/, never the user's own, which unit tests would
+# otherwise write into (an empty auth.json, the sandbox's cache).
+[env]
+XDG_CONFIG_HOME = { value = "target/test-home/config", relative = true, force = true }
+XDG_STATE_HOME = { value = "target/test-home/state", relative = true, force = true }
+XDG_DATA_HOME = { value = "target/test-home/data", relative = true, force = true }

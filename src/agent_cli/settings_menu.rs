@@ -10,7 +10,7 @@ use super::theme_editor::ThemeEditor;
 use super::{background, editor, installed, palette, select, style};
 use scramjet_rs::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
-    Publication, Scope, Setting, agent_directory, shortened, write_replacing,
+    Publication, Scope, Setting, config_directory, shortened, write_replacing,
 };
 use std::{
     path::{Path, PathBuf},
@@ -368,7 +368,7 @@ impl Interactive {
         own: Option<(String, PathBuf)>,
         mut editor: Box<ThemeEditor>,
     ) -> Option<String> {
-        let Some(directory) = agent_directory().map(|directory| directory.join("themes")) else {
+        let Some(directory) = config_directory().map(|directory| directory.join("themes")) else {
             self.say("Error: a theme cannot be saved: HOME is not set");
             return None;
         };

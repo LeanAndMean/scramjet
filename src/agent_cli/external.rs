@@ -105,7 +105,7 @@ fn create_prompt_file() -> io::Result<(PathBuf, File)> {
     let mut attempt = 0;
     loop {
         let path = std::env::temp_dir().join(format!(
-            "scramjet-rs-prompt-{}-{nanos}-{attempt}.md",
+            "scramjet-prompt-{}-{nanos}-{attempt}.md",
             std::process::id()
         ));
         match scramjet_rs::os::private_file(OpenOptions::new().write(true).create_new(true))

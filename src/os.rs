@@ -709,7 +709,7 @@ mod windows {
     /// write, after removing those of helpers no longer running.
     fn temporary() -> Option<std::path::PathBuf> {
         let local = std::path::PathBuf::from(std::env::var_os("LOCALAPPDATA")?);
-        let base = local.parent()?.join("LocalLow").join("scramjet-rs-tmp");
+        let base = local.parent()?.join("LocalLow").join("scramjet-tmp");
         for entry in std::fs::read_dir(&base).into_iter().flatten().flatten() {
             let pid = entry
                 .file_name()
@@ -936,7 +936,7 @@ mod tests {
 
     #[test]
     fn windows_finds_git_bash_or_another_bash_but_never_wsls() {
-        let root = std::env::temp_dir().join(format!("scramjet-rs-bash-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("scramjet-bash-{}", std::process::id()));
         let _scratch = Scratch(root.clone());
         let file = |parts: &[&str]| {
             let path = parts

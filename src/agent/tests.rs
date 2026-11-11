@@ -1540,7 +1540,7 @@ fn a_run_that_saves_no_session_keeps_its_sessions_apart_until_it_ends() {
         .to_string_lossy()
         .into_owned();
     assert_eq!(directory.parent(), Some(std::env::temp_dir().as_path()));
-    assert!(name.starts_with("scramjet-rs-unsaved-"), "{name}");
+    assert!(name.starts_with("scramjet-unsaved-"), "{name}");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

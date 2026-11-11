@@ -206,17 +206,19 @@ def main():
 
     print('scramjet-rs sandbox checks on %s (%s), %s' % (
         sys.platform, 'names fold case' if folded else 'names keep case',
-        subprocess.run([binary, '--version'], capture_output=True, text=True).stdout.strip()))
+        subprocess.run([binary, '--version'], capture_output=True, text=True, env=dict(
+            os.environ, HOME=home, XDG_CONFIG_HOME=os.path.join(scratch, 'config'),
+            XDG_STATE_HOME=os.path.join(scratch, 'state'), XDG_DATA_HOME=os.path.join(scratch, 'data'))).stdout.strip()))
     failed = 0
     for number, (title, args, settings, git, through_subagent, checks) in enumerate(scenarios):
         work = os.path.join(scratch, 'run%d' % number)
         project = os.path.join(work, 'proj')
-        config = os.path.join(work, 'config', 'scramjet-rs')
+        config = os.path.join(work, 'config', 'scramjet')
         os.makedirs(project)
         os.makedirs(config)
+        shutil.copytree(os.path.join(agent, 'agents'), os.path.join(config, 'agents'))
         env = dict(os.environ, HOME=home, XDG_CONFIG_HOME=os.path.join(work, 'config'),
-                   XDG_STATE_HOME=os.path.join(work, 'state'), XDG_DATA_HOME=os.path.join(work, 'data'),
-                   SCRAMJET_CODING_AGENT_DIR=agent, GIT_CONFIG_NOSYSTEM='1')
+                   XDG_STATE_HOME=os.path.join(work, 'state'), XDG_DATA_HOME=os.path.join(work, 'data'), GIT_CONFIG_NOSYSTEM='1')
         if git:
             for command in (['git', 'init', '-q'], ['git', 'config', 'user.email', 't@example.com'],
                             ['git', 'config', 'user.name', 't'], ['git', 'commit', '-q', '--allow-empty', '-m', 'start']):

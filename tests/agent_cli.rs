@@ -15,6 +15,27 @@ fn binary() -> std::path::PathBuf {
         .map_or_else(|| env!("CARGO_BIN_EXE_scramjet-rs").into(), Into::into)
 }
 
+/// `binary` to run with the user's directories in a scratch one of the tests', so that no test
+/// reads or moves the user's own; a test's own `env` replaces them.
+fn program(binary: &std::path::Path) -> Command {
+    static HOME: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let home = HOME.get_or_init(|| {
+        let home = std::env::temp_dir().join("scramjet-cli-tests-home");
+        std::fs::create_dir_all(home.join("runtime")).unwrap();
+        home
+    });
+    let mut command = Command::new(binary);
+    for (variable, directory) in [
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_STATE_HOME", "state"),
+        ("XDG_DATA_HOME", "data"),
+        ("XDG_RUNTIME_DIR", "runtime"),
+    ] {
+        command.env(variable, home.join(directory));
+    }
+    command
+}
+
 /// This repository: the `CARGO_MANIFEST_DIR` the tests run with, else the build's.
 fn repository() -> std::path::PathBuf {
     std::env::var_os("CARGO_MANIFEST_DIR")
@@ -25,7 +46,7 @@ fn repository() -> std::path::PathBuf {
 fn help_shows_the_agents_usage_and_other_words_are_refused() {
     let binary = &binary();
     for help in ["--help", "-h"] {
-        let output = Command::new(binary).arg(help).output().unwrap();
+        let output = program(binary).arg(help).output().unwrap();
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(
@@ -34,7 +55,7 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         );
     }
     for word in ["--bogus", "-x"] {
-        let output = Command::new(binary).arg(word).output().unwrap();
+        let output = program(binary).arg(word).output().unwrap();
         assert!(!output.status.success());
         let text = String::from_utf8(output.stderr).unwrap();
         assert!(
@@ -44,7 +65,7 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         assert!(text.contains("Usage: scramjet-rs"), "{text}");
     }
     let refused = |arguments: &[&str]| {
-        let output = Command::new(binary).args(arguments).output().unwrap();
+        let output = program(binary).args(arguments).output().unwrap();
         assert!(!output.status.success());
         String::from_utf8(output.stderr).unwrap()
     };
@@ -58,10 +79,7 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         format!("scramjet-rs: file not found: {}\n", absolute.display())
     );
     for option in ["--thinking", "--effort"] {
-        let output = Command::new(binary)
-            .args([option, "hgih"])
-            .output()
-            .unwrap();
+        let output = program(binary).args([option, "hgih"]).output().unwrap();
         assert!(!output.status.success());
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
@@ -72,7 +90,7 @@ medium, high, xhigh, max\n"
         );
     }
     for version in ["--version", "-v"] {
-        let output = Command::new(binary).arg(version).output().unwrap();
+        let output = program(binary).arg(version).output().unwrap();
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).unwrap();
         assert_eq!(text, format!("{}\n", env!("CARGO_PKG_VERSION")));
@@ -84,7 +102,7 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-models-{}", std::process::id())));
     let list = || {
-        let output = Command::new(binary())
+        let output = program(&binary())
             .arg("--list-models")
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
             .output()
@@ -99,7 +117,7 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
     let file = scratch
         .0
         .join("config")
-        .join("scramjet-rs")
+        .join("scramjet")
         .join("models.json");
     let mut models: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
@@ -137,8 +155,8 @@ fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
     std::fs::write(package.join("token"), "").unwrap();
     provide(&config, "127.0.0.1:9");
     // scramjet-rs's own logins, beside the settings.
-    std::fs::write(config.join("scramjet-rs/auth.json"), "{}").unwrap();
-    let file = config.join("scramjet-rs/models.json");
+    std::fs::write(config.join("scramjet/auth.json"), "{}").unwrap();
+    let file = config.join("scramjet/models.json");
     let mut models: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
     models["credentialFiles"] = serde_json::json!(["~/.fake", "~/.ssh/inside", "~/absent"]);
@@ -146,13 +164,9 @@ fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
     let package_models = package.join("models.json");
     std::fs::write(&package_models, r#"{"credentialFiles": ["token"]}"#).unwrap();
     let settings = serde_json::json!({"commandSets": [package]});
-    std::fs::write(
-        config.join("scramjet-rs/settings.json"),
-        settings.to_string(),
-    )
-    .unwrap();
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
     let list = || {
-        let output = Command::new(binary())
+        let output = program(&binary())
             .arg("--list-credential-stores")
             .env("HOME", &home)
             .env("USERPROFILE", &home)
@@ -165,7 +179,7 @@ fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
         (text(output.stdout), text(output.stderr))
     };
     let real = |path: std::path::PathBuf| std::fs::canonicalize(path).unwrap();
-    let listed: Vec<String> = [config.join("scramjet-rs/auth.json"), home.join(".fake")]
+    let listed: Vec<String> = [config.join("scramjet/auth.json"), home.join(".fake")]
         .into_iter()
         .chain([
             home.join(".netrc"),
@@ -195,12 +209,12 @@ impl Drop for Scratch {
 /// Writes the `models.json` of the configuration directory `config`: a provider at `endpoint`
 /// offering gpt-6-luna.
 fn provide(config: &std::path::Path, endpoint: &str) {
-    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let models = serde_json::json!({"providers": {"test": {
         "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-responses",
         "models": [{"id": "gpt-6-luna", "reasoning": true, "input": ["text", "image"]}],
     }}});
-    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
 }
 
 #[test]
@@ -213,20 +227,19 @@ fn https_providers_are_reached_over_tls_and_untrusted_certificates_refused_once(
     let tls = repository().join("tests").join("tls");
     let (port, connections, heads) = serve_tls(&tls);
     let config = scratch.0.join("config");
-    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let models = serde_json::json!({"providers": {"test": {
         "baseUrl": format!("https://localhost:{port}"), "api": "anthropic-messages",
         "models": [{"id": "claude-test"}],
     }}});
-    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
     // As if the system trusted only the certificates in `trusted`.
     let run = |trusted: &str| {
-        Command::new(binary)
+        program(binary)
             .args(["--retries", "2", "--no-session", "-p", "hi"])
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))
             .env("XDG_CONFIG_HOME", &config)
-            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
             .env("SCRAMJET_CACHE", scratch.0.join("cache"))
             .env("SSL_CERT_FILE", tls.join(trusted))
             .env_remove("SSL_CERT_DIR")
@@ -354,7 +367,7 @@ fn session_and_fork_find_a_session_by_the_start_of_its_id() {
         true => &['/', '\\', ':'],
         false => &['/'],
     };
-    let sessions = scratch.0.join("state").join("scramjet-rs").join("sessions");
+    let sessions = scratch.0.join("state").join("scramjet").join("sessions");
     let slug = project
         .to_str()
         .unwrap()
@@ -378,13 +391,12 @@ fn session_and_fork_find_a_session_by_the_start_of_its_id() {
     }
     provide(&scratch.0.join("config"), "127.0.0.1:9");
     let run = |arguments: &[&str]| {
-        let output = Command::new(binary)
+        let output = program(binary)
             .args(["--retries", "0"])
             .args(arguments)
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
-            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
             .env("SCRAMJET_CACHE", scratch.0.join("cache"))
             .stdin(std::process::Stdio::null())
             .output()
@@ -394,7 +406,7 @@ fn session_and_fork_find_a_session_by_the_start_of_its_id() {
         error.lines().last().unwrap_or_default().to_owned()
     };
     let first_line = |arguments: &[&str]| {
-        let output = Command::new(binary).args(arguments).output().unwrap();
+        let output = program(binary).args(arguments).output().unwrap();
         let error = String::from_utf8(output.stderr).unwrap();
         error.lines().next().unwrap_or_default().to_owned()
     };
@@ -457,7 +469,7 @@ fn a_chains_session_resumed_without_a_terminal_shows_the_earlier_ones_first() {
     std::fs::create_dir_all(&project).unwrap();
     let project = project.canonicalize().unwrap();
     let slug = (project.to_str().unwrap().trim_matches('/')).replace('/', "-");
-    let here = scratch.0.join("state/scramjet-rs/sessions").join(slug);
+    let here = scratch.0.join("state/scramjet/sessions").join(slug);
     std::fs::create_dir_all(&here).unwrap();
     let report = |summary: &str| {
         let arguments = format!("{{\"status\":\"completed\",\"summary\":{summary:?}}}");
@@ -489,13 +501,12 @@ fn a_chains_session_resumed_without_a_terminal_shows_the_earlier_ones_first() {
         parent = Some(path);
     }
     provide(&scratch.0.join("config"), "127.0.0.1:9");
-    let output = Command::new(binary)
+    let output = program(binary)
         .arg("--session")
         .arg(parent.unwrap())
         .current_dir(&project)
         .env("XDG_STATE_HOME", scratch.0.join("state"))
         .env("XDG_CONFIG_HOME", scratch.0.join("config"))
-        .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
         .env("SCRAMJET_CACHE", scratch.0.join("cache"))
         .stdin(std::process::Stdio::null())
         .output()
@@ -522,13 +533,12 @@ fn session_dir_saves_and_finds_sessions_there_whatever_their_project() {
     let config = scratch.0.join("config");
     provide(&config, "127.0.0.1:9");
     let run_all = |arguments: &[&str]| {
-        let output = Command::new(binary)
+        let output = program(binary)
             .args(["--retries", "0"])
             .args(arguments)
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))
             .env("XDG_CONFIG_HOME", &config)
-            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
             .env("SCRAMJET_CACHE", scratch.0.join("cache"))
             .stdin(std::process::Stdio::null())
             .output()
@@ -550,7 +560,7 @@ fn session_dir_saves_and_finds_sessions_there_whatever_their_project() {
     };
     let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap();
     let refused = "scramjet-rs: provider: cannot connect to 127.0.0.1:9";
-    let projects = scratch.0.join("state/scramjet-rs/sessions");
+    let projects = scratch.0.join("state/scramjet/sessions");
 
     // Relative to the current directory, as Scramjet's.
     let custom = project.join("custom");
@@ -577,7 +587,7 @@ fn session_dir_saves_and_finds_sessions_there_whatever_their_project() {
     assert_eq!(sessions(&custom).len(), 2);
 
     // The settings' sessionDir, which the option replaces.
-    let settings = config.join("scramjet-rs/settings.json");
+    let settings = config.join("scramjet/settings.json");
     let elsewhere = scratch.0.join("elsewhere");
     let setting = serde_json::json!({"sessionDir": elsewhere});
     std::fs::write(&settings, setting.to_string()).unwrap();
@@ -615,14 +625,13 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
     std::fs::create_dir_all(&temporary).unwrap();
     let command = |endpoint: &str| {
         provide(&scratch.0.join("config"), endpoint);
-        let mut command = Command::new(binary);
+        let mut command = program(binary);
         command
             .args(["--retries", "0"])
             .args(["--no-session", "-p", "hi"])
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
-            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
             .env("SCRAMJET_CACHE", scratch.0.join("cache"))
             // Where the run keeps its sessions, so that this test finds its own.
             .env("TMPDIR", &temporary)
@@ -633,7 +642,7 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains("cannot connect to 127.0.0.1:9"), "{error}");
     assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
-    assert!(!scratch.0.join("state/scramjet-rs/sessions").exists());
+    assert!(!scratch.0.join("state/scramjet/sessions").exists());
 
     // Accepts connections into its backlog and never answers, so the request waits.
     #[cfg(unix)]
@@ -700,7 +709,7 @@ fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
 fn a_copys_owner_serves_until_another_takes_the_selection() {
     let selection = format!("SCRAMJET_RS_TEST_{}_owner", std::process::id());
     let start = |text: &str| -> (Child, String) {
-        let mut owner = Command::new(binary())
+        let mut owner = program(&binary())
             .args(["__x11-selection-owner", &selection])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -825,7 +834,7 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
         env!("CARGO_PKG_VERSION")
     );
     let run = |arguments: &[&str]| {
-        let output = Command::new(binary())
+        let output = program(&binary())
             .args(arguments)
             .current_dir(&project)
             .env("PATH", &path)
@@ -845,13 +854,13 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
         )
     };
     let source = format!("file://{}", upstream.display());
-    let clones = scratch.0.join("data/scramjet-rs/git");
+    let clones = scratch.0.join("data/scramjet/git");
     let clone = clones
         .join("localhost")
         .join(scratch.0.strip_prefix("/").unwrap())
         .join("upstream");
     let shown_clone = format!("~/{}", clone.strip_prefix(&scratch.0).unwrap().display());
-    let settings = scratch.0.join("config/scramjet-rs/settings.json");
+    let settings = scratch.0.join("config/scramjet/settings.json");
     let packages = || {
         let text = std::fs::read_to_string(&settings).unwrap();
         serde_json::from_str::<serde_json::Value>(&text).unwrap()["packages"].clone()
@@ -937,7 +946,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
 
     // A session's start clones it too, as Scramjet's does, unless SCRAMJET_OFFLINE is set.
     let start = |offline: &str| {
-        let output = Command::new(binary())
+        let output = program(&binary())
             .args(["-p", "--no-session", "--model", "nowhere/none", "hi"])
             .current_dir(&project)
             .env("HOME", &scratch.0)
@@ -1147,13 +1156,13 @@ fn shell_path_and_shell_command_prefix_run_the_agents_commands() {
     let project = scratch.0.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let config = scratch.0.join("config");
-    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let (port, bodies) = serve_bash_call("greet");
     let models = serde_json::json!({"providers": {"test": {
         "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
         "models": [{"id": "claude-test"}],
     }}});
-    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
     let marker = scratch.0.join("ran");
     let shell = scratch.0.join("shell");
     let script = format!(
@@ -1163,14 +1172,13 @@ fn shell_path_and_shell_command_prefix_run_the_agents_commands() {
     std::fs::write(&shell, script).unwrap();
     std::fs::set_permissions(&shell, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let run = |settings: serde_json::Value| {
-        let file = config.join("scramjet-rs/settings.json");
+        let file = config.join("scramjet/settings.json");
         std::fs::write(file, settings.to_string()).unwrap();
-        let output = Command::new(binary)
+        let output = program(binary)
             .args(["--retries", "0", "--no-session", "-p", "hi"])
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))
             .env("XDG_CONFIG_HOME", &config)
-            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
             .env("SCRAMJET_CACHE", scratch.0.join("cache"))
             .stdin(Stdio::null())
             .output()
@@ -1239,7 +1247,7 @@ fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
     let project = scratch.0.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let config = scratch.0.join("config");
-    std::fs::create_dir_all(config.join("scramjet-rs")).unwrap();
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let wide = image::RgbImage::from_fn(2100, 10, |x, y| image::Rgb([x as u8, y as u8, 7]));
     let mut png = Vec::new();
     image::ImageEncoder::write_image(
@@ -1256,17 +1264,16 @@ fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
         "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
         "models": [{"id": "claude-test", "input": ["text", "image"]}],
     }}});
-    std::fs::write(config.join("scramjet-rs/models.json"), models.to_string()).unwrap();
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
     // The read call's result, as the second request sends it.
     let run = |images: serde_json::Value| {
-        let file = config.join("scramjet-rs/settings.json");
+        let file = config.join("scramjet/settings.json");
         std::fs::write(file, serde_json::json!({"images": images}).to_string()).unwrap();
-        let output = Command::new(binary)
+        let output = program(binary)
             .args(["--retries", "0", "--no-session", "-p", "hi"])
             .current_dir(&project)
             .env("XDG_STATE_HOME", scratch.0.join("state"))
             .env("XDG_CONFIG_HOME", &config)
-            .env("SCRAMJET_CODING_AGENT_DIR", scratch.0.join("agent"))
             .env("SCRAMJET_CACHE", scratch.0.join("cache"))
             .stdin(Stdio::null())
             .output()

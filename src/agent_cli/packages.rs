@@ -1,7 +1,7 @@
 //! Packages from git hosting, as Scramjet installs them: `git:github.com/user/repo[@ref]`,
 //! `git:git@github.com:user/repo` and `https://`, `ssh://`, `git://` or `file://` URLs, cloned
 //! by the `git` program, with the user's SSH configuration and credential helpers, into
-//! `$XDG_DATA_HOME/scramjet-rs/git/<host>/<path>`. A ref pins a package: `update` leaves it.
+//! `$XDG_DATA_HOME/scramjet/git/<host>/<path>`. A ref pins a package: `update` leaves it.
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -114,11 +114,11 @@ fn split_reference(path: &str) -> Result<(&str, Option<String>), String> {
     Ok((path, Some(reference.to_owned())))
 }
 
-/// Where packages are cloned: `$XDG_DATA_HOME/scramjet-rs/git`, by default
-/// `~/.local/share/scramjet-rs/git`.
+/// Where packages are cloned: `$XDG_DATA_HOME/scramjet/git`, by default
+/// `~/.local/share/scramjet/git`.
 pub(super) fn clones() -> Option<PathBuf> {
     let data = scramjet_rs::os::base_directory("XDG_DATA_HOME", ".local/share")?;
-    Some(data.join("scramjet-rs").join("git"))
+    Some(data.join("scramjet").join("git"))
 }
 
 /// Clones `source` into `directory`, which must not exist, at its ref. Nothing of it is left

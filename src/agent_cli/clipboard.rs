@@ -261,16 +261,13 @@ fn preferred(listed: &str) -> Option<(&'static str, &'static str)> {
         .find(|(kind, _)| listed.iter().any(|line| line.eq_ignore_ascii_case(kind)))
 }
 
-/// Writes `bytes` to a new `scramjet-rs-clipboard-…` file in `directory`; never to one that
+/// Writes `bytes` to a new `scramjet-clipboard-…` file in `directory`; never to one that
 /// exists, which in a shared `/tmp` may be another user's.
 fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String> {
     let stamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    let name = format!(
-        "scramjet-rs-clipboard-{}-{stamp:x}.{extension}",
-        process::id()
-    );
+    let name = format!("scramjet-clipboard-{}-{stamp:x}.{extension}", process::id());
     let path = Path::new(directory)
         .join(name)
         .to_string_lossy()
@@ -543,8 +540,7 @@ mod tests {
 
     #[test]
     fn a_pasted_image_is_saved_to_a_new_file_only_the_user_reads() {
-        let directory =
-            env::temp_dir().join(format!("scramjet-rs-clipboard-test-{}", process::id()));
+        let directory = env::temp_dir().join(format!("scramjet-clipboard-test-{}", process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let _scratch = Scratch(directory.clone());
         let directory = directory.to_string_lossy().into_owned();
@@ -560,7 +556,7 @@ mod tests {
             (read(&first), read(&second)),
             (b"one".to_vec(), b"two".to_vec())
         );
-        let named = Path::new(&directory).join("scramjet-rs-clipboard-");
+        let named = Path::new(&directory).join("scramjet-clipboard-");
         assert!(first.starts_with(&*named.to_string_lossy()), "{first}");
         assert!(first.ends_with(".png") && second.ends_with(".jpg"));
         #[cfg(unix)]
@@ -580,8 +576,7 @@ mod tests {
     #[test]
     #[cfg_attr(windows, ignore = "runs `sh` scripts as programs")]
     fn a_macs_image_is_kept_only_when_the_script_saved_one() {
-        let directory =
-            env::temp_dir().join(format!("scramjet-rs-clipboard-mac-{}", process::id()));
+        let directory = env::temp_dir().join(format!("scramjet-clipboard-mac-{}", process::id()));
         fs::create_dir_all(&directory).unwrap();
         let _scratch = Scratch(directory.clone());
         let directory = directory.to_string_lossy().into_owned();

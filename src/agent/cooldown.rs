@@ -46,15 +46,12 @@ fn now() -> u64 {
 fn directory() -> Option<PathBuf> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
     if let Some(runtime) = runtime.filter(|runtime| runtime.is_absolute() && runtime.is_dir()) {
-        return Some(runtime.join("scramjet-rs-cooldown"));
+        return Some(runtime.join("scramjet-cooldown"));
     }
     #[cfg(unix)]
-    let name = format!(
-        "scramjet-rs-cooldown-{}",
-        rustix::process::geteuid().as_raw()
-    );
+    let name = format!("scramjet-cooldown-{}", rustix::process::geteuid().as_raw());
     #[cfg(not(unix))]
-    let name = "scramjet-rs-cooldown".to_owned();
+    let name = "scramjet-cooldown".to_owned();
     Some(std::env::temp_dir().join(name))
 }
 

@@ -4,7 +4,7 @@
 //! them, else as the nearest of its 256, as Scramjet sends them. Beyond Scramjet's format, a
 //! theme may color the main `background` among its `colors`.
 
-use scramjet_rs::agent::{Problem, agent_directory};
+use scramjet_rs::agent::{Problem, config_directory};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -218,13 +218,13 @@ enum Place {
 
 impl Themes {
     /// The built-in themes, then, as Scramjet finds its own, the files in the `themes`
-    /// directory of Scramjet's agent directory and in the project's `.scramjet/themes`, the
+    /// directory of the user's (`config_directory`) and in the project's `.scramjet/themes`, the
     /// settings' `listed` files and directories, and those `options` give; with `--no-themes`,
     /// only those it gives.
     pub(super) fn discover(root: &Path, listed: &[PathBuf], options: &ThemeOptions) -> Self {
         let mut places = Vec::new();
         if !options.no_themes {
-            let user = agent_directory().map(|directory| directory.join("themes"));
+            let user = config_directory().map(|directory| directory.join("themes"));
             places.extend(user.map(|directory| (directory, Place::Directory)));
             places.push((
                 scramjet_rs::os::join(root, ".scramjet/themes"),

@@ -59,7 +59,7 @@
     {"sleep": 0.3},
     {"type": "\u001b"},
     {"sleep": 0.3},
-    {"type": "!ls \"$SCRAMJET_CODING_AGENT_DIR/themes\"; grep -A9 themeEditor \"$SCRAMJET_CODING_AGENT_DIR/themes/my-theme.json\"\r"},
+    {"type": "!ls \"$XDG_CONFIG_HOME/scramjet/themes\"; grep -A9 themeEditor \"$XDG_CONFIG_HOME/scramjet/themes/my-theme.json\"\r"},
     {"until": "contrast"},
     {"sleep": 0.5},
     {"shot": "file"}

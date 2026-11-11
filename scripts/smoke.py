@@ -96,7 +96,13 @@ def main():
                 sys.exit(1)
             tar.extractall(scratch)
         binary = os.path.join(scratch, name)
-        ran = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=30)
+        home, project = os.path.join(scratch, 'home'), os.path.join(scratch, 'project')
+        # Every run keeps to the scratch home: a start moves the user's directories.
+        env = {key: value for key, value in os.environ.items() if not key.startswith(('XDG_', 'SCRAMJET'))}
+        env.update(HOME=home, USERPROFILE=home, XDG_CONFIG_HOME=os.path.join(home, '.config'),
+                   XDG_STATE_HOME=os.path.join(home, '.local', 'state'),
+                   XDG_DATA_HOME=os.path.join(home, '.local', 'share'))
+        ran = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=30, env=env)
         check('--version says %s' % version, ran.returncode == 0 and ran.stdout.split() == [version],
               ran.stdout + ran.stderr)
 
@@ -107,8 +113,7 @@ def main():
                 'content': [{'type': 'output_text', 'text': 'Smoke reply.', 'annotations': []}]}
         bodies = []
         port = serve([stream([call]), stream([text])], bodies)
-        home, project = os.path.join(scratch, 'home'), os.path.join(scratch, 'project')
-        config = os.path.join(home, '.config', 'scramjet-rs')
+        config = os.path.join(home, '.config', 'scramjet')
         os.makedirs(config)
         os.makedirs(project)
         provider = {'baseUrl': 'http://127.0.0.1:%d/v1' % port, 'api': 'openai-responses', 'apiKey': 'scripted',
@@ -118,10 +123,6 @@ def main():
         if unhidden:
             with open(os.path.join(config, 'settings.json'), 'w') as file:
                 json.dump({'hideCredentials': 'never'}, file)
-        env = {key: value for key, value in os.environ.items() if not key.startswith(('XDG_', 'SCRAMJET'))}
-        env.update(HOME=home, USERPROFILE=home, XDG_CONFIG_HOME=os.path.join(home, '.config'),
-                   XDG_STATE_HOME=os.path.join(home, '.local', 'state'),
-                   SCRAMJET_CODING_AGENT_DIR=os.path.join(home, '.scramjet', 'agent'))
         ran = subprocess.run([binary, '--model', 'smoke/smoke', '--no-session', '-p', 'Run the check.'],
                              cwd=project, env=env, capture_output=True, text=True, timeout=120)
         said = ran.stdout + ran.stderr

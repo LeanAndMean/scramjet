@@ -1,5 +1,5 @@
 //! The project agents the user approved running, remembered across sessions as the SHA-256 of
-//! each agent file's text when they said yes, in `$XDG_STATE_HOME/scramjet-rs/approved-agents.json`
+//! each agent file's text when they said yes, in `$XDG_STATE_HOME/scramjet/approved-agents.json`
 //! (`{"<agent file>": "<sha256>"}`). An agent file added or changed since is asked about again.
 
 use super::subagent::Definition;

@@ -38,9 +38,10 @@ pub const LOGINS: [(&str, &str); 2] = [
 /// What a login fails with when it was cancelled.
 pub const CANCELLED: &str = "cancelled";
 
-/// `$XDG_CONFIG_HOME/scramjet-rs`, by default `~/.config/scramjet-rs`: where the settings are.
+/// `$XDG_CONFIG_HOME/scramjet`, by default `~/.config/scramjet`: the settings, credentials, and
+/// the user's agents, skills, themes and context files.
 pub fn config_directory() -> Option<PathBuf> {
-    crate::os::base_directory("XDG_CONFIG_HOME", ".config").map(|config| config.join("scramjet-rs"))
+    crate::os::base_directory("XDG_CONFIG_HOME", ".config").map(|config| config.join("scramjet"))
 }
 
 /// The credentials file.

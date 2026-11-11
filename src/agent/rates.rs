@@ -1,6 +1,6 @@
 //! How fast models write, as Scramjet's output rates: a reply's output tokens over the time from
 //! its request to its end, kept for each model's last replies across sessions in
-//! `$XDG_STATE_HOME/scramjet-rs/output-rates.json`, and shown as their median.
+//! `$XDG_STATE_HOME/scramjet/output-rates.json`, and shown as their median.
 
 use super::client::Reply;
 use serde::{Deserialize, Serialize};

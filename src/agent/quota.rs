@@ -1,5 +1,5 @@
 //! What is left of a subscription's quota, as its responses' headers report it, kept for each
-//! provider's latest response across sessions in `$XDG_STATE_HOME/scramjet-rs/quota.json`, for
+//! provider's latest response across sessions in `$XDG_STATE_HOME/scramjet/quota.json`, for
 //! `/usage`. ChatGPT's (Codex) backend sends `x-codex-primary-*` and `x-codex-secondary-*`, a
 //! model's own limits under other names (`x-<id>-primary-*`) and `x-codex-credits-*`, read as
 //! Codex reads them (`codex-rs/codex-api/src/rate_limits.rs`); GitHub Copilot's sends

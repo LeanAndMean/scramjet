@@ -1849,7 +1849,7 @@ pub(super) const COMMAND_VARIABLE: &str = "SCRAMJET_RS_COMMAND";
 /// Gives `process`, bash or a sandbox about to start it, `-c` and `command` in the environment
 /// rather than in its arguments, so that no process's command line holds it: a `pkill -f` or
 /// `pgrep -f` with a pattern from the command would otherwise find the shell running it. Its `$0`,
-/// `scramjet-rs-bash-PID-N`, tells each command's shells apart in `ps`, and lets `pkill -f`
+/// `scramjet-bash-PID-N`, tells each command's shells apart in `ps`, and lets `pkill -f`
 /// find those it left running.
 pub(super) fn bash_runs(process: &mut Command, command: &str) {
     static SHELLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -1859,7 +1859,7 @@ pub(super) fn bash_runs(process: &mut Command, command: &str) {
         .arg(format!(
             "eval \"unset {COMMAND_VARIABLE}; ${COMMAND_VARIABLE}\""
         ))
-        .arg(format!("scramjet-rs-bash-{}-{number}", std::process::id()))
+        .arg(format!("scramjet-bash-{}-{number}", std::process::id()))
         .env(COMMAND_VARIABLE, prefixed(command));
 }
 
@@ -1959,19 +1959,6 @@ pub(super) fn run_sandboxed(
     run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress)
 }
 
-/// `path` with `bin` first, unless it has it already, as Scramjet's `getShellEnv` puts the
-/// downloaded `rg` and `fd` within reach of commands.
-fn with_first(bin: &Path, path: &std::ffi::OsStr) -> Option<std::ffi::OsString> {
-    if path.is_empty() {
-        return Some(bin.as_os_str().to_owned());
-    }
-    let entries: Vec<PathBuf> = std::env::split_paths(path).collect();
-    if entries.iter().any(|entry| entry == bin) {
-        return None;
-    }
-    std::env::join_paths(std::iter::once(bin.to_owned()).chain(entries)).ok()
-}
-
 /// Runs `process` until it ends, `cancel` is set or, if given, `timeout` passes; `own_console`
 /// as `Group::spawn`.
 fn run_process(
@@ -1982,11 +1969,6 @@ fn run_process(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let bin = super::subagent::agent_directory().map(|directory| directory.join("bin"));
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    if let Some(path) = bin.and_then(|bin| with_first(&bin, &path)) {
-        process.env("PATH", path);
-    }
     let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
     let (mut child, group) = {
         process
@@ -2278,19 +2260,6 @@ mod tests {
 
     fn call(name: &str, arguments: Value) -> Call<'_> {
         Call { name, arguments }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn commands_find_the_downloaded_programs_first() {
-        let bin = Path::new("/home/u/.scramjet/agent/bin");
-        let first = |path: &str| with_first(bin, path.as_ref()).map(|p| p.into_string().unwrap());
-        assert_eq!(
-            first("/usr/bin:/bin").unwrap(),
-            "/home/u/.scramjet/agent/bin:/usr/bin:/bin"
-        );
-        assert_eq!(first("").unwrap(), "/home/u/.scramjet/agent/bin");
-        assert_eq!(first("/usr/bin:/home/u/.scramjet/agent/bin"), None);
     }
 
     #[test]
@@ -3218,7 +3187,7 @@ to see full lines]",
                 .unwrap()
                 .text
         };
-        let name = format!("scramjet-rs-bash-{}-", std::process::id());
+        let name = format!("scramjet-bash-{}-", std::process::id());
         let (first, second) = (bash("echo $0"), bash("echo $0"));
         assert!(
             first.starts_with(&name) && second.starts_with(&name),

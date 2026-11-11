@@ -1,4 +1,4 @@
-//! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet-rs/settings.json` (by default
+//! scramjet-rs's own settings file, `$XDG_CONFIG_HOME/scramjet/settings.json` (by default
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
 use super::banner::Banner;
@@ -529,8 +529,8 @@ impl Settings {
     }
 
     fn loaded(cloning: bool) -> Self {
-        let path = scramjet_rs::os::base_directory("XDG_CONFIG_HOME", ".config")
-            .map(|config| config.join("scramjet-rs").join("settings.json"));
+        let path = scramjet_rs::agent::login::config_directory()
+            .map(|config| config.join("settings.json"));
         let mut settings = Self::read_with(path, packages::clones(), cloning);
         settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
         settings

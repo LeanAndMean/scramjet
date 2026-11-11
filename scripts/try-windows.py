@@ -53,7 +53,7 @@ profile = subprocess.run(['cmd.exe', '/c', 'echo %USERPROFILE%'], capture_output
 profile = subprocess.run(['wslpath', '-u', profile], capture_output=True, text=True).stdout.strip()
 work = os.path.join(win, 'work')
 shutil.rmtree(work, ignore_errors=True)
-for directory in ['config/scramjet-rs', 'state', 'data', 'proj']:
+for directory in ['config/scramjet', 'state', 'data', 'proj']:
     os.makedirs(os.path.join(work, directory))
 work_windows = temp + '\\scramjet-rs-try\\work'
 binary = os.path.join(win, 'scramjet-rs.exe')
@@ -67,8 +67,8 @@ for target, source in scenario.get('copy', {}).items():
     os.makedirs(os.path.dirname(target), exist_ok=True)
     (shutil.copytree if os.path.isdir(source) else shutil.copy)(source, target)
 for name, text in scenario.get('agents', {}).items():
-    os.makedirs(os.path.join(work, 'agent/agents'), exist_ok=True)
-    open(os.path.join(work, 'agent/agents', name + '.md'), 'w').write(text)
+    os.makedirs(os.path.join(work, 'config/scramjet/agents'), exist_ok=True)
+    open(os.path.join(work, 'config/scramjet/agents', name + '.md'), 'w').write(text)
 servers = []
 for server in scenario.get('servers', []):
     server = server if isinstance(server, dict) else {'run': server}
@@ -98,13 +98,12 @@ base = 'http://%s/v1' % screens.serve(scenario.get('replies', []), log=os.enviro
 provider = {'baseUrl': base, 'api': 'openai-responses', 'apiKey': 'scripted',
             'models': [{'id': 'gpt-6-luna', 'reasoning': True, 'contextWindow': 200000}]}
 provider.update(scenario.get('provider', {}))
-config = os.path.join(work, 'config/scramjet-rs')
+config = os.path.join(work, 'config/scramjet')
 open(os.path.join(config, 'models.json'), 'w').write(placed(dict(scenario.get('models', {}), providers={'screens': provider})))
 open(os.path.join(config, 'settings.json'), 'w').write(placed(scenario.get('settings', {})))
 if 'auth' in scenario:
     open(os.path.join(config, 'auth.json'), 'w').write(placed(scenario['auth']))
-env = dict(XDG_STATE_HOME=work + '/state', XDG_CONFIG_HOME=work + '/config', XDG_DATA_HOME=work + '/data',
-           SCRAMJET_CODING_AGENT_DIR=work + '/agent')
+env = dict(XDG_STATE_HOME=work + '/state', XDG_CONFIG_HOME=work + '/config', XDG_DATA_HOME=work + '/data')
 env.update({name: value.replace('$PROJECT', work + '/proj') for name, value in scenario.get('env', {}).items()})
 if scenario.get('path'):
     windows_path = subprocess.run(['cmd.exe', '/c', 'echo %PATH%'], capture_output=True, text=True, cwd='/mnt/c').stdout.strip()

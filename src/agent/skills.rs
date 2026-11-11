@@ -105,7 +105,7 @@ impl Skills {
     /// The skills of a session in `root`, with the settings' `listed` files and directories,
     /// the command `sets`' own and the command line's `options`.
     pub fn discover(listed: &[PathBuf], sets: &[Set], options: &SkillOptions, root: &Path) -> Self {
-        let agent_directory = super::subagent::agent_directory();
+        let agent_directory = super::login::config_directory();
         let home = std::env::home_dir();
         let sets: Vec<PathBuf> = sets.iter().map(|set| set.directory.clone()).collect();
         Self::load(&places(
@@ -462,7 +462,7 @@ mod tests {
             &[PathBuf::from("/sets/mach12")],
             &SkillOptions::default(),
             root,
-            Some(Path::new("/home/u/.scramjet/agent")),
+            Some(Path::new("/home/u/.config/scramjet")),
             Some(Path::new("/home/u")),
         );
         let top = Place::Directory { top_files: true };
@@ -482,7 +482,7 @@ mod tests {
                 (PathBuf::from("/listed"), Place::Listed),
                 (PathBuf::from("/sets/mach12/skills"), nested()),
                 (
-                    PathBuf::from("/home/u/.scramjet/agent/skills"),
+                    PathBuf::from("/home/u/.config/scramjet/skills"),
                     Place::Directory { top_files: true }
                 ),
                 (PathBuf::from("/home/u/.agents/skills"), nested()),

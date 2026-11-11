@@ -18,14 +18,14 @@ const SUFFIX: &str = ".kept";
 pub(super) fn directory() -> Option<PathBuf> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
     if let Some(runtime) = runtime.filter(|runtime| runtime.is_absolute() && runtime.is_dir()) {
-        return Some(runtime.join("scramjet-rs-kept"));
+        return Some(runtime.join("scramjet-kept"));
     }
     #[cfg(unix)]
     {
         let shm = Path::new("/dev/shm");
         let user = rustix::process::geteuid().as_raw();
         shm.is_dir()
-            .then(|| shm.join(format!("scramjet-rs-kept-{user}")))
+            .then(|| shm.join(format!("scramjet-kept-{user}")))
     }
     #[cfg(not(unix))]
     None

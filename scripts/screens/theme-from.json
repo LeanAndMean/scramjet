@@ -47,7 +47,7 @@
     {"sleep": 0.3},
     {"type": "\u001b"},
     {"sleep": 0.3},
-    {"type": "!grep -A3 -E '\"(from|muted)\"' \"$SCRAMJET_CODING_AGENT_DIR/themes/my-theme.json\" | tail -12\r"},
+    {"type": "!grep -A3 -E '\"(from|muted)\"' \"$XDG_CONFIG_HOME/scramjet/themes/my-theme.json\" | tail -12\r"},
     {"until": "from"},
     {"sleep": 0.5},
     {"shot": "file"}

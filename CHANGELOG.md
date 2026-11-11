@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.138.0 — Scramjet 2's directories
+
+### Changed
+
+- scramjet-rs keeps its files where Scramjet 2 will: settings, credentials, models and keybindings in `~/.config/scramjet/` (beside Scramjet 1's `autonomy.yaml`), sessions and other state in `~/.local/state/scramjet/`, packages in `~/.local/share/scramjet/git/`. Files in the `scramjet-rs` directories are not moved for you: move them over yourself.
+- Your own agents, skills, themes, `SYSTEM.md` and global `CLAUDE.md`/`AGENTS.md` are read from `~/.config/scramjet/`; Scramjet 1's `~/.scramjet/agent` is no longer read (its `auth.json` stays hidden from the agent's tools), and bash commands no longer get its `bin` (Scramjet 1's `rg` and `fd`) on their `PATH`.
+
 ## 0.137.0 — CLAUDE.local.md
 
 ### Added

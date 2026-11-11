@@ -65,7 +65,7 @@ pub(super) fn definition() -> Value {
     json!({"type":"function","name":NAME,"strict":false,
         "description":"Delegate tasks to specialized subagents with isolated context. Modes: \
 single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder). \
-Default loose-agent scope is \"user\" (from ~/.scramjet/agent/agents). To enable loose \
+Default loose-agent scope is \"user\" (from ~/.config/scramjet/agents). To enable loose \
 project-local agents in .scramjet/agents, set agentScope: \"both\" (or \"project\"). Registered \
 command-set agents remain available under every scope; project-provenance confirmation still \
 applies.",
@@ -137,28 +137,15 @@ pub(super) enum Scope {
 
 /// Where agents are found, besides the project.
 pub(super) struct Sources<'a> {
-    /// The user's loose agents: `$SCRAMJET_CODING_AGENT_DIR/agents`, else
-    /// `~/.scramjet/agent/agents`.
+    /// The user's loose agents: `~/.config/scramjet/agents`.
     pub user: Option<&'a Path>,
     /// The session's command sets, whose agents are registered.
     pub sets: &'a Sets,
 }
 
-/// Scramjet's agent directory, as its `getAgentDir()`: `$SCRAMJET_CODING_AGENT_DIR`, else
-/// `~/.scramjet/agent`.
-pub fn agent_directory() -> Option<PathBuf> {
-    match std::env::var_os("SCRAMJET_CODING_AGENT_DIR").filter(|dir| !dir.is_empty()) {
-        Some(dir) => Some(super::tools::resolve(
-            Path::new("/"),
-            &dir.to_string_lossy(),
-        )),
-        None => std::env::home_dir().map(|home| crate::os::join(&home, ".scramjet/agent")),
-    }
-}
-
 /// The user's loose agent directory.
 pub(super) fn user_directory() -> Option<PathBuf> {
-    agent_directory().map(|dir| dir.join("agents"))
+    super::login::config_directory().map(|dir| dir.join("agents"))
 }
 
 /// The agents a call can use, and what was wrong with the files skipped.

@@ -76,7 +76,10 @@ fn relocated(variable: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathB
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-    let mut stores = Vec::new();
+    let mut stores: Vec<PathBuf> = set("SCRAMJET_CODING_AGENT_DIR")
+        .map(|agent| agent.join("auth.json"))
+        .into_iter()
+        .collect();
     if let Some(cargo) = set("CARGO_HOME") {
         stores.extend(["credentials.toml", "credentials"].map(|name| cargo.join(name)));
     }
@@ -340,8 +343,8 @@ pub(super) struct Hidden {
 }
 
 impl Hidden {
-    /// Those of this user's home directory, Scramjet's `auth.json` wherever
-    /// `SCRAMJET_CODING_AGENT_DIR` puts it, scramjet-rs's own (`login::auth_file`), the files and
+    /// Those of this user's home directory, Scramjet 1's `auth.json` wherever
+    /// `SCRAMJET_CODING_AGENT_DIR` puts it, the own one (`login::auth_file`), the files and
     /// directories `named` (the providers' `credentialFiles`), and this user's tmux servers.
     pub(super) fn current(named: &[PathBuf]) -> Hidden {
         #[cfg_attr(windows, allow(unused_mut))]
@@ -358,12 +361,11 @@ impl Hidden {
 
     /// `current`'s credential stores, without the tmux servers.
     pub(super) fn stores(named: &[PathBuf]) -> Hidden {
-        let auth = super::subagent::agent_directory().map(|dir| dir.join("auth.json"));
         let own = super::login::auth_file();
         if let Some(own) = &own {
             super::login::make(own);
         }
-        let also = (auth.into_iter().chain(own))
+        let also = (own.into_iter())
             .chain(relocated(|name| std::env::var_os(name)))
             .chain(named.iter().cloned())
             .collect();
@@ -1393,9 +1395,11 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             "CARGO_HOME" => Some("/c".into()),
             "XDG_CACHE_HOME" => Some("/x".into()),
             "HF_TOKEN_PATH" => Some("/t".into()),
+            "SCRAMJET_CODING_AGENT_DIR" => Some("/v1".into()),
             _ => None,
         });
         let expected = [
+            "/v1/auth.json",
             "/c/credentials.toml",
             "/c/credentials",
             "/x/huggingface/token",

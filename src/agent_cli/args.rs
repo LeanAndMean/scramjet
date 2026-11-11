@@ -17,7 +17,7 @@ pub(super) const USAGE: &str =
        scramjet-rs lint [--strict] [--json] DIR...
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
-settings file (by default ~/.config/scramjet-rs/models.json) and in installed command sets, in
+settings file (by default ~/.config/scramjet/models.json) and in installed command sets, in
 Scramjet's format: each provider has a baseUrl (http:// or https://), an api (openai-responses,
 anthropic-messages or openai-completions, with its compat), an apiKey (the value of the
 environment variable of that name, else the text; !command: what the command prints, run for
@@ -58,19 +58,19 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
                          /branch and /import too) are kept in a private temporary directory
                          removed at exit, and /resume lists only them
   --session-dir DIR      save and find sessions in DIR, in place of the project's directory
-                         under ~/.local/state/scramjet-rs/sessions, as Scramjet's (default:
+                         under ~/.local/state/scramjet/sessions, as Scramjet's (default:
                          the settings' sessionDir); -c, -r, /resume and --session ID look
                          there, whatever project a session there was of
   --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
                          or the contents of the file it names (default: the project's
-                         .scramjet/SYSTEM.md, else ~/.scramjet/agent/SYSTEM.md, else
+                         .scramjet/SYSTEM.md, else ~/.config/scramjet/SYSTEM.md, else
                          scramjet-rs's), as in Scramjet
   --append-system-prompt TEXT
                          text, or a file's contents, after the opening; several are joined
                          (default: an APPEND_SYSTEM.md found as SYSTEM.md is)
   -nc, --no-context-files
                          leave out the AGENTS.md, CLAUDE.md and CLAUDE.local.md files of
-                         ~/.scramjet/agent, the project and the directories above it
+                         ~/.config/scramjet, the project and the directories above it
   --skill PATH           a skill file, or a directory of skills, looked in after the others
                          (repeatable); a relative PATH is from the current directory
   -ns, --no-skills       no skills but those --skill names: none from the skill directories
@@ -209,7 +209,7 @@ them, and its skills and themes directories; `remove NAME|DIR` takes them out an
 shows the sets loaded in the current directory, what each brings and what was skipped.
 `install REPO` clones a package from git (git:github.com/USER/REPO[@REF],
 git:git@github.com:USER/REPO, or an https://, ssh://, git:// or file:// URL) into
-$XDG_DATA_HOME/scramjet-rs/git, recorded in the settings' packages: its sets are its top
+$XDG_DATA_HOME/scramjet/git, recorded in the settings' packages: its sets are its top
 directory when that is a set, else the sets at its top and those with a set.yaml deeper, and
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
 and `remove REPO` deletes the clone. `lint DIR...` checks the sets in DIR as the harness loads
@@ -217,7 +217,7 @@ them and as Scramjet's scramjet-command-lint does (`lint --help`).
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'
 compaction.enabled is false (Auto-compact in /settings).
-Settings are read from $XDG_CONFIG_HOME/scramjet-rs/settings.json (~/.config/scramjet-rs/),
+Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramjet/),
 with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
@@ -225,7 +225,7 @@ defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, wr
 default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
 list and the agent save; and startupModel: per-directory (new sessions start with the model
-chosen last in their project, kept in $XDG_STATE_HOME/scramjet-rs/last-used-models.json) or
+chosen last in their project, kept in $XDG_STATE_HOME/scramjet/last-used-models.json) or
 global; retry: enabled, maxRetries (3), baseDelayMs (2000, doubled at each retry, give or take a tenth)
 and provider.maxRetryDelayMs (60000: a longer wait, the provider's or the backoff's, fails the
 request; 0 for no limit); compaction: enabled (true), reserveTokens (16384: compaction runs

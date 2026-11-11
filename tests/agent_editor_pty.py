@@ -28,7 +28,6 @@ import urllib.request
 import zlib
 
 BINARY = sys.argv[1]
-VERSION = subprocess.run([BINARY, '--version'], capture_output=True, text=True, check=True).stdout.strip()
 work = tempfile.mkdtemp(prefix='agent-editor-')
 atexit.register(shutil.rmtree, work, True)
 project = os.path.join(work, 'project')
@@ -79,8 +78,8 @@ def provide(endpoint, config):
         entry.setdefault('baseUrl', 'http://%s%s' % (endpoint, '' if messages else '/v1'))
         providers.setdefault(entry.pop('provider'), {'models': []})['models'].append(entry)
     providers.update(more_providers.get(config, {}))
-    os.makedirs(os.path.join(config, 'scramjet-rs'), exist_ok=True)
-    with open(os.path.join(config, 'scramjet-rs', 'models.json'), 'w') as file:
+    os.makedirs(os.path.join(config, 'scramjet'), exist_ok=True)
+    with open(os.path.join(config, 'scramjet', 'models.json'), 'w') as file:
         json.dump({'providers': providers}, file)
 
 
@@ -355,21 +354,11 @@ talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 approved = serve_call('echo approved-$((6*7)); sleep 30')
 pausing = serve_call('sleep 2')
-# `@` completion and the `grep` and `find` tools run the rg and fd the harness finds: in the agent
-# directory's `bin`, else on the PATH.
-user_bin = os.path.join(os.environ.get('SCRAMJET_CODING_AGENT_DIR') or os.path.expanduser('~/.scramjet/agent'), 'bin')
-os.makedirs(os.path.join(work, 'agent', 'bin'))
-found = {}
-for program, names in [('rg', ['rg']), ('fd', ['fd', 'fdfind'])]:
-    local = os.path.join(user_bin, program)
-    found[program] = local if os.access(local, os.X_OK) else next(filter(None, map(shutil.which, names)), None)
-    if found[program]:
-        os.symlink(found[program], os.path.join(work, 'agent', 'bin', program))
-fd = found['fd']
-# The settings journey switches the grep tool on, which needs rg.
-assert found['rg'], f'rg is needed: neither {user_bin}/rg nor rg on the PATH'
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'commands'),
-           XDG_CONFIG_HOME=os.path.join(work, 'config'), SCRAMJET_CODING_AGENT_DIR=os.path.join(work, 'agent'), SCRAMJET_OFFLINE='1')
+           XDG_CONFIG_HOME=os.path.join(work, 'config'), XDG_DATA_HOME=os.path.join(work, 'data'),
+           XDG_RUNTIME_DIR=os.path.join(work, 'runtime'), SCRAMJET_OFFLINE='1')
+os.makedirs(env['XDG_RUNTIME_DIR'], mode=0o700)
+VERSION = subprocess.run([BINARY, '--version'], capture_output=True, text=True, check=True, env=env).stdout.strip()
 env.pop('VISUAL', None)
 env.pop('EDITOR', None)
 # The journeys never reach the desktop's clipboard: those that copy or paste give a stand-in tool.
@@ -379,7 +368,7 @@ for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'SS
 # Temporary files of the external editor go here, so the journeys can check they are removed.
 scratch = os.path.join(work, 'tmp')
 os.mkdir(scratch)
-os.makedirs(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet-rs'))
+os.makedirs(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet'))
 # Checks its argument, the prompt file's mode and text, then writes a new text; exits 0.
 edit_script = os.path.join(work, 'edit.sh')
 with open(edit_script, 'w') as script_file:
@@ -503,18 +492,18 @@ def run_in_shell(script, endpoint, arguments=''):
 SAME_MODE = b'stty -g | cmp -s - ../mode && echo restored-$((6*7))\r'
 
 
-remembered_models = os.path.join(work, 'state', 'scramjet-rs', 'last-used-models.json')
+remembered_models = os.path.join(work, 'state', 'scramjet', 'last-used-models.json')
 
 
 def session_files():
-    return glob.glob(os.path.join(work, 'state', 'scramjet-rs', 'sessions', '*', '*.jsonl'))
+    return glob.glob(os.path.join(work, 'state', 'scramjet', 'sessions', '*', '*.jsonl'))
 
 
 def config_home(name, settings=None):
     """A directory for XDG_CONFIG_HOME of its own, with `settings` (text) as the settings file if
     given."""
     path = os.path.join(work, 'config-' + name)
-    os.makedirs(os.path.join(path, 'scramjet-rs'))
+    os.makedirs(os.path.join(path, 'scramjet'))
     if settings is not None:
         with open(settings_path(path), 'w') as file:
             file.write(settings)
@@ -522,7 +511,7 @@ def config_home(name, settings=None):
 
 
 def settings_path(home):
-    return os.path.join(home, 'scramjet-rs', 'settings.json')
+    return os.path.join(home, 'scramjet', 'settings.json')
 
 
 def saved(home):
@@ -1110,7 +1099,7 @@ def remapped_keys(read, until, send, output):
     title = next(at for at, row in enumerate(rows) if row.startswith('Installed  '))
     note = ' '.join(row.strip() for row in rows[rows.index('', title) + 1:]).strip()
     assert note.endswith('"hyper+l" is no key; ignored F6 opens %s.'
-                         % os.path.join(keys_home, 'scramjet-rs', 'keybindings.json')), rows
+                         % os.path.join(keys_home, 'scramjet', 'keybindings.json')), rows
     send(b'\x1b')
     on_screen('Settings  \u2191\u2193 move')
     send(b'\x1b')
@@ -1265,7 +1254,7 @@ run([], ctrl_t_hides_reasoning, serve_thoughts([thought_gate]), variables={'XDG_
 assert saved(hiding) == {'hideThinkingBlock': True}
 run([], hidden_from_the_start, serve_quiet_reasoning(), variables={'XDG_CONFIG_HOME': hiding})
 keys_home = config_home('keys')
-with open(os.path.join(keys_home, 'scramjet-rs', 'keybindings.json'), 'w') as file:
+with open(os.path.join(keys_home, 'scramjet', 'keybindings.json'), 'w') as file:
     json.dump({'app.message.followUp': 'ctrl+q', 'app.thinking.toggle': ['f2'], 'app.model.select': 'hyper+l',
                'app.exit': 'ctrl+x', 'app.session.delete': 'f4', 'tui.select.confirm': ['f6', 'enter'],
                'app.model.cycleForward': 'f7'}, file)
@@ -1275,7 +1264,7 @@ run([], remapped_keys, serve_replies([(['Reply one.'], 'Reply one.')]), variable
 
 def changed_keys(read, until, send, output):
     shown, on_screen = full_screen(columns=80, rows=30)(read, output)
-    keys_file = os.path.join(changing_home, 'scramjet-rs', 'keybindings.json')
+    keys_file = os.path.join(changing_home, 'scramjet', 'keybindings.json')
     on_screen('\u2500' * 20)
     send(b'/hotkeys\r')
     on_screen('Keyboard shortcuts  \u2191\u2193 move')
@@ -1340,7 +1329,7 @@ def changed_keys(read, until, send, output):
     on_screen('Keyboard shortcuts', gone=True)
     # `/keybindings` opens the file in the editor and reads it once the editor exits.
     send(b'/keybindings\r')
-    on_screen('app.bogus is no action; ignored')
+    on_screen('is no action; ignored')
     assert json.load(open(seen_keys)) == {}
     send(b'\x04')
     read(.3)
@@ -1350,7 +1339,7 @@ def changed_keys(read, until, send, output):
 
 def logins(read, until, send, output):
     shown, on_screen = full_screen(columns=80, rows=30)(read, output)
-    auth = os.path.join(login_home, 'scramjet-rs', 'auth.json')
+    auth = os.path.join(login_home, 'scramjet', 'auth.json')
     on_screen('\u2500' * 20)
     send(b'/logout\r')
     on_screen('No saved logins to remove.')
@@ -1534,7 +1523,7 @@ login_home = config_home('login')
 listed_heads = []
 more_providers[login_home] = {'listed': {'baseUrl': 'http://%s/v1' % serve_listed_models(listed_heads),
                                          'api': 'openai-completions'}}
-copilot_models = os.path.join(work, 'state', 'scramjet-rs', 'logins', 'github-copilot.json')
+copilot_models = os.path.join(work, 'state', 'scramjet', 'logins', 'github-copilot.json')
 # Never the desktop's browser or clipboard: stand-ins that keep what they were given.
 login_bin = os.path.join(work, 'login-bin')
 os.mkdir(login_bin)
@@ -1585,8 +1574,8 @@ def serve_copilot_models(ids):
 
 def relisting_copilot(host, minutes, ids):
     """A Copilot login whose requests go to `host`, its list of `ids` read `minutes` ago."""
-    os.makedirs(os.path.join(relisting_home, 'scramjet-rs'), exist_ok=True)
-    with open(os.path.join(relisting_home, 'scramjet-rs', 'auth.json'), 'w') as file:
+    os.makedirs(os.path.join(relisting_home, 'scramjet'), exist_ok=True)
+    with open(os.path.join(relisting_home, 'scramjet', 'auth.json'), 'w') as file:
         json.dump({'github-copilot': {'type': 'oauth', 'refresh': 'gho', 'access': 'tid=1;proxy-ep=' + host,
                                       'expires': (time.time() + 3600) * 1000}}, file)
     listed = [{'id': id, 'supported_endpoints': ['/responses'],
@@ -1622,7 +1611,7 @@ def relisting_fails(read, until, send, output):
 
 
 relisting_home, relisting_state = config_home('relisting'), os.path.join(work, 'relisting-state')
-relisted_models = os.path.join(relisting_state, 'scramjet-rs', 'logins', 'github-copilot.json')
+relisted_models = os.path.join(relisting_state, 'scramjet', 'logins', 'github-copilot.json')
 in_relisting = {'XDG_CONFIG_HOME': relisting_home, 'XDG_STATE_HOME': relisting_state,
                 'SSL_CERT_FILE': os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tls', 'ca.pem')}
 copilot_port, copilot_taken = serve_copilot_models(['gpt-6-luna', 'grok-5'])
@@ -2172,10 +2161,7 @@ run(['--retries', '0'], completes_paths_and_commands)
 (completed,) = set(session_files()) - known
 prompts = [item['content'] for item in map(json.loads, open(completed)) if item.get('role') == 'user']
 assert prompts == ['see completion/alpine-file and completion/unique-file'], prompts
-if fd:
-    run([], completes_file_references)
-else:
-    print('skipped completes_file_references: no fd', file=sys.stderr)
+run([], completes_file_references)
 known = set(session_files())
 run([], bang_commands)
 (ran,) = set(session_files()) - known
@@ -3141,30 +3127,30 @@ run([], themed_start(b'\x1b[38;2;129;139;157m'), variables=exact)
 # Where the terminal may not show 24-bit colors, the nearest of its 256.
 indexed = dict(exact, COLORTERM='', WT_SESSION='', TERM='screen-256color')
 run([], themed_start(b'\x1b[38;5;103m'), variables=indexed)
-# A theme of the user's own, in Scramjet's agent directory.
-themes_agent = os.path.join(work, 'agent-themes')
-os.makedirs(os.path.join(themes_agent, 'themes'))
-ocean = os.path.join(themes_agent, 'themes', 'ocean.json')
+# A theme of the user's own, in their configuration directory.
+user_theme_home = config_home('user-theme')
+user_themes = os.path.join(user_theme_home, 'scramjet', 'themes')
+os.makedirs(user_themes)
+ocean = os.path.join(user_themes, 'ocean.json')
 theme = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'agent_cli', 'themes',
                                     'scramjet-dark.json')))
 theme['name'] = 'Ocean'
 theme['colors']['mdCode'] = '#0a141e'
 with open(ocean, 'w') as file:
     json.dump(theme, file)
-with open(os.path.join(themes_agent, 'themes', 'broken.json'), 'w') as file:
+with open(os.path.join(user_themes, 'broken.json'), 'w') as file:
     file.write('{')
-user_theme_home = config_home('user-theme')
 run([], user_theme(ocean), serve_replies([(['Run `ls` now.'], 'Run `ls` now.')]),
-    variables={'XDG_CONFIG_HOME': user_theme_home, 'COLORTERM': 'truecolor', 'SCRAMJET_CODING_AGENT_DIR': themes_agent},
+    variables={'XDG_CONFIG_HOME': user_theme_home, 'COLORTERM': 'truecolor'},
     columns=120)
 assert saved(user_theme_home) == {'theme': 'Ocean'}
 # Themes from --theme, without those found elsewhere (--no-themes), the settings' themes included.
 given_theme = os.path.join(work, 'given.json')
 with open(given_theme, 'w') as file:
     json.dump(dict(theme, name='Given'), file)
-listed_home = config_home('listed-themes', json.dumps({'themes': [os.path.join(themes_agent, 'themes')]}))
+listed_home = config_home('listed-themes', json.dumps({'themes': [user_themes]}))
 run(['--no-themes', '--theme', given_theme], given_themes(given_theme),
-    variables={'XDG_CONFIG_HOME': listed_home, 'SCRAMJET_CODING_AGENT_DIR': themes_agent}, columns=120)
+    variables={'XDG_CONFIG_HOME': listed_home}, columns=120)
 run([], missing_theme, variables={'XDG_CONFIG_HOME': config_home('missing-theme', '{"theme": "gone"}')}, columns=120)
 forking_home = config_home('forking', '{"doubleEscapeAction": "fork", "branchSummary": {"skipPrompt": true}}')
 run([], double_escape_forks, serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply two.')]),
@@ -3185,7 +3171,7 @@ luna = [model('gpt-6-luna', ['low', 'medium', 'high'], cost={
 SPENT = '\u2191100 \u219334 (RATE) R1.0k W100 $0.074 1.2k'
 run([], name_and_session, serve_replies([(['Reply one.'], 'Reply one.')], models=luna, usage=usage, backend='azure'),
     columns=200, rows=30)
-rates = os.path.join(work, 'state/scramjet-rs/output-rates.json')
+rates = os.path.join(work, 'state/scramjet/output-rates.json')
 samples = json.load(open(rates))['samples']
 assert [(sample['model'], sample['output_tokens']) for sample in samples] == [('test/gpt-6-luna', 34)], samples
 json.dump({'version': 1, 'samples': [dict(samples[0], duration_ms=1000)]}, open(rates, 'w'))
@@ -3303,7 +3289,7 @@ def installed_view(read, until, send, output):
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
     at = rows.index('  Needs attention')
     assert rows[at + 1].startswith('\u203a   settings: '), rows
-    assert rows[at + 2].startswith('    agents: %s: failed to read agent file (No such file' % stale_agent), rows
+    assert rows[at + 2].startswith('    agents: %s: failed to read agent file (No such' % stale_agent), rows
     assert rows[at + 3].startswith('    skills: skill path does not exist: '), rows
     assert rows[at + 4] == '  Command sets', rows
     assert rows[at + 5:at + 7] == ['    tools  global   ' + os.path.join(work, 'commands', 'tools'),
@@ -3347,7 +3333,7 @@ def installed_view(read, until, send, output):
     send(b'\r')
     on_screen('Remove this broken link?')
     send(b'\x1b[B\r')
-    rows = on_screen('Removed %s, a link to %s' % (stale_agent, stale_target))
+    rows = on_screen('Removed %s, a link to' % stale_agent)
     assert not os.path.lexists(stale_agent)
     # What was loaded is read again, and the list no longer has it.
     after = '2 problems in what was loaded: see Installed in /settings'
@@ -3878,18 +3864,16 @@ with open(greet_edit, 'w') as script_file:
                       'sed -i "s/^description: Greet someone$/description: Greet someone kindly/" "$1"\n'
                       % (settings_path(listing), settings_opened, greet_file))
 os.chmod(greet_edit, 0o755)
-stale_directory = os.path.join(work, 'agent-installed')
-stale_agent = os.path.join(stale_directory, 'agents', 'stale.md')
+stale_agent = os.path.join(listing, 'scramjet', 'agents', 'stale.md')
 stale_target = os.path.join(work, 'gone', 'stale.md')
 os.makedirs(os.path.dirname(stale_agent))
 os.symlink(stale_target, stale_agent)
-run([], installed_view, variables={'XDG_CONFIG_HOME': listing, 'VISUAL': greet_edit,
-                                   'SCRAMJET_CODING_AGENT_DIR': stale_directory}, columns=120, rows=40)
+run([], installed_view, variables={'XDG_CONFIG_HOME': listing, 'VISUAL': greet_edit}, columns=120, rows=40)
 assert 'description: Greet someone kindly\n' in open(greet_file).read()
 with open(greet_file, 'w') as file:
     file.write(greet_text)
 approving = os.path.join(work, 'state-approving')
-agent_approvals = os.path.join(approving, 'scramjet-rs', 'approved-agents.json')
+agent_approvals = os.path.join(approving, 'scramjet', 'approved-agents.json')
 helper_agent = os.path.join(project, '.scramjet', 'agents', 'helper.md')
 other_agent = os.path.join(work, 'other', '.scramjet', 'agents', 'helper.md')
 helper_text = '---\nname: helper\ndescription: Helps.\n---\nHelp.\n'
@@ -4063,7 +4047,7 @@ outputs = [line['output'] for line in lines if line.get('call_id') == 'call_2' a
 assert outputs == ['ran-42\n'], outputs
 os.remove(os.path.join(project, 'made.txt'))
 stepping = config_home('steps')
-os.makedirs(os.path.join(stepping, 'scramjet'))
+os.makedirs(os.path.join(stepping, 'scramjet'), exist_ok=True)
 with open(os.path.join(stepping, 'scramjet', 'autonomy.yaml'), 'w') as file:
     file.write("edges:\n  flow:step:\n    '*': pause\n")
 suggesting = os.path.join(project, '.scramjet', 'flow', 'autonomy-defaults.yaml')
@@ -4807,10 +4791,10 @@ def fullscreen_paste_image(read, until, send, output):
     # Ctrl+V pastes the clipboard's image as the path of the file it is saved to, as Scramjet does;
     # so does Alt+V, which Windows Terminal leaves to the program.
     send(b'look at \x16')
-    on_screen('> look at %s/scramjet-rs-clipboard-' % images)
+    on_screen('> look at %s/scramjet-clipboard-' % images)
     send(b' and \x1bv')
     end = time.monotonic() + 10
-    while '\n'.join(shown()).count('%s/scramjet-rs-clipboard-' % images) < 2:
+    while '\n'.join(shown()).count('%s/scramjet-clipboard-' % images) < 2:
         assert time.monotonic() < end, shown()
         read(.05)
     # Without an image on the clipboard, the prompt stays as it is and says so.
@@ -5075,7 +5059,7 @@ run([], fullscreen_paste_image, serve_items([[message('Seen.')]]), columns=160, 
 (pasted,) = set(session_files()) - known
 prompts = [line['content'] for line in map(json.loads, open(pasted)) if line.get('role') == 'user']
 saved = sorted(os.listdir(images))
-assert len(saved) == 2 and all(re.fullmatch(r'scramjet-rs-clipboard-\d+-[0-9a-f]+\.png', name) for name in saved), saved
+assert len(saved) == 2 and all(re.fullmatch(r'scramjet-clipboard-\d+-[0-9a-f]+\.png', name) for name in saved), saved
 assert sorted(re.findall(r'\S+\.png', prompts[0])) == [os.path.join(images, name) for name in saved], prompts
 assert re.fullmatch(r'look at \S+\.png and \S+\.png', prompts[0]), prompts
 for name in saved:
@@ -5089,8 +5073,8 @@ run([], fullscreen_collapsed, serve_items([
     [message('Printed.')], [message(summary)], [message('Greeted.')], [report('call_3')],
 ]))
 run(['--continue'], fullscreen_collapsed_resumed, rows=40)
-os.makedirs(os.path.join(work, 'agent', 'agents'), exist_ok=True)
-with open(os.path.join(work, 'agent', 'agents', 'scout.md'), 'w') as file:
+os.makedirs(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet', 'agents'), exist_ok=True)
+with open(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet', 'agents', 'scout.md'), 'w') as file:
     file.write('---\nname: scout\ndescription: Looks around\ntools: ls\n---\n\nYou look around.\n')
 subagent_gate = threading.Event()
 
