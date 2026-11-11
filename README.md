@@ -17,7 +17,21 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 
 ## Install
 
-Each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive per platform (`scramjet-VERSION-ARCH-OS.tar.gz`, holding only the program) and their `SHA256SUMS`. Unpack it (`tar -xzf`, also on Windows 10 and later) into a directory on your `PATH`; `scramjet update self` then takes newer releases. The programs are not signed: on macOS, one downloaded through a browser is refused until `xattr -d com.apple.quarantine scramjet` (a download with `curl` is not marked). Linux's need glibc 2.31 or newer. On Linux, subagents' tools and unattended turns need Bubblewrap (`bwrap`; `apt install bubblewrap`).
+On Linux and macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.sh | sh
+```
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.ps1 | iex
+```
+
+Each takes the newest release, prereleases included (`SCRAMJET_VERSION=2.143.1` for another), checks it against the release's `SHA256SUMS`, runs it, and puts it in `~/.local/bin` (on Windows `%LOCALAPPDATA%\Programs\scramjet`; `SCRAMJET_INSTALL_DIR` for another). On Windows it also puts that directory first on your user `Path`, unless `SCRAMJET_NO_MODIFY_PATH` is set; on Linux and macOS it changes no startup file, but shows the line to add when the directory is not on your `PATH` or another `scramjet` comes first.
+
+Or by hand: each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive per platform (`scramjet-VERSION-ARCH-OS.tar.gz`, holding only the program) and their `SHA256SUMS`. Unpack it (`tar -xzf`, also on Windows 10 and later) into a directory on your `PATH`; `scramjet update self` then takes newer releases. The programs are not signed: on macOS, one downloaded through a browser is refused until `xattr -d com.apple.quarantine scramjet` (a download with `curl` is not marked). Linux's need glibc 2.31 or newer. On Linux, subagents' tools and unattended turns need Bubblewrap (`bwrap`; `apt install bubblewrap`).
 
 Scramjet 1's npm package installs a `scramjet` command too, and whichever directory comes first on your `PATH` runs: `which -a scramjet` (on Windows `where.exe scramjet`) lists both. To keep both, put Scramjet 2's directory ahead of npm's and run Scramjet 1 by its full path (`"$(npm prefix -g)/bin/scramjet"`, on Windows `%APPDATA%\npm\scramjet.cmd`), or give one of them another name. The two keep their files apart (below).
 

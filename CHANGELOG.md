@@ -4,6 +4,10 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+### Added
+
+- `install.sh` (Linux, macOS) and `install.ps1` (Windows) install the newest release in one line, checked against its `SHA256SUMS`; on Windows the program's directory goes first on your user `Path`, ahead of Scramjet 1's npm directory, and on Linux and macOS the line to add is shown when another `scramjet` comes first.
+
 ## 2.144.0 — Unattended turns say why git and gh fail
 
 ### Changed
