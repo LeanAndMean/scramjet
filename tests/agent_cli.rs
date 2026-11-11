@@ -266,8 +266,7 @@ fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
         assert_eq!(run(given), format!("scramjet: {error}\n"), "{given:?}");
     }
     for given in [
-        &["--api-key", "sk-not-repeated"][..],
-        &["-e", "x.ts"],
+        &["-e", "x.ts"][..],
         &["--extension", "x.ts"],
         &["--prompt-template", "p"],
         &["--model-definition", "{}"],
@@ -279,15 +278,77 @@ fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
             "{said}"
         );
         assert!(said.contains("Scramjet 2"), "{said}");
-        assert!(
-            !said.contains("sk-not-repeated") && !said.contains("Usage"),
-            "{said}"
-        );
+        assert!(!said.contains("Usage"), "{said}");
     }
 }
 
+#[test]
+fn api_key_is_sent_as_given_to_the_models_provider_for_the_run() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-api-key-{}", std::process::id())));
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let (port, requests) = serve_refusals();
+    let models = serde_json::json!({"providers": {
+        "test": {
+            "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+            "apiKey": "from-the-entry", "models": [{"id": "claude-test"}],
+        },
+        "other": {
+            "baseUrl": "http://127.0.0.1:9", "api": "anthropic-messages",
+            "models": [{"id": "claude-other"}],
+        },
+    }});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let run = |arguments: &[&str]| {
+        let output = program(&binary())
+            .args([
+                "-p",
+                "--no-session",
+                "--retries",
+                "0",
+                "--model",
+                "test/claude-test",
+            ])
+            .args(arguments)
+            .arg("hi")
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("SCRAMJET_OFFLINE", "1")
+            .env("SCRAMJET_TEST_KEY_VARIABLE", "from-the-variable")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let (head, _) = requests.recv_timeout(Duration::from_secs(20)).unwrap();
+        let key = (head.lines())
+            .find_map(|line| line.strip_prefix("x-api-key: "))
+            .map(str::to_owned);
+        (key, stderr)
+    };
+    let (key, _) = run(&[]);
+    assert_eq!(key.as_deref(), Some("from-the-entry"));
+    // As it is: neither a variable's name nor a command.
+    for given in ["sk-given", "SCRAMJET_TEST_KEY_VARIABLE", "!true"] {
+        let (key, stderr) = run(&["--api-key", given]);
+        assert_eq!(key.as_deref(), Some(given), "{stderr}");
+        assert!(!stderr.contains(given), "{stderr}");
+    }
+    let output = program(&binary())
+        .args(["-p", "--no-session", "--api-key", "two words", "hi"])
+        .env("XDG_CONFIG_HOME", &config)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let said = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        said,
+        "scramjet: --api-key: a key is letters, digits and punctuation, without spaces\n"
+    );
+}
+
 /// A server answering each request with an error that is not retried, sending on each body.
-fn serve_refusals() -> (u16, std::sync::mpsc::Receiver<serde_json::Value>) {
+fn serve_refusals() -> (u16, std::sync::mpsc::Receiver<(String, serde_json::Value)>) {
     use std::io::{BufRead, Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -296,10 +357,11 @@ fn serve_refusals() -> (u16, std::sync::mpsc::Receiver<serde_json::Value>) {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
             let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
-            let mut length = 0;
+            let (mut length, mut head) = (0, String::new());
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
+                head.push_str(&line);
                 let line = line.trim_end().to_ascii_lowercase();
                 if line.is_empty() {
                     break;
@@ -310,7 +372,7 @@ fn serve_refusals() -> (u16, std::sync::mpsc::Receiver<serde_json::Value>) {
             }
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
-            let _ = sent.send(serde_json::from_slice(&body).unwrap());
+            let _ = sent.send((head, serde_json::from_slice(&body).unwrap()));
             let refusal =
                 r#"{"type":"error","error":{"type":"invalid_request_error","message":"no"}}"#;
             let reply = format!(
@@ -352,7 +414,7 @@ fn cache_retention_marks_requests_as_scramjet_1s() {
             .output()
             .unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
-        let body = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let (_, body) = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
         // The system prompt's marker and the last message's, whose last block is the prompt's.
         let last = body["messages"].as_array().unwrap().last().unwrap()["content"]
             .as_array()

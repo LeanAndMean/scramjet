@@ -1550,6 +1550,19 @@ impl Agent {
         &self.info.id
     }
 
+    /// `--api-key`: `key`, as it is, for the current model's provider's requests from now on.
+    pub fn give_key(&mut self, key: &str) -> Result<(), String> {
+        let Some(provider) = self.model_provider().map(str::to_owned) else {
+            return Err(format!(
+                "--api-key: no provider offers {}, the model it would be for",
+                self.config.model
+            ));
+        };
+        self.config.providers.give_key(&provider, key);
+        self.take_model_info();
+        Ok(())
+    }
+
     /// The provider the current model's requests go to; `None` when none offers it.
     pub fn model_provider(&self) -> Option<&str> {
         (self.info.route.as_ref()).map(|route| route.provider.as_str())
@@ -1887,6 +1900,7 @@ impl Agent {
     /// stores named before kept hidden as `Providers::reload` keeps them.
     pub fn set_providers(&mut self, mut providers: Providers) {
         providers.keep_credential_files(self.config.providers.credential_files().to_vec());
+        providers.keep_given_key(&self.config.providers);
         self.config.providers = providers;
         self.take_model_info();
     }

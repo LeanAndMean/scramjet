@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.155.0 — --api-key
+
+### Added
+
+- `--api-key KEY`, as in Scramjet 1: the requests to the model's provider carry KEY, as it is, for the run, in place of the key `/login` saved or `models.json` gives; `/login` shows it as the key from `--api-key`. A key with spaces is refused without repeating it.
+
 ## 2.154.0 — Cache retention
 
 ### Added

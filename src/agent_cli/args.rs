@@ -6,7 +6,7 @@ use std::{ffi::OsString, path::PathBuf};
 pub(super) const USAGE: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
-[-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
+[--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-s MODE] [--offline] [-p]
@@ -58,6 +58,10 @@ but to NO_PROXY's hosts and this machine.
                          their default, 5 minutes on Anthropic's (default: the variable
                          SCRAMJET_CACHE_RETENTION or PI_CACHE_RETENTION, which may also be
                          none, for no caching asked, else long)
+  --api-key KEY          the key the requests to the model's provider carry for this run, as it
+                         is, in place of /login's and models.json's, as in Scramjet 1 (other
+                         programs of yours can read the command line: a variable models.json
+                         names, or /login, keeps it out of sight)
   -c, --continue         resume the session for this project written to last
   -r, --resume           choose one of this project's sessions to resume, as /resume does
   --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
@@ -308,6 +312,8 @@ pub(super) struct Options {
     pub(super) retries: Option<u32>,
     /// `--cache-retention`, over the variables.
     pub(super) cache_retention: Option<CacheRetention>,
+    /// `--api-key`.
+    pub(super) api_key: Option<String>,
     /// `-p`: run the messages and exit.
     pub(super) print: bool,
     /// `@FILE` arguments, without the `@`: sent with the first message.
@@ -344,6 +350,7 @@ impl Options {
             sandbox: None,
             retries: None,
             cache_retention: None,
+            api_key: None,
             print: false,
             files: Vec::new(),
             messages: Vec::new(),
@@ -401,13 +408,15 @@ setup it leaves)"
 models.json (see --help)"
                     ));
                 }
-                // Never repeats the key.
                 Some("--api-key") => {
-                    return Err(
-                        "--api-key is not in Scramjet 2: give the provider's apiKey in \
-models.json (an environment variable's name or a !command), or /login"
-                            .to_owned(),
-                    );
+                    let key = value()?;
+                    // Never repeats the key.
+                    if key.is_empty() || !key.chars().all(|ch| ch.is_ascii_graphic()) {
+                        return Err("--api-key: a key is letters, digits and punctuation, \
+without spaces"
+                            .to_owned());
+                    }
+                    options.api_key = Some(key)
                 }
                 Some("--models") => {
                     let patterns = value()?.split(',').map(|p| p.trim().to_owned()).collect();

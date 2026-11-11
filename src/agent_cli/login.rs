@@ -82,6 +82,9 @@ impl Interactive {
                 Row::Key(_, KeyFrom::Variable(_) | KeyFrom::Entry) => {
                     "A key saved here goes to auth.json, as logins do, and replaces models.json's"
                 }
+                Row::Key(_, KeyFrom::Given) => {
+                    "Its requests carry --api-key's for this run; one saved here is kept for later"
+                }
                 Row::Key(_, KeyFrom::Nowhere) => {
                     "Its requests carry no key. One saved here is kept in auth.json, as logins are"
                 }
@@ -104,6 +107,7 @@ impl Interactive {
                         KeyFrom::Saved => mark("key saved"),
                         KeyFrom::Variable(variable) => mark(&format!("key from {variable}")),
                         KeyFrom::Entry => mark("key in models.json"),
+                        KeyFrom::Given => mark("key from --api-key"),
                         KeyFrom::Nowhere => String::new(),
                     };
                     format!("{indent}{}{from}", visible(name))

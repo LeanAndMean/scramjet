@@ -331,6 +331,7 @@ fn start(
     settings: &Settings,
     (patterns, source): (&[String], &str),
 ) -> Result<(Agent, Vec<String>), String> {
+    let api_key = options.api_key.clone();
     let providers = Providers::read(settings.models_files(), agent::login::Logins::user());
     // Before the session starts, so that a pattern naming no model leaves none behind.
     let named = match &options.model {
@@ -444,7 +445,12 @@ fn start(
         .or_else(|| settings.default_thinking_level.clone())
         .unwrap_or_else(|| "medium".to_owned());
     agent.set_effort(effort).map_err(|e| e.to_string())?;
-    agent.load_model_info();
+    match &api_key {
+        Some(key) => agent.give_key(key)?,
+        None => {
+            agent.load_model_info();
+        }
+    }
     Ok((agent, warnings))
 }
 

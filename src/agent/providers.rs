@@ -206,6 +206,8 @@ pub enum KeyFrom {
     Variable(String),
     /// Its entry's `apiKey` text.
     Entry,
+    /// `--api-key`.
+    Given,
     /// Its requests carry none.
     Nowhere,
 }
@@ -234,6 +236,8 @@ pub struct Providers {
     tried: HashMap<String, Result<Vec<Value>, String>>,
     /// The logins the files' programs do.
     programs: Vec<LoginProgram>,
+    /// `--api-key`: a provider and the key its requests carry for the run.
+    given_key: Option<(String, String)>,
 }
 
 impl Providers {
@@ -276,6 +280,7 @@ impl Providers {
     pub(super) fn reload(&mut self) {
         let mut reading = Reading {
             logins: self.logins.clone(),
+            given_key: self.given_key.clone(),
             tried: std::mem::take(&mut self.tried),
             ..Reading::default()
         };
@@ -316,6 +321,21 @@ impl Providers {
         let previous = std::mem::replace(&mut self.credential_files, reading.credential_files);
         self.problems = reading.problems;
         self.keep_credential_files(previous);
+    }
+
+    /// Sends `key` as it is, in place of any other, with `provider`'s requests from now on, and
+    /// reads the files again for it.
+    pub fn give_key(&mut self, provider: &str, key: &str) {
+        self.given_key = Some((provider.to_owned(), key.to_owned()));
+        self.reload();
+    }
+
+    /// The key `give_key` gave, kept by providers read again from other files.
+    pub(super) fn keep_given_key(&mut self, previous: &Self) {
+        if self.given_key.is_none() && previous.given_key.is_some() {
+            self.given_key = previous.given_key.clone();
+            self.reload();
+        }
     }
 
     /// Keeps `previous`, the stores named before, hidden while a file has problems: once fixed,
@@ -474,6 +494,8 @@ struct Reading {
     logins: Option<Logins>,
     /// What `/login` saved.
     saved: Map<String, Value>,
+    /// `Providers::given_key`.
+    given_key: Option<(String, String)>,
     /// The providers the files named.
     named: Vec<String>,
     keyed: Vec<(String, KeyFrom)>,
@@ -641,7 +663,9 @@ impl Reading {
         for (name, entry) in providers.into_iter().flat_map(|ordered| ordered.0) {
             self.named.push(name.clone());
             if !self.logs_in(&name) && !self.keyed.iter().any(|(keyed, _)| *keyed == name) {
+                let given = (self.given_key.as_ref()).is_some_and(|(given, _)| *given == name);
                 let from = match (super::login::key(&self.saved, &name), &entry["apiKey"]) {
+                    _ if given => KeyFrom::Given,
                     (Some(_), _) => KeyFrom::Saved,
                     (None, Value::String(key))
                         if std::env::var_os(key).is_some_and(|set| !set.is_empty()) =>
@@ -802,7 +826,9 @@ impl Reading {
                  and {origin} is not one"
             ),
         };
+        let given = (self.given_key.as_ref()).filter(|(given, _)| given == name);
         let key = match super::login::key(&self.saved, name) {
+            _ if let Some((_, key)) = given => Some((key.as_str(), "--api-key")),
             Some((_, origins)) if origins.is_empty() => {
                 return Err(format!(
                     "{subject}: the API key /login saved for {name} names no server, as keys \
@@ -852,7 +878,10 @@ impl Reading {
         }
         let mut commanded = Vec::new();
         if let Some((key, what)) = key {
-            let key = configured::read(key);
+            let key = match given {
+                Some(_) => Configured::Text(key.to_owned()),
+                None => configured::read(key),
+            };
             if protocol == Protocol::Messages {
                 put(&mut headers, &mut commanded, "x-api-key", "", &key, what);
             }
@@ -1797,6 +1826,27 @@ mod tests {
         let copilot = route(&providers, "github-copilot/m-openai-responses");
         assert!(copilot.headers.is_empty() && copilot.login.is_some());
         assert_eq!(providers.problems(), [] as [String; 0]);
+        // `--api-key`'s goes, as it is, to its provider alone, and stays when read again.
+        let mut given = providers.clone();
+        given.give_key("named", "SCRAMJET_RS_PROVIDERS_KEYED_TEST");
+        let mut again = Providers::given_logged_in(document.clone(), logins.clone());
+        again.keep_given_key(&given);
+        for providers in [&given, &again] {
+            assert_eq!(
+                headers(providers, "named/m-openai-responses"),
+                [pair(
+                    "authorization",
+                    "Bearer SCRAMJET_RS_PROVIDERS_KEYED_TEST"
+                )]
+            );
+            assert_eq!(
+                headers(providers, "anthropic/m-anthropic-messages"),
+                [pair("x-api-key", "sk-ant")]
+            );
+            let from = providers.keyed().iter().map(|(_, from)| from.clone());
+            let from: Vec<KeyFrom> = from.collect();
+            assert_eq!(from, [KeyFrom::Saved, KeyFrom::Given, KeyFrom::Saved]);
+        }
         // A saved key goes only to the servers it was saved for; one saved before keys named
         // them goes nowhere until saved again.
         let mut moved = document.clone();
