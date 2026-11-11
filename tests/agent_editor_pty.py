@@ -4026,7 +4026,9 @@ fake_home = os.path.join(work, 'home')
 os.makedirs(fake_home)
 with open(os.path.join(fake_home, '.netrc'), 'w') as file:
     file.write('FAKE-netrc-secret\n')
-in_fake_home = {'HOME': fake_home, 'FAKE_API_TOKEN': 'FAKE-env-secret'}
+# Nothing is hidden by default; these journeys ask for it when unattended.
+unattended = config_home('unattended', '{"hideCredentials": "unattended"}')
+in_fake_home = {'HOME': fake_home, 'FAKE_API_TOKEN': 'FAKE-env-secret', 'XDG_CONFIG_HOME': unattended}
 peek = lambda call_id: tool_call(call_id, 'bash', {
     'command': 'cat ~/.netrc; printenv FAKE_API_TOKEN; echo ran-$((6*7)) | tee made.txt'})
 known = set(session_files())
@@ -4076,12 +4078,11 @@ assert open(os.path.join(stepping, 'scramjet', 'autonomy.yaml')).read() == \
     'edges:\n  flow:step:\n    "*": pause\n    flow:step: chain\n'
 (stepped,) = set(session_files()) - known
 assert [line['on'] for line in map(json.loads, open(stepped)) if line.get('type') == 'autopilot'] == [True]
-# `-p` runs unattended: hidden by default, unless the settings say never.
+# `-p` runs unattended: hidden when the settings say so, and by default not.
 run(['-p', 'peek'], printed_hides_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
     variables=in_fake_home)
-never = config_home('never', '{"hideCredentials": "never"}')
 run(['-p', 'peek'], printed_with_credentials, serve_items([[peek('call_1')], [message('Peeked.')]]),
-    variables=dict(in_fake_home, XDG_CONFIG_HOME=never))
+    variables=dict(in_fake_home, XDG_CONFIG_HOME=env['XDG_CONFIG_HOME']))
 os.remove(os.path.join(project, 'made.txt'))
 # An installed package's credentialFiles are hidden as the common stores are.
 package = os.path.join(work, 'fake-provider')
@@ -4093,7 +4094,7 @@ for path, text in [(os.path.join(fake_home, '.config', 'fake-provider', 'token')
                     json.dumps({'credentialFiles': ['~/.config/fake-provider', 'key.txt']}))]:
     with open(path, 'w') as file:
         file.write(text)
-packaged = config_home('packaged', json.dumps({'commandSets': [package]}))
+packaged = config_home('packaged', json.dumps({'commandSets': [package], 'hideCredentials': 'unattended'}))
 peek_package = lambda call_id: tool_call(call_id, 'bash', {
     'command': 'cat ~/.config/fake-provider/token %s; echo ran-$((6*7))' % os.path.join(package, 'key.txt')})
 run(['-p', 'peek'], printed_hides_credentials, serve_items([[peek_package('call_1')], [message('Peeked.')]]),

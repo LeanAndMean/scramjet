@@ -476,11 +476,28 @@ pub fn own_group(command: &mut Command) -> &mut Command {
     command
 }
 
-/// As `own_group`, and on Windows with a console of its own that has no window, so that the code
-/// page it sets, and what it or its programs write to the console rather than their output, stay
-/// out of scramjet-rs's.
-pub fn own_group_and_console(command: &mut Command) -> &mut Command {
+/// As `own_group`, and on Unix in a session of its own, with no controlling terminal, as Scramjet
+/// 1's `detached` commands: what asks there for a passphrase, a host key or a password (ssh,
+/// sudo) fails at once rather than wait on scramjet-rs's terminal for an answer nobody sees.
+pub fn own_session(command: &mut Command) -> &mut Command {
+    #[cfg(unix)]
+    // SAFETY: `setsid` is async-signal-safe, as what runs between `fork` and `exec` must be. It
+    // makes the process a group leader too, which `kill_group` and `end_group` reach.
+    unsafe {
+        std::os::unix::process::CommandExt::pre_exec(command, || {
+            Ok(rustix::process::setsid().map(drop)?)
+        });
+    }
+    #[cfg(windows)]
     own_group(command);
+    command
+}
+
+/// As `own_session`, and on Windows with a console of its own that has no window, so that the
+/// code page it sets, and what it or its programs write to the console rather than their output,
+/// stay out of scramjet-rs's.
+pub fn own_session_and_console(command: &mut Command) -> &mut Command {
+    own_session(command);
     #[cfg(windows)]
     std::os::windows::process::CommandExt::creation_flags(
         command,

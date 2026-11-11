@@ -104,7 +104,7 @@ pub(super) enum DoubleEscape {
 }
 
 /// When the agent's coding tools run with the credential stores hidden (`hideCredentials`, a
-/// key of scramjet-rs's own).
+/// key of scramjet-rs's own); never by default (user decision, 2026-11-11).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum HideCredentials {
     /// In turns that no one started: a next step run at once, and `-p`.
@@ -601,7 +601,7 @@ impl Settings {
             startup_model: StartupModel::PerDirectory,
             recall: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
-            hide_credentials: HideCredentials::Unattended,
+            hide_credentials: HideCredentials::Never,
             sandbox: None,
             sandbox_network: true,
             steering_mode: Delivery::All,
@@ -2087,7 +2087,7 @@ mod tests {
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert_eq!(settings.default_thinking_level, None);
         assert_eq!(settings.tools, DEFAULT_TOOLS);
-        assert_eq!(settings.hide_credentials, HideCredentials::Unattended);
+        assert_eq!(settings.hide_credentials, HideCredentials::Never);
         assert_eq!(settings.steering_mode, Delivery::All);
         assert_eq!(settings.follow_up_mode, Delivery::OneAtATime);
         assert!(settings.skills.is_empty());
@@ -2385,7 +2385,7 @@ mod tests {
             assert_eq!((hides.hides(false), hides.hides(true)), (typed, unattended));
         }
         let wrong = settings_with(&scratch, r#"{"hideCredentials": true}"#);
-        assert_eq!(wrong.hide_credentials, HideCredentials::Unattended);
+        assert_eq!(wrong.hide_credentials, HideCredentials::Never);
         let path = shown(&scratch.0.join("settings.json"));
         assert_eq!(
             wrong.warnings,
@@ -2897,10 +2897,10 @@ mod tests {
         assert_eq!(
             seen(Row::Credentials, &mut settings),
             [
+                "never hidden",
                 "hidden when unattended",
                 "always hidden",
-                "never hidden",
-                "hidden when unattended"
+                "never hidden"
             ]
         );
         assert_eq!(
@@ -3029,7 +3029,7 @@ mod tests {
                 "markdown": {"toolDisplay": "source"},
                 "defaultShell": if bash { "bash" } else { "powershell" },
                 "doubleEscapeAction": "tree",
-                "hideCredentials": "unattended",
+                "hideCredentials": "never",
                 "steeringMode": "one-at-a-time",
                 "hideThinkingBlock": true,
                 "copyOnSelect": !cfg!(target_os = "macos"),

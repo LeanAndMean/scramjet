@@ -1562,7 +1562,8 @@ static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 pub(super) struct Group(u32);
 
 impl Group {
-    /// `own_console`: with a console of its own (`os::own_group_and_console`).
+    /// In a session of its own (`os::own_session`); `own_console`: with a console of its own
+    /// too (`os::own_session_and_console`).
     pub(super) fn spawn(
         command: &mut Command,
         own_console: bool,
@@ -1570,8 +1571,8 @@ impl Group {
         // Held while spawning, so that none starts once `end_commands` has run.
         let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
         let child = match own_console {
-            true => crate::os::own_group_and_console(command).spawn()?,
-            false => crate::os::own_group(command).spawn()?,
+            true => crate::os::own_session_and_console(command).spawn()?,
+            false => crate::os::own_session(command).spawn()?,
         };
         crate::os::hold_group(&child);
         let group = child.id();
@@ -3296,6 +3297,27 @@ to see full lines]",
         )
         .unwrap();
         assert_eq!(shown(&sandboxed.tool_output().text), expected);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn commands_run_in_a_session_of_their_own_without_the_terminal() {
+        let root =
+            std::env::temp_dir().join(format!("scramjet-agent-session-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        let ours = rustix::process::getsid(None).unwrap().as_raw_nonzero();
+        let command = "cut -d' ' -f6 /proc/$$/stat; : 2>/dev/null </dev/tty || echo none";
+        let cancel = AtomicBool::new(false);
+        let plain = run_command(&root, command, None, &cancel, &mut |_| {}).unwrap();
+        let hidden = call("bash", json!({"command": command}))
+            .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
+            .unwrap();
+        for text in [plain.tool_output().text, hidden.text] {
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.len(), 2, "{text}");
+            assert_ne!(lines[0], ours.to_string(), "{text}");
+            assert_eq!(lines[1], "none", "{text}");
+        }
     }
 
     #[cfg(unix)]

@@ -4,6 +4,17 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.152.0 — Credentials in every turn
+
+### Changed
+
+- The agent's tools see your credential stores in every turn by default, so `gh` and `git` over SSH work in a loop or autopilot turn too. `hideCredentials` set to `unattended` or `always` hides them as before.
+- A command that failed for want of a hidden store tells the agent to ask you if the task needs that access, and to go on without it if it does not.
+
+### Fixed
+
+- The agent's commands no longer get the terminal, as in Scramjet 1, so an `ssh` passphrase or host-key prompt, or `sudo`'s, fails at once instead of waiting where nobody sees it.
+
 ## 2.151.0 — --offline
 
 ### Added

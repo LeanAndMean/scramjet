@@ -30,8 +30,7 @@ const UNAVAILABLE: &str = "Scramjet has no sandbox for the main agent on Windows
 /// agent's run there with nothing hidden instead (`tools::HIDES_COMMANDS`).
 #[cfg(windows)]
 const NOT_HIDDEN: &str = "Scramjet has no sandbox on Windows yet, so it cannot run commands \
-    with the credential stores hidden, as the hideCredentials setting asks for this turn (by \
-    default, turns nobody started: -p, autopilot, a next step that runs by itself)";
+    with the credential stores hidden, as the hideCredentials setting asks for this turn";
 
 /// Credential stores in the home directory that subagents, and the main agent when its
 /// credentials are hidden, do not see, after an agent printed `~/.scramjet/agent/auth.json` to
@@ -657,7 +656,7 @@ pub(super) fn server(
 
 /// `bash -c command` in `root` with everything as it is, writable and on the network, except the
 /// credential stores, hidden as in the sandbox (`scripts/without-credentials.sh`). Unlike the
-/// sandbox, it shares the process ids and session, so that a command's `setsid nohup … &` outlives
+/// sandbox, it shares the process ids, so that a command's `setsid nohup … &` outlives
 /// it, as outside.
 #[cfg(windows)]
 pub(super) fn hiding(_: &Path, _: &str, _: &Hidden) -> Result<Command, String> {

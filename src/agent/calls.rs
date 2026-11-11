@@ -644,15 +644,13 @@ fn needs_a_store(command: &str) -> bool {
         .any(|word| STORE_USERS.contains(&word))
 }
 
-/// What a failed command that may have needed a store is told after its output, so that the
-/// model can tell the user why rather than take it for a fault.
+/// What a failed command that may have needed a store is told after its output: why it failed,
+/// so that the model raises a need for that access with the user, or, where the task did not
+/// need it, takes the failure as a sign that it went out of scope and goes on without it.
 fn stores_hidden(sandbox: bool) -> String {
     let why = match sandbox {
         true => " in the sandbox (--sandbox)",
-        false => {
-            ", as the hideCredentials setting asks for this turn (by default, turns nobody \
-             started: -p, autopilot, a next step that runs by itself)"
-        }
+        false => ", as the hideCredentials setting asks for this turn",
     };
     let way_out = match sandbox {
         true => "run it themselves, or start without --sandbox",
@@ -662,10 +660,12 @@ fn stores_hidden(sandbox: bool) -> String {
     };
     format!(
         "\n\nScramjet: this turn's commands run with the credential stores hidden (~/.ssh, \
-         ~/.config/gh, ~/.git-credentials, ~/.aws and others){why}. If the command failed \
-         for want of a login or key (such as \"Host key verification failed\" or \"not logged \
-         in\"), that is why: it is not a fault to work around. Tell the user, who can \
-         {way_out}."
+         ~/.config/gh, ~/.git-credentials, ~/.aws, the ssh-agent and others){why}. If the \
+         command failed for want of a login or key (such as \"Host key verification failed\", \
+         \"Permission denied (publickey)\" or \"not logged in\"), that is why: it is not a fault \
+         to work around, and the login itself is likely fine. If the task needs this access, \
+         stop and tell the user, who can {way_out}. If it does not, the command was out of the \
+         task's scope: go on without it."
     )
 }
 

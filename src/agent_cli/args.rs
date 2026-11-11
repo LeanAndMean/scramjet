@@ -120,8 +120,8 @@ but to NO_PROXY's hosts and this machine.
                          take images, as Scramjet 1 lists them, and exit
   --list-credential-stores
                          list the credential files and directories that subagents' tools, and
-                         the agent's in turns nobody started (setting hideCredentials), do not
-                         see: the common ones and those models.json files name, and exit
+                         the agent's when the hideCredentials setting asks, do not see: the
+                         common ones and those models.json files name, and exit
   -v, --version          print the version and exit
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt, and under it the project's directory and Git branch, the session's tokens, how full the
