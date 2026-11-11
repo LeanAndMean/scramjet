@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.147.1 — Lists keep their keys on a short screen
+
+### Fixed
+
+- A list longer than the screen, such as `/resume`'s or `/hotkeys`', cut its keys to one line, losing those at the end (Ctrl+D delete, Esc close); it now shows them on up to three lines and one or two rows fewer, as long as three rows stay in view.
+
 ## 2.147.0 — The scramjet set comes with the program
 
 ### Added

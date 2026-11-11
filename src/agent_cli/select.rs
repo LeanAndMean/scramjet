@@ -1210,7 +1210,8 @@ fn lines(
     let shown = list.rows.len();
     let search_rows = usize::from(search.is_some());
     let wanted = list.visible.min(shown);
-    let spare = height.saturating_sub(3 + search_rows + wanted);
+    // The keys take rows from the list while it keeps the selected row and those beside it.
+    let spare = height.saturating_sub(3 + search_rows + wanted.min(3));
     let header = header_lines(title, hint, width, 1 + spare.min(HINT_LINES - 1));
     let visible = list
         .visible
@@ -1765,18 +1766,28 @@ mod tests {
         assert_eq!(three.len(), HINT_LINES);
         assert!(three[2].starts_with("Ctrl+N named ·") && three[2].ends_with('…'));
         let list = List::new(4, 0, 8);
-        let lines = plain(lines(
-            ("Resume", hint, style::MUTED),
-            &list,
-            None,
-            None,
-            (None, None),
-            (41, 8),
-            &|index, _| format!("row {index}"),
-        ));
+        let lines_of = |list: &List, height| {
+            lines(
+                ("Resume", hint, style::MUTED),
+                list,
+                None,
+                None,
+                (None, None),
+                (41, height),
+                &|index, _| format!("row {index}"),
+            )
+        };
+        let lines = plain(lines_of(&list, 8));
         assert_eq!(lines[0], "Resume  Tab all folders · Ctrl+S sort");
         assert_eq!(lines[1], "  Ctrl+N named · Ctrl+D delete");
         assert_eq!(lines.len(), 6, "{lines:#?}");
+        // A list longer than the screen gives up rows for the keys, keeping three.
+        let long = plain(lines_of(&List::new(25, 0, 25), 7));
+        assert_eq!(long[1], "  Ctrl+N named · Ctrl+D delete");
+        assert_eq!(long[2..], ["› row 0", "  row 1", "  row 2", "  (1/25)"]);
+        let tiny = plain(lines_of(&List::new(25, 0, 25), 6));
+        assert_eq!(tiny[0], "Resume  Tab all folders · Ctrl+S sort ·…");
+        assert_eq!(tiny.len(), 5, "{tiny:#?}");
         let short = header_lines("Resume", hint, 40, 1);
         assert_eq!(short, ["Tab all folders · Ctrl+S sort ·…"]);
     }
