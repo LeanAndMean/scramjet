@@ -390,6 +390,13 @@ fn body_retaining(
             if let Some(effort) = request["reasoning"]["effort"].as_str() {
                 request["reasoning"]["effort"] = info.sent(effort).to_owned().into();
             }
+            // As Scramjet 1's Responses provider; its Codex one asks for no retention.
+            if info.protocol == Protocol::Responses
+                && retention == CacheRetention::Long
+                && info.compat.long_cache_retention
+            {
+                request["prompt_cache_retention"] = json!("24h");
+            }
             serde_json::to_vec(&request)
         }
         Protocol::Messages => {
@@ -722,6 +729,47 @@ mod tests {
             key(Protocol::Codex, CacheRetention::None),
             key(Protocol::Codex, CacheRetention::Long)
         );
+    }
+
+    #[test]
+    fn responses_ask_for_a_days_retention_at_long_unless_the_model_says_its_server_refuses_it() {
+        let providers = crate::agent::Providers::given(json!({"providers": {"p": {
+            "baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+            "compat": {"supportsLongCacheRetention": false},
+            "models": [
+                {"id": "plain", "compat": {"supportsLongCacheRetention": true}},
+                {"id": "refusing", "compat": {"sendSessionIdHeader": false}},
+                {"id": "odd", "compat": {"supportsLongCacheRetention": "no"}},
+            ],
+        }}}));
+        assert_eq!(
+            providers.problems(),
+            [
+                "models: provider p: model odd: compat.supportsLongCacheRetention must be true or false"
+            ]
+        );
+        let request = json!({"model":"m","input":[],"prompt_cache_key":"s-1"});
+        let retained = |info: &ModelInfo, retention| {
+            let (body, _) = body_retaining(&request, info, retention).unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            body.get("prompt_cache_retention").cloned()
+        };
+        let plain = &providers.find("plain").unwrap().info;
+        assert_eq!(retained(plain, CacheRetention::Long), Some(json!("24h")));
+        assert_eq!(
+            retained(&ModelInfo::guess("m"), CacheRetention::Long),
+            Some(json!("24h"))
+        );
+        for retention in [CacheRetention::Short, CacheRetention::None] {
+            assert_eq!(retained(plain, retention), None);
+        }
+        let refusing = &providers.find("refusing").unwrap().info;
+        assert_eq!(retained(refusing, CacheRetention::Long), None);
+        let codex = ModelInfo {
+            protocol: Protocol::Codex,
+            ..ModelInfo::guess("m")
+        };
+        assert_eq!(retained(&codex, CacheRetention::Long), None);
     }
 
     #[test]

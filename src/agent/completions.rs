@@ -55,7 +55,7 @@ pub(super) struct Compat {
     strict_mode: bool,
     anthropic_cache_control: bool,
     pub(super) session_affinity: bool,
-    long_cache_retention: bool,
+    pub(super) long_cache_retention: bool,
     /// OpenAI's own servers, which take `prompt_cache_key` whatever the retention.
     at_openai: bool,
     /// The model's `thinkingLevelMap` names a level for `off`, which is then sent.
@@ -126,6 +126,20 @@ impl Compat {
             at_openai: at("api.openai.com"),
             off_named,
         }
+    }
+
+    /// A Responses model's: of its provider's `compat` then its own, only
+    /// `supportsLongCacheRetention` (default true), as Scramjet 1 reads; other keys are ignored.
+    pub(super) fn read_responses(given: [Option<&Value>; 2]) -> Result<Self, String> {
+        let mut compat = Self::default();
+        for given in given.into_iter().flatten() {
+            let given = given.as_object().ok_or("compat must be an object")?;
+            if let Some(value) = given.get("supportsLongCacheRetention") {
+                compat.long_cache_retention = (value.as_bool())
+                    .ok_or("compat.supportsLongCacheRetention must be true or false")?;
+            }
+        }
+        Ok(compat)
     }
 
     /// The compatibility of `model`, a model of the provider `name` at `base_url`: `given`, its

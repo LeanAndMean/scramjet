@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.156.0 — A day's cache on Responses
+
+### Changed
+
+- OpenAI Responses servers are asked to keep the prompt cache for 24 hours (`prompt_cache_retention`) at the default long retention, as in Scramjet 1, not only Chat Completions servers. A model whose `models.json` entry (or its provider's) sets `"compat": {"supportsLongCacheRetention": false}` is not asked.
+
 ## 2.155.0 — --api-key
 
 ### Added

@@ -54,7 +54,7 @@ but to NO_PROXY's hosts and this machine.
   --cache-retention short|long
                          how long providers keep the conversation's start cached for the next
                          request, as in Scramjet 1: long asks for an hour where the provider
-                         takes it (24 hours on Chat Completions servers that do), short for
+                         takes it (24 hours on OpenAI-style servers that do), short for
                          their default, 5 minutes on Anthropic's (default: the variable
                          SCRAMJET_CACHE_RETENTION or PI_CACHE_RETENTION, which may also be
                          none, for no caching asked, else long)

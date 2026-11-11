@@ -117,7 +117,7 @@ pub(super) struct ModelInfo {
     pub renamed: Vec<(String, String)>,
     pub images: bool,
     pub prices: Prices,
-    /// What its server accepts, for Chat Completions.
+    /// What its server accepts, for Chat Completions (and Responses' cache retention).
     pub compat: Compat,
     /// `None` when no provider offers it.
     pub route: Option<Route>,
@@ -953,14 +953,13 @@ impl Reading {
         let field = |key: &str| entry.get(key).or_else(|| provider.get(key));
         let headed = [provider.get("headers"), entry.get("headers")];
         let (protocol, url, route) = self.route(name, field, headed, &format!("model {id}"))?;
+        let given = [provider.get("compat"), entry.get("compat")];
         let compat = match protocol {
-            Protocol::Completions => {
-                let given = [provider.get("compat"), entry.get("compat")];
-                Compat::read(name, url, entry, given)
-                    .map_err(|problem| format!("model {id}: {problem}"))?
-            }
-            _ => Compat::default(),
+            Protocol::Completions => Compat::read(name, url, entry, given),
+            Protocol::Responses => Compat::read_responses(given),
+            _ => Ok(Compat::default()),
         };
+        let compat = compat.map_err(|problem| format!("model {id}: {problem}"))?;
         let reasoning = entry["reasoning"].as_bool().unwrap_or(false);
         let (levels, renamed) = match reasoning {
             true => levels(&entry["thinkingLevelMap"]),
