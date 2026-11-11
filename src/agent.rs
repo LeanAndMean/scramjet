@@ -27,6 +27,7 @@ mod messages;
 mod pricing;
 mod problem;
 mod providers;
+mod proxy;
 mod publish;
 mod question;
 pub mod quota;

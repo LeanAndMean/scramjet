@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.149.0 — Requests through HTTPS_PROXY
+
+### Added
+
+- Requests go through the `http://` proxy that `HTTPS_PROXY` or `HTTP_PROXY` names, with its `user:password@` if given, and not to the hosts `NO_PROXY` lists, as in Scramjet 1. Servers on this machine are always reached directly.
+
 ## 2.148.1 — Saying so when no provider offers a model
 
 ### Fixed

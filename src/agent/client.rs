@@ -642,8 +642,8 @@ pub(super) type Connection = (
     JoinHandle<hyper::Result<()>>,
 );
 
-/// An HTTP/1.1 connection to `route`'s host, in TLS for an `https://` base URL, with the task
-/// that drives it.
+/// An HTTP/1.1 connection to `route`'s host, in TLS for an `https://` base URL, through the
+/// proxy the environment names for it if any (`proxy`), with the task that drives it.
 async fn connect(route: &Route) -> Result<Connection, Failure> {
     connect_for(route, &format!(" (provider {})", route.provider)).await
 }
@@ -651,8 +651,17 @@ async fn connect(route: &Route) -> Result<Connection, Failure> {
 /// As `connect`, its failures naming the host followed by `who`.
 pub(super) async fn connect_for(route: &Route, who: &str) -> Result<Connection, Failure> {
     let authority = &route.authority;
-    let socket = (TcpStream::connect((route.host.as_str(), route.port)).await)
-        .map_err(|e| Failure::new(format!("cannot connect to {authority}{who}: {e}"), true))?;
+    let proxy = super::proxy::for_host(route.tls, &route.host, route.port)
+        .map_err(|problem| Failure::new(problem, false))?;
+    let socket = match &proxy {
+        None => (TcpStream::connect((route.host.as_str(), route.port)).await)
+            .map_err(|e| Failure::new(format!("cannot connect to {authority}{who}: {e}"), true))?,
+        Some(proxy) => {
+            let whom = format!("{authority}{who}");
+            (super::proxy::tunnel(proxy, &route.host, route.port, &whom).await)
+                .map_err(|(problem, transient)| Failure::new(problem, transient))?
+        }
+    };
     if !route.tls {
         return handshake(socket).await;
     }
