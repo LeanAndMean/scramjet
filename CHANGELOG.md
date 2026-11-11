@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.144.0 — Unattended turns say why git and gh fail
+
+### Changed
+
+- When a command run with the credential stores hidden fails and runs `git`, `gh`, `ssh` or another program whose login lives in them, its result says the stores are hidden and why (`hideCredentials`, or `--sandbox`), so that the agent tells you instead of taking "Host key verification failed" or "not logged in" for a fault.
+
 ## 2.143.1 — Quiet when output is cut short, and a guide from Scramjet 1
 
 ### Fixed

@@ -610,7 +610,13 @@ impl Tools<'_> {
                     }
                     _ => call.run(root, hidden.as_ref(), cancel, progress),
                 };
-                let output = output.unwrap_or_else(failure);
+                let mut output = output.unwrap_or_else(failure);
+                if hidden.is_some() && output.failed && tools::is_shell(call.name) {
+                    let command = call.arguments["command"].as_str().unwrap_or_default();
+                    if needs_a_store(command) {
+                        output.text += &stores_hidden(self.sandbox.is_some());
+                    }
+                }
                 (output, Usage::default())
             }
         };
@@ -622,6 +628,45 @@ impl Tools<'_> {
         );
         (output, usage)
     }
+}
+
+/// Programs whose logins or keys live in the stores that hidden credentials leave out.
+const STORE_USERS: [&str; 14] = [
+    "git", "gh", "glab", "ssh", "scp", "sftp", "rsync", "gpg", "aws", "gcloud", "az", "kubectl",
+    "docker", "vault",
+];
+
+/// Whether `command` runs one of `STORE_USERS`, so that its failure may come from their hiding.
+fn needs_a_store(command: &str) -> bool {
+    let word = |c: char| c.is_ascii_alphanumeric() || "_-./".contains(c);
+    (command.split(|c: char| !word(c)))
+        .map(|word| word.rsplit('/').next().unwrap_or(word))
+        .any(|word| STORE_USERS.contains(&word))
+}
+
+/// What a failed command that may have needed a store is told after its output, so that the
+/// model can tell the user why rather than take it for a fault.
+fn stores_hidden(sandbox: bool) -> String {
+    let why = match sandbox {
+        true => " in the sandbox (--sandbox)",
+        false => {
+            ", as the hideCredentials setting asks for this turn (by default, turns nobody \
+             started: -p, autopilot, a next step that runs by itself)"
+        }
+    };
+    let way_out = match sandbox {
+        true => "run it themselves, or start without --sandbox",
+        false => {
+            "run it themselves, or set hideCredentials to \"never\" (/settings, Credential stores)"
+        }
+    };
+    format!(
+        "\n\nScramjet: this turn's commands run with the credential stores hidden (~/.ssh, \
+         ~/.config/gh, ~/.git-credentials, ~/.aws and others){why}. If the command failed \
+         for want of a login or key (such as \"Host key verification failed\" or \"not logged \
+         in\"), that is why: it is not a fault to work around. Tell the user, who can \
+         {way_out}."
+    )
 }
 
 /// Says, once a process, that commands run with nothing hidden where scramjet-rs cannot hide it.
@@ -919,6 +964,49 @@ here\n\nkept.txt says original";
         let mut resumed = Recorder::default();
         show_items(agent.conversation(), None, &mut resumed);
         assert_eq!(resumed.details, ui.details);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
+    fn a_failed_command_needing_a_store_says_the_stores_are_hidden() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let bash = |command: &str| json!({ "command": command });
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                "bash",
+                bash("echo pushing; /usr/bin/git -C . nowhere 2>/dev/null; exit 128"),
+            ),
+            tool_call("call_2", "bash", bash("echo digit; exit 1")),
+            tool_call("call_3", "bash", bash("echo gh")),
+            reply("done"),
+            tool_call("call_4", "bash", bash("echo gh; exit 1")),
+            reply("shown"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "stores-hidden-note");
+        agent.set_hide_credentials(true);
+        let cancel = AtomicBool::new(false);
+        let mut ui = Recorder::default();
+        agent.turn("push", &mut ui, &cancel).unwrap();
+        agent.set_hide_credentials(false);
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let note = "Scramjet: this turn's commands run with the credential stores hidden";
+        let noted: Vec<bool> = ([1, 2, 3, 5].map(|at| &bodies[at]).iter())
+            .map(|body| last_output(body).contains(note))
+            .collect();
+        assert_eq!(noted, [true, false, false, false]);
+        let pushed = last_output(&bodies[1]);
+        assert!(
+            pushed.starts_with("pushing\n\nCommand exited with code 128\n\nScramjet:")
+                && pushed.contains("set hideCredentials to \"never\""),
+            "{pushed}"
+        );
+        assert!(
+            ui.shown.iter().any(|line| line.contains(note)),
+            "{:?}",
+            ui.shown
+        );
     }
 
     #[test]
