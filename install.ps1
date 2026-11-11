@@ -61,6 +61,10 @@ try {
 
     New-Item -ItemType Directory -Force $dir | Out-Null
     $target = Join-Path $dir 'scramjet.exe'
+    $before = ''
+    if (Test-Path $target) {
+        try { $before = (& $target --version 2>$null | Out-String).Trim() } catch { $before = '' }
+    }
     # A running scramjet.exe cannot be overwritten, but it can be renamed out of the way.
     $old = "$target.old"
     if (Test-Path $old) { Remove-Item -Force $old -ErrorAction SilentlyContinue }
@@ -99,9 +103,16 @@ $env:Path = "$dir;$env:Path"
 $others = @(Get-Command scramjet -All -ErrorAction SilentlyContinue | Where-Object { $_.Source -and $_.Source -ne $target })
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 foreach ($other in $others) {
+    # Scramjet 1 (npm's) is never changed: say where it is, should this one fail.
+    Write-Host "$($other.Source) is left as it was: run it by that path if this one fails you."
     $otherDir = Split-Path $other.Source
     if (($machinePath -split ';') | Where-Object { $_.TrimEnd('\') -eq $otherDir.TrimEnd('\') }) {
         Write-Host "$($other.Source) is on the system Path, which comes before the user's: it runs first."
     }
+}
+if ($before -and $before -ne $said) {
+    $given = if ($env:SCRAMJET_INSTALL_DIR) { "`$env:SCRAMJET_INSTALL_DIR='$dir'; " } else { '' }
+    Write-Host "To go back to ${before}:"
+    Write-Host "  $given`$env:SCRAMJET_VERSION='$before'; irm https://raw.githubusercontent.com/$repo/main/install.ps1 | iex"
 }
 Write-Host 'Later releases: scramjet update self'

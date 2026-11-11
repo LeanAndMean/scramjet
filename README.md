@@ -4,7 +4,7 @@ A terminal coding agent written in Rust: an independent rewrite of Scramjet that
 
 ## Status
 
-An alpha: a working agent, used daily on one platform and barely or never on the others.
+An alpha: a working agent, used daily on one platform and barely or never on the others. Installing it leaves Scramjet 1 as it is, to fall back on if this one fails you ([how](https://github.com/LeanAndMean/scramjet#install)).
 
 - **Linux x86_64 and WSL2** (Ubuntu 20.04): in daily use by its author. Subagents, and turns with the credential stores hidden, run under Bubblewrap.
 - **Windows x86_64:** tried by its author in Windows Terminal and on a colleague's PC with Git for Windows. Commands run in PowerShell, and in Git for Windows' bash where it is installed, with a cmd tool to switch on in `/settings`. The main agent has no sandbox, so its commands see everything even where `hideCredentials` asks to hide the stores (it says so); subagents' run at Windows' low integrity level, which keeps them from changing files on local disks but hides nothing.
@@ -34,6 +34,8 @@ Each takes the newest release, prereleases included (`SCRAMJET_VERSION=2.143.1` 
 Or by hand: each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive per platform (`scramjet-VERSION-ARCH-OS.tar.gz`, holding only the program) and their `SHA256SUMS`. Unpack it (`tar -xzf`, also on Windows 10 and later) into a directory on your `PATH`; `scramjet update self` then takes newer releases. The programs are not signed: on macOS, one downloaded through a browser is refused until `xattr -d com.apple.quarantine scramjet` (a download with `curl` is not marked). Linux's need glibc 2.31 or newer. On Linux, subagents' tools, and the agent's with `hideCredentials` set, need Bubblewrap (`bwrap`; `apt install bubblewrap`).
 
 Scramjet 1's npm package installs a `scramjet` command too, and whichever directory comes first on your `PATH` runs: `which -a scramjet` (on Windows `where.exe scramjet`) lists both. To keep both, put Scramjet 2's directory ahead of npm's and run Scramjet 1 by its full path (`"$(npm prefix -g)/bin/scramjet"`, on Windows `%APPDATA%\npm\scramjet.cmd`), or give one of them another name. The two keep their files apart (below).
+
+If Scramjet 2 fails you, Scramjet 1 is still there: neither installer nor `scramjet update self` changes npm's package or `~/.scramjet/agent`, and each installer names the other `scramjet` it finds. Run Scramjet 1 by its full path, or take Scramjet 2's directory off your `PATH` again (the line you added, or on Windows its entry in your user `Path`). To go back to an earlier Scramjet 2, run the installer with that release's version, as the installer shows when it replaces one: `curl -fsSL https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.sh | SCRAMJET_VERSION=2.143.1 sh`, on Windows `$env:SCRAMJET_VERSION='2.143.1'; irm https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.ps1 | iex`. Then [report it](https://github.com/LeanAndMean/scramjet/issues).
 
 ## Build from source
 

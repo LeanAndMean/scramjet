@@ -11,6 +11,10 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 - A `models.json` can name the earliest Scramjet it works with, as npm's `engines`: `"engines": {"scramjet": ">=2.157.0"}`. An older Scramjet takes nothing from it but its `credentialFiles` and says which version it needs; `scramjet install` refuses such a package.
 - `scramjet install`, and the start for a listed package, say when a package is a Scramjet 1 extension (a `package.json` with a `pi` manifest) rather than that it holds no command set.
 
+### Changed
+
+- The installers say where another `scramjet` (Scramjet 1's) is left unchanged, to run should Scramjet 2 fail, and, when they replace an earlier Scramjet 2, how to go back to it. The README's Install section says how to fall back.
+
 ## 2.156.0 — A day's cache on Responses
 
 ### Changed

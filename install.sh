@@ -67,6 +67,10 @@ said=$("$work/scramjet" --version 2>&1) ||
   fail "the downloaded program does not run here (Linux's need glibc 2.31 or newer): $said"
 
 mkdir -p "$dir"
+before=
+if [ -x "$dir/scramjet" ]; then
+  before=$("$dir/scramjet" --version 2>/dev/null | head -n 1 || true)
+fi
 # Renamed in from the same directory, so a running scramjet keeps its file.
 cp "$work/scramjet" "$dir/.scramjet.new"
 mv -f "$dir/.scramjet.new" "$dir/scramjet"
@@ -87,6 +91,26 @@ if [ "$found" != "$dir/scramjet" ]; then
   esac
   echo "Add this line at the end of $rc, then open a new terminal:"
   echo "  export PATH=\"$dir:\$PATH\""
+fi
+# Scramjet 1 (npm's) is never changed: say where it is, should this one fail.
+old_ifs=$IFS
+IFS=:
+set -f
+for entry in $PATH; do
+  if [ -n "$entry" ] && [ -x "$entry/scramjet" ] && [ "$entry" != "$dir" ] && [ "$entry/scramjet" != "${found:-}" ]; then
+    echo "$entry/scramjet is left as it was: run it by that path if this one fails you."
+  fi
+done
+IFS=$old_ifs
+set +f
+if [ -n "${found:-}" ] && [ "$found" != "$dir/scramjet" ]; then
+  echo "$found is left as it was: if this one fails you, take that line out again."
+fi
+if [ -n "$before" ] && [ "$before" != "$said" ]; then
+  echo "To go back to $before:"
+  given=
+  [ -z "${SCRAMJET_INSTALL_DIR:-}" ] || given=" SCRAMJET_INSTALL_DIR=$dir"
+  echo "  curl -fsSL https://raw.githubusercontent.com/$repo/main/install.sh | SCRAMJET_VERSION=$before$given sh"
 fi
 if [ "$os" = linux ] && ! command -v bwrap >/dev/null; then
   echo "Subagents' tools and unattended turns need Bubblewrap: apt install bubblewrap (or your system's package)."
