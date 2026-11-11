@@ -359,10 +359,7 @@ fn session_and_fork_find_a_session_by_the_start_of_its_id() {
     let project = scratch.0.join("project");
     std::fs::create_dir_all(&project).unwrap();
     // As the program takes it from the working directory, and names its sessions' directory.
-    let project = match cfg!(windows) {
-        true => project,
-        false => project.canonicalize().unwrap(),
-    };
+    let project = scramjet::os::canonicalize(&project).unwrap();
     let separators: &[char] = match cfg!(windows) {
         true => &['/', '\\', ':'],
         false => &['/'],
@@ -790,14 +787,8 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
     git(&work, &["init", "--quiet"]);
     file("README.md", "A kit\n");
     file("packages/kit/mach12/set.yaml", "name: mach12\n");
-    file(
-        "packages/kit/mach12/commands/mach12:hello.md",
-        "Say hello\n",
-    );
-    file(
-        "packages/kit/tests/fixture/commands/fixture:x.md",
-        "Not a set\n",
-    );
+    file("packages/kit/mach12/commands/hello.md", "Say hello\n");
+    file("packages/kit/tests/fixture/commands/x.md", "Not a set\n");
     file(
         "providers/models.json",
         r#"{"providersCommand": ["bin/models", "--all"]}"#,
@@ -846,6 +837,7 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
             .current_dir(&project)
             .env("SCRAMJET_RELEASES", &releases)
             .env("HOME", &scratch.0)
+            .env("USERPROFILE", &scratch.0)
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
             .env("XDG_DATA_HOME", scratch.0.join("data"))
             .env("XDG_STATE_HOME", scratch.0.join("state"))
@@ -861,33 +853,46 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
         )
     };
     // Git for Windows takes file:///C:/path.
-    let source = format!(
-        "file://{}{}",
-        if cfg!(windows) { "/" } else { "" },
-        upstream.display().to_string().replace('\\', "/")
-    );
+    let url = |path: &std::path::Path| {
+        format!(
+            "file://{}{}",
+            if cfg!(windows) { "/" } else { "" },
+            path.display().to_string().replace('\\', "/")
+        )
+    };
+    let source = url(&upstream);
     let clones = scratch.0.join("data/scramjet/git");
     let within = scratch.0.display().to_string().replace(':', "");
     let clone = clones
         .join("localhost")
         .join(within.trim_start_matches(['/', '\\']))
         .join("upstream");
-    let shown_clone = format!("~/{}", clone.strip_prefix(&scratch.0).unwrap().display());
+    // A path as the program shows it: with `\` on Windows.
+    let native = |path: &str| match cfg!(windows) {
+        true => path.replace('/', "\\"),
+        false => path.to_owned(),
+    };
+    let shown_clone = native(&format!(
+        "~/{}",
+        clone.strip_prefix(&scratch.0).unwrap().display()
+    ));
     let settings = scratch.0.join("config/scramjet/settings.json");
     let packages = || {
         let text = std::fs::read_to_string(&settings).unwrap();
         serde_json::from_str::<serde_json::Value>(&text).unwrap()["packages"].clone()
     };
 
+    let kit = native("packages/kit/mach12");
     let (ok, out, err) = run(&["install", &source]);
     assert!(ok, "{out}{err}");
     assert_eq!(
         out,
         format!(
             "Cloning {source} into {shown_clone}\nInstalled {source} from {shown_clone}:\n  \
-mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 commands, \
+mach12 ({kit}): 1 command, 0 agents\n  providers (providers): 0 commands, \
 0 agents, and providers (models.json)\nIt runs at each start:\n  bin/models --all \
-(providersCommand in providers/models.json, run in its directory)\n"
+(providersCommand in {models}, run in its directory)\n",
+            models = native("providers/models.json"),
         )
     );
     assert_eq!(packages(), serde_json::json!([source]));
@@ -895,7 +900,8 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert!(ok);
     assert!(
         out.contains(&format!(
-            "mach12     {source}  {shown_clone}/packages/kit/mach12  1 command"
+            "mach12     {source}  {shown_clone}{}  1 command",
+            native("/packages/kit/mach12")
         )),
         "{out}"
     );
@@ -908,7 +914,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     let pinned = format!("{source}@{first}");
     let (ok, _, err) = run(&["install", &pinned]);
     assert!(!ok);
-    let identity = format!("git:localhost{}", scratch.0.join("upstream").display());
+    let identity = url(&scratch.0.join("upstream")).replacen("file://", "git:localhost", 1);
     assert_eq!(
         err,
         format!("scramjet: {identity} is installed as {source}; remove it first\n")
@@ -923,7 +929,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     );
 
     // An update pulls what was pushed and keeps what was changed in the clone.
-    file("packages/kit/mach12/commands/mach12:second.md", "Again\n");
+    file("packages/kit/mach12/commands/second.md", "Again\n");
     commit("Second");
     let second = git(&work, &["rev-parse", "--short", "HEAD"]);
     git(&work, &["push", "--quiet", "origin", &branch]);
@@ -963,6 +969,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
             .args(["-p", "--no-session", "--model", "nowhere/none", "hi"])
             .current_dir(&project)
             .env("HOME", &scratch.0)
+            .env("USERPROFILE", &scratch.0)
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
             .env("XDG_DATA_HOME", scratch.0.join("data"))
             .env("XDG_STATE_HOME", scratch.0.join("state"))
@@ -999,10 +1006,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     // A ref pins a package.
     let (ok, out, err) = run(&["install", &pinned]);
     assert!(ok, "{out}{err}");
-    assert!(
-        out.contains("mach12 (packages/kit/mach12): 1 command"),
-        "{out}"
-    );
+    assert!(out.contains(&format!("mach12 ({kit}): 1 command")), "{out}");
     let (ok, out, _) = run(&["update"]);
     assert!(ok);
     assert_eq!(
@@ -1016,15 +1020,16 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
         &scratch.0,
         &["clone", "--quiet", "--bare", "work", "upstream/inner.git"],
     );
-    let inner = format!("file://{}", scratch.0.join("upstream/inner.git").display());
+    let inner = url(&scratch.0.join("upstream/inner.git"));
     assert!(run(&["install", &source]).0);
     let (ok, _, err) = run(&["install", &inner]);
     assert!(!ok);
     assert_eq!(
         err,
         format!(
-            "scramjet: {inner} would be cloned into {shown_clone}/inner, which nests with the \
-             clone of {source}; remove that first\n"
+            "scramjet: {inner} would be cloned into {shown_clone}{}, which nests with the \
+             clone of {source}; remove that first\n",
+            native("/inner")
         )
     );
     assert!(!clone.join("inner").exists());
@@ -1063,7 +1068,10 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     let (ok, _, err) = run(&["update"]);
     assert!(!ok);
     assert!(
-        err.contains(&format!("{source}: {} is not a clone", clone.display())),
+        err.contains(&format!(
+            "{source}: {} is not a clone",
+            native(&clone.display().to_string())
+        )),
         "{err}"
     );
     std::fs::write(&settings, r#"{"packages": []}"#).unwrap();
@@ -1076,11 +1084,11 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     std::fs::write(plain.join("notes.md"), "Notes\n").unwrap();
     git(&plain, &["add", "-A"]);
     git(&plain, &["commit", "--quiet", "-m", "Notes"]);
-    let plain = format!("file://{}", plain.display());
+    let plain = url(&plain);
     let (ok, _, err) = run(&["install", &plain]);
     assert!(!ok);
     assert!(err.ends_with(&format!("scramjet: {plain} holds no command set (no commands, agents or models.json at its top or in its top directories, and no set.yaml deeper) and no skills or themes directory\n")), "{err}");
-    let missing = format!("file://{}", scratch.0.join("missing.git").display());
+    let missing = url(&scratch.0.join("missing.git"));
     let (ok, _, err) = run(&["install", &missing]);
     assert!(!ok);
     assert!(err.ends_with("scramjet: git clone failed\n"), "{err}");
@@ -1097,8 +1105,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
         "skills/greeting/SKILL.md",
         "---\nname: greeting\ndescription: Greets.\n---\nSay hi.\n",
     );
-    let dark = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("src/agent_cli/themes/scramjet-dark.json");
+    let dark = repository().join("src/agent_cli/themes/scramjet-dark.json");
     file(
         "themes/scramjet-dark.json",
         &std::fs::read_to_string(dark).unwrap(),
@@ -1110,38 +1117,46 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert!(ok, "{out}{err}");
     assert_eq!(
         out,
-        "Installed the package in ~/work:\n  mach12 (packages/kit/mach12): 2 commands, 0 agents\n  \
-providers (providers): 0 commands, 0 agents, and providers (models.json)\n  skills: 1 skill \
-(greeting)\n  themes: 1 theme (scramjet-dark)\nIt now brings providers, taken out of \
+        native(
+            "Installed the package in ~/work:\n  mach12 (packages/kit/mach12): 2 commands, 0 \
+agents\n  providers (providers): 0 commands, 0 agents, and providers (models.json)\n  skills: 1 \
+skill (greeting)\n  themes: 1 theme (scramjet-dark)\nIt now brings providers, taken out of \
 commandSets.\n"
+        )
     );
     assert_eq!(command_sets(), serde_json::json!([]));
-    assert_eq!(packages(), serde_json::json!(["~/work"]));
+    assert_eq!(packages(), serde_json::json!([native("~/work")]));
     let (ok, _, err) = run(&["install", work.to_str().unwrap()]);
     assert!(!ok);
-    assert!(err.ends_with("~/work is already installed\n"), "{err}");
+    assert!(
+        err.ends_with(&native("~/work is already installed\n")),
+        "{err}"
+    );
     // A set that appears later comes with it.
-    file("tools/commands/tools:x.md", "X\n");
+    file("tools/commands/x.md", "X\n");
     let (ok, out, err) = run(&["list"]);
     assert!(ok, "{err}");
-    assert!(out.contains("tools      ~/work  ~/work/tools"), "{out}");
     assert!(
-        out.contains("greeting  ~/work/skills/greeting/SKILL.md"),
+        out.contains(&native("tools      ~/work  ~/work/tools")),
+        "{out}"
+    );
+    assert!(
+        out.contains(&native("greeting  ~/work/skills/greeting/SKILL.md")),
         "{out}"
     );
     assert!(!out.contains("Warnings"), "{out}");
     let (ok, _, err) = run(&["remove", "mach12"]);
     assert!(!ok);
     assert!(
-        err.ends_with(
+        err.ends_with(&native(
             "mach12 came with ~/work; `scramjet remove ~/work` removes it with the package's \
 other command sets\n"
-        ),
+        )),
         "{err}"
     );
     let (ok, out, err) = run(&["remove", work.to_str().unwrap()]);
     assert!(ok, "{out}{err}");
-    assert_eq!(out, "Removed the package in ~/work\n");
+    assert_eq!(out, native("Removed the package in ~/work\n"));
     assert_eq!(packages(), serde_json::json!([]));
     std::fs::remove_dir_all(work.join("skills")).unwrap();
     std::fs::remove_dir_all(work.join("themes")).unwrap();
