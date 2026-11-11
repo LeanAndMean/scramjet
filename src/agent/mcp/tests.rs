@@ -348,7 +348,8 @@ fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
             )),
             "{why}"
         );
-        assert!(why.contains("Read-only file system"), "{mode:?}: {why}");
+        let refused = crate::agent::tests::REFUSED_WRITE;
+        assert!(why.contains(refused), "{mode:?}: {why}");
         if mode == SandboxMode::WorkspaceWrite {
             assert!(!path.exists());
         }
@@ -402,13 +403,17 @@ fn servers_that_cannot_start_say_why_once_and_the_others_run() {
         missing,
         test_server("test", &[]),
     ];
+    // As the system says it: Windows finds no path there.
+    let absent = std::process::Command::new("/nonexistent/mcp-server")
+        .spawn()
+        .unwrap_err();
     let servers = started(&configs, &scratch.0);
     let failures = servers.unreported_failures();
     assert_eq!(
         failures,
         [
             ("exits".to_owned(), "it ended before it answered; it wrote:\ntest server starting\nno configuration found".to_owned()),
-            ("missing".to_owned(), "could not run /nonexistent/mcp-server: No such file or directory (os error 2)".to_owned()),
+            ("missing".to_owned(), format!("could not run /nonexistent/mcp-server: {absent}")),
         ]
     );
     assert!(servers.unreported_failures().is_empty());
@@ -418,7 +423,7 @@ fn servers_that_cannot_start_say_why_once_and_the_others_run() {
         .search(&json!({"query": "echo"}), &AtomicBool::new(false))
         .unwrap();
     assert!(found.starts_with("1 tool matches \"echo\":"), "{found}");
-    assert!(found.ends_with("\n\nNot available:\n- exits: exits is not available: it ended before it answered\n- missing: missing is not available: could not run /nonexistent/mcp-server: No such file or directory (os error 2)"), "{found}");
+    assert!(found.ends_with(&format!("\n\nNot available:\n- exits: exits is not available: it ended before it answered\n- missing: missing is not available: could not run /nonexistent/mcp-server: {absent}")), "{found}");
     let arguments = json!({"server": "missing", "tool": "echo"});
     let refused = servers
         .call(&arguments, &AtomicBool::new(false))
@@ -725,15 +730,36 @@ fn pids(log: &Path) -> Vec<u32> {
         .collect()
 }
 
-/// Whether `pid` runs and is not a zombie, from `ps`, which reads it on Linux and macOS alike.
+/// Whether `pid` runs and is not a zombie, from `ps`, which reads it on Linux and macOS alike,
+/// or Windows' `tasklist`.
 fn alive(pid: u32) -> bool {
+    let pid = pid.to_string();
+    if cfg!(windows) {
+        let filter = format!("PID eq {pid}");
+        let listed = std::process::Command::new("tasklist")
+            .args(["/NH", "/FI", &filter])
+            .output();
+        return listed.is_ok_and(|listed| {
+            (String::from_utf8_lossy(&listed.stdout).split_whitespace()).any(|word| word == pid)
+        });
+    }
     let shown = std::process::Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .args(["-o", "stat=", "-p", &pid])
         .output();
     shown.is_ok_and(|shown| {
         let stat = String::from_utf8_lossy(&shown.stdout);
         !stat.trim().is_empty() && !stat.trim().starts_with('Z')
     })
+}
+
+fn kill(pid: u32) {
+    let pid = pid.to_string();
+    let mut killing = std::process::Command::new(if cfg!(windows) { "taskkill" } else { "kill" });
+    match cfg!(windows) {
+        true => killing.args(["/F", "/PID", &pid]),
+        false => killing.args(["-9", &pid]),
+    };
+    let _ = killing.status();
 }
 
 fn until(done: impl Fn() -> bool) {
@@ -783,10 +809,7 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
     let (first_a, first_b) = (pids(&log_a), pids(&log_b));
     assert_eq!((first_a.len(), first_b.len()), (1, 1));
     // `a` ends.
-    std::process::Command::new("kill")
-        .args(["-9", &first_a[0].to_string()])
-        .status()
-        .unwrap();
+    kill(first_a[0]);
     until(|| matches!(agent.mcp_servers()[0].1, State::Failed(_)));
     assert!(matches!(agent.mcp_servers()[0].1, State::Failed(_)));
     let reload = |agent: &mut Agent, servers: Vec<Server>| {
@@ -863,10 +886,7 @@ fn reconnect_starts_one_server_again_or_all_and_says_how_each_is() {
     assert_eq!(pids(&log_b), first_b);
 
     // One that ended is started again with all, and its failure is not said again.
-    std::process::Command::new("kill")
-        .args(["-9", &first_b[0].to_string()])
-        .status()
-        .unwrap();
+    kill(first_b[0]);
     until(|| matches!(agent.mcp_servers()[1].1, State::Failed(_)));
     let (states, _) = reconnect(&mut agent, None);
     let names: Vec<_> = (states.unwrap().into_iter())
@@ -955,9 +975,7 @@ fn servers_ended_as_they_start_leave_no_process() {
     until(|| started.iter().all(|pid| !alive(*pid)));
     let left: Vec<&u32> = started.iter().filter(|pid| alive(**pid)).collect();
     for pid in &left {
-        let _ = std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status();
+        kill(**pid);
     }
     assert!(left.is_empty(), "{} of {} left", left.len(), started.len());
 }

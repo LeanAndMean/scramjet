@@ -402,10 +402,11 @@ impl<'a> Call<'a> {
                 let outside = format!("{} outside the project: {given}", self.name);
                 match super::sandbox::real_path(&path) {
                     Some(real) if real.starts_with(&root) => Approval::None,
-                    Some(real) if real != path => Approval::Ask(format!(
-                        "{outside} (through a symlink to {})",
-                        real.display()
-                    )),
+                    // From the root's real path, as on macOS a project under /var is under
+                    // /private/var.
+                    Some(real) if real != path && real != resolve(&root, given) => Approval::Ask(
+                        format!("{outside} (through a symlink to {})", real.display()),
+                    ),
                     Some(_) => Approval::Ask(outside),
                     None => Approval::Ask(format!(
                         "{} through a symlink that leads nowhere: {given}",
@@ -3276,6 +3277,10 @@ to see full lines]",
             .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
             .unwrap();
         assert_eq!(shown(&hidden.text), expected);
+        // Seatbelt shows a command no process outside it, as Codex's: `pkill` finds none.
+        if cfg!(target_os = "macos") {
+            return;
+        }
         let sandboxed = run_sandboxed(
             &root,
             &command,

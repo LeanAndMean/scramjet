@@ -744,11 +744,16 @@ mod tests {
         };
         // Says `ok` only once it has the text, in a session of its own in `/`. macOS's `ps` shows
         // no session's ID: there, the process group's, which `setsid` makes too.
-        let owning = script(
-            "read -r text; session=$(ps -o sid= -p $$ 2>/dev/null || ps -o pgid= -p $$); \
+        let session = if cfg!(target_os = "macos") {
+            "pgid"
+        } else {
+            "sid"
+        };
+        let owning = script(&format!(
+            "read -r text; session=$(ps -o {session}= -p $$); \
              [ \"$text\" = copied ] && [ $session = $$ ] && [ \"$(pwd -P)\" = / ] && echo ok; \
-             exec sleep 1",
-        );
+             exec sleep 1"
+        ));
         assert_eq!(
             start_owner(owning, "copied\n", Duration::from_secs(5)),
             Ok(())

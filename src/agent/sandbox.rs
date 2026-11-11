@@ -1045,11 +1045,12 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
                 std::fs::read_to_string(root.join(".git/HEAD")).unwrap(),
                 "ref: refs/heads/main\n"
             );
-            for left in [
-                ".git/hooks/pre-commit",
-                ".scramjet/autonomy.yaml",
-                "../outside",
-            ] {
+            // macOS's temporary directory, which holds this project, stays writable, as Codex's.
+            let outside = cfg!(not(target_os = "macos")).then_some("../outside");
+            for left in [".git/hooks/pre-commit", ".scramjet/autonomy.yaml"]
+                .into_iter()
+                .chain(outside)
+            {
                 assert!(!root.join(left).exists(), "{mode:?}: {left}");
             }
         }
@@ -1491,11 +1492,17 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let marker = format!("{}.{}", 200 + std::process::id() % 100, std::process::id());
+        // macOS has no `setsid` command.
+        let setsid = if cfg!(target_os = "macos") {
+            "perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV'"
+        } else {
+            "setsid"
+        };
         let script = format!(
             "pwd; cat ../.netrc; ls -A ../.ssh; echo x > ../.netrc; touch ../.ssh/new; \
 echo made > made.txt; echo private > /tmp/scramjet-hiding-{marker}; \
 (exec 3<>/dev/tcp/127.0.0.1/{port}) && echo connected; \
-setsid sleep {marker} > /dev/null 2>&1 & echo done"
+{setsid} sleep {marker} > /dev/null 2>&1 & echo done"
         );
         let output = super::hiding(
             &home.join("project"),
@@ -1578,7 +1585,7 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
         let project = home.join("project");
         let cat = |seen: &str| {
             format!(
-                "cat {} > {} 2>&1",
+                "cat {} > {} 2>&1; true",
                 netrc.display(),
                 project.join(seen).display()
             )

@@ -441,7 +441,8 @@ continues it in a new session of this one"
 
     // The requests fail (nothing listens), after the prompt is saved in the session.
     let refused = "scramjet: provider: cannot connect to 127.0.0.1:9";
-    assert!(run(&["--session", "16", "-p", "again"]).starts_with(refused));
+    let said = run(&["--session", "16", "-p", "again"]);
+    assert!(said.starts_with(refused), "{said}");
     let saved = std::fs::read_to_string(&ours).unwrap();
     assert!(saved.contains("\"content\":\"again\""), "{saved}");
     assert!(run(&["--fork", "1700", "-p", "more"]).starts_with(refused));
@@ -859,11 +860,17 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
             text(output.stderr),
         )
     };
-    let source = format!("file://{}", upstream.display());
+    // Git for Windows takes file:///C:/path.
+    let source = format!(
+        "file://{}{}",
+        if cfg!(windows) { "/" } else { "" },
+        upstream.display().to_string().replace('\\', "/")
+    );
     let clones = scratch.0.join("data/scramjet/git");
+    let within = scratch.0.display().to_string().replace(':', "");
     let clone = clones
         .join("localhost")
-        .join(scratch.0.strip_prefix("/").unwrap())
+        .join(within.trim_start_matches(['/', '\\']))
         .join("upstream");
     let shown_clone = format!("~/{}", clone.strip_prefix(&scratch.0).unwrap().display());
     let settings = scratch.0.join("config/scramjet/settings.json");

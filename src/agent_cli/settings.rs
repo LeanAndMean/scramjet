@@ -2557,8 +2557,8 @@ mod tests {
                 home.join(".claude/skills"),
                 home.clone(),
                 scratch.0.join("own"),
-                // On Windows, on the settings file's drive: here the current one.
-                std::path::absolute("/abs/one.md").unwrap(),
+                // On Windows, on the settings file's drive.
+                scratch.0.ancestors().last().unwrap().join("abs/one.md"),
             ]
         );
         // Shown with the platform's separators, and `~` alone without one after it.

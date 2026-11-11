@@ -77,7 +77,8 @@ impl Source {
         };
         let path = path.trim_matches('/');
         let path = path.strip_suffix(".git").unwrap_or(path);
-        let parts: Vec<&str> = path.split('/').collect();
+        // Windows takes `\` as a separator too.
+        let parts: Vec<&str> = path.split(['/', '\\']).collect();
         let wrong = |part: &str| part.is_empty() || part == "." || part == "..";
         if wrong(host) || host.contains('/') || parts.len() < 2 || parts.iter().any(|p| wrong(p)) {
             return Err(FORMS.into());
@@ -99,7 +100,10 @@ impl Source {
 
     /// Its clone under `root`, the directory of clones.
     pub fn clone_directory(&self, root: &Path) -> PathBuf {
-        root.join(&self.host).join(&self.path)
+        let mut directory = root.join(&self.host);
+        // Without a drive's colon (`file:///C:/repo`), from which Windows would start again.
+        directory.extend(self.path.split('/').map(|part| part.replace(':', "")));
+        directory
     }
 }
 
@@ -342,6 +346,17 @@ mod tests {
                 .unwrap()
                 .clone_directory(Path::new("/clones")),
             Path::new("/clones/github.com/user/repo")
+        );
+        assert_eq!(
+            Source::parse("file:///C:/repos/kit")
+                .unwrap()
+                .unwrap()
+                .clone_directory(Path::new("/clones")),
+            Path::new("/clones/localhost/C/repos/kit")
+        );
+        assert!(
+            Source::parse("git:host.example/user\\..\\..\\x/repo")
+                .is_some_and(|parsed| parsed.is_err())
         );
     }
 

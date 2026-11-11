@@ -4,6 +4,14 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.142.1 — Fixes from the first runs on macOS and Windows
+
+### Fixed
+
+- On Windows, a package from a local repository given as `file:///C:/path/repo` is cloned under `~/.local/share/scramjet/git/localhost/C/path/repo`, and a source path's `..` is refused between `\` as between `/`.
+- On macOS, `--ask`'s question for a write outside the project says "through a symlink" only when one leads there, not for every path under `/var`, which is a link to `/private/var`.
+- Source checkouts on Windows keep LF line ends (`.gitattributes`), which the built-in instructions and changelog need.
+
 ## 2.142.0 — The start says when a newer release is out
 
 ### Added
