@@ -1764,7 +1764,7 @@ response is incomplete; retry the request."});
         let count = scratch.0.join("count");
         std::fs::write(&count, "").unwrap();
         let command = format!(
-            "!printf \"k$(wc -l < '{0}')\"; echo >> '{0}'",
+            "!printf \"k$(($(wc -l < '{0}')))\"; echo >> '{0}'",
             count.display()
         );
         let providers = |key: &str| {

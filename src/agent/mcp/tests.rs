@@ -226,16 +226,7 @@ fn a_call_stopped_cancels_its_request_and_ending_the_servers_kills_them() {
         .unwrap()
         .parse()
         .unwrap();
-    let running = || {
-        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
-            !stat
-                .rsplit(')')
-                .next()
-                .unwrap_or("")
-                .trim_start()
-                .starts_with('Z')
-        })
-    };
+    let running = || alive(pid);
     assert!(running());
     drop(servers);
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -331,10 +322,12 @@ fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
         call(&servers, "echo", json!({"text": "hi"})).unwrap().text,
         "echo: hi"
     );
-    // The first process of its own namespace's, after bubblewrap's.
+    // The first process of its own namespace's, after bubblewrap's (Seatbelt has no namespaces).
     let logged = std::fs::read_to_string(&inside).unwrap();
     assert!(
-        logged.starts_with("pid 2\n") || logged.starts_with("pid 3\n"),
+        cfg!(not(target_os = "linux"))
+            || logged.starts_with("pid 2\n")
+            || logged.starts_with("pid 3\n"),
         "{logged}"
     );
     drop(servers);
@@ -463,22 +456,14 @@ fn a_server_that_does_not_answer_is_given_up_and_killed() {
         "it did not start within 1 s; it wrote:\ntest server starting"
     );
     let logged = std::fs::read_to_string(&log).unwrap();
-    let pid = logged.lines().next().unwrap().strip_prefix("pid ").unwrap();
+    let pid: u32 = (logged.lines().next().unwrap().strip_prefix("pid ").unwrap())
+        .parse()
+        .unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    let alive = || {
-        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
-            !stat
-                .rsplit(')')
-                .next()
-                .unwrap_or("")
-                .trim_start()
-                .starts_with('Z')
-        })
-    };
-    while alive() && std::time::Instant::now() < deadline {
+    while alive(pid) && std::time::Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
     }
-    assert!(!alive());
+    assert!(!alive(pid));
 }
 
 #[test]
@@ -740,9 +725,15 @@ fn pids(log: &Path) -> Vec<u32> {
         .collect()
 }
 
+/// Whether `pid` runs and is not a zombie, from `ps`, which reads it on Linux and macOS alike.
 fn alive(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .is_ok_and(|stat| !(stat.rsplit(')').next().unwrap_or("").trim_start()).starts_with('Z'))
+    let shown = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output();
+    shown.is_ok_and(|shown| {
+        let stat = String::from_utf8_lossy(&shown.stdout);
+        !stat.trim().is_empty() && !stat.trim().starts_with('Z')
+    })
 }
 
 fn until(done: impl Fn() -> bool) {
@@ -1083,6 +1074,12 @@ fn http_servers_that_cannot_be_reached_or_refuse_say_why() {
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = closed.local_addr().unwrap().port();
     drop(closed);
+    // As the system says it: errno 111 on Linux, 61 on macOS.
+    let connection_refused = std::io::Error::from_raw_os_error(if cfg!(windows) {
+        10061
+    } else {
+        libc::ECONNREFUSED
+    });
     let configs = [
         Server::http(
             "refused",
@@ -1111,7 +1108,7 @@ supported yet)"
     );
     assert_eq!(
         why_closed,
-        &format!("cannot connect to 127.0.0.1:{port}: Connection refused (os error 111)")
+        &format!("cannot connect to 127.0.0.1:{port}: {connection_refused}")
     );
 }
 

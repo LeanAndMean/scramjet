@@ -702,7 +702,7 @@ mod tests {
                 .unwrap_err()
                 .contains("install `gh` and run `gh auth login`")
         );
-        let failing = download(Path::new("/bin/false"), "o/r", "v1", "a.tar.gz");
+        let failing = download(Path::new("false"), "o/r", "v1", "a.tar.gz");
         assert_eq!(
             failing.unwrap_err(),
             "gh release view failed; `gh auth status` shows whether it is logged in to an \

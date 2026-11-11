@@ -2652,9 +2652,14 @@ inline image size limit.]",
         std::os::unix::fs::symlink(root.join("sub"), root.join("here")).unwrap();
         std::os::unix::fs::symlink(out.join("gone/x"), root.join("dangling")).unwrap();
         std::os::unix::fs::symlink(&root, base.join("alias")).unwrap();
+        let real = std::fs::canonicalize(&base).unwrap();
         let question =
             |path: &str| match call("write", json!({"path":path,"content":""})).approval(&root) {
-                Approval::Ask(question) => Some(question.replace(&base.display().to_string(), "B")),
+                Approval::Ask(question) => Some(
+                    // macOS's temporary directory is under /var, a link to /private/var.
+                    (question.replace(&real.display().to_string(), "B"))
+                        .replace(&base.display().to_string(), "B"),
+                ),
                 Approval::None => None,
             };
         assert_eq!(
@@ -2914,7 +2919,12 @@ to see full lines]",
                 "bash",
                 json!({"command":"cat ../.netrc a.txt; echo more >> a.txt"})
             ),
-            Ok("plain\n".into())
+            // Bubblewrap shows an empty file there; Seatbelt can only refuse it.
+            Ok(if cfg!(target_os = "macos") {
+                "cat: ../.netrc: Operation not permitted\nplain\n".into()
+            } else {
+                "plain\n".into()
+            })
         );
         assert_eq!(
             std::fs::read_to_string(root.join("a.txt")).unwrap(),
@@ -3253,12 +3263,19 @@ to see full lines]",
         );
         let cancel = AtomicBool::new(false);
         let expected = "after unset 0\n\nCommand exited with code 3";
+        // macOS's bash 3.2 says when a job is killed.
+        let shown = |text: &str| {
+            (text.lines())
+                .filter(|line| !line.contains(" Terminated: 15 "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         let plain = run_command(&root, &command, None, &cancel, &mut |_| {}).unwrap();
-        assert_eq!(plain.tool_output().text, expected);
+        assert_eq!(shown(&plain.tool_output().text), expected);
         let hidden = call("bash", json!({"command": command}))
             .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
             .unwrap();
-        assert_eq!(hidden.text, expected);
+        assert_eq!(shown(&hidden.text), expected);
         let sandboxed = run_sandboxed(
             &root,
             &command,
@@ -3268,7 +3285,7 @@ to see full lines]",
             &mut |_| {},
         )
         .unwrap();
-        assert_eq!(sandboxed.tool_output().text, expected);
+        assert_eq!(shown(&sandboxed.tool_output().text), expected);
     }
 
     #[cfg(unix)]

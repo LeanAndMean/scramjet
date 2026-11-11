@@ -91,7 +91,7 @@ if scenario.get('bash'):
     os.makedirs(standin, exist_ok=True)
     subprocess.run(['docker', 'run', '--rm', '-u', '%d:%d' % (os.getuid(), os.getgid()),
                     '-v', '%s:/src:ro' % os.path.join(ROOT, 'scripts'), '-v', '%s:/out' % standin,
-                    'scramjet-rs-mingw', 'x86_64-w64-mingw32-gcc-posix', '-O2', '-o', '/out/bash.exe',
+                    'scramjet-rs-mingw-focal', 'x86_64-w64-mingw32-gcc-posix', '-O2', '-o', '/out/bash.exe',
                     '/src/try-windows-bash.c'], check=True)
     scenario['path'] = scenario.get('path', []) + ['standin']
 base = 'http://%s/v1' % screens.serve(scenario.get('replies', []), log=os.environ.get('TRY_WINDOWS_LOG'))

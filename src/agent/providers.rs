@@ -1450,7 +1450,8 @@ mod tests {
             "list",
             &format!(
                 "[ \"$1\" = arg ] && [ \"$PWD\" = \"{}\" ] && echo '{listed}'",
-                scratch.0.display()
+                // macOS's temporary directory is under /var, a link to /private/var.
+                std::fs::canonicalize(&scratch.0).unwrap().display()
             ),
         );
         script("fail", "echo 'cannot reach the server' >&2; exit 3");

@@ -843,7 +843,7 @@ You review code.\n",
         assert_eq!(child["prompt_cache_key"], key.as_str());
         let bash = last_output(&bodies[2]);
         assert!(bash.starts_with("original\n"), "{bash}");
-        assert!(bash.contains("Read-only file system"), "{bash}");
+        assert!(bash.contains(crate::agent::tests::REFUSED_WRITE), "{bash}");
         assert_eq!(last_output(&bodies[3]), "Tool write not found");
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "original\n");
         let result = "Agent invocation warnings:\n- write: left out, as subagents run read-only \
@@ -1020,7 +1020,7 @@ here\n\nkept.txt says original";
         let bodies = server.join().unwrap();
         assert_eq!(bodies.len(), 5);
         let bash = last_output(&bodies[1]);
-        assert!(bash.contains("Read-only file system"), "{bash}");
+        assert!(bash.contains(crate::agent::tests::REFUSED_WRITE), "{bash}");
         assert_eq!(
             std::fs::read_to_string(root.join("made.txt")).unwrap(),
             "bash\n"

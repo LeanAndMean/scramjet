@@ -365,6 +365,11 @@ env.pop('EDITOR', None)
 for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'SSH_CONNECTION', 'SSH_CLIENT',
              'MOSH_CONNECTION']:
     env.pop(name, None)
+# The same terminal wherever they run: a CI runner sets none of these, Windows Terminal WT_SESSION.
+env.update(TERM='xterm-256color', COLORTERM='truecolor')
+for name in ['WT_SESSION', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'LC_TERMINAL', 'COLORFGBG', 'TMUX', 'TMUX_PANE',
+             'STY', 'KITTY_WINDOW_ID', 'VTE_VERSION']:
+    env.pop(name, None)
 # Temporary files of the external editor go here, so the journeys can check they are removed.
 scratch = os.path.join(work, 'tmp')
 os.mkdir(scratch)

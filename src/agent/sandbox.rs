@@ -977,10 +977,12 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         let output = ran.tool_output();
         assert!(!output.failed, "{}", output.text);
         let lines: Vec<&str> = output.text.lines().collect();
-        assert_eq!(lines[0], root.display().to_string());
+        // macOS's temporary directory is under /var, a link to /private/var.
+        let real = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(lines[0], real.display().to_string());
         assert_eq!(lines[1], "original");
         assert!(
-            output.text.contains("Read-only file system"),
+            output.text.contains(crate::agent::tests::REFUSED_WRITE),
             "{}",
             output.text
         );
@@ -1018,7 +1020,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
 rm .git/HEAD; touch .git/hooks/pre-commit .scramjet/autonomy.yaml ../outside {probe}; \
 cat ../.netrc; echo private > /tmp/x && cat /tmp/x; \
 (exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo connected || echo no network; \
-ls /run/WSL 2>/dev/null | wc -l; cmd.exe /c echo windows 2>/dev/null; true",
+echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; true",
             probe = probe.display()
         );
         let hidden = super::Hidden::under(&home, Vec::new());
@@ -1304,12 +1306,9 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let errors = String::from_utf8_lossy(&output.stderr);
         assert_eq!(String::from_utf8_lossy(&output.stdout), "plain\ndone\n");
         assert!(!errors.contains("SECRET"), "{errors}");
-        assert!(errors.contains("../.ssh/id_x: No such file"), "{errors}");
-        assert_eq!(
-            errors.matches("Read-only file system").count(),
-            2,
-            "{errors}"
-        );
+        let unseen = format!("../.ssh/id_x: {}", crate::agent::tests::HIDDEN_READ);
+        assert!(errors.contains(&unseen), "{errors}");
+        assert_eq!(crate::agent::tests::refused_writes(&errors), 2, "{errors}");
         assert_eq!(
             std::fs::read_to_string(home.join(".netrc")).unwrap(),
             "SECRET-netrc\n"
@@ -1507,13 +1506,10 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
         .output()
         .unwrap();
         let errors = String::from_utf8_lossy(&output.stderr);
-        let lines = format!("{}\nconnected\ndone\n", home.join("project").display());
+        let real = std::fs::canonicalize(home.join("project")).unwrap();
+        let lines = format!("{}\nconnected\ndone\n", real.display());
         assert_eq!(String::from_utf8_lossy(&output.stdout), lines, "{errors}");
-        assert_eq!(
-            errors.matches("Read-only file system").count(),
-            2,
-            "{errors}"
-        );
+        assert_eq!(crate::agent::tests::refused_writes(&errors), 2, "{errors}");
         assert_eq!(
             std::fs::read_to_string(home.join(".netrc")).unwrap(),
             "SECRET-netrc\n"
@@ -1523,15 +1519,20 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
         let shared = std::path::PathBuf::from(format!("/tmp/scramjet-hiding-{marker}"));
         assert_eq!(std::fs::read_to_string(&shared).unwrap(), "private\n");
         std::fs::remove_file(shared).unwrap();
-        // A command started with `setsid` goes on after the command, as it does outside.
-        let left = std::process::Command::new("pkill")
-            .args(["-f", &format!("^sleep {marker}$")])
-            .status()
-            .unwrap();
-        assert!(
-            left.success(),
-            "the background command did not outlive the command"
-        );
+        // A command started with `setsid` goes on after the command, as it does outside. The
+        // output ends once its redirection is made, perhaps before it has become `sleep`.
+        let left = (0..50).any(|_| {
+            let killed = std::process::Command::new("pkill")
+                .args(["-f", &format!("^sleep {marker}$")])
+                .status()
+                .unwrap()
+                .success();
+            killed || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                false
+            }
+        });
+        assert!(left, "the background command did not outlive the command");
     }
 
     /// Ends the tmux servers of these `TMUX_TMPDIR`s, also when a test fails.
@@ -1572,15 +1573,29 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
         std::fs::write(&netrc, "SECRET-netrc\n").unwrap();
         let _servers = TmuxServers(vec![outside.clone(), own.clone()]);
         let run = TmuxServers::run;
-        let cat = format!("cat {}", netrc.display());
+        // tmux 3.4 shows `run-shell`'s output in a pane, not on the client's stdout: each copies
+        // what it read into a file of its own.
+        let project = home.join("project");
+        let cat = |seen: &str| {
+            format!(
+                "cat {} > {} 2>&1",
+                netrc.display(),
+                project.join(seen).display()
+            )
+        };
+        let seen = |seen: &str| std::fs::read_to_string(project.join(seen)).unwrap_or_default();
         assert!(
             run(&outside, &["new-session", "-d", "-s", "out", "sleep 300"])
                 .status
                 .success()
         );
         // A server outside runs a client's command with everything visible.
-        let shown = run(&outside, &["run-shell", &cat]);
-        assert_eq!(String::from_utf8_lossy(&shown.stdout), "SECRET-netrc\n");
+        assert!(
+            run(&outside, &["run-shell", &cat("outside")])
+                .status
+                .success()
+        );
+        assert_eq!(seen("outside"), "SECRET-netrc\n");
 
         let mut hidden = super::Hidden::under(&home, Vec::new());
         hidden.keep_tmux_apart(&outside, Some(own.clone()));
@@ -1589,15 +1604,19 @@ setsid sleep {marker} > /dev/null 2>&1 & echo done"
             rustix::process::getuid().as_raw()
         ));
         let script = format!(
-            "tmux ls; TMUX_TMPDIR={out} tmux run-shell '{cat}'; tmux -S {socket} run-shell '{cat}'; \
-TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300' && echo started",
+            "tmux ls; TMUX_TMPDIR={out} tmux run-shell '{one}'; tmux -S {socket} run-shell '{two}'; \
+TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 300' && echo started",
             out = outside.display(),
             socket = socket.display(),
+            one = cat("one"),
+            two = cat("two"),
+            three = cat("three"),
         );
         let mut process = super::hiding(&home.join("project"), &script, &hidden).unwrap();
         let envs: Vec<_> = process.get_envs().collect();
         assert!(envs.contains(&("TMUX".as_ref(), None)), "{envs:?}");
-        assert!(envs.contains(&("TMUX_TMPDIR".as_ref(), Some(own.as_ref()))));
+        let real = std::fs::canonicalize(&own).unwrap();
+        assert!(envs.contains(&("TMUX_TMPDIR".as_ref(), Some(real.as_ref()))));
         let output = process.output().unwrap();
         let errors = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
@@ -1606,6 +1625,9 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
             "{errors}"
         );
         assert!(!errors.contains("SECRET"), "{errors}");
+        for attempt in ["one", "two", "three"] {
+            assert!(!seen(attempt).contains("SECRET"), "{attempt}: {errors}");
+        }
 
         // The server a hidden command started is apart from the one outside, and keeps the
         // stores hidden from what the user runs on it.
@@ -1613,9 +1635,10 @@ TMUX={socket},1,0 tmux run-shell '{cat}'; tmux new-session -d -s own 'sleep 300'
             |base| String::from_utf8_lossy(&run(base, &["ls", "-F", "#S"]).stdout).into_owned();
         assert_eq!(sessions(&outside), "out\n");
         assert_eq!(sessions(&own), "own\n");
-        let shown = run(&own, &["run-shell", &cat]);
+        let shown = run(&own, &["run-shell", &cat("own")]);
+        assert!(shown.status.success(), "{shown:?}");
         assert!(
-            shown.status.success() && shown.stdout.is_empty(),
+            project.join("own").exists() && !seen("own").contains("SECRET"),
             "{shown:?}"
         );
 

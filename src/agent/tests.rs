@@ -253,6 +253,37 @@ impl AgentUi for Watching {
     }
 }
 
+/// What a write the sandbox refuses says: bubblewrap mounts what it keeps read-only, Seatbelt
+/// refuses reads and writes alike.
+pub(crate) const REFUSED_WRITE: &str = if cfg!(target_os = "macos") {
+    "Operation not permitted"
+} else {
+    "Read-only file system"
+};
+
+/// What a read of a hidden store says: bubblewrap mounts nothing there.
+#[cfg(unix)]
+pub(crate) const HIDDEN_READ: &str = if cfg!(target_os = "macos") {
+    "Operation not permitted"
+} else {
+    "No such file"
+};
+
+/// How many writes a command's `errors` say were refused; on macOS those of `touch` and the
+/// shell's redirections, the only writes the tests make that way.
+#[cfg(unix)]
+pub(crate) fn refused_writes(errors: &str) -> usize {
+    if cfg!(target_os = "macos") {
+        let writes = ["touch: ", "scramjet-bash-"];
+        (errors.lines())
+            .filter(|line| line.ends_with(REFUSED_WRITE))
+            .filter(|line| writes.iter().any(|write| line.starts_with(write)))
+            .count()
+    } else {
+        errors.matches(REFUSED_WRITE).count()
+    }
+}
+
 /// Whether `program` (`bash`, `python3`…), which a test runs, is missing, as on Windows
 /// without Git Bash or Python; the test then says so and is passed over.
 pub(crate) fn missing(program: &str) -> bool {
@@ -855,7 +886,10 @@ fn a_session_whose_file_could_not_be_created_creates_it_once_there_is_room() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "writes to /dev/full, which only Linux has"
+)]
 fn a_copy_on_a_full_disk_holds_its_lines_until_there_is_room() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-full-copy-{}", std::process::id())),
@@ -900,7 +934,10 @@ fn a_copy_on_a_full_disk_holds_its_lines_until_there_is_room() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "writes to /dev/full, which only Linux has"
+)]
 fn a_session_on_a_full_disk_keeps_its_lines_until_there_is_room() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-full-{}", std::process::id())),
@@ -1645,7 +1682,10 @@ fn names_another_process_gives_while_entries_go_in_keep_the_file_readable() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "writes to /dev/full, which only Linux has"
+)]
 fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
     let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "left-held");
     let original = scratch.0.join("1700000000000-1.jsonl");
@@ -1685,7 +1725,10 @@ fn a_session_left_while_holding_lines_writes_them_once_there_is_room() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "writes to /dev/full, which only Linux has"
+)]
 fn a_session_left_while_holding_lines_resumes_with_them() {
     let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "resume-held");
     let original = scratch.0.join("1700000000000-1.jsonl");
@@ -2709,7 +2752,10 @@ fn models_that_replied_before_a_compaction_are_still_on_the_branch() {
 }
 
 #[test]
-#[cfg_attr(windows, ignore = "writes to /dev/full, which Windows lacks")]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "writes to /dev/full, which only Linux has"
+)]
 fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-kept-{}", std::process::id())),

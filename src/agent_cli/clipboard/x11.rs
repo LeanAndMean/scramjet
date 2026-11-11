@@ -742,10 +742,11 @@ mod tests {
             owner.args(["-c", script]);
             owner
         };
-        // Says `ok` only once it has the text, in a session of its own in `/`.
+        // Says `ok` only once it has the text, in a session of its own in `/`. macOS's `ps` shows
+        // no session's ID: there, the process group's, which `setsid` makes too.
         let owning = script(
-            "read -r text; read -r _ _ _ _ _ session _ < /proc/$$/stat; \
-             [ \"$text\" = copied ] && [ \"$session\" = $$ ] && [ \"$(pwd -P)\" = / ] && echo ok; \
+            "read -r text; session=$(ps -o sid= -p $$ 2>/dev/null || ps -o pgid= -p $$); \
+             [ \"$text\" = copied ] && [ $session = $$ ] && [ \"$(pwd -P)\" = / ] && echo ok; \
              exec sleep 1",
         );
         assert_eq!(
