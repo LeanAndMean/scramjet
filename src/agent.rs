@@ -100,7 +100,7 @@ use std::{
 };
 
 /// Guards against a model that never stops calling tools.
-const MAX_STEPS: usize = 200;
+const MAX_STEPS: usize = 300;
 /// Stored with each response item: the model that produced it. Never sent to the provider.
 const PRODUCER: &str = "_scramjet_model";
 /// Stored with a response's last item when the response reported it: the context size, so a

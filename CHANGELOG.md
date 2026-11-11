@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.143.0 — 300 model requests before a turn stops
+
+### Changed
+
+- A turn, and a subagent's, stops for you after 300 model requests rather than 200 ("stopped after 300 model requests in one turn").
+
 ## 2.142.1 — Fixes from the first runs on macOS and Windows
 
 ### Fixed
