@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.148.0 — npm's packages, ready for Scramjet 1's update
+
+### Added
+
+- Each release can be packed for npm, as esbuild's are: `@leanandmean/scramjet` runs the program from a package of its own for each platform, so that `npm install -g @leanandmean/scramjet`, which Scramjet 1's `scramjet update` runs, brings Scramjet 2. They are not published yet.
+
+### Changed
+
+- When npm installed the program, `scramjet update self` says to update it with `npm install -g @leanandmean/scramjet`, and the start's notice of a newer release names that command, rather than replacing a file npm keeps.
+
 ## 2.147.1 — Lists keep their keys on a short screen
 
 ### Fixed

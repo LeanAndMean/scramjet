@@ -44,7 +44,21 @@ pub(super) fn start_check() -> Option<String> {
         .ok()?
         .join("version.json");
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    start_check_in(&file, &releases(), env!("CARGO_PKG_VERSION"), now).0
+    let how = match std::env::current_exe() {
+        Ok(program) if by_npm(&program) => Some(NPM_UPDATE),
+        _ => None,
+    };
+    start_check_in(&file, &releases(), env!("CARGO_PKG_VERSION"), now, how).0
+}
+
+const NPM_UPDATE: &str = "npm install -g @leanandmean/scramjet";
+
+/// Whether npm installed `program`, from `@leanandmean/scramjet`'s platform package: npm then
+/// keeps it, and replacing it here would leave npm's record of it wrong.
+fn by_npm(program: &Path) -> bool {
+    program
+        .components()
+        .any(|part| part.as_os_str() == "node_modules")
 }
 
 fn start_check_in(
@@ -52,6 +66,7 @@ fn start_check_in(
     releases: &str,
     current: &str,
     now: u64,
+    npm: Option<&str>,
 ) -> (Option<String>, Option<JoinHandle<()>>) {
     let last: Value = fs::read(file)
         .ok()
@@ -70,7 +85,11 @@ fn start_check_in(
         let latest = Version::parse(last["latest"].as_str()?).ok()?;
         let running = Version::parse(current).ok()?;
         latest.cmp_precedence(&running).is_gt().then(|| {
-            format!("Update available: scramjet {latest} (this is {current}); `scramjet update self` installs it")
+            let how = match npm {
+                Some(npm) => format!("{npm}@{latest}"),
+                None => "scramjet update self".to_owned(),
+            };
+            format!("Update available: scramjet {latest} (this is {current}); `{how}` installs it")
         })
     };
     (newer(), check)
@@ -95,6 +114,12 @@ fn check(file: &Path, releases: &str, now: u64, before: Value) {
 pub(super) fn update_self() -> Result<(), String> {
     let program =
         std::env::current_exe().map_err(|error| format!("cannot find this program: {error}"))?;
+    if by_npm(&program) {
+        return Err(format!(
+            "npm installed this program ({}): `{NPM_UPDATE}` updates it",
+            program.display()
+        ));
+    }
     let releases = releases();
     outln!(
         "{}",
@@ -654,7 +679,8 @@ mod tests {
         let release = release("start", "v2.142.0", "2.142.0", str::to_owned);
         let file = release.directory.join("state/version.json");
         let read = || serde_json::from_slice::<Value>(&fs::read(&file).unwrap()).unwrap();
-        let at = |now: u64, current: &str| start_check_in(&file, &release.releases, current, now);
+        let at =
+            |now: u64, current: &str| start_check_in(&file, &release.releases, current, now, None);
         let (said, check) = at(1000, "2.141.0");
         assert_eq!(said, None);
         check.unwrap().join().unwrap();
@@ -668,12 +694,21 @@ mod tests {
             "Update available: scramjet 2.142.0 (this is 2.141.0); `scramjet update self` installs it"
         );
         assert!(check.is_none());
+        let npm = start_check_in(&file, &release.releases, "2.141.0", 1001, Some(NPM_UPDATE));
+        assert_eq!(
+            npm.0.unwrap(),
+            "Update available: scramjet 2.142.0 (this is 2.141.0); `npm install -g @leanandmean/scramjet@2.142.0` installs it"
+        );
+        assert!(by_npm(Path::new(
+            "/p/lib/node_modules/@leanandmean/scramjet-linux-x64/bin/scramjet"
+        )));
+        assert!(!by_npm(Path::new("/home/u/.local/bin/scramjet")));
         for current in ["2.142.0", "2.143.0", "not a version"] {
             assert_eq!(at(2000, current).0, None, "{current}");
         }
         assert_eq!(requests(&release), ["/releases"]);
         let gone = release.releases.replace("/releases", "/gone");
-        let (said, check) = start_check_in(&file, &gone, "2.141.0", 1000 + CHECK_EVERY);
+        let (said, check) = start_check_in(&file, &gone, "2.141.0", 1000 + CHECK_EVERY, None);
         assert!(said.is_some());
         check.unwrap().join().unwrap();
         assert_eq!(
