@@ -425,13 +425,21 @@ mod tests {
         std::thread::scope(|threads| {
             for _ in 0..4 {
                 threads.spawn(|| {
-                    for _ in 0..25 {
-                        locked(&config, || {
+                    // A loaded machine can keep a thread waiting past the lock's half second:
+                    // refused as busy, its change is not made, and it tries again.
+                    let mut made = 0;
+                    while made < 25 {
+                        let changed = locked(&config, || {
                             let n: u32 = std::fs::read_to_string(&config).unwrap().parse().unwrap();
                             std::thread::yield_now();
                             std::fs::write(&config, (n + 1).to_string()).map_err(|e| e.to_string())
-                        })
-                        .unwrap();
+                        });
+                        match changed {
+                            Ok(()) => made += 1,
+                            Err(error) => {
+                                assert!(error.starts_with("update lock is busy"), "{error}")
+                            }
+                        }
                     }
                 });
             }
