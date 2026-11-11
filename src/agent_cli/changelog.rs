@@ -10,6 +10,8 @@ struct Version<'a> {
     number: [u64; 3],
     /// Its heading without `## `: `0.123.0 — Title`.
     heading: &'a str,
+    /// The part (a `# ` heading and its text) this version is the first of, as `# scramjet-rs`.
+    part: Option<&'a str>,
     /// The whole section, its heading included.
     text: &'a str,
 }
@@ -29,23 +31,39 @@ fn released_in(changelog: &str) -> &str {
 fn versions(changelog: &str) -> Vec<Version<'_>> {
     let released = released_in(changelog);
     let starts: Vec<usize> = std::iter::once(0)
-        .chain(released.match_indices("\n## ").map(|(at, _)| at + 1))
+        .chain(
+            (released.match_indices('\n').map(|(at, _)| at + 1)).filter(|&at| {
+                released[at..].starts_with("## ") || released[at..].starts_with("# ")
+            }),
+        )
         .collect();
     let ends = starts.iter().skip(1).copied().chain([released.len()]);
-    (starts.iter().zip(ends))
-        .filter_map(|(&start, end)| {
-            let text = released[start..end].trim_end();
-            let heading = text.lines().next()?.strip_prefix("## ")?;
-            let number = heading.split_whitespace().next()?;
-            number
-                .starts_with(|c: char| c.is_ascii_digit())
-                .then(|| Version {
-                    number: parsed(number),
-                    heading,
-                    text,
-                })
-        })
-        .collect()
+    let mut part = None;
+    let mut versions = Vec::new();
+    for (&start, end) in starts.iter().zip(ends) {
+        let text = released[start..end].trim_end();
+        if text.starts_with("# ") {
+            part = Some(text);
+            continue;
+        }
+        let Some(heading) = text
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("## "))
+        else {
+            continue;
+        };
+        let number = heading.split_whitespace().next().unwrap_or_default();
+        if number.starts_with(|c: char| c.is_ascii_digit()) {
+            versions.push(Version {
+                number: parsed(number),
+                heading,
+                part: part.take(),
+                text,
+            });
+        }
+    }
+    versions
 }
 
 /// `0.123.0` as its three numbers, a missing or unreadable one 0, as Scramjet reads them.
@@ -56,20 +74,29 @@ fn parsed(version: &str) -> [u64; 3] {
 
 /// A view of `versions`: each whole, or with `collapse` its title line first.
 fn view(title: &str, versions: &[Version], collapse: bool) -> ReportView {
-    let summary = (versions.iter())
-        .map(|version| match version.heading.split_once(' ') {
+    let mut summary = String::new();
+    let mut details = String::new();
+    for version in versions {
+        if let Some(part) = version.part {
+            let name = part
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim_start_matches("# ");
+            summary.push_str(&format!("\n\n**{name}**\n"));
+            details.push_str(&format!("\n\n{part}"));
+        }
+        let item = match version.heading.split_once(' ') {
             Some((number, rest)) => format!("- **{number}** {}", rest.trim()),
             None => format!("- **{}**", version.heading),
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let details = (versions.iter().map(|version| version.text))
-        .collect::<Vec<_>>()
-        .join("\n\n");
+        };
+        summary.push_str(&format!("\n{item}"));
+        details.push_str(&format!("\n\n{}", version.text));
+    }
     let tabs = vec![Tab {
         name: title.to_owned(),
-        summary,
-        details,
+        summary: summary.trim().to_owned(),
+        details: details.trim().to_owned(),
     }];
     ReportView::new(title, "titles", tabs, 0, !collapse).markdown()
 }
@@ -143,6 +170,32 @@ mod tests {
     }
 
     #[test]
+    fn a_part_heading_goes_with_the_first_version_under_it() {
+        let changelog = "# Changelog\n\n## Unreleased\n\n## 2.0.0 — Two\n\n- b\n\n\
+                         # Old\n\nBefore 2.0.\n\n## 1.1.0 — One\n\n- a\n\n## 1.0.0 — Zero\n";
+        let versions = versions(changelog);
+        let parts: Vec<_> = versions.iter().map(|version| version.part).collect();
+        assert_eq!(parts, [None, Some("# Old\n\nBefore 2.0."), None]);
+        assert_eq!(versions[0].text, "## 2.0.0 — Two\n\n- b");
+        let shown = view("Changelog", &versions, false);
+        assert_eq!(
+            shown.report(),
+            "## 2.0.0 — Two\n\n- b\n\n# Old\n\nBefore 2.0.\n\n## 1.1.0 — One\n\n- a\n\n\
+             ## 1.0.0 — Zero"
+        );
+        let collapsed = view("Changelog", &versions, true);
+        assert_eq!(
+            collapsed.report(),
+            "- **2.0.0** — Two\n\n**Old**\n\n- **1.1.0** — One\n- **1.0.0** — Zero"
+        );
+        let newer = newer(changelog, "1.1.0").unwrap();
+        assert_eq!(
+            view("What's new", &newer, false).report(),
+            "## 2.0.0 — Two\n\n- b"
+        );
+    }
+
+    #[test]
     fn the_built_in_changelog_reads_as_versions_newest_first() {
         let versions = versions(super::CHANGELOG);
         assert_eq!(versions[0].number, parsed(env!("CARGO_PKG_VERSION")));
@@ -156,6 +209,18 @@ mod tests {
             versions
                 .iter()
                 .all(|version| version.text.starts_with("## "))
+        );
+        let old = versions
+            .iter()
+            .find(|version| version.number[0] == 0)
+            .unwrap();
+        assert!(old.part.unwrap().starts_with("# scramjet-rs\n"));
+        assert_eq!(
+            versions
+                .iter()
+                .filter(|version| version.part.is_some())
+                .count(),
+            1
         );
     }
 }
