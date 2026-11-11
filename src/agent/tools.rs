@@ -2954,7 +2954,7 @@ to see full lines]",
             network: true,
         };
         let done = AtomicBool::new(false);
-        let (mut ran, mut shown) = (0, Vec::new());
+        let mut shown = Vec::new();
         std::thread::scope(|scope| {
             // As a bash call running alongside would: the checked file, then a symlink to a
             // store, each renamed into place.
@@ -2979,12 +2979,18 @@ to see full lines]",
                     0 => call.run(&root, Some(&hidden), &cancel, &mut |_| {}),
                     _ => call.run_in_sandbox(&root, sandbox, &hidden, &cancel, &mut |_| {}),
                 };
-                ran += usize::from(output.is_ok());
                 shown.push(output.map_or_else(|error| error, |output| output.text));
             }
             done.store(true, Ordering::Relaxed);
         });
-        assert!(ran > 0);
+        // Every call of the race may meet the symlink (arm64's runners did): the tools read the
+        // file once nothing swaps it.
+        std::fs::write(root.join("a.txt"), "plain\n").unwrap();
+        let read = call("read", json!({"path":"a.txt"}));
+        let calm = read
+            .run(&root, Some(&hidden), &cancel, &mut |_| {})
+            .unwrap();
+        assert_eq!(calm.text, "plain\n");
         let leaked = shown.iter().find(|text| text.contains("SECRET"));
         assert!(leaked.is_none(), "{leaked:?}");
         assert_eq!(
