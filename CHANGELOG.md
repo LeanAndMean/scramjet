@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.147.0 — The scramjet set comes with the program
+
+### Added
+
+- The `scramjet` command set comes with the program, as it does with Scramjet 1: `/scramjet:troubleshoot`, its agents for designing, reviewing and diagnosing commands, and the `writing-scramjet-commands` skill, so a release needs nothing installed to write command sets. A release writes its files under `~/.local/share/scramjet/builtin/`; a set you install under the name `scramjet` replaces it.
+
+### Fixed
+
+- The agent can read the README when you ask it about Scramjet: a release, which has no checkout, used to point it at the build machine's path; it now writes its own README beside the built-in set.
+
 ## 2.146.0 — Commands name tools as Claude Code does
 
 ### Changed

@@ -22,6 +22,8 @@ pub enum Origin {
     Global,
     /// Under the project's `.scramjet` directory.
     Project,
+    /// Carried by the program (`builtin`).
+    BuiltIn,
 }
 
 impl Origin {
@@ -30,6 +32,7 @@ impl Origin {
             Self::Installed => "installed",
             Self::Global => "global",
             Self::Project => "project",
+            Self::BuiltIn => "built in",
         }
     }
 }
@@ -211,9 +214,21 @@ impl Sets {
     }
 
     /// The sets of a session in `root`: the `installed` ones, then those under Scramjet's global
-    /// root and the project's `.scramjet` directory.
+    /// root and the project's `.scramjet` directory, then the program's own `scramjet` set unless
+    /// one of them has its name, as one installed from a checkout does.
     pub fn for_project(installed: &[PathBuf], root: &Path) -> Self {
-        Self::find(installed, global_root().as_deref(), &root.join(".scramjet"))
+        let mut sets = Self::find(installed, global_root().as_deref(), &root.join(".scramjet"));
+        if cfg!(test) {
+            return sets;
+        }
+        match super::builtin::set().and_then(|directory| Set::at(&directory, Origin::BuiltIn)) {
+            Ok(set) if sets.list.iter().all(|known| known.name != set.name) => sets.list.push(set),
+            Ok(_) => {}
+            Err(error) => sets.warnings.push(Problem::new(format!(
+                "the built-in scramjet command set is not loaded: {error}"
+            ))),
+        }
+        sets
     }
 
     /// `set` alone, as if installed by itself.

@@ -203,7 +203,8 @@ As in Scramjet 1, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/COMMAND.md (or SET:COMMAND.md) is sent with the arguments substituted, inside
 <scramjet-command>. Agent files may name tools as Claude Code does (Read, Grep, Glob, Bash). The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)
-and the project's .scramjet. `scramjet install DIR` installs the set in DIR by reference,
+and the project's .scramjet, then the built-in scramjet set (/scramjet:troubleshoot, agents and
+a skill for writing commands) unless one of them is named scramjet. `scramjet install DIR` installs the set in DIR by reference,
 recorded in the settings' commandSets (~ for the home directory), or, as Pi installs a local
 path, DIR as a package in the settings' packages: the sets it holds as a package's clone holds
 them, and its skills and themes directories; `remove NAME|DIR` takes them out and `list`

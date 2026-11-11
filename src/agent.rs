@@ -5,6 +5,7 @@ mod approvals;
 mod attached;
 mod autonomy;
 mod batch;
+mod builtin;
 mod calls;
 mod client;
 pub mod codex;

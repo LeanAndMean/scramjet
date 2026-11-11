@@ -1154,13 +1154,16 @@ commandSets.\n"
     let (ok, out, err) = run(&["list"]);
     assert!(ok, "{err}");
     assert!(
-        out.contains(&native("tools      ~/work  ~/work/tools")),
+        out.contains(&native("tools      ~/work    ~/work/tools")),
         "{out}"
     );
     assert!(
-        out.contains(&native("greeting  ~/work/skills/greeting/SKILL.md")),
+        out.contains(&native(
+            "greeting                   ~/work/skills/greeting/SKILL.md"
+        )),
         "{out}"
     );
+    assert!(out.contains("\nscramjet   built in  "), "{out}");
     assert!(!out.contains("Warnings"), "{out}");
     let (ok, _, err) = run(&["remove", "mach12"]);
     assert!(!ok);

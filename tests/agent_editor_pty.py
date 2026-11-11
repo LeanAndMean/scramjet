@@ -1786,9 +1786,10 @@ def completes_paths_and_commands(read, until, send, output):
     ending(read, output, ['> /autopilot status'])
     send(b'\r')
     on_screen('Autopilot is off')
-    # Commands are listed as soon as `/` starts the prompt; Escape closes the list.
+    # Commands are listed as soon as `/` starts the prompt, the built-in scramjet set's among
+    # them; Escape closes the list.
     send(b'/')
-    on_screen('(1/24)')
+    on_screen('(1/26)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -3288,7 +3289,7 @@ def installed_view(read, until, send, output):
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     send(b'\x1b[A')
-    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 2 command sets, 2 commands'))
+    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 3 commands, 6 agents, 1 skill'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
@@ -3297,8 +3298,13 @@ def installed_view(read, until, send, output):
     assert rows[at + 2].startswith('    agents: %s: failed to read agent file (No such' % stale_agent), rows
     assert rows[at + 3].startswith('    skills: skill path does not exist: '), rows
     assert rows[at + 4] == '  Command sets', rows
-    assert rows[at + 5:at + 7] == ['    tools  global   ' + os.path.join(work, 'commands', 'tools'),
-                                   '    demo   project  ' + os.path.join(project, '.scramjet', 'demo')], rows
+    # The program's own set, here its checkout's, comes last.
+    builtin = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'sets', 'scramjet')
+    home = os.path.expanduser('~')
+    builtin = '~' + builtin[len(home):] if builtin.startswith(home + os.sep) else builtin
+    assert rows[at + 5:at + 8] == ['    tools     global    ' + os.path.join(work, 'commands', 'tools'),
+                                   '    demo      project   ' + os.path.join(project, '.scramjet', 'demo'),
+                                   '    scramjet  built in  ' + builtin], rows
     # The note under the list says the whole problem, which the row cuts, and that Enter opens the
     # settings file, which has it.
     note = ' '.join(row.strip() for row in rows[-4:]).strip()
@@ -3321,7 +3327,7 @@ def installed_view(read, until, send, output):
     # On a command, it opens the command's file in the editor, and the session reads what changed.
     select_row(read, shown, send, '/demo:greet', b'\x1b[A')
     send(b'\r')
-    rows = on_screen('\u203a   /demo:greet  Greet someone kindly')
+    rows = on_screen('\u203a   /demo:greet             Greet someone kindly')
     assert 'Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files' in rows, rows
     assert rows.count(attention) == 2, rows
     # On a link that leads nowhere, it asks before removing the link; Escape keeps it.
@@ -3707,7 +3713,8 @@ def next_step_settings(read, until, send, output):
     rows = on_screen('\u203a ' + setting(
         'Next steps', 'continue automatically: 1 \u00b7 ask me: 2 \u00b7 suggested: 1'))
     assert '  ' + setting('Autopilot', 'off') in rows, rows
-    # Each command's steps under it: what follows each, and where that is set; first, applying
+    # Each command's steps under it (the built-in /scramjet:troubleshoot's too, whose step to
+    # /mach12:issue-create widens the column): what follows each, and where that is set; first, applying
     # what the set suggests where nothing is set (its suggestion for /flow:done is set already).
     send(b'\r')
     rows = on_screen('Next steps  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc back')
@@ -3715,9 +3722,9 @@ def next_step_settings(read, until, send, output):
     assert rows[at - 1:at + 4] == [
         '\u203a Apply 1 suggested setting',
         '  After /flow:step',
-        '    \u2192 /flow:step         ask me \u00b7 as any other command \u00b7 suggested: continue automatically',
-        '    \u2192 /flow:done         continue automatically \u00b7 this project',
-        '    \u2192 any other command  ask me \u00b7 all projects',
+        '    \u2192 /flow:step            ask me \u00b7 as any other command \u00b7 suggested: continue automatically',
+        '    \u2192 /flow:done            continue automatically \u00b7 this project',
+        '    \u2192 any other command     ask me \u00b7 all projects',
     ], rows
     assert 'for the steps marked "suggested" below, which you have not set yourself' in \
         ' '.join(row.strip() for row in rows), rows
@@ -3738,7 +3745,7 @@ def next_step_settings(read, until, send, output):
     assert 'Saved for all projects in' in note and \
         'autonomy.yaml: /flow:step \u2192 /flow:step: continue automatically.' in note, rows
     send(b'\r')
-    rows = on_screen('\u203a   \u2192 /flow:step         continue automatically \u00b7 all projects')
+    rows = on_screen('\u203a   \u2192 /flow:step            continue automatically \u00b7 all projects')
     assert 'Apply' not in '\n'.join(rows), rows
     # Autopilot decides: the project's setting goes, and the one for any other command holds.
     send(b'\x1b[B\r')
@@ -3749,7 +3756,7 @@ def next_step_settings(read, until, send, output):
     assert "Takes its setting out of this project's file. The setting for any other command still holds" \
         in note, rows
     send(b'\r')
-    on_screen('\u203a   \u2192 /flow:done         ask me \u00b7 as any other command')
+    on_screen('\u203a   \u2192 /flow:done            ask me \u00b7 as any other command')
     send(b'\x1b')
     on_screen('\u203a ' + setting('Next steps', 'continue automatically: 1 \u00b7 ask me: 2'))
     send(b'\x1b[A\r')
@@ -4263,7 +4270,7 @@ def fullscreen_turn(read, until, send, output):
 def fullscreen_turn_resumed(read, until, send, output):
     """The turn is shown as it ran: reasoning, the edit's diff, the failed command on the failure's
     background, the reply."""
-    shown, on_screen = full_screen()(read, output)
+    shown, on_screen = full_screen(rows=28)(read, output)
     rows = on_screen('Done, it says two.')
     text = '\n'.join(rows)
     for expected in [' bash  echo checked; exit 2', '\n checked\n', 'Command exited with code 2']:
@@ -4413,7 +4420,7 @@ def prompt_keys(read, until, send, output):
     # Ctrl+Home shows the conversation's start, Ctrl+End its end again.
     send(b'\x1b[1;5H')
     # Shortened, beside the hand-off.
-    rows = on_screen('\u219342')
+    rows = on_screen('\u219345')
     assert rows[0] == 'scramjet v' + VERSION and ' \u203a go' in rows, rows
     send(b'\x1b[1;5F')
     rows = on_screen('Row 40 of the reply.')
@@ -4896,7 +4903,8 @@ run([], fullscreen_turn, serve_items([
     [tool_call('call_2', 'bash', {'command': 'echo checked; exit 2'})],
     [message('**Done**, it says two.')],
 ]))
-run(['--continue'], fullscreen_turn_resumed)
+# Taller than the default, to fit the banner's built-in skill with the turn on a page.
+run(['--continue'], fullscreen_turn_resumed, rows=28)
 run([], fullscreen_typed_during_turn, talking)
 known = set(session_files())
 run([], fullscreen_queue, serve_items([
@@ -5195,7 +5203,9 @@ for arguments in [[], ['--system-prompt', 'Given.', '--append-system-prompt', ap
 found, given = (body['instructions'] for body in sent_bodies)
 assert found.startswith('From SYSTEM.md.\n\n# Project Context\n'), found
 assert '\n## %s\n\nContext here.\n' % os.path.realpath(context_file) in found, found
-assert given.startswith('Given.\n\nFrom a file.\n\nInline.\n\n# Scramjet\n'), given
+# Then the skills, here the built-in set's, then the harness's own section.
+assert given.startswith('Given.\n\nFrom a file.\n\nInline.\n\nThe following skills provide'), given
+assert '</available_skills>\n\n# Scramjet\n' in given, given
 os.remove(context_file)
 os.remove(system_md)
 print('agent editor journeys passed')

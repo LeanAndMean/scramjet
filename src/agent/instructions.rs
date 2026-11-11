@@ -9,8 +9,6 @@ use std::path::{Path, PathBuf};
 const CONTEXT_FILE_BYTES: u64 = 256 << 10;
 /// Scramjet's base directives, from its command framing to its release timing.
 const DIRECTIVES: &str = include_str!("directives.md");
-/// This build's README, which the instructions point to when it is there.
-pub(super) const README: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/README.md");
 
 /// The agent's instructions, in Scramjet's order: Pi's list of the `tools` offered and the
 /// guidelines for them, or the opening `loaded` has in their place, the texts it appends, the
@@ -151,7 +149,7 @@ delegation. Mach 12 is one such command set (the issue → plan → review →
 implement → PR → ship methodology); other sets can sit alongside it.
 "
     .to_owned();
-    let readme = Path::new(README).is_file().then(|| README.to_owned());
+    let readme = super::builtin::readme().map(|readme| readme.display().to_string());
     let help = std::env::current_exe().ok().map(|exe| {
         format!(
             "`{} --help` (every option, key and built-in command)",
@@ -666,9 +664,9 @@ them in implementation plans, never flag their absence in reviews, and never per
 feature implementation. A dedicated pre-merge step handles them at the correct time; doing them \
 earlier causes version conflicts between parallel PRs."
         ));
-        let readme = match Path::new(README).is_file() {
-            true => format!("{README}; "),
-            false => String::new(),
+        let readme = match crate::agent::builtin::readme() {
+            Some(readme) => format!("{}; ", readme.display()),
+            None => String::new(),
         };
         assert!(text.contains(&format!(
             "about Scramjet itself — its commands, command sets, \

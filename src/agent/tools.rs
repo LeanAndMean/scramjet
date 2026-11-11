@@ -1,7 +1,6 @@
 use super::{
     CompactRead, ToolDetail,
     image::{self, Image},
-    instructions,
     sandbox::{self, Hidden, Sandbox},
 };
 use serde_json::{Value, json};
@@ -374,7 +373,7 @@ impl<'a> Call<'a> {
             let skill = skill.map_or(name.into(), |skill| skill.to_string_lossy());
             return Some(CompactRead::Skill(format!("{skill}{lines}")));
         }
-        if path == Path::new(instructions::README) {
+        if super::builtin::readme_paths().any(|readme| path == readme) {
             return Some(CompactRead::Docs(format!("README.md{lines}")));
         }
         if !matches!(name, "AGENTS.md" | "AGENTS.MD" | "CLAUDE.md" | "CLAUDE.MD") {
@@ -2425,7 +2424,7 @@ inline image size limit.]",
             ))
         );
         assert_eq!(
-            compact(json!({"path":instructions::README})),
+            compact(json!({"path":crate::agent::builtin::readme_paths().next().unwrap()})),
             Some(CompactRead::Docs("README.md".into()))
         );
         for other in [

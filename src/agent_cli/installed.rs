@@ -126,6 +126,9 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 },
                 Origin::Global => "Found in Scramjet's directory of command sets.".to_owned(),
                 Origin::Project => "Found in this project's .scramjet directory.".to_owned(),
+                Origin::BuiltIn => {
+                    "Comes with Scramjet; a set installed under its name replaces it.".to_owned()
+                }
             };
             let columns = vec![
                 set.name.clone(),
