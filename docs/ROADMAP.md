@@ -90,6 +90,8 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 **Releases (user decisions, 2026-11-09 and 2026-11-10):** public prereleases with executables for every target platform (the Raspberry Pi 5 included), checked by CI, for the versions the user asks for ([design](DESIGN.md#releases-updates-and-going-public-2026-11-09)); `update` updates the program from them, and "What's new" and `/changelog` show the changelog. Going public no longer waits for every platform; the first stable release does.
 
+**Ahead of RPC mode (user decisions, second steer of 2026-11-11):** the private package's Windows login and the `[Providers]` banner, the progress indicator, item 52, the linter, setting up command-set repositories (with SemVer for Mach 12 and darkstar), other harnesses' sessions, write access granted while working, then local models in `/login` ([design](DESIGN.md#ahead-of-rpc-mode-2026-11-11)).
+
 **RPC mode (user decision, 2026-11-09):** `scramjet --mode rpc` for front ends built in other repositories ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)), after the platforms and before what is left of S3's parallel work and S5, now the lowest priority. Its protocol design is signed off by the user before it is built; no network surface and no daemon in this repository.
 
 ## S5 — Capacity and admission hardening
