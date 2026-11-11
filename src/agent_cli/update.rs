@@ -111,7 +111,8 @@ fn check(file: &Path, releases: &str, now: u64, before: Value) {
     let _ = scramjet::agent::write_replacing(file, &format!("{record:#}\n"));
 }
 
-pub(super) fn update_self() -> Result<(), String> {
+/// Replaces the program with the newest release when it is newer, or whatever it is if `force`.
+pub(super) fn update_self(force: bool) -> Result<(), String> {
     let program =
         std::env::current_exe().map_err(|error| format!("cannot find this program: {error}"))?;
     if by_npm(&program) {
@@ -127,7 +128,8 @@ pub(super) fn update_self() -> Result<(), String> {
             &releases,
             &program,
             env!("CARGO_PKG_VERSION"),
-            std::env::consts::ARCH
+            std::env::consts::ARCH,
+            force
         )?
     );
     Ok(())
@@ -148,7 +150,13 @@ fn get(what: &str, url: &str, limit: usize, timeout: Duration) -> Result<Vec<u8>
     scramjet::agent::download(what, url, &headers, limit, timeout)
 }
 
-fn replace(releases: &str, program: &Path, current: &str, arch: &str) -> Result<String, String> {
+fn replace(
+    releases: &str,
+    program: &Path,
+    current: &str,
+    arch: &str,
+    force: bool,
+) -> Result<String, String> {
     let running =
         Version::parse(current).map_err(|error| format!("this version {current:?}: {error}"))?;
     let what = format!("{REPOSITORY}'s release list");
@@ -161,7 +169,7 @@ fn replace(releases: &str, program: &Path, current: &str, arch: &str) -> Result<
         ));
     };
     let tag = release["tag_name"].as_str().unwrap_or_default();
-    if newest.cmp_precedence(&running).is_le() {
+    if !force && newest.cmp_precedence(&running).is_le() {
         return Ok(format!(
             "scramjet {current} is up to date (newest release {tag})"
         ));
@@ -575,7 +583,14 @@ mod tests {
         ] {
             let latest = &tag[1..];
             let release = release(test, tag, latest, str::to_owned);
-            let said = replace(&release.releases, &release.program, running, "x86_64").unwrap();
+            let said = replace(
+                &release.releases,
+                &release.program,
+                running,
+                "x86_64",
+                false,
+            )
+            .unwrap();
             assert!(
                 said.starts_with(&format!("Updated scramjet: {running}..{latest} (")),
                 "{said}"
@@ -609,13 +624,41 @@ mod tests {
             ("final", "v2.0.0-alpha.3", "2.0.0"),
         ] {
             let release = release(test, tag, &tag[1..], str::to_owned);
-            let said = replace(&release.releases, &release.program, running, "x86_64").unwrap();
+            let said = replace(
+                &release.releases,
+                &release.program,
+                running,
+                "x86_64",
+                false,
+            )
+            .unwrap();
             assert_eq!(
                 said,
                 format!("scramjet {running} is up to date (newest release {tag})")
             );
             assert_eq!(fs::read_to_string(&release.program).unwrap(), "old");
             assert_eq!(requests(&release), ["/releases"]);
+        }
+    }
+
+    #[test]
+    fn force_replaces_the_program_with_the_newest_release_whatever_it_is() {
+        for (test, tag, running) in [
+            ("forced-same", "v2.140.0", "2.140.0"),
+            ("forced-older", "v2.140.0", "2.141.0"),
+        ] {
+            let release = release(test, tag, &tag[1..], str::to_owned);
+            let said =
+                replace(&release.releases, &release.program, running, "x86_64", true).unwrap();
+            let latest = &tag[1..];
+            assert!(
+                said.starts_with(&format!("Updated scramjet: {running}..{latest} (")),
+                "{said}"
+            );
+            assert_eq!(
+                fs::read_to_string(&release.program).unwrap(),
+                format!("#!/bin/sh\necho {latest}\n")
+            );
         }
     }
 
@@ -646,8 +689,14 @@ mod tests {
         ];
         for (test, says, sums, problem) in cases {
             let release = release(test, "v0.10.0", says, sums);
-            let error =
-                replace(&release.releases, &release.program, "0.9.3", "x86_64").unwrap_err();
+            let error = replace(
+                &release.releases,
+                &release.program,
+                "0.9.3",
+                "x86_64",
+                false,
+            )
+            .unwrap_err();
             assert!(error.contains(problem), "{test}: {error}");
             assert_eq!(fs::read_to_string(&release.program).unwrap(), "old");
             assert_eq!(leftovers(&release), ["assets", PROGRAM, "stage"]);
@@ -657,7 +706,14 @@ mod tests {
     #[test]
     fn a_release_without_this_platform_or_an_unreachable_list_says_so() {
         let release = release("platform", "v0.10.0", "0.10.0", str::to_owned);
-        let error = replace(&release.releases, &release.program, "0.9.3", "riscv64").unwrap_err();
+        let error = replace(
+            &release.releases,
+            &release.program,
+            "0.9.3",
+            "riscv64",
+            false,
+        )
+        .unwrap_err();
         assert_eq!(
             error,
             format!(
@@ -666,7 +722,7 @@ mod tests {
             )
         );
         let gone = release.releases.replace("/releases", "/gone");
-        let error = replace(&gone, &release.program, "0.9.3", "x86_64").unwrap_err();
+        let error = replace(&gone, &release.program, "0.9.3", "x86_64", false).unwrap_err();
         assert_eq!(
             error,
             "LeanAndMean/scramjet's release list answered HTTP 404"

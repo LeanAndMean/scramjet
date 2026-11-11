@@ -4,6 +4,17 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.153.0 — Scramjet 1's command lines
+
+### Added
+
+- `--provider NAME`, as in Scramjet 1: `--provider P --model M` chooses `P/M`.
+- `scramjet update --extensions` updates only the packages, `--extension NAME` one of them, `--self` only the program, and `--force` takes the newest release even when it is not newer, as in Scramjet 1.
+
+### Changed
+
+- `--verbose`, `--mode text`, `-ne` (`--no-extensions`) and `-np` (`--no-prompt-templates`) are taken, changing nothing, so Scramjet 1's aliases and scripts with them start. `--mode json` and `rpc`, `--extension`, `--prompt-template`, `--api-key` and `--model-definition` stop with what to do instead, rather than as unknown arguments.
+
 ## 2.152.1 — The ssh-agent in the hidden-stores note
 
 ### Fixed

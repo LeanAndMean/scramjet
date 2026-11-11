@@ -4,7 +4,7 @@ use scramjet::agent::{HARNESS_TOOLS, SandboxMode, SystemPrompt};
 use std::{ffi::OsString, path::PathBuf};
 
 pub(super) const USAGE: &str =
-    "Usage: scramjet [--project DIR] [--model PATTERN] [--models PATTERNS]
+    "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N]
 [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--system-prompt TEXT]
@@ -37,6 +37,8 @@ but to NO_PROXY's hosts and this machine.
                          one a resumed session last used; for a new session, the one last
                          chosen in this project, else anywhere, as in Scramjet 1, else
                          gpt-6-luna)
+  --provider NAME        the provider whose model --model names, as in Scramjet 1: --provider
+                         P --model M is --model P/M; without --model it chooses nothing
   --models PATTERNS      the models Ctrl+P cycles through, comma-separated, in place of the
                          settings' enabledModels: each a model's id, part of its id or name,
                          or a glob (claude-*), with an optional :LEVEL; a new session without
@@ -108,6 +110,10 @@ but to NO_PROXY's hosts and this machine.
                          (sandbox-exec). `!` commands you type stay outside
   --offline              no network at start, as SCRAMJET_OFFLINE=1: packages not cloned
                          yet are not cloned, and no newer release is looked for
+  --verbose, --mode text, -ne, --no-extensions, -np, --no-prompt-templates
+                         taken as Scramjet 1 takes them, changing nothing: the start always
+                         shows what it loaded, and Scramjet 2 has no extensions or prompt
+                         templates
   -p, --print            run the messages and exit; a message `-` is read from stdin
   @FILE                  send FILE with the first message (or alone), as Scramjet 1 does: a
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
@@ -219,8 +225,10 @@ $XDG_DATA_HOME/scramjet/git, recorded in the settings' packages: its sets are it
 directory when that is a set, else the sets at its top and those with a set.yaml deeper, and
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
 and `remove REPO` deletes the clone. `update self` replaces the program with the newest
-release of LeanAndMean/scramjet; the full screen's start says when one newer than this is out,
-looking at most once a day (not with --offline). `lint DIR...` checks the sets in DIR as the harness loads
+release of LeanAndMean/scramjet (--force: even when it is not newer); the full screen's start
+says when one newer than this is out, looking at most once a day (not with --offline). As in
+Scramjet 1, a plain `update` does both, `update --extensions` only the packages, `--extension
+NAME|REPO` one of them, and `--self` only the program. `lint DIR...` checks the sets in DIR as the harness loads
 them and as Scramjet 1's scramjet-command-lint does (`lint --help`). `import` copies Scramjet
 1's setup from ~/.scramjet/agent, converted, never over a file here, and lists what it leaves
 and why (`import --help`); the first interactive start that finds one offers it.
@@ -266,6 +274,8 @@ pub(super) enum Start {
 pub(super) struct Options {
     pub(super) project: Option<PathBuf>,
     pub(super) model: Option<String>,
+    /// `--provider`: the provider `--model` names one of the models of.
+    pub(super) provider: Option<String>,
     /// `--models`: the patterns of the models Ctrl+P cycles through, for the session.
     pub(super) models: Option<Vec<String>>,
     pub(super) effort: Option<String>,
@@ -309,6 +319,7 @@ impl Options {
         let mut options = Self {
             project: None,
             model: None,
+            provider: None,
             models: None,
             effort: None,
             max_output_tokens: None,
@@ -349,6 +360,45 @@ impl Options {
             match argument.to_str() {
                 Some("--project") => options.project = Some(PathBuf::from(value()?)),
                 Some("--model") => options.model = Some(value()?),
+                Some("--provider") => options.provider = Some(value()?),
+                // Scramjet 1's, with nothing to change here: the start always shows what it
+                // loaded, and there are no extensions or prompt templates to leave out.
+                Some("--verbose" | "-ne" | "--no-extensions" | "-np" | "--no-prompt-templates") => {
+                }
+                Some("--mode") => match value()?.as_str() {
+                    "text" => {}
+                    mode @ ("json" | "rpc") => {
+                        return Err(format!(
+                            "--mode {mode} is not in Scramjet 2 yet; -p prints the replies as text"
+                        ));
+                    }
+                    mode => {
+                        return Err(format!(
+                            "invalid --mode {mode:?}: valid modes are text, json and rpc"
+                        ));
+                    }
+                },
+                Some(name @ ("-e" | "--extension" | "--prompt-template")) => {
+                    return Err(format!(
+                        "{name}: Scramjet 2 runs no TypeScript extensions or prompt templates; \
+command sets and skills take their place (`scramjet import --dry-run` says what of Scramjet 1's \
+setup it leaves)"
+                    ));
+                }
+                Some(name @ ("--model-definition" | "--model-definition-env")) => {
+                    return Err(format!(
+                        "{name} is not in Scramjet 2: add the provider and its models to \
+models.json (see --help)"
+                    ));
+                }
+                // Never repeats the key.
+                Some("--api-key") => {
+                    return Err(
+                        "--api-key is not in Scramjet 2: give the provider's apiKey in \
+models.json (an environment variable's name or a !command), or /login"
+                            .to_owned(),
+                    );
+                }
                 Some("--models") => {
                     let patterns = value()?.split(',').map(|p| p.trim().to_owned()).collect();
                     options.models = Some(patterns)

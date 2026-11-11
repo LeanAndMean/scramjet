@@ -187,6 +187,106 @@ or https:// URL\n",
 }
 
 #[test]
+fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-v1-{}", std::process::id())));
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    // Two providers offering gpt-6-luna, at closed ports that tell them apart.
+    let models = r#"{"providers": {
+        "test": {"baseUrl": "http://127.0.0.1:9/v1", "api": "openai-responses",
+            "models": [{"id": "gpt-6-luna"}]},
+        "remote": {"baseUrl": "http://127.0.0.1:7/v1", "api": "openai-responses",
+            "models": [{"id": "gpt-6-luna"}, {"id": "far"}]}}}"#;
+    std::fs::write(config.join("scramjet/models.json"), models).unwrap();
+    let run = |arguments: &[&str]| {
+        let output = program(&binary())
+            .args(["-p", "--no-session", "--retries", "0"])
+            .args(arguments)
+            .arg("hi")
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("SCRAMJET_OFFLINE", "1")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let reached = |port: u16, provider: &str| format!("127.0.0.1:{port} (provider {provider})");
+    let said = run(&["--model", "gpt-6-luna"]);
+    assert!(said.contains(&reached(9, "test")), "{said}");
+    for given in [
+        &["--provider", "remote", "--model", "gpt-6-luna"][..],
+        &["--provider", "REMOTE", "--model", "remote/fa"],
+        &[
+            "--model",
+            "gpt-6-luna",
+            "--provider",
+            "remote",
+            "--verbose",
+            "-ne",
+            "-np",
+        ],
+        &[
+            "--model",
+            "far",
+            "--mode",
+            "text",
+            "--no-extensions",
+            "--no-prompt-templates",
+        ],
+    ] {
+        let said = run(given);
+        assert!(said.contains(&reached(7, "remote")), "{given:?}: {said}");
+    }
+    let said = run(&["--provider", "test"]);
+    assert!(
+        said.starts_with("--provider test chooses no model without --model; ignored\n"),
+        "{said}"
+    );
+    let refused = [
+        (
+            &["--provider", "nowhere", "--model", "far"][..],
+            "--provider \"nowhere\" is none of the providers (--list-models lists them)",
+        ),
+        (
+            &["--provider", "test", "--model", "far"],
+            "--provider \"test\" --model \"far\" names none of its models (--list-models lists them)",
+        ),
+        (
+            &["--mode", "rpc"],
+            "--mode rpc is not in Scramjet 2 yet; -p prints the replies as text",
+        ),
+        (
+            &["--mode", "xml"],
+            "invalid --mode \"xml\": valid modes are text, json and rpc",
+        ),
+    ];
+    for (given, error) in refused {
+        assert_eq!(run(given), format!("scramjet: {error}\n"), "{given:?}");
+    }
+    for given in [
+        &["--api-key", "sk-not-repeated"][..],
+        &["-e", "x.ts"],
+        &["--extension", "x.ts"],
+        &["--prompt-template", "p"],
+        &["--model-definition", "{}"],
+        &["--model-definition-env", "ROUTE"],
+    ] {
+        let said = run(given);
+        assert!(
+            said.starts_with(&format!("scramjet: {}", given[0])),
+            "{said}"
+        );
+        assert!(said.contains("Scramjet 2"), "{said}");
+        assert!(
+            !said.contains("sk-not-repeated") && !said.contains("Usage"),
+            "{said}"
+        );
+    }
+}
+
+#[test]
 fn list_credential_stores_lists_the_common_ones_and_those_files_name() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-stores-{}", std::process::id())));
@@ -994,6 +1094,20 @@ mach12 ({kit}): 1 command, 0 agents\n  providers (providers): 0 commands, \
     let (ok, out, _) = run(&["update", "mach12"]);
     assert!(ok);
     assert_eq!(out, format!("{source}: up to date ({second})\n"));
+    // Scramjet 1's options: the packages alone, one of them, or the program alone.
+    let packages_only = format!("{source}: up to date ({second})\n");
+    assert_eq!(run(&["update", "--extensions"]).1, packages_only);
+    assert_eq!(run(&["update", "--extension", "mach12"]).1, packages_only);
+    assert_eq!(run(&["update", "--self"]).1, up_to_date);
+    let (ok, out, _) = run(&["update", "self", "--extensions"]);
+    assert!(ok);
+    assert_eq!(out, format!("{packages_only}{up_to_date}"));
+    let (ok, _, err) = run(&["update", "mach12", "--extensions"]);
+    assert!(!ok);
+    assert!(
+        err.starts_with("scramjet: Usage: scramjet install"),
+        "{err}"
+    );
     assert!(run(&["list"]).1.contains("2 commands"));
 
     // A clone gone is said at start and cloned again by an update.

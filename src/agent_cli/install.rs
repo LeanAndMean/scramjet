@@ -9,7 +9,7 @@ use scramjet::agent::{Inventory, Problem, Set, inventory, sets_in, shortened};
 use std::path::{Path, PathBuf};
 
 pub(super) const USAGE: &str =
-    "Usage: scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
+    "Usage: scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] [--force] | list
 REPO: git:github.com/USER/REPO[@REF], git:git@github.com:USER/REPO or a git URL";
 
 /// Runs `command` with its `arguments` when it is one of these; `None` when it is not.
@@ -20,18 +20,48 @@ pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), Stri
             Some(source) => source.and_then(install_package),
         },
         ("remove" | "uninstall", [reference]) => remove(reference),
-        ("update", []) => {
-            let packages = update(None);
-            let program = super::update::update_self();
-            packages.and(program)
-        }
-        ("update", [this]) if this == "self" || this == "--self" => super::update::update_self(),
-        ("update", [reference]) => update(Some(reference)),
+        ("update", arguments) => match update_target(arguments) {
+            Some((packages, program, force)) => {
+                let packages = packages.map(|reference| update(reference.as_deref()));
+                let program = program.then(|| super::update::update_self(force));
+                (packages.unwrap_or(Ok(()))).and(program.unwrap_or(Ok(())))
+            }
+            None => Err(USAGE.to_owned()),
+        },
         ("list", []) => list(),
-        ("install" | "remove" | "uninstall" | "update" | "list", _) => Err(USAGE.to_owned()),
+        ("install" | "remove" | "uninstall" | "list", _) => Err(USAGE.to_owned()),
         _ => return None,
     };
     Some(result)
+}
+
+/// What `update`'s `arguments` update, as Scramjet 1's: the packages (all, or the one named),
+/// the program, and whether to replace it even when no release is newer (`--force`). `None`
+/// when they make no sense together.
+fn update_target(arguments: &[String]) -> Option<(Option<Option<String>>, bool, bool)> {
+    let (mut named, mut one, mut program, mut packages, mut force) =
+        (None, None, false, false, false);
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--self" => program = true,
+            "--extensions" => packages = true,
+            "--force" => force = true,
+            "--extension" if one.is_none() => one = Some(arguments.next()?.clone()),
+            option if option.starts_with('-') => return None,
+            _ if named.is_some() => return None,
+            reference => named = Some(reference.to_owned()),
+        }
+    }
+    match (one, named.as_deref()) {
+        (None, Some("self")) => Some((packages.then_some(None), true, force)),
+        (Some(_), Some(_)) => None,
+        (Some(_), None) | (None, Some(_)) if program || packages => None,
+        (Some(one), None) => Some((Some(Some(one)), false, force)),
+        (None, Some(named)) => Some((Some(Some(named.to_owned())), false, force)),
+        (None, None) if program || packages => Some((packages.then_some(None), program, force)),
+        (None, None) => Some((Some(None), true, force)),
+    }
 }
 
 fn install(directory: &Path) -> Result<(), String> {
@@ -526,4 +556,51 @@ fn print_texts<'a>(texts: impl IntoIterator<Item = &'a str>) {
 
 fn shown(path: &Path) -> String {
     shortened(&path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_target;
+
+    #[test]
+    fn update_takes_scramjet_1s_options() {
+        let target = |arguments: &[&str]| {
+            let arguments: Vec<String> = arguments.iter().map(|a| a.to_string()).collect();
+            update_target(&arguments)
+        };
+        let one = |name: &str| Some(Some(name.to_owned()));
+        assert_eq!(target(&[]), Some((Some(None), true, false)));
+        assert_eq!(target(&["self"]), Some((None, true, false)));
+        assert_eq!(target(&["--self"]), Some((None, true, false)));
+        assert_eq!(
+            target(&["self", "--self", "--force"]),
+            Some((None, true, true))
+        );
+        assert_eq!(target(&["--extensions"]), Some((Some(None), false, false)));
+        assert_eq!(
+            target(&["--self", "--extensions"]),
+            Some((Some(None), true, false))
+        );
+        assert_eq!(
+            target(&["self", "--extensions"]),
+            Some((Some(None), true, false))
+        );
+        assert_eq!(target(&["mach12"]), Some((one("mach12"), false, false)));
+        assert_eq!(
+            target(&["--extension", "mach12"]),
+            Some((one("mach12"), false, false))
+        );
+        for refused in [
+            &["a", "b"][..],
+            &["mach12", "--self"],
+            &["mach12", "--extensions"],
+            &["--extension", "a", "b"],
+            &["--extension", "a", "--extensions"],
+            &["--extension", "a", "--extension", "b"],
+            &["--extension"],
+            &["--local"],
+        ] {
+            assert_eq!(target(refused), None, "{refused:?}");
+        }
+    }
 }

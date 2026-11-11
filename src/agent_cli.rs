@@ -334,7 +334,11 @@ fn start(
     let providers = Providers::read(settings.models_files(), agent::login::Logins::user());
     // Before the session starts, so that a pattern naming no model leaves none behind.
     let named = match &options.model {
-        Some(pattern) => Some(named_model(pattern, &providers)?),
+        Some(pattern) => Some(named_model(
+            pattern,
+            options.provider.as_deref(),
+            &providers,
+        )?),
         None => None,
     };
     let chosen = named.is_some();
@@ -355,6 +359,11 @@ fn start(
         no_skills: options.no_skills,
     };
     let mut warnings: Vec<String> = providers.problems().to_vec();
+    if let (Some(provider), None) = (&options.provider, &options.model) {
+        warnings.push(format!(
+            "--provider {provider} chooses no model without --model; ignored"
+        ));
+    }
     if providers.options().is_empty() {
         let file = (providers.files().first())
             .map_or("models.json".into(), |file| file.display().to_string());
@@ -450,16 +459,51 @@ fn given_path(path: &str, cwd: &Path) -> PathBuf {
 
 /// The model `--model` names, with the level its `:level` sets. When the providers list no
 /// models, `pattern` is taken as an id, as before it could be checked.
-fn named_model(pattern: &str, providers: &Providers) -> Result<scope::Scoped, String> {
+/// The model `pattern` names, as `scope::named` finds it; with a `provider`, as Scramjet 1's
+/// `--provider`, among that provider's models, a `provider/` before it left out.
+fn named_model(
+    pattern: &str,
+    provider: Option<&str>,
+    providers: &Providers,
+) -> Result<scope::Scoped, String> {
+    let pattern = pattern.trim();
+    // As Scramjet 1's, `--provider P --model P/M` is `--model M` among P's.
+    let pattern = (pattern.split_once('/'))
+        .filter(|(before, _)| provider.is_some_and(|p| before.eq_ignore_ascii_case(p)))
+        .map_or(pattern, |(_, rest)| rest);
     let models = providers.options();
     if models.is_empty() {
-        let model = pattern.trim().to_owned();
+        let model = match provider {
+            Some(provider) => format!("{provider}/{pattern}"),
+            None => pattern.to_owned(),
+        };
         return Ok(scope::Scoped { model, level: None });
     }
+    let models = match provider {
+        None => models,
+        Some(provider) => {
+            let theirs: Vec<ModelOption> = (models.iter())
+                .filter(|model| {
+                    (model.provider.as_deref()).is_some_and(|p| p.eq_ignore_ascii_case(provider))
+                })
+                .cloned()
+                .collect();
+            if theirs.is_empty() {
+                return Err(format!(
+                    "--provider {provider:?} is none of the providers (--list-models lists them)"
+                ));
+            }
+            theirs
+        }
+    };
     scope::named(pattern, &models).ok_or_else(|| {
-        format!(
-            "--model {pattern:?} names none of the providers' models (--list-models lists them)"
-        )
+        let named = match provider {
+            Some(provider) => {
+                format!("--provider {provider:?} --model {pattern:?} names none of its")
+            }
+            None => format!("--model {pattern:?} names none of the providers'"),
+        };
+        format!("{named} models (--list-models lists them)")
     })
 }
 
