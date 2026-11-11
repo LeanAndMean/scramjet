@@ -2,10 +2,10 @@
 description: Diagnose unexpected command behavior and recommend safe resolution
 argument-hint: "[symptom or command]"
 allowed-tools:
-  - read
-  - bash
-  - grep
-  - glob
+  - Read
+  - Bash
+  - Grep
+  - Glob
 next:
   mode: open
   candidates:

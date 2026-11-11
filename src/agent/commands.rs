@@ -5,6 +5,7 @@
 
 use super::Problem;
 use super::autonomy::{self, Publication, Publications, Suggestion};
+use super::subagent::ours;
 use super::yaml;
 use std::{
     fs,
@@ -665,7 +666,8 @@ fn parse(
 }
 
 /// The tools an `allowed-tools` value names, as Scramjet's `parseAllowedTools` reads a list or
-/// a comma-separated string; a list's entries that are not strings are noted and ignored.
+/// a comma-separated string, Claude Code's names read as ours; a list's entries that are not
+/// strings are noted and ignored.
 fn allowed_tools(raw: &Yaml, file: &str, notices: &mut Vec<String>) -> Option<Vec<String>> {
     let tools: Vec<String> = match raw {
         Yaml::Array(items) => {
@@ -685,12 +687,12 @@ fn allowed_tools(raw: &Yaml, file: &str, notices: &mut Vec<String>) -> Option<Ve
                 ));
             }
             (items.iter().filter_map(Yaml::as_str))
-                .map(|tool| tool.trim().to_owned())
+                .map(|tool| ours(tool.trim()).to_owned())
                 .filter(|tool| !tool.is_empty())
                 .collect()
         }
         Yaml::String(text) => (text.split(','))
-            .map(|tool| tool.trim().to_owned())
+            .map(|tool| ours(tool.trim()).to_owned())
             .filter(|tool| !tool.is_empty())
             .collect(),
         _ => Vec::new(),
@@ -1457,6 +1459,10 @@ at byte 14 line 1 column 15"
             (names(&["bash", "read"]), vec![])
         );
         assert_eq!(tools("bash, ,grep"), (names(&["bash", "grep"]), vec![]));
+        assert_eq!(
+            tools("[Bash, Read, Glob, MultiEdit, create_pr]").0,
+            names(&["bash", "read", "find", "edit", "create_pr"])
+        );
         assert_eq!(
             tools("[bash, 3, {a: 1}]"),
             (

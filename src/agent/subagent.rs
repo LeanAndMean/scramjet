@@ -85,7 +85,7 @@ under every scope."},
 }
 
 /// The name here of a tool an agent file names as Claude Code does, so that one file serves both.
-fn ours(tool: &str) -> &str {
+pub(super) fn ours(tool: &str) -> &str {
     match tool {
         "Read" => "read",
         "Write" => "write",

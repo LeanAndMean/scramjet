@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.146.0 — Commands name tools as Claude Code does
+
+### Changed
+
+- A command's `allowed-tools` may name the built-in tools as Claude Code does (`Bash`, `Read`, `Grep`, `Glob`, `Edit`, `Write`), as agents' `tools` already could, so one command file serves both; Claude Code matches those names case-sensitively and asks for, or in `dontAsk` mode refuses, a tool listed as `bash`. The `scramjet` set's command lists them so.
+
 ## 2.145.0 — Import Scramjet 1's setup
 
 ### Added
