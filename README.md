@@ -63,7 +63,8 @@ scramjet -c                               # continue this project's latest sessi
 scramjet -r                               # choose a session to resume
 scramjet --model opus:high                # the newest Opus, at high effort
 scramjet --list-models                    # the providers' models
-scramjet install ~/repos/mach12                              # a command set, by reference
+scramjet install git:github.com/LeanAndMean/mach12           # Mach 12's command sets, from git
+scramjet install ~/work/my-set                               # a command set, by reference
 scramjet install ~/repos/scramjet/packages/scramjet          # a package: its sets, skills and themes
 scramjet install git:github.com/USER/REPO                     # the sets in a git repository
 scramjet update                           # pull the packages not pinned to a ref, then update the program
@@ -131,7 +132,7 @@ Scramjet 2 reads nothing of Scramjet 1's `~/.scramjet/agent`, and Scramjet 1 not
 - `models.json`: a provider entry needs its `baseUrl` and `api`, and its `models` unless its server lists them, as there are no built-in providers. An entry that only changes a built-in one (`anthropic` or `openai` with a `baseUrl` or `modelOverrides`) is left out: copy it with an `api` (`anthropic-messages`, `openai-responses`). `--list-models` says what is missing.
 - `auth.json`: ChatGPT's and GitHub Copilot's logins carry over. A ChatGPT login renewed by one of the two programs stops working in the other, which then needs `/login` again; to use both, `/login` in each instead of copying. Saved API keys do not carry over (Scramjet 2 keeps with each key the servers it may go to): enter them again under `/login`. The import takes only the logins of providers not logged in to here.
 - `keybindings.json`, `themes/`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md` and `CLAUDE.md` as they are, and `skills/`.
-- `agents/`: your own agents (`*.md`). The import leaves out those named `<set>:<name>` (such as `mach12:code-reviewer.md`): they come with their command set, which you install instead (`scramjet install ~/repos/mach12`); while it is installed, loose copies are skipped with a warning.
+- `agents/`: your own agents (`*.md`). The import leaves out those named `<set>:<name>` (such as `mach12:code-reviewer.md`): they come with their command set, which you install instead (`scramjet install git:github.com/LeanAndMean/mach12`); while it is installed, loose copies are skipped with a warning.
 
 What does not carry over: TypeScript extensions and Pi packages (the private provider package has a Scramjet 2 package of its own), `prompts/` (make them a command set's `commands/`), `git/` (Scramjet 2 clones its packages again into `~/.local/share/scramjet/git/`) and `sessions/`.
 
