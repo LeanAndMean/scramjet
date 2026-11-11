@@ -8,7 +8,7 @@ An alpha: a working agent, used daily on one platform and barely or never on the
 
 - **Linux x86_64 and WSL2** (Ubuntu 20.04): in daily use by its author. Subagents and unattended turns run under Bubblewrap.
 - **Windows x86_64:** tried by its author in Windows Terminal and on a colleague's PC with Git for Windows. Commands run in PowerShell, and in Git for Windows' bash where it is installed, with a cmd tool to switch on in `/settings`. The main agent has no sandbox, so its commands in unattended turns see everything (it says so); subagents' run at Windows' low integrity level, which keeps them from changing files on local disks but hides nothing.
-- **macOS:** nobody has run it on a Mac. Each release's tests pass on GitHub's arm64 runners; the Intel build is only compiled; the Seatbelt sandbox and the clipboard have never been checked there.
+- **macOS:** nobody has run it on a Mac. Each release's tests pass on GitHub's arm64 runners; the Intel build is only compiled; the Seatbelt sandbox passes its checks on those runners; the clipboard and terminals have never been checked there.
 - **Linux aarch64** (such as a Raspberry Pi 5): nobody has run it there. Each release's tests pass on GitHub's arm64 runners, whose kernel has 4 KB pages; Raspberry Pi OS's has 16 KB.
 - **Providers:** in daily use through a local proxy speaking OpenAI's Responses and Anthropic's Messages APIs. ChatGPT's and GitHub Copilot's logins, and Chat Completions servers, were checked live when they were built and have been little used since.
 - Not built yet: parallel agents at scale (the ~8,000 concurrent requests goal); [docs/TASKS.md](https://github.com/LeanAndMean/scramjet/blob/main/docs/TASKS.md) lists the pending work.
@@ -21,7 +21,7 @@ Each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive 
 
 ## Build from source
 
-You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`) on Linux, and fail without it, and under Seatbelt (`sandbox-exec`, built in) on macOS, not yet tried on a Mac. The agent has all seven tools by default (read, bash, edit, write, grep, find, ls; `tools` in `/settings` narrows them); `grep`, `find` and `@` file completion are built in, with ripgrep's libraries, so neither ripgrep nor `fd` is needed.
+You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`) on Linux, and fail without it, and under Seatbelt (`sandbox-exec`, built in) on macOS, so far checked on GitHub's macOS runners only. The agent has all seven tools by default (read, bash, edit, write, grep, find, ls; `tools` in `/settings` narrows them); `grep`, `find` and `@` file completion are built in, with ripgrep's libraries, so neither ripgrep nor `fd` is needed.
 
 ```sh
 cd /path/to/scramjet-rs
