@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.159.0 — The progress indicator means the agent is working
+
+### Changed
+
+- The terminal's progress indicator (OSC 9;4) stops while the agent waits for you (a question, next steps, an approval) and starts again when it works, so a tab that stops spinning means it is your turn.
+- It is on by default in Windows Terminal, ConEmu, Ghostty 1.2+ and iTerm2 3.6.6+, told from the environment, and off elsewhere and inside tmux; `terminal.showTerminalProgress` (Terminal progress in `/settings`) still turns it on or off, and Claude Code's `terminalProgressBarEnabled` is read too.
+
 ## 2.158.0 — Provider packages listed as providers
 
 ### Changed

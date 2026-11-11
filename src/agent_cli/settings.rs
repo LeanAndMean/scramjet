@@ -346,8 +346,9 @@ impl Row {
                  files, arguments)."
             }
             Self::TerminalProgress => {
-                "While the agent works, the terminal's tab and taskbar show it busy, in terminals \
-                 that show progress (OSC 9;4), such as Windows Terminal."
+                "While the agent works, the terminal's tab and taskbar show it busy (OSC 9;4); it \
+                 stops while the agent waits for you. On by default in Windows Terminal, ConEmu, \
+                 Ghostty 1.2+ and iTerm2 3.6.6+."
             }
             Self::SpellCheck => {
                 return format!(
@@ -433,8 +434,9 @@ pub(super) struct Settings {
     pub(super) collapse_changelog: bool,
     /// `lastChangelogVersion`: the version What's new last showed, or that first started.
     pub(super) last_changelog_version: Option<String>,
-    /// `terminal.showTerminalProgress`: the full screen tells the terminal it is busy while a
-    /// turn runs (OSC 9;4), as Scramjet's.
+    /// `terminal.showTerminalProgress` (or Claude Code's `terminalProgressBarEnabled`): the full
+    /// screen tells the terminal it is busy while the agent works (OSC 9;4); by default only in
+    /// terminals known to show it (`shows_progress`).
     pub(super) terminal_progress: bool,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
@@ -587,7 +589,7 @@ impl Settings {
             retain_transcript: false,
             collapse_changelog: false,
             last_changelog_version: None,
-            terminal_progress: false,
+            terminal_progress: shows_progress(|name| std::env::var(name).ok()),
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             resume_chains: Chains::Flat,
@@ -683,6 +685,12 @@ impl Settings {
                 }
             }
             Some(_) => wrong("images", "an object"),
+        }
+        // Claude Code's key; Scramjet's below, which `/settings` writes, wins over it.
+        match object.get("terminalProgressBarEnabled") {
+            None => {}
+            Some(Value::Bool(on)) => self.terminal_progress = *on,
+            Some(_) => wrong("terminalProgressBarEnabled", "true or false"),
         }
         // Scramjet's other `terminal` keys are for images, which are not shown here.
         match object.get("terminal") {
@@ -2062,6 +2070,37 @@ pub(super) fn read_object(path: &Path) -> Result<Map<String, Value>, String> {
     }
 }
 
+/// Whether the terminal, told from `var`, is one known to show OSC 9;4 progress: Claude Code's
+/// list (ConEmu, Ghostty 1.2+, iTerm2 3.6.6+) and Windows Terminal. Some others take OSC 9 as a
+/// desktop notification, and tmux passes nothing on.
+fn shows_progress(var: impl Fn(&str) -> Option<String>) -> bool {
+    if var("TMUX").is_some() {
+        return false;
+    }
+    if ["WT_SESSION", "ConEmuANSI", "ConEmuPID", "ConEmuTask"]
+        .iter()
+        .any(|name| var(name).is_some_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+    let least = match var("TERM_PROGRAM").as_deref() {
+        Some("ghostty") => [1, 2, 0],
+        Some("iTerm.app") => [3, 6, 6],
+        _ => return false,
+    };
+    let Some(version) = var("TERM_PROGRAM_VERSION") else {
+        return false;
+    };
+    let numbers: Vec<u64> = (version.split('.'))
+        .map_while(|part| {
+            let digits: String = part.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .collect();
+    let given: [u64; 3] = std::array::from_fn(|at| numbers.get(at).copied().unwrap_or(0));
+    !numbers.is_empty() && given >= least
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2276,9 +2315,55 @@ mod tests {
     }
 
     #[test]
+    fn terminal_progress_takes_claude_codes_key_below_scramjets() {
+        let scratch = Scratch::new("terminal-progress-claude");
+        assert!(
+            settings_with(&scratch, r#"{"terminalProgressBarEnabled": true}"#).terminal_progress
+        );
+        assert!(
+            !settings_with(&scratch, r#"{"terminalProgressBarEnabled": false}"#).terminal_progress
+        );
+        let both =
+            r#"{"terminalProgressBarEnabled": true, "terminal": {"showTerminalProgress": false}}"#;
+        assert!(!settings_with(&scratch, both).terminal_progress);
+    }
+
+    #[test]
+    fn progress_is_on_by_default_only_in_terminals_known_to_show_it() {
+        let with = |vars: &[(&str, &str)]| {
+            let vars: Vec<(String, String)> = (vars.iter())
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect();
+            shows_progress(move |name| {
+                (vars.iter())
+                    .find(|(given, _)| given == name)
+                    .map(|(_, value)| value.clone())
+            })
+        };
+        assert!(with(&[("WT_SESSION", "5f1c")]));
+        assert!(with(&[("ConEmuPID", "1234")]));
+        assert!(!with(&[
+            ("WT_SESSION", "5f1c"),
+            ("TMUX", "/tmp/tmux-1/default,1,0")
+        ]));
+        let program =
+            |name, version| with(&[("TERM_PROGRAM", name), ("TERM_PROGRAM_VERSION", version)]);
+        assert!(program("ghostty", "1.2.0"));
+        assert!(program("ghostty", "1.10.1-dev+abc"));
+        assert!(!program("ghostty", "1.1.3"));
+        assert!(program("iTerm.app", "3.6.6beta1"));
+        assert!(!program("iTerm.app", "3.6.5"));
+        assert!(!program("iTerm.app", ""));
+        assert!(!program("WezTerm", "20240203"));
+        assert!(!with(&[("TERM_PROGRAM", "ghostty")]));
+        assert!(!with(&[]));
+    }
+
+    #[test]
     fn terminal_progress_takes_scramjets_key_beside_its_image_ones() {
         let scratch = Scratch::new("terminal-progress");
-        assert!(!settings_with(&scratch, "{}").terminal_progress);
+        let by_default = shows_progress(|name| std::env::var(name).ok());
+        assert_eq!(settings_with(&scratch, "{}").terminal_progress, by_default);
         let settings = settings_with(
             &scratch,
             r#"{"terminal": {"showTerminalProgress": true, "showImages": false, "imageWidthCells": 40}}"#,
@@ -2287,7 +2372,7 @@ mod tests {
         assert!(settings.terminal_progress);
         let path = shown(&scratch.0.join("settings.json"));
         let wrong = settings_with(&scratch, r#"{"terminal": {"showTerminalProgress": "on"}}"#);
-        assert!(!wrong.terminal_progress);
+        assert_eq!(wrong.terminal_progress, by_default);
         assert_eq!(
             wrong.warnings,
             [format!(
@@ -3005,6 +3090,7 @@ mod tests {
             seen(Row::RetainTranscript, &mut settings),
             ["off", "on", "off", "on"]
         );
+        settings.terminal_progress = false;
         assert_eq!(
             seen(Row::TerminalProgress, &mut settings),
             ["off", "on", "off", "on"]

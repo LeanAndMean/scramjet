@@ -6,13 +6,12 @@ Last steer: ad61a0a
 
 ## Current focus
 
-Set at the second steer of 2026-11-11 ([design](DESIGN.md#ahead-of-rpc-mode-2026-11-11)): items 54, 52, 55, 56, 57, 58 and 59 in that order, all before RPC mode, the user's priorities. What is left of 51, 44 and 48 goes on alongside where the loop can act on it, much of it waiting on the user. Then the user reviews RPC mode's proposal (38) at a steer; build nothing of it before. After that: macOS (35), from testers' reports on the alphas and by hand once the user has a Mac, and last item 7, the lowest priority, kept in mind so that nothing built now corners it ([design](DESIGN.md#current-direction-2026-11-03)). What is left of 49 waits for tries on the user's PCs, the chain forms in `/resume` (25) for the user to see them, and what is left of 17 needs the user.
+Set at the second steer of 2026-11-11 ([design](DESIGN.md#ahead-of-rpc-mode-2026-11-11)): items 52, 55, 56, 57, 58 and 59 in that order, all before RPC mode, the user's priorities. What is left of 51, 44 and 48 goes on alongside where the loop can act on it, much of it waiting on the user. Then the user reviews RPC mode's proposal (38) at a steer; build nothing of it before. After that: macOS (35), from testers' reports on the alphas and by hand once the user has a Mac, and last item 7, the lowest priority, kept in mind so that nothing built now corners it ([design](DESIGN.md#current-direction-2026-11-03)). What is left of 49 waits for tries on the user's PCs, the chain forms in `/resume` (25) for the user to see them, and what is left of 17 needs the user.
 
 ## Next candidates
 
 Order agreed at the second steer of 2026-11-11 (Current focus); the items after 59 keep the order of the steers of 2026-11-09 and 2026-11-10.
 
-54. **The progress indicator** ([design](DESIGN.md#ahead-of-rpc-mode-2026-11-11)). OSC 9;4 follows `self.activity` (`tell_progress` in `src/agent_cli/screen.rs`), so it spins while the turn waits on the user. Stop it whenever the status row says `Waiting for you`, and start it again when the agent works. Default on in Windows Terminal (`WT_SESSION`), ConEmu, Ghostty 1.2+ and iTerm2 3.6.6+, told from the environment (Claude Code's list, `terminalProgressBarEnabled` in its settings reference, read 2026-11-11), off elsewhere; `terminal.showTerminalProgress` turns it off. Accept Claude Code's `terminalProgressBarEnabled` too. Inside tmux nothing reaches the outer terminal (TERMINALS.md).
 55. **The linter's gaps** ([design](DESIGN.md#ahead-of-rpc-mode-2026-11-11); found by an agent in darkstar's repository with a scratch set of deliberate defects, which `scramjet lint --strict` passed). Warn on:
     1. `:` in file names (Windows cannot check them out; suggest the bare name);
     2. no `set.yaml` (the name falls back to the directory's), and a set mixing `<set>:<name>.md` with bare names;

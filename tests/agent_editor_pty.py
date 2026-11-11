@@ -368,7 +368,7 @@ for name in ['WSL_DISTRO_NAME', 'WSL_INTEROP', 'WAYLAND_DISPLAY', 'DISPLAY', 'SS
 # The same terminal wherever they run: a CI runner sets none of these, Windows Terminal WT_SESSION.
 env.update(TERM='xterm-256color', COLORTERM='truecolor')
 for name in ['WT_SESSION', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'LC_TERMINAL', 'COLORFGBG', 'TMUX', 'TMUX_PANE',
-             'STY', 'KITTY_WINDOW_ID', 'VTE_VERSION']:
+             'STY', 'KITTY_WINDOW_ID', 'VTE_VERSION', 'ConEmuANSI', 'ConEmuPID', 'ConEmuTask']:
     env.pop(name, None)
 # Temporary files of the external editor go here, so the journeys can check they are removed.
 scratch = os.path.join(work, 'tmp')
@@ -1708,6 +1708,37 @@ sleeping = [[tool_call('call_1', 'bash', {'command': 'sleep 2.5'})], [message('S
 progress_home = config_home('progress', '{"terminal": {"showTerminalProgress": true}}')
 run([], progress_told, serve_items(sleeping), variables={'XDG_CONFIG_HOME': progress_home})
 assert b'\x1b]9;4' not in run([], progress_quiet, serve_items(sleeping))
+
+
+def progress_waits(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('Go on?')
+    read(0.3)
+    asked = len(output)
+    assert BUSY in output and output.rfind(IDLE) > output.rfind(BUSY), 'still busy at the question'
+    read(2.5)
+    assert BUSY not in output[asked:], 'told busy while waiting for the user'
+    send(b'\r')
+    on_screen('Went on.')
+    ended(read, output)
+    assert BUSY in output[asked:], 'not told busy again once answered'
+    assert output.rfind(IDLE) > output.rfind(BUSY), bytes(output[-300:])
+    send(b'\x04')
+
+
+# On by default in Windows Terminal, and off there when the setting says so.
+waiting = [[tool_call('call_1', 'bash', {'command': 'sleep 1.2'})],
+           [tool_call('call_2', 'get_scramjet_user_input', {
+               'type': 'select', 'message': 'Go on?',
+               'options': [{'value': 'yes', 'label': 'Yes'}, {'value': 'no', 'label': 'No'}]})],
+           [tool_call('call_3', 'bash', {'command': 'sleep 1.2'})], [message('Went on.')]]
+run([], progress_waits, serve_items(waiting),
+    variables={'XDG_CONFIG_HOME': config_home('progress-default'), 'WT_SESSION': 'test'})
+progress_off = config_home('progress-off', '{"terminal": {"showTerminalProgress": false}}')
+assert b'\x1b]9;4' not in run([], progress_quiet, serve_items(sleeping),
+                               variables={'XDG_CONFIG_HOME': progress_off, 'WT_SESSION': 'test'})
 
 
 def reply_then_exit(read, until, send, output):

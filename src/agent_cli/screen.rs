@@ -1078,10 +1078,11 @@ impl App {
         true
     }
 
-    /// Tells the terminal that a turn runs, again each `PROGRESS_AGAIN` as Scramjet does, and
-    /// that it no longer does.
+    /// Tells the terminal that the agent works, again each `PROGRESS_AGAIN` as Scramjet does,
+    /// and that it no longer does: the turn ended, or it waits for the user's answer.
     fn tell_progress(&mut self) -> io::Result<()> {
-        let busy = self.terminal_progress && self.activity.is_some() && !self.exiting;
+        let works = (self.activity.as_ref()).is_some_and(|activity| !activity.asks());
+        let busy = self.terminal_progress && works && !self.exiting;
         if !busy {
             if PROGRESS_SHOWN.swap(false, Ordering::SeqCst) {
                 to_terminal(PROGRESS_CLEAR)?;
