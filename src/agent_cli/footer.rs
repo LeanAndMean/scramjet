@@ -41,6 +41,7 @@ pub(super) struct Shown {
 
 impl Shown {
     pub(super) fn of(agent: &Agent) -> Self {
+        let none = agent.providers().options().is_empty();
         Self {
             name: agent.session_name().map(str::to_owned),
             tokens: agent.session_tokens(),
@@ -48,10 +49,13 @@ impl Shown {
             window: agent.context_window(),
             auto_compact: agent.compacting().automatic,
             rate: agent.output_rate(),
-            model: agent.model_id().to_owned(),
+            model: match none {
+                true => "no-model".to_owned(),
+                false => agent.model_id().to_owned(),
+            },
             provider: agent.provider().map(str::to_owned),
             effort: (agent.effort())
-                .filter(|_| agent.reasons())
+                .filter(|_| agent.reasons() && !none)
                 .map(str::to_owned),
             sandbox: agent.sandbox().map(|sandbox| sandbox.mode.name()),
         }

@@ -130,6 +130,36 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
     };
     let none = ("No provider offers any model\n".to_owned(), String::new());
     assert_eq!(list(), none);
+    let output = program(&binary())
+        .args(["-p", "hello"])
+        .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("SCRAMJET_OFFLINE", "1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!(
+            "scramjet: no provider offers any model: start scramjet and /login, or add providers \
+to {} (see --help)\n",
+            (scratch
+                .0
+                .join("config")
+                .join("scramjet")
+                .join("models.json"))
+            .display()
+        )
+    );
+    assert!(output.stdout.is_empty());
+    assert!(
+        !scratch
+            .0
+            .join("state")
+            .join("scramjet")
+            .join("sessions")
+            .exists()
+    );
     provide(&scratch.0.join("config"), "127.0.0.1:9");
     let file = scratch
         .0

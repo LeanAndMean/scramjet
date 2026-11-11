@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.148.1 — Saying so when no provider offers a model
+
+### Fixed
+
+- `scramjet -p` with no provider set up stops at once with one error saying to log in or add providers, as Scramjet 1 does, rather than starting a turn that fails, printing a usage line and leaving a session file.
+- With no provider set up, a prompt in the full screen says no provider offers any model, rather than naming a default model you never chose, and the footer shows `no-model` without an effort level.
+
 ## 2.148.0 — npm's packages, ready for Scramjet 1's update
 
 ### Added

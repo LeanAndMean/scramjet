@@ -1759,14 +1759,17 @@ impl Agent {
         let files: Vec<String> = (providers.files().iter())
             .map(|file| file.display().to_string())
             .collect();
-        let mut message = format!(
-            "no provider offers the model {}; providers come from {}",
-            self.config.model,
-            match files.is_empty() {
-                true => "models.json files".to_owned(),
-                false => files.join(", "),
-            }
-        );
+        let files = match files.is_empty() {
+            true => "models.json files".to_owned(),
+            false => files.join(", "),
+        };
+        let mut message = match providers.options().is_empty() {
+            true => format!("no provider offers any model: /login, or add providers to {files}"),
+            false => format!(
+                "no provider offers the model {}; providers come from {files}",
+                self.config.model
+            ),
+        };
         for problem in providers.problems() {
             message.push_str(&format!("\n{problem}"));
         }

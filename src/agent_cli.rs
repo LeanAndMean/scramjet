@@ -349,12 +349,17 @@ fn start(
     };
     let mut warnings: Vec<String> = providers.problems().to_vec();
     if providers.options().is_empty() {
+        let file = (providers.files().first())
+            .map_or("models.json".into(), |file| file.display().to_string());
+        // As Scramjet's, a run without the full screen stops here: no request could be sent.
+        if options.print {
+            return Err(format!(
+                "no provider offers any model: start scramjet and /login, or add providers to \
+{file} (see --help)"
+            ));
+        }
         warnings.push(format!(
-            "No provider offers any model: /login, or add providers to {} (see --help)",
-            providers
-                .files()
-                .first()
-                .map_or("models.json".into(), |file| file.display().to_string())
+            "No provider offers any model: /login, or add providers to {file} (see --help)"
         ));
     }
     let model = named.map_or_else(|| default_model(&providers), |named| named.model);

@@ -686,7 +686,7 @@ fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
     assert_eq!(agent.info.route, None);
     let error = agent.turn("Hi", &mut Recorder::default(), &AtomicBool::new(false));
     assert!(
-        matches!(&error, Err(AgentError::Provider(message)) if message.starts_with("no provider offers the model openai/m;")),
+        matches!(&error, Err(AgentError::Provider(message)) if message.starts_with("no provider offers any model: /login, or add providers to ")),
         "{error:?}"
     );
 }
