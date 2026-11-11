@@ -13,7 +13,7 @@ image=scramjet-rs-mingw-focal
 if ! docker image inspect "$image" >/dev/null 2>&1; then
   printf '%s\n' 'FROM ubuntu:20.04' \
     'RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev gcc-mingw-w64-x86-64 && rm -rf /var/lib/apt/lists/*' |
-    docker build -q -t "$image" - >/dev/null
+    docker build -t "$image" - >&2
 fi
 rustup=${RUSTUP_HOME:-$HOME/.rustup} cargo=${CARGO_HOME:-$HOME/.cargo}
 exec docker run --rm -u "$(id -u):$(id -g)" \

@@ -10,7 +10,7 @@ image=scramjet-rs-focal
 if ! docker image inspect "$image" >/dev/null 2>&1; then
   printf '%s\n' 'FROM ubuntu:20.04' \
     'RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc libc6-dev python3 && rm -rf /var/lib/apt/lists/*' |
-    docker build -q -t "$image" - >/dev/null
+    docker build -t "$image" - >&2
 fi
 rustup=${RUSTUP_HOME:-$HOME/.rustup} cargo=${CARGO_HOME:-$HOME/.cargo}
 docker run --rm -u "$(id -u):$(id -g)" \
