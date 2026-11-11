@@ -1,8 +1,8 @@
 #!/bin/sh
-# Prints a release's notes from CHANGELOG.md: the sections of VERSION and of each version after
-# PREVIOUS (the release before), newest first. Without PREVIOUS (the first release), only
-# VERSION's section and a link to the whole changelog. A part's heading (`# scramjet-rs`, above
-# the 0.x versions) ends them.
+# Prints a release's notes: README.md's Status section (which platforms have been used), then
+# CHANGELOG.md's sections of VERSION and of each version after PREVIOUS (the release before),
+# newest first. Without PREVIOUS (the first release), only VERSION's section and a link to the
+# whole changelog. A part's heading (`# scramjet-rs`, above the 0.x versions) ends them.
 #   scripts/release-notes.sh VERSION [PREVIOUS]
 set -e
 cd "$(dirname "$0")/.."
@@ -13,6 +13,8 @@ if [ -n "$2" ] && ! grep -q "^## $2 — " CHANGELOG.md; then
   echo "CHANGELOG.md has no section for $2" >&2
   exit 1
 fi
+grep -q '^## Status$' README.md || { echo "README.md has no Status section" >&2; exit 1; }
+awk '/^## / { on = $0 == "## Status" } on' README.md
 awk -v version="$1" -v previous="$2" '
   /^## / {
     if (index($0, "## " version " — ") == 1) on = 1

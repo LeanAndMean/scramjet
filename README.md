@@ -2,9 +2,24 @@
 
 A terminal coding agent written in Rust: an independent rewrite of Scramjet that talks to the providers its `models.json` lists and runs Scramjet's command sets (Mach 12 among them). Its command is `scramjet`.
 
-**Status:** an early but working interactive agent, verified live through a local proxy on Linux and WSL2 Ubuntu. macOS is untested; a native Windows build (`scripts/build-windows.sh`) runs scripted turns there, without a sandbox for the main agent, so its shell commands run unhidden in unattended turns (with a notice), while subagents' run at Windows' low integrity level, which keeps them from changing files on local disks but hides nothing; its agent runs commands in PowerShell, and in Git for Windows' bash where it is installed, with a cmd tool to switch on in `/settings`. Parallel agents at scale (the ~8,000 concurrent requests goal) are not built yet; [docs/TASKS.md](docs/TASKS.md) lists the pending work.
+## Status
 
-## Build and run
+An alpha: a working agent, used daily on one platform and barely or never on the others.
+
+- **Linux x86_64 and WSL2** (Ubuntu 20.04): in daily use by its author. Subagents and unattended turns run under Bubblewrap.
+- **Windows x86_64:** tried by its author in Windows Terminal and on a colleague's PC with Git for Windows. Commands run in PowerShell, and in Git for Windows' bash where it is installed, with a cmd tool to switch on in `/settings`. The main agent has no sandbox, so its commands in unattended turns see everything (it says so); subagents' run at Windows' low integrity level, which keeps them from changing files on local disks but hides nothing.
+- **macOS:** nobody has run it on a Mac. Each release's tests pass on GitHub's arm64 runners; the Intel build is only compiled; the Seatbelt sandbox and the clipboard have never been checked there.
+- **Linux aarch64** (such as a Raspberry Pi 5): nobody has run it there. Each release's tests pass on GitHub's arm64 runners, whose kernel has 4 KB pages; Raspberry Pi OS's has 16 KB.
+- **Providers:** in daily use through a local proxy speaking OpenAI's Responses and Anthropic's Messages APIs. ChatGPT's and GitHub Copilot's logins, and Chat Completions servers, were checked live when they were built and have been little used since.
+- Not built yet: parallel agents at scale (the ~8,000 concurrent requests goal); [docs/TASKS.md](https://github.com/LeanAndMean/scramjet/blob/main/docs/TASKS.md) lists the pending work.
+
+Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](https://github.com/LeanAndMean/scramjet/issues), a short "works on my machine" too: `scramjet --version`, the system and terminal, what you did, what you expected and what happened. A session's file (under `~/.local/state/scramjet/sessions/`) shows what was sent and received; it holds the whole conversation and what the agent read, so look through it before attaching it.
+
+## Install
+
+Each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive per platform (`scramjet-VERSION-ARCH-OS.tar.gz`, holding only the program) and their `SHA256SUMS`. Unpack it (`tar -xzf`, also on Windows 10 and later) into a directory on your `PATH`; `scramjet update self` then takes newer releases. The programs are not signed: on macOS, one downloaded through a browser is refused until `xattr -d com.apple.quarantine scramjet` (a download with `curl` is not marked). Linux's need glibc 2.31 or newer. On Linux, subagents' tools and unattended turns need Bubblewrap (`bwrap`; `apt install bubblewrap`).
+
+## Build from source
 
 You need stable Rust (checked with 1.99), a C compiler (for the regular expressions syntax highlighting uses), and a provider (below). Subagents' tools and unattended turns run under Bubblewrap (`bwrap`) on Linux, and fail without it, and under Seatbelt (`sandbox-exec`, built in) on macOS, not yet tried on a Mac. The agent has all seven tools by default (read, bash, edit, write, grep, find, ls; `tools` in `/settings` narrows them); `grep`, `find` and `@` file completion are built in, with ripgrep's libraries, so neither ripgrep nor `fd` is needed.
 
