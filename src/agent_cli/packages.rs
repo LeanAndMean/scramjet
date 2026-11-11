@@ -28,6 +28,11 @@ impl Source {
     /// one, as a directory is not: without `git:`, only a URL is.
     pub fn parse(text: &str) -> Option<Result<Self, String>> {
         let written = text.trim();
+        if written.starts_with("npm:") {
+            return Some(Err(format!(
+                "{written}: an npm package, which only Scramjet 1 installs"
+            )));
+        }
         let (prefixed, url) = match written.strip_prefix("git:") {
             Some(rest) if !rest.starts_with("//") => (true, rest.trim()),
             _ => (false, written),
@@ -425,6 +430,10 @@ mod tests {
             ("https://github.com/user/./repo", forms),
             ("https://../user/repo", forms),
             ("file:///repo", forms),
+            (
+                "npm:@scope/pi-tool",
+                "an npm package, which only Scramjet 1 installs",
+            ),
             (
                 "ftp://host/user/repo",
                 "git URLs start https://, http://, ssh://, git:// or file://",

@@ -19,7 +19,7 @@ fn lint_command(arguments: &[String]) -> Result<(), String> {
             "--strict" => strict = true,
             "--json" => json = true,
             "--help" | "-h" => {
-                println!("{USAGE}");
+                outln!("{USAGE}");
                 return Ok(());
             }
             option if option.starts_with('-') => {
@@ -54,12 +54,12 @@ fn lint_command(arguments: &[String]) -> Result<(), String> {
     };
     let (errors, warnings) = (count(Severity::Error), count(Severity::Warning));
     match json {
-        true => println!("{}", report(&diagnostics, &files, errors, warnings)),
+        true => outln!("{}", report(&diagnostics, &files, errors, warnings)),
         false => {
             for diagnostic in &diagnostics {
-                println!("{}", shown(diagnostic));
+                outln!("{}", shown(diagnostic));
             }
-            println!(
+            outln!(
                 "Checked {}: {}, {}.",
                 plural(files.len(), "file"),
                 plural(errors, "error"),

@@ -96,7 +96,7 @@ pub(super) fn update_self() -> Result<(), String> {
     let program =
         std::env::current_exe().map_err(|error| format!("cannot find this program: {error}"))?;
     let releases = releases();
-    println!(
+    outln!(
         "{}",
         replace(
             &releases,

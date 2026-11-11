@@ -43,6 +43,23 @@ fn repository() -> std::path::PathBuf {
 }
 
 #[test]
+fn a_closed_stdout_ends_the_output_quietly() {
+    let binary = &binary();
+    for arguments in [&["--help"][..], &["--version"], &["lint", "--help"]] {
+        let mut child = program(binary)
+            .args(arguments)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdout.take());
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        assert!(output.stderr.is_empty(), "{arguments:?}: {output:?}");
+    }
+}
+
+#[test]
 fn help_shows_the_agents_usage_and_other_words_are_refused() {
     let binary = &binary();
     for help in ["--help", "-h"] {

@@ -599,7 +599,7 @@ mod windows {
             std::process::exit(125);
         }
         let Some((program, rest)) = arguments.split_first() else {
-            print!("{}", super::LOWERED);
+            let _ = std::io::Write::write_all(&mut std::io::stdout(), super::LOWERED.as_bytes());
             std::process::exit(0)
         };
         let temporary = temporary();

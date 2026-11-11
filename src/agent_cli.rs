@@ -1,3 +1,17 @@
+/// `println!` and `print!` for the commands' stdout, quiet when it is closed (`| head`).
+macro_rules! outln {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = write!(std::io::stdout(), $($arg)*);
+    }};
+}
+
 mod args;
 mod background;
 mod banner;
@@ -84,11 +98,11 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         }
     }
     let Some(mut options) = Options::parse(arguments.into_iter())? else {
-        println!("{USAGE}");
+        outln!("{USAGE}");
         return Ok(());
     };
     if options.version {
-        println!("{}", env!("CARGO_PKG_VERSION"));
+        outln!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if let Some(search) = options.list_models.take() {
@@ -99,7 +113,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         for problem in providers.problems() {
             eprintln!("Warning: {problem}");
         }
-        print!(
+        out!(
             "{}",
             scope::listing(&providers.options(), search.as_deref())
         );
@@ -114,14 +128,14 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             eprintln!("Warning: {problem}");
         }
         for store in agent::credential_stores(&providers) {
-            println!("{}", store.display());
+            outln!("{}", store.display());
         }
         return Ok(());
     }
     if let Some(file) = options.export.take() {
         let output = options.messages.first().map(std::path::PathBuf::from);
         let written = export::file(&file, output)?;
-        println!("Exported to: {}", written.display());
+        outln!("Exported to: {}", written.display());
         return Ok(());
     }
     let mut messages = std::mem::take(&mut options.messages);

@@ -4,6 +4,17 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.143.1 — Quiet when output is cut short, and a guide from Scramjet 1
+
+### Fixed
+
+- `scramjet --help | head`, and any other command whose output is cut short, ends quietly instead of with "failed printing to stdout: Broken pipe".
+- An `npm:` entry in `packages`, Scramjet 1's, says so instead of "not a directory".
+
+### Added
+
+- The README's "Coming from Scramjet 1" says which of `~/.scramjet/agent`'s files to copy and what does not carry over, and Install how to keep both programs' `scramjet` on the `PATH`.
+
 ## 2.143.0 — 300 model requests before a turn stops
 
 ### Changed

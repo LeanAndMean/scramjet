@@ -40,7 +40,7 @@ fn install(directory: &Path) -> Result<(), String> {
     let found = here(&settings)?;
     let concerned = match installed {
         Installed::Set(set) => {
-            println!(
+            outln!(
                 "Installed {} from {}: {}",
                 set.name,
                 shown(&set.directory),
@@ -55,18 +55,18 @@ fn install(directory: &Path) -> Result<(), String> {
             skills,
             themes,
         } => {
-            println!("Installed the package in {}:", shown(&directory));
+            outln!("Installed the package in {}:", shown(&directory));
             for set in &sets {
                 let path = set
                     .directory
                     .strip_prefix(&directory)
                     .unwrap_or(&set.directory);
                 let (name, path) = (&set.name, path.display());
-                println!("  {name} ({path}): {}", contents(&found, set));
+                outln!("  {name} ({path}): {}", contents(&found, set));
             }
             print_extras(&found, skills, themes);
             if !moved.is_empty() {
-                println!(
+                outln!(
                     "It now brings {}, taken out of commandSets.",
                     moved.join(", ")
                 );
@@ -90,12 +90,12 @@ fn print_extras(found: &Inventory, skills: Option<PathBuf>, themes: Option<PathB
             .filter(|skill| skill.path.starts_with(&skills))
             .map(|skill| skill.name.as_str())
             .collect();
-        println!("  skills: {}", listing(&names, "skill"));
+        outln!("  skills: {}", listing(&names, "skill"));
     }
     if let Some(themes) = themes {
         let names = theme::names_in(&themes);
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        println!("  themes: {}", listing(&names, "theme"));
+        outln!("  themes: {}", listing(&names, "theme"));
     }
 }
 
@@ -145,7 +145,7 @@ fn install_package(source: Source) -> Result<(), String> {
     }
     match (fresh, &source.reference) {
         (true, _) => {
-            println!("Cloning {} into {}", source.written, shown(&directory));
+            outln!("Cloning {} into {}", source.written, shown(&directory));
             packages::clone(&source, &directory, &root)?
         }
         (false, Some(reference)) => packages::checkout(&directory, reference)?,
@@ -186,7 +186,7 @@ fn install_package(source: Source) -> Result<(), String> {
         true => "",
         false => " (the clone already there)",
     };
-    println!(
+    outln!(
         "Installed {} from {}{reused}:",
         source.written,
         shown(&directory)
@@ -201,16 +201,16 @@ fn install_package(source: Source) -> Result<(), String> {
                 true => String::new(),
                 false => format!(" ({})", path.display()),
             };
-            println!("  {}{path}: {}", set.name, contents(&found, set));
+            outln!("  {}{path}: {}", set.name, contents(&found, set));
         }
     }
     print_extras(&found, skills, themes);
     let (downloaded, failed) = super::programs::fetch(&directory);
     for line in downloaded {
-        println!("{line}");
+        outln!("{line}");
     }
     for why in failed {
-        println!(
+        outln!(
             "Not downloaded: {why}; `scramjet update {}` tries again",
             source.written
         );
@@ -220,11 +220,11 @@ fn install_package(source: Source) -> Result<(), String> {
         .filter_map(|set| program(set, &directory))
         .collect();
     match programs.is_empty() {
-        true => println!("It runs no program of its own."),
+        true => outln!("It runs no program of its own."),
         false => {
-            println!("It runs at each start:");
+            outln!("It runs at each start:");
             for program in programs {
-                println!("  {program}");
+                outln!("  {program}");
             }
         }
     }
@@ -283,7 +283,7 @@ fn remove(reference: &str) -> Result<(), String> {
                 known.written
             )
         })?;
-        println!(
+        outln!(
             "Removed {} and its clone in {}",
             known.written,
             shown(&directory)
@@ -291,14 +291,14 @@ fn remove(reference: &str) -> Result<(), String> {
         return Ok(());
     }
     if let Some(directory) = settings.remove_local_package(reference)? {
-        println!("Removed the package in {}", shown(&directory));
+        outln!("Removed the package in {}", shown(&directory));
         return Ok(());
     }
     match settings.remove_set(reference) {
         Ok(directories) => {
             for directory in directories {
                 let name = directory.file_name().unwrap_or_default().to_string_lossy();
-                println!("Removed {name}, installed from {}", shown(&directory));
+                outln!("Removed {name}, installed from {}", shown(&directory));
             }
             Ok(())
         }
@@ -340,7 +340,7 @@ fn update(reference: Option<&str>) -> Result<(), String> {
         },
     };
     if chosen.is_empty() {
-        println!("No packages. `scramjet install git:github.com/USER/REPO` installs one.");
+        outln!("No packages. `scramjet install git:github.com/USER/REPO` installs one.");
         return Ok(());
     }
     let (mut failed, mut changed) = (0, Vec::new());
@@ -368,14 +368,14 @@ fn update(reference: Option<&str>) -> Result<(), String> {
             match failed.is_empty() {
                 true => Ok((lines.join("\n"), updated)),
                 false => {
-                    println!("{}", lines.join("\n"));
+                    outln!("{}", lines.join("\n"));
                     Err(format!("not downloaded: {}", failed.join("; ")))
                 }
             }
         });
         match result {
             Ok((line, updated)) => {
-                println!("{line}");
+                outln!("{line}");
                 if updated {
                     changed.push(directory.display().to_string());
                 }
@@ -410,7 +410,7 @@ fn list() -> Result<(), String> {
     let found = here(&settings)?;
     let sets = found.sets.list();
     if sets.is_empty() {
-        println!("No command sets. `scramjet install DIR|REPO` installs one.");
+        outln!("No command sets. `scramjet install DIR|REPO` installs one.");
     }
     let rows: Vec<[String; 4]> = (sets.iter())
         .map(|set| {
@@ -425,17 +425,19 @@ fn list() -> Result<(), String> {
     let width = |column: usize| rows.iter().map(|row| row[column].chars().count()).max();
     let widths = [0, 1, 2].map(|column| width(column).unwrap_or(0));
     for [name, origin, directory, contents] in &rows {
-        println!(
+        outln!(
             "{name:<0$}  {origin:<1$}  {directory:<2$}  {contents}",
-            widths[0], widths[1], widths[2]
+            widths[0],
+            widths[1],
+            widths[2]
         );
     }
     if let Some(path) = settings.shown_path() {
-        println!("Installed sets are listed in {path} (commandSets, packages).");
+        outln!("Installed sets are listed in {path} (commandSets, packages).");
     }
     let skills = found.skills.list();
     if !skills.is_empty() {
-        println!("\nSkills:");
+        outln!("\nSkills:");
         let width = (skills.iter())
             .map(|skill| skill.name.chars().count())
             .max();
@@ -445,7 +447,7 @@ fn list() -> Result<(), String> {
                 false => " (not offered to the model)",
             };
             let (name, path) = (&skill.name, shown(&skill.path));
-            println!("  {name:<0$}  {path}{only_typed}", width.unwrap_or(0));
+            outln!("  {name:<0$}  {path}{only_typed}", width.unwrap_or(0));
         }
     }
     let warnings = found.warnings.iter().chain(found.skills.warnings());
@@ -513,11 +515,11 @@ fn print_texts<'a>(texts: impl IntoIterator<Item = &'a str>) {
     let tilde = format!("~{}", std::path::MAIN_SEPARATOR);
     for (number, text) in texts.into_iter().enumerate() {
         if number == 0 {
-            println!("\nWarnings:");
+            outln!("\nWarnings:");
         }
         match &home {
-            Some(home) => println!("  {}", text.replace(home, &tilde)),
-            None => println!("  {text}"),
+            Some(home) => outln!("  {}", text.replace(home, &tilde)),
+            None => outln!("  {text}"),
         }
     }
 }
