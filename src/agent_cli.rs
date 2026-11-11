@@ -82,7 +82,14 @@ use std::{
 use terminal::{InputMode, Terminal};
 
 pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
-    let arguments: Vec<OsString> = arguments.collect();
+    let mut arguments: Vec<OsString> = arguments.collect();
+    // As Scramjet 1's, `--offline` anywhere stands for `SCRAMJET_OFFLINE=1`.
+    let before = arguments.len();
+    arguments.retain(|argument| argument != "--offline");
+    if arguments.len() != before {
+        // SAFETY: the process has started no thread yet.
+        unsafe { std::env::set_var("SCRAMJET_OFFLINE", "1") };
+    }
     if let Some((command, rest)) = arguments.split_first()
         && let Some(command) = command.to_str()
     {

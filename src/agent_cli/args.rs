@@ -9,7 +9,7 @@ pub(super) const USAGE: &str =
 [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
-[--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-s MODE] [-p]
+[--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-s MODE] [--offline] [-p]
 [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
@@ -106,6 +106,8 @@ but to NO_PROXY's hosts and this machine.
                          setting sandboxNetwork is false. It needs bubblewrap (bwrap) and
                          refuses to start without it; on macOS it runs under Seatbelt
                          (sandbox-exec). `!` commands you type stay outside
+  --offline              no network at start, as SCRAMJET_OFFLINE=1: packages not cloned
+                         yet are not cloned, and no newer release is looked for
   -p, --print            run the messages and exit; a message `-` is read from stdin
   @FILE                  send FILE with the first message (or alone), as Scramjet 1 does: a
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
@@ -218,7 +220,7 @@ directory when that is a set, else the sets at its top and those with a set.yaml
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
 and `remove REPO` deletes the clone. `update self` replaces the program with the newest
 release of LeanAndMean/scramjet; the full screen's start says when one newer than this is out,
-looking at most once a day (not with SCRAMJET_OFFLINE set). `lint DIR...` checks the sets in DIR as the harness loads
+looking at most once a day (not with --offline). `lint DIR...` checks the sets in DIR as the harness loads
 them and as Scramjet 1's scramjet-command-lint does (`lint --help`). `import` copies Scramjet
 1's setup from ~/.scramjet/agent, converted, never over a file here, and lists what it leaves
 and why (`import --help`); the first interactive start that finds one offers it.

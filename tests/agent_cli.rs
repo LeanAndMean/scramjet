@@ -1010,10 +1010,12 @@ mach12 ({kit}): 1 command, 0 agents\n  providers (providers): 0 commands, \
     assert!(ok);
     assert_eq!(out, format!("Cloned {source} into {shown_clone}\n"));
 
-    // A session's start clones it too, as Scramjet's does, unless SCRAMJET_OFFLINE is set.
+    // A session's start clones it too, as Scramjet's does, unless SCRAMJET_OFFLINE is set or
+    // --offline given.
     let start = |offline: &str| {
         let output = program(&binary())
             .args(["-p", "--no-session", "--model", "nowhere/none", "hi"])
+            .args((offline == "--offline").then_some("--offline"))
             .current_dir(&project)
             .env("HOME", &scratch.0)
             .env("USERPROFILE", &scratch.0)
@@ -1029,9 +1031,12 @@ mach12 ({kit}): 1 command, 0 agents\n  providers (providers): 0 commands, \
         String::from_utf8(output.stderr).unwrap()
     };
     std::fs::remove_dir_all(&clone).unwrap();
-    let err = start("1");
-    assert!(!err.contains("Cloning"), "{err}");
-    assert!(!clone.exists());
+    for offline in ["1", "--offline"] {
+        let err = start(offline);
+        assert!(!err.contains("Cloning"), "{err}");
+        assert!(!err.contains("unknown argument"), "{err}");
+        assert!(!clone.exists());
+    }
     let err = start("");
     assert!(
         err.starts_with(&format!("Cloning {source} into {shown_clone}…\n")),

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.151.0 — --offline
+
+### Added
+
+- `--offline`, as in Scramjet 1: the same as `SCRAMJET_OFFLINE=1`, so the start neither clones packages nor looks for a newer release. Scramjet 2 refused it as an unknown argument.
+
 ## 2.150.0 — MCP servers start again when used
 
 ### Changed
