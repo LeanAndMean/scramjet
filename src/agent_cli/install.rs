@@ -5,7 +5,7 @@
 use super::packages::{self, Source};
 use super::settings::{self, Installed, Settings};
 use super::theme;
-use scramjet::agent::{Inventory, Problem, Set, inventory, sets_in, shortened};
+use scramjet::agent::{Inventory, Problem, Set, inventory, sets_in, shortened, unmet_engine};
 use std::path::{Path, PathBuf};
 
 pub(super) const USAGE: &str =
@@ -64,8 +64,23 @@ fn update_target(arguments: &[String]) -> Option<(Option<Option<String>>, bool, 
     }
 }
 
+/// Refuses a package whose `models.json`, at its top or in a set it brings, needs a later
+/// Scramjet: none of it would be read.
+fn unmet_engines(package: &Path, written: &str) -> Result<(), String> {
+    let mut directories = vec![package.to_path_buf()];
+    directories.extend(sets_in(package));
+    for directory in directories {
+        let models = std::fs::read(directory.join("models.json"));
+        if let Some(problem) = models.ok().as_deref().and_then(unmet_engine) {
+            return Err(format!("{written}: {problem}"));
+        }
+    }
+    Ok(())
+}
+
 fn install(directory: &Path) -> Result<(), String> {
     let mut settings = Settings::load();
+    unmet_engines(directory, &shown(directory))?;
     let installed = settings.install_directory(directory)?;
     let found = here(&settings)?;
     let concerned = match installed {
@@ -190,12 +205,16 @@ fn install_package(source: Source) -> Result<(), String> {
     let sets = sets_in(&directory);
     let (skills, themes) = settings::extras(&directory);
     if sets.is_empty() && skills.is_none() && themes.is_none() {
+        if let Some(why) = settings::scramjet_1_extension(&directory) {
+            return Err(undo(format!("{} {why}", source.written)));
+        }
         return Err(undo(format!(
             "{} holds no command set (no commands, agents or models.json at its top or in its \
              top directories, and no set.yaml deeper) and no skills or themes directory",
             source.written
         )));
     }
+    unmet_engines(&directory, &source.written).map_err(undo)?;
     for set in &sets {
         let name = set.file_name();
         if let Some(known) = (settings.command_sets.iter()).find(|known| known.file_name() == name)

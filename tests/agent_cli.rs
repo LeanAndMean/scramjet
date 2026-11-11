@@ -1516,6 +1516,66 @@ other command sets\n"
     assert!(ok, "{out}{err}");
     assert_eq!(out, native("Removed the package in ~/work\n"));
     assert_eq!(packages(), serde_json::json!([]));
+    // From git, a Scramjet 1 extension and a package needing a later Scramjet leave no clone.
+    let old = scratch.0.join("old");
+    std::fs::create_dir_all(&old).unwrap();
+    git(&old, &["init", "--quiet"]);
+    std::fs::write(
+        old.join("package.json"),
+        r#"{"pi": {"extensions": ["./x.ts"]}}"#,
+    )
+    .unwrap();
+    git(&old, &["add", "-A"]);
+    git(&old, &["commit", "--quiet", "-m", "v1"]);
+    git(
+        &scratch.0,
+        &["clone", "--quiet", "--bare", "old", "old.git"],
+    );
+    let old_source = url(&scratch.0.join("old.git"));
+    let (ok, _, err) = run(&["install", &old_source]);
+    assert!(!ok);
+    assert!(
+        err.ends_with(&format!(
+            "scramjet: {old_source} is a Scramjet 1 extension (its package.json has a \"pi\" \
+manifest), which Scramjet 2 cannot run; install the package's Scramjet 2 version instead, if it \
+has one\n"
+        )),
+        "{err}"
+    );
+    std::fs::write(
+        old.join("models.json"),
+        r#"{"engines": {"scramjet": ">=99.0.0"}, "providers": {}}"#,
+    )
+    .unwrap();
+    git(&old, &["add", "-A"]);
+    git(&old, &["commit", "--quiet", "-m", "v2"]);
+    git(
+        &old,
+        &[
+            "push",
+            "--quiet",
+            scratch.0.join("old.git").to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+    let (ok, _, err) = run(&["install", &old_source]);
+    assert!(!ok);
+    assert!(
+        err.ends_with(&format!(
+            "scramjet: {old_source}: needs Scramjet 99.0.0 or later, and this is {}; \
+`scramjet update self` updates it\n",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{err}"
+    );
+    assert!(
+        !clones
+            .join("localhost")
+            .join(within.trim_start_matches(['/', '\\']))
+            .join("old")
+            .exists()
+    );
+    assert_eq!(packages(), serde_json::json!([]));
     std::fs::remove_dir_all(work.join("skills")).unwrap();
     std::fs::remove_dir_all(work.join("themes")).unwrap();
     let notes = scratch.0.join("notes");
@@ -1531,6 +1591,37 @@ and no skills or themes directory\n",
         )),
         "{err}"
     );
+    std::fs::write(
+        notes.join("package.json"),
+        r#"{"name": "old", "pi": {"extensions": ["./src/index.ts"]}}"#,
+    )
+    .unwrap();
+    let (ok, _, err) = run(&["install", notes.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(
+        err.ends_with(&native(
+            "scramjet: ~/notes is a Scramjet 1 extension (its package.json has a \"pi\" \
+manifest), which Scramjet 2 cannot run; install the package's Scramjet 2 version instead, if it \
+has one\n"
+        )),
+        "{err}"
+    );
+    std::fs::write(
+        notes.join("models.json"),
+        r#"{"engines": {"scramjet": ">=99.0.0"}, "providers": {}}"#,
+    )
+    .unwrap();
+    let (ok, _, err) = run(&["install", notes.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(
+        err.ends_with(&native(&format!(
+            "scramjet: ~/notes: needs Scramjet 99.0.0 or later, and this is {}; `scramjet update \
+self` updates it\n",
+            env!("CARGO_PKG_VERSION")
+        ))),
+        "{err}"
+    );
+    assert_eq!(packages(), serde_json::json!([]));
 }
 
 #[test]

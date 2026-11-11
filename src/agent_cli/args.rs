@@ -25,6 +25,7 @@ environment variable of that name, else the text; !command: what the command pri
 each request, as headers' values may be) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
 providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}, and
 its credentialFiles the files holding their keys, hidden as --list-credential-stores says,
+its engines the earliest Scramjet it works with ({\"scramjet\": \">=X.Y.Z\"}),
 and its logins the programs that log in to more providers. /login adds the models of ChatGPT,
 GitHub Copilot and those logins, each saved in auth.json beside the settings. Requests go
 through the http:// proxy HTTPS_PROXY or HTTP_PROXY names (http://user:password@host:port),

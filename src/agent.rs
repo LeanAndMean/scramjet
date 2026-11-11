@@ -66,7 +66,7 @@ pub use mcp::{
     Transport as McpTransport,
 };
 pub use problem::{Problem, ProblemFile};
-pub use providers::{KeyFrom, Providers};
+pub use providers::{KeyFrom, Providers, unmet_engine};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use request::{CacheRetention, set_cache_retention};

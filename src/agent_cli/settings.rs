@@ -1063,6 +1063,9 @@ impl Settings {
         let held = sets_in(&directory);
         let (skills, themes) = extras(&directory);
         if held.is_empty() && skills.is_none() && themes.is_none() {
+            if let Some(why) = scramjet_1_extension(&directory) {
+                return Err(format!("{} {why}", shown(&directory)));
+            }
             return Err(match directory.is_dir() {
                 true => format!(
                     "{why}, and holds no set (none in its top directories, nor one with a \
@@ -1235,10 +1238,13 @@ impl Settings {
             let sets = sets_in(&directory);
             let (skills, themes) = extras(&directory);
             if sets.is_empty() && skills.is_none() && themes.is_none() {
-                self.warnings.push(format!(
-                    "{written}: {} holds no command set, skills or themes",
-                    shown(&directory)
-                ));
+                self.warnings.push(match scramjet_1_extension(&directory) {
+                    Some(why) => format!("{written}: {} {why}", shown(&directory)),
+                    None => format!(
+                        "{written}: {} holds no command set, skills or themes",
+                        shown(&directory)
+                    ),
+                });
             }
             self.command_sets.extend(sets);
             self.skills.extend(skills);
@@ -2011,6 +2017,17 @@ pub(super) enum Installed {
 pub(super) fn extras(package: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
     let directory = |name| Some(package.join(name)).filter(|path| path.is_dir());
     (directory("skills"), directory("themes"))
+}
+
+/// What to say of a `package` that brings nothing here when it is a Scramjet 1 extension:
+/// a `package.json` with a `pi` manifest.
+pub(super) fn scramjet_1_extension(package: &Path) -> Option<&'static str> {
+    let text = std::fs::read(package.join("package.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_slice(&text).ok()?;
+    manifest.get("pi")?.is_object().then_some(
+        "is a Scramjet 1 extension (its package.json has a \"pi\" manifest), which Scramjet 2 \
+         cannot run; install the package's Scramjet 2 version instead, if it has one",
+    )
 }
 
 /// Whether `a` and `b` are the same directory, also through links.
@@ -3155,6 +3172,20 @@ mod tests {
             Settings::read(Some(path.clone())).warnings,
             [format!(
                 "{0}: {0} holds no command set, skills or themes",
+                shown(&package)
+            )]
+        );
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"pi": {"extensions": []}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Settings::read(Some(path.clone())).warnings,
+            [format!(
+                "{0}: {0} is a Scramjet 1 extension (its package.json has a \"pi\" manifest), \
+                 which Scramjet 2 cannot run; install the package's Scramjet 2 version instead, \
+                 if it has one",
                 shown(&package)
             )]
         );

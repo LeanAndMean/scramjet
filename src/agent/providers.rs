@@ -533,6 +533,10 @@ impl Reading {
 
     /// The logins a `models.json` in `directory` names; problems name it `what`.
     fn declare(&mut self, text: &[u8], directory: &Path, what: &str) {
+        // `document` says why.
+        if unmet_engine(text).is_some() {
+            return;
+        }
         let logins = match serde_json::from_slice(text) {
             Ok(Declared {
                 logins: Some(logins),
@@ -638,6 +642,10 @@ impl Reading {
             Some(_) => self.problems.push(format!(
                 "{what}: credentialFiles must be a list of files and directories"
             )),
+        }
+        // Its stores stay hidden all the same.
+        if let Some(problem) = unmet_engine(text) {
+            return self.problems.push(format!("{what}: {problem}"));
         }
         self.providers(document.providers, what);
         match document.command {
@@ -1179,6 +1187,47 @@ fn listed(output: &[u8], what: &str) -> Result<Option<Ordered>, String> {
     }
 }
 
+/// What keeps this Scramjet from taking a `models.json`'s `text`: its `engines.scramjet`, as
+/// npm's `engines`, asking for a later version or in a form not read here.
+pub fn unmet_engine(text: &[u8]) -> Option<String> {
+    let document: Value = serde_json::from_slice(text).ok()?;
+    let wanted = document.get("engines")?;
+    let unread = || {
+        Some(
+            "engines must be {\"scramjet\": \">=X.Y.Z\"}, the earliest Scramjet it works \
+             with; not read"
+                .to_owned(),
+        )
+    };
+    let Some(wanted) = wanted.as_object().map(|engines| engines.get("scramjet")) else {
+        return unread();
+    };
+    let wanted = wanted?
+        .as_str()
+        .and_then(|wanted| wanted.strip_prefix(">="));
+    let Some(earliest) = wanted.map(str::trim).and_then(version) else {
+        return unread();
+    };
+    let running = env!("CARGO_PKG_VERSION");
+    (version(running)? < earliest).then(|| {
+        format!(
+            "needs Scramjet {}.{}.{} or later, and this is {running}; `scramjet update self` \
+             updates it",
+            earliest[0], earliest[1], earliest[2]
+        )
+    })
+}
+
+/// `X.Y.Z`'s numbers.
+fn version(text: &str) -> Option<[u64; 3]> {
+    let mut parts = text.split('.').map(|part| {
+        let digits = !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit());
+        digits.then(|| part.parse().ok()).flatten()
+    });
+    let numbers = [parts.next()??, parts.next()??, parts.next()??];
+    parts.next().is_none().then_some(numbers)
+}
+
 /// `path` as a settings path is taken: `~` is the home directory, and a relative one is from
 /// `directory`, the file's.
 fn in_directory(path: &str, directory: &Path) -> PathBuf {
@@ -1412,6 +1461,59 @@ mod tests {
             ]
         );
         assert!(!format!("{route:?}").contains("pass"));
+    }
+
+    #[test]
+    fn a_models_json_needing_a_later_scramjet_is_not_read_but_hides_its_stores() {
+        let running = env!("CARGO_PKG_VERSION");
+        let wanting = |wanted: Value| {
+            let document = json!({"engines": wanted, "credentialFiles": ["/stores/a"],
+                "logins": {"co": {"command": ["./login"]}},
+                "providers": {"a": {"baseUrl": "http://a/v1", "api": "openai-responses",
+                    "models": [{"id": "m"}]}}});
+            Providers::given(document)
+        };
+        for met in [
+            json!({"scramjet": format!(">={running}")}),
+            json!({"scramjet": ">= 2.0.0"}),
+            json!({"node": ">=99"}),
+        ] {
+            let providers = wanting(met);
+            assert_eq!(providers.models().len(), 1);
+            assert_eq!(providers.login_programs().len(), 1);
+            assert!(
+                providers.problems().is_empty(),
+                "{:?}",
+                providers.problems()
+            );
+        }
+        let later = wanting(json!({"scramjet": ">=99.0.0"}));
+        assert!(later.models().is_empty() && later.login_programs().is_empty());
+        assert!((later.credential_files().iter()).any(|file| file.ends_with("stores/a")));
+        assert_eq!(
+            later.problems(),
+            [format!(
+                "models: needs Scramjet 99.0.0 or later, and this is {running}; \
+                 `scramjet update self` updates it"
+            )]
+        );
+        for unread in [
+            json!("2.0.0"),
+            json!({"scramjet": "^2.0.0"}),
+            json!({"scramjet": 2}),
+            json!({"scramjet": ">=2.0"}),
+            json!({"scramjet": ">=2.0.x"}),
+        ] {
+            let providers = wanting(unread);
+            assert!(providers.models().is_empty());
+            assert_eq!(
+                providers.problems(),
+                [
+                    "models: engines must be {\"scramjet\": \">=X.Y.Z\"}, the earliest \
+                  Scramjet it works with; not read"
+                ]
+            );
+        }
     }
 
     #[test]
