@@ -648,9 +648,10 @@ fn needs_a_store(command: &str) -> bool {
 /// so that the model raises a need for that access with the user, or, where the task did not
 /// need it, takes the failure as a sign that it went out of scope and goes on without it.
 fn stores_hidden(sandbox: bool) -> String {
-    let why = match sandbox {
-        true => " in the sandbox (--sandbox)",
-        false => ", as the hideCredentials setting asks for this turn",
+    // Hiding alone shares /tmp and /run, so the ssh-agent's socket stays within reach.
+    let (agent, why) = match sandbox {
+        true => (", the ssh-agent", " in the sandbox (--sandbox)"),
+        false => ("", ", as the hideCredentials setting asks for this turn"),
     };
     let way_out = match sandbox {
         true => "run it themselves, or start without --sandbox",
@@ -660,7 +661,7 @@ fn stores_hidden(sandbox: bool) -> String {
     };
     format!(
         "\n\nScramjet: this turn's commands run with the credential stores hidden (~/.ssh, \
-         ~/.config/gh, ~/.git-credentials, ~/.aws, the ssh-agent and others){why}. If the \
+         ~/.config/gh, ~/.git-credentials, ~/.aws{agent} and others){why}. If the \
          command failed for want of a login or key (such as \"Host key verification failed\", \
          \"Permission denied (publickey)\" or \"not logged in\"), that is why: it is not a fault \
          to work around, and the login itself is likely fine. If the task needs this access, \
@@ -2211,5 +2212,16 @@ required property\n  - model: must be string\n\nReceived arguments:"
         );
         let (session, ..) = Session::open(agent.session_path()).unwrap();
         assert_eq!(session.model(), Some("openai/gpt-x"));
+    }
+
+    #[test]
+    fn only_the_sandbox_note_says_the_ssh_agent_is_hidden() {
+        assert!(stores_hidden(true).contains("~/.aws, the ssh-agent and others) in the sandbox"));
+        let hiding = stores_hidden(false);
+        assert!(!hiding.contains("ssh-agent"), "{hiding}");
+        assert!(
+            hiding.contains("~/.aws and others), as the hideCredentials"),
+            "{hiding}"
+        );
     }
 }

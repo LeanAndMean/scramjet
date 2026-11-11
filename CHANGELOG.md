@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.152.1 — The ssh-agent in the hidden-stores note
+
+### Fixed
+
+- With `hideCredentials` set, a failed command's note no longer says the ssh-agent is hidden: only `--sandbox` keeps it out of reach.
+
 ## 2.152.0 — Credentials in every turn
 
 ### Changed
