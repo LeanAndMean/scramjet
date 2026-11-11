@@ -97,6 +97,7 @@ To compare a display with Scramjet's: `scripts/screens.py --binary "$(which scra
 
 Not scheduled; fix them when they matter.
 
+- Command sets are still read from `~/.local/share/scramjet` (or `SCRAMJET_CACHE`) as global sets, as Scramjet 1 once did, though Scramjet 1 now ignores that directory as a legacy seed: a user with an old seeded `~/.local/share/scramjet/mach12/` runs that stale snapshot unless they install Mach 12 (left for now, user, 2026-11-11). The option offered: stop reading sets there, warning once to install a set left there instead.
 - The old history, before the rewrite of 2026-11-10, stays reachable by ID on the private `LeanAndMean/scramjet-rs`, which never goes public (the public repository is new; item 51). Here one stash from 2026-11-06 (`git stash list`; a change to `src/agent/sandbox.rs`, its owner unknown) still holds the old history up to that day, locally only: drop it once the user says it is not needed, then `git gc --prune=now`.
 - `docs/DESIGN.md` is about 50,600 bytes (2026-11-11), near the tools' output limit of 51,200, and already dense: before a decision takes it past, move a finished section's detail (the theme editor's, say) out rather than drop a user decision. Keep this file under about 45,000.
 
