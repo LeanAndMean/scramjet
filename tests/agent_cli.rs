@@ -814,21 +814,27 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
     );
     let branch = git(&work, &["rev-parse", "--abbrev-ref", "HEAD"]);
 
-    // A plain `update` updates the program too: a `gh` whose newest release is older.
-    let programs = scratch.0.join("programs");
-    std::fs::create_dir_all(&programs).unwrap();
-    std::fs::write(programs.join("gh"), "#!/bin/sh\necho v0.0.0\n").unwrap();
-    std::fs::write(programs.join("gh.cmd"), "@echo v0.0.0\r\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let executable = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(programs.join("gh"), executable).unwrap();
-    }
-    let path = std::env::join_paths(
-        std::iter::once(programs).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
-    )
-    .unwrap();
+    // A plain `update` updates the program too: a release list whose newest release is older.
+    let listing = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let releases = format!("http://{}/releases", listing.local_addr().unwrap());
+    std::thread::spawn(move || {
+        use std::io::{BufRead, Write};
+        for stream in listing.incoming() {
+            let mut stream = stream.unwrap();
+            let reader = std::io::BufReader::new(stream.try_clone().unwrap());
+            for line in reader.lines() {
+                if line.unwrap().is_empty() {
+                    break;
+                }
+            }
+            let body = r#"[{"tag_name": "v0.0.0", "assets": []}]"#;
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
     let up_to_date = format!(
         "scramjet {} is up to date (newest release v0.0.0)\n",
         env!("CARGO_PKG_VERSION")
@@ -837,7 +843,7 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
         let output = program(&binary())
             .args(arguments)
             .current_dir(&project)
-            .env("PATH", &path)
+            .env("SCRAMJET_RELEASES", &releases)
             .env("HOME", &scratch.0)
             .env("XDG_CONFIG_HOME", scratch.0.join("config"))
             .env("XDG_DATA_HOME", scratch.0.join("data"))

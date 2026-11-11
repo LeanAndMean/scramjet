@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 2.140.0 — Scramjet 2's version, and updates from its public releases
+
+### Changed
+
+- The version is now 2.140.0: Scramjet 2's major, the minor and patch counting on from 0.139.0's. Its releases are GitHub prereleases until one is called stable.
+- `scramjet update self` takes the newest release of the public `LeanAndMean/scramjet` over HTTPS, with no `gh` needed, prereleases included, still checked against its `SHA256SUMS` and run before it replaces the program. Until Scramjet 2's first release there, it finds only Scramjet 1's older versions and says the program is up to date.
+
 ## 0.139.0 — The command is `scramjet`
 
 ### Changed

@@ -456,6 +456,7 @@ async fn exchange(
 pub(super) struct Fetched {
     pub status: u16,
     pub body: Vec<u8>,
+    pub location: Option<String>,
 }
 
 const FETCHED_BYTES: usize = 4 << 20;
@@ -534,6 +535,9 @@ pub(super) async fn fetch_within(
             Failure::new(format!("request to {} failed: {e}", route.authority), true)
         })?;
         let status = response.status().as_u16();
+        let location = (response.headers().get(hyper::header::LOCATION))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let mut body = response.into_body();
         let mut bytes = Vec::new();
         while let Some(frame) = body.frame().await {
@@ -552,6 +556,7 @@ pub(super) async fn fetch_within(
         Ok(Fetched {
             status,
             body: bytes,
+            location,
         })
     };
     match tokio::time::timeout(timeout, exchange).await {
@@ -565,6 +570,71 @@ pub(super) async fn fetch_within(
             true,
         )),
     }
+}
+
+const REDIRECTS: usize = 5;
+
+/// The body `url` answers a GET with, `what` naming it in failures: at most `limit` bytes, each
+/// request within `timeout`, following at most 5 redirects and none from HTTPS to HTTP. An
+/// answer other than 2xx fails with its status and the start of its body, if not a web page.
+pub fn download(
+    what: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    limit: usize,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    let mut url = url.to_owned();
+    for _ in 0..=REDIRECTS {
+        let fetching = fetch_within(what, "GET", &url, headers, None, limit, timeout);
+        // On a thread of its own, as a runtime may be running where this is called.
+        let fetched = std::thread::scope(|scope| {
+            let fetched = scope.spawn(|| super::login::blocking(fetching));
+            (fetched.join()).unwrap_or_else(|_| Err(Failure::new(format!("{what} failed"), false)))
+        });
+        let fetched = fetched.map_err(|failure| failure.message)?;
+        match fetched.status {
+            200..=299 => return Ok(fetched.body),
+            301 | 302 | 303 | 307 | 308 => url = redirected(what, &url, fetched.location)?,
+            status => {
+                let said = String::from_utf8_lossy(&fetched.body);
+                let said: String = match said.trim() {
+                    page if page.is_empty() || page.starts_with('<') => String::new(),
+                    said => format!(": {}", said.chars().take(400).collect::<String>()),
+                };
+                return Err(format!("{what} answered HTTP {status}{said}"));
+            }
+        }
+    }
+    Err(format!("{what} redirected more than {REDIRECTS} times"))
+}
+
+/// Where a redirect from `from` to `location` leads: an absolute URL, or a path on the same
+/// host; never from HTTPS to plain HTTP.
+fn redirected(what: &str, from: &str, location: Option<String>) -> Result<String, String> {
+    let location = location.ok_or_else(|| format!("{what} redirected nowhere"))?;
+    let refused = || {
+        Err(format!(
+            "{what} redirected to {location}, which is not followed"
+        ))
+    };
+    if location.starts_with("https://") {
+        return Ok(location);
+    }
+    if location.starts_with("http://") {
+        return match from.starts_with("http://") {
+            true => Ok(location),
+            false => refused(),
+        };
+    }
+    if location.starts_with('/') && !location.starts_with("//") {
+        let scheme = from.find("://").map_or(0, |at| at + 3);
+        let origin = from[scheme..]
+            .find('/')
+            .map_or(from, |at| &from[..scheme + at]);
+        return Ok(format!("{origin}{location}"));
+    }
+    refused()
 }
 
 pub(super) type Connection = (
@@ -772,4 +842,83 @@ fn describe(parser: &ResponsesParser, outcome: crate::http::responses::Outcome) 
             .map(|f| format!(", field {f}"))
             .unwrap_or_default(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+
+    #[test]
+    fn redirects_lead_anywhere_but_from_https_to_http() {
+        let to = |from: &str, location: &str| redirected("it", from, Some(location.to_owned()));
+        let https = "https://github.com/o/r/releases/download/v1/a.tar.gz";
+        let asset = "https://objects.example/a?x=1";
+        assert_eq!(to(https, asset).unwrap(), asset);
+        assert_eq!(to(https, "/o/r/a").unwrap(), "https://github.com/o/r/a");
+        assert_eq!(
+            to("http://127.0.0.1:9/x", "/y").unwrap(),
+            "http://127.0.0.1:9/y"
+        );
+        assert_eq!(
+            to("http://127.0.0.1:9/x", "http://localhost/y").unwrap(),
+            "http://localhost/y"
+        );
+        for location in ["http://objects.example/a", "//objects.example/a", "a"] {
+            assert_eq!(
+                to(https, location).unwrap_err(),
+                format!("it redirected to {location}, which is not followed")
+            );
+        }
+        assert_eq!(
+            redirected("it", https, None).unwrap_err(),
+            "it redirected nowhere"
+        );
+    }
+
+    /// Answers each connection's request with `answer(path)`'s status, extra header and body.
+    fn serve(answer: fn(&str) -> (u16, String, &'static str)) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut lines = BufReader::new(stream.try_clone().unwrap()).lines();
+                let request = lines.next().unwrap().unwrap();
+                while lines.next().is_some_and(|line| !line.unwrap().is_empty()) {}
+                let path = request.split(' ').nth(1).unwrap().to_owned();
+                let (status, header, body) = answer(&path);
+                let reply = format!(
+                    "HTTP/1.1 {status} X\r\n{header}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(reply.as_bytes());
+            }
+        });
+        format!("http://{address}")
+    }
+
+    #[test]
+    fn a_download_follows_redirects_and_says_what_failed() {
+        let base = serve(|path| match path {
+            "/start" => (302, "Location: /next\r\n".to_owned(), ""),
+            "/next" => (307, "Location: /body?signed=1\r\n".to_owned(), ""),
+            "/body?signed=1" => (200, String::new(), "the bytes"),
+            "/loop" => (301, "Location: /loop\r\n".to_owned(), ""),
+            _ => (404, String::new(), "{\"message\":\"Not Found\"}"),
+        });
+        let get = |path: &str| {
+            let url = format!("{base}{path}");
+            download("the file", &url, &[], 1 << 20, Duration::from_secs(5))
+        };
+        assert_eq!(get("/start").unwrap(), b"the bytes");
+        assert_eq!(
+            get("/gone").unwrap_err(),
+            "the file answered HTTP 404: {\"message\":\"Not Found\"}"
+        );
+        assert_eq!(
+            get("/loop").unwrap_err(),
+            "the file redirected more than 5 times"
+        );
+    }
 }

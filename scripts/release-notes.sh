@@ -20,5 +20,5 @@ awk -v version="$1" -v previous="$2" '
   on { print }
 ' CHANGELOG.md
 if [ -z "$2" ]; then
-  printf '\nEarlier versions: [CHANGELOG.md](https://github.com/LeanAndMean/scramjet-rs/blob/v%s/CHANGELOG.md).\n' "$1"
+  printf '\nEarlier versions: [CHANGELOG.md](https://github.com/LeanAndMean/scramjet/blob/v%s/CHANGELOG.md).\n' "$1"
 fi

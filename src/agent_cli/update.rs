@@ -1,8 +1,11 @@
-//! `scramjet update self`: the newest release of `LeanAndMean/scramjet-rs` replaces this
-//! program. While the repository is private the download goes through `gh`, run as a program,
-//! so its token is never read here; the archive is checked against the release's `SHA256SUMS`
-//! and the program in it must run and say the release's version before it is renamed into place.
+//! `scramjet update self`: the newest release of the public `LeanAndMean/scramjet` replaces
+//! this program, downloaded over HTTPS. The archive is checked against the release's
+//! `SHA256SUMS` and the program in it must run and say the release's version before it is
+//! renamed into place. A package's programs from a private repository's releases come through
+//! `gh` (`download`), run as a program, so its token is never read here.
 use flate2::read::GzDecoder;
+use semver::Version;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     ffi::OsStr,
@@ -14,21 +17,23 @@ use std::{
     time::Duration,
 };
 
-const REPOSITORY: &str = "LeanAndMean/scramjet-rs";
+const REPOSITORY: &str = "LeanAndMean/scramjet";
+const RELEASES: &str = "https://api.github.com/repos/LeanAndMean/scramjet/releases?per_page=100";
 const PROGRAM: &str = if cfg!(windows) {
     "scramjet.exe"
 } else {
     "scramjet"
 };
 
+/// `SCRAMJET_RELEASES` names another release list, for tests and rehearsals.
 pub(super) fn update_self() -> Result<(), String> {
     let program =
         std::env::current_exe().map_err(|error| format!("cannot find this program: {error}"))?;
-    let gh = scramjet::os::program("gh", None);
+    let releases = std::env::var("SCRAMJET_RELEASES").unwrap_or_else(|_| RELEASES.to_owned());
     println!(
         "{}",
         replace(
-            &gh,
+            &releases,
             &program,
             env!("CARGO_PKG_VERSION"),
             std::env::consts::ARCH
@@ -38,37 +43,71 @@ pub(super) fn update_self() -> Result<(), String> {
 }
 
 /// The release archive of `program` for `version` on this platform, as `scripts/package.sh`
-/// names scramjet-rs's.
+/// names scramjet's.
 pub(super) fn archive_name(program: &str, version: &str, arch: &str) -> String {
     format!("{program}-{version}-{arch}-{}.tar.gz", std::env::consts::OS)
 }
 
-fn replace(gh: &Path, program: &Path, current: &str, arch: &str) -> Result<String, String> {
-    let view = ["release", "view", "--repo", REPOSITORY];
-    let tag = run_gh(
-        gh,
-        REPOSITORY,
-        view.iter()
-            .chain(&["--json", "tagName", "--jq", ".tagName"]),
-    )?;
-    let tag = tag.trim();
-    let latest = tag.strip_prefix('v').unwrap_or(tag);
-    let (Some(newest), Some(running)) = (parsed(latest), parsed(current)) else {
-        return Err(format!("the newest release's tag {tag:?} is not a version"));
+fn get(what: &str, url: &str, limit: usize, timeout: Duration) -> Result<Vec<u8>, String> {
+    let agent = concat!("scramjet/", env!("CARGO_PKG_VERSION"));
+    let headers = [
+        ("User-Agent", agent),
+        ("Accept", "application/vnd.github+json"),
+    ];
+    scramjet::agent::download(what, url, &headers, limit, timeout)
+}
+
+fn replace(releases: &str, program: &Path, current: &str, arch: &str) -> Result<String, String> {
+    let running =
+        Version::parse(current).map_err(|error| format!("this version {current:?}: {error}"))?;
+    let what = format!("{REPOSITORY}'s release list");
+    let listed = get(&what, releases, 16 << 20, Duration::from_secs(30))?;
+    let listed: Value =
+        serde_json::from_slice(&listed).map_err(|error| format!("{what} is not JSON: {error}"))?;
+    let Some((newest, release)) = newest(&listed) else {
+        return Ok(format!(
+            "scramjet {current} is up to date ({REPOSITORY} has no release)"
+        ));
     };
-    if newest <= running {
+    let tag = release["tag_name"].as_str().unwrap_or_default();
+    if newest.cmp_precedence(&running).is_le() {
         return Ok(format!(
             "scramjet {current} is up to date (newest release {tag})"
         ));
     }
-    let name = archive_name("scramjet", latest, arch);
-    let archive = download(gh, REPOSITORY, tag, &name)?;
+    let latest = newest.to_string();
+    let name = archive_name("scramjet", &latest, arch);
+    let asset = |file: &str| {
+        let assets = release["assets"].as_array().into_iter().flatten();
+        let mut found = assets.filter(|asset| asset["name"] == file);
+        found.find_map(|asset| asset["browser_download_url"].as_str())
+    };
+    let Some(url) = asset(&name) else {
+        return Err(format!(
+            "release {tag} of {REPOSITORY} has no {name} for this platform"
+        ));
+    };
+    let sums = asset("SHA256SUMS")
+        .ok_or_else(|| format!("release {tag} has no SHA256SUMS; nothing was replaced"))?;
+    let sums = get(
+        &format!("SHA256SUMS of release {tag}"),
+        sums,
+        1 << 20,
+        Duration::from_secs(30),
+    )?;
+    let archive = get(
+        &format!("{name} of release {tag}"),
+        url,
+        256 << 20,
+        Duration::from_secs(600),
+    )?;
+    checked(&String::from_utf8_lossy(&sums), &archive, &name, tag)?;
     let bytes = unpacked(&archive, PROGRAM)
         .ok_or_else(|| format!("{name} holds no {PROGRAM}; nothing was replaced"))?;
     let new = program.with_file_name(format!(".{PROGRAM}.new-{}", std::process::id()));
     let result = write_program(&new, &bytes)
         .map_err(|error| format!("cannot write {}: {error}", new.display()))
-        .and_then(|()| check_version(&new, latest))
+        .and_then(|()| check_version(&new, &latest))
         .and_then(|()| swap(&new, program));
     if result.is_err() {
         let _ = fs::remove_file(&new);
@@ -78,6 +117,44 @@ fn replace(gh: &Path, program: &Path, current: &str, arch: &str) -> Result<Strin
         "Updated scramjet: {current}..{latest} ({}); What's new opens at its next start",
         program.display()
     ))
+}
+
+/// The newest of the `listed` releases with its version, prereleases included: Scramjet 2's are
+/// all prereleases until one is called stable.
+fn newest(listed: &Value) -> Option<(Version, &Value)> {
+    let releases = listed
+        .as_array()?
+        .iter()
+        .filter(|release| release["draft"] != true);
+    let versions = releases.filter_map(|release| {
+        let tag = release["tag_name"].as_str()?;
+        Some((
+            Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok()?,
+            release,
+        ))
+    });
+    versions.max_by(|a, b| a.0.cmp_precedence(&b.0))
+}
+
+/// Fails unless `archive`'s SHA-256 is the one `sums` lists for `name`.
+fn checked(sums: &str, archive: &[u8], name: &str, tag: &str) -> Result<(), String> {
+    let expected = sums
+        .lines()
+        .find_map(|line| {
+            let (hash, file) = line.split_once(char::is_whitespace)?;
+            (file.trim_start().trim_start_matches('*') == name).then(|| hash.to_ascii_lowercase())
+        })
+        .ok_or_else(|| format!("SHA256SUMS of release {tag} does not list {name}"))?;
+    let actual: String = Sha256::digest(archive)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    match actual == expected {
+        true => Ok(()),
+        false => Err(format!(
+            "{name} does not match its checksum in SHA256SUMS; nothing was replaced"
+        )),
+    }
 }
 
 /// The archive `name` of `repository`'s release `tag`, downloaded through `gh` and checked
@@ -126,22 +203,7 @@ pub(super) fn download(
     };
     let sums = String::from_utf8_lossy(&read("SHA256SUMS")?).into_owned();
     let archive = read(name)?;
-    let expected = sums
-        .lines()
-        .find_map(|line| {
-            let (hash, file) = line.split_once(char::is_whitespace)?;
-            (file.trim_start().trim_start_matches('*') == name).then(|| hash.to_ascii_lowercase())
-        })
-        .ok_or_else(|| format!("SHA256SUMS of release {tag} does not list {name}"))?;
-    let actual: String = Sha256::digest(&archive)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    if actual != expected {
-        return Err(format!(
-            "{name} does not match its checksum in SHA256SUMS; nothing was replaced"
-        ));
-    }
+    checked(&sums, &archive, name, tag)?;
     Ok(archive)
 }
 
@@ -174,12 +236,6 @@ fn run_gh<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         )),
         Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
     }
-}
-
-fn parsed(version: &str) -> Option<(u64, u64, u64)> {
-    let mut parts = version.split('.').map(|part| part.parse().ok());
-    let version = (parts.next()??, parts.next()??, parts.next()??);
-    parts.next().is_none().then_some(version)
 }
 
 /// The file `name` in a gzipped tar archive, at its top or in a directory.
@@ -308,12 +364,15 @@ impl Drop for Scratch {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::{Arc, Mutex};
 
     struct Release {
         directory: PathBuf,
-        gh: PathBuf,
+        releases: String,
         program: PathBuf,
+        requests: Arc<Mutex<Vec<String>>>,
     }
 
     impl Drop for Release {
@@ -322,22 +381,21 @@ mod tests {
         }
     }
 
-    /// A scratch directory holding the program to replace, a release of `tag` whose program
-    /// prints `says`, its archive made by `tar`, and a `gh` serving it.
+    /// A scratch directory holding the program to replace, and a local server listing a draft,
+    /// an older release and the release of `tag`, whose program prints `says` and whose assets
+    /// redirect to where their files are, as GitHub's do.
     fn release(test: &str, tag: &str, says: &str, sums: impl Fn(&str) -> String) -> Release {
         let directory = std::env::temp_dir().join(format!(
-            "scramjet-rs-update-test-{test}-{}",
+            "scramjet-update-test-{test}-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&directory);
         let (stage, assets) = (directory.join("stage"), directory.join("assets"));
         fs::create_dir_all(&stage).unwrap();
         fs::create_dir_all(&assets).unwrap();
-        let executable = |path: &Path, text: &str| {
-            fs::write(path, text).unwrap();
-            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
-        };
-        executable(&stage.join(PROGRAM), &format!("#!/bin/sh\necho {says}\n"));
+        let staged = stage.join(PROGRAM);
+        fs::write(&staged, format!("#!/bin/sh\necho {says}\n")).unwrap();
+        fs::set_permissions(&staged, fs::Permissions::from_mode(0o755)).unwrap();
         let name = archive_name("scramjet", tag.trim_start_matches('v'), "x86_64");
         let made = Command::new("tar")
             .arg("-czf")
@@ -357,31 +415,54 @@ mod tests {
             sums(&format!("{hash}  {name}\n")),
         )
         .unwrap();
-        let gh = directory.join("gh");
-        let log = directory.join("calls");
-        executable(
-            &gh,
-            &format!(
-                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n\
-                 *assets*) ls '{assets}' ;;\n\
-                 'release view'*) echo {tag} ;;\n\
-                 'release download'*) while [ $# -gt 0 ]; do [ \"$1\" = --dir ] && cp '{assets}'/* \"$2\"; shift; done ;;\n\
-                 esac\n",
-                log = log.display(),
-                assets = assets.display(),
-            ),
-        );
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let asset = |file: &str| serde_json::json!({"name": file, "browser_download_url": format!("{base}/download/{tag}/{file}")});
+        let listing = serde_json::json!([
+            {"tag_name": "v99.0.0", "draft": true, "assets": [asset(&name)]},
+            {"tag_name": tag, "prerelease": true, "assets": [asset(&name), asset("SHA256SUMS")]},
+            {"tag_name": "v0.1.0", "assets": []},
+        ]);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let (served, logged) = (assets.clone(), requests.clone());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut lines = BufReader::new(stream.try_clone().unwrap()).lines();
+                let request = lines.next().unwrap().unwrap();
+                while lines.next().is_some_and(|line| !line.unwrap().is_empty()) {}
+                let path = request.split(' ').nth(1).unwrap().to_owned();
+                logged.lock().unwrap().push(path.clone());
+                let (status, header, body) = match path.split('/').collect::<Vec<_>>()[..] {
+                    ["", "releases"] => (200, String::new(), listing.to_string().into_bytes()),
+                    ["", "download", _, file] => {
+                        (302, format!("Location: /assets/{file}\r\n"), vec![])
+                    }
+                    ["", "assets", file] => {
+                        (200, String::new(), fs::read(served.join(file)).unwrap())
+                    }
+                    _ => (404, String::new(), vec![]),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status} X\r\n{header}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
         let program = directory.join(PROGRAM);
         fs::write(&program, "old").unwrap();
         Release {
             directory,
-            gh,
+            releases: format!("{base}/releases"),
             program,
+            requests,
         }
     }
 
-    fn calls(release: &Release) -> String {
-        fs::read_to_string(release.directory.join("calls")).unwrap_or_default()
+    fn requests(release: &Release) -> Vec<String> {
+        release.requests.lock().unwrap().clone()
     }
 
     fn leftovers(release: &Release) -> Vec<String> {
@@ -395,46 +476,55 @@ mod tests {
 
     #[test]
     fn a_newer_release_replaces_the_program_after_its_checks() {
-        let release = release("newer", "v0.10.0", "0.10.0", str::to_owned);
-        let said = replace(&release.gh, &release.program, "0.9.3", "x86_64").unwrap();
-        assert!(
-            said.starts_with("Updated scramjet: 0.9.3..0.10.0 ("),
-            "{said}"
-        );
-        assert_eq!(
-            fs::read_to_string(&release.program).unwrap(),
-            "#!/bin/sh\necho 0.10.0\n"
-        );
-        let mode = fs::metadata(&release.program).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o755);
-        let calls = calls(&release);
-        assert!(
-            calls.starts_with(
-                "release view --repo LeanAndMean/scramjet-rs --json tagName --jq .tagName\n\
-             release view v0.10.0 --repo LeanAndMean/scramjet-rs --json assets --jq \
-             .assets[].name\n\
-             release download v0.10.0 --repo LeanAndMean/scramjet-rs --pattern \
-             scramjet-0.10.0-x86_64-"
-            ),
-            "{calls}"
-        );
-        assert_eq!(
-            leftovers(&release),
-            ["assets", "calls", "gh", PROGRAM, "stage"]
-        );
+        for (test, tag, running) in [
+            ("newer", "v0.10.0", "0.9.3"),
+            ("from-0.x", "v2.140.0", "0.140.0"),
+            ("later", "v2.141.0", "2.140.0"),
+            ("alpha", "v2.0.0-alpha.10", "2.0.0-alpha.9"),
+        ] {
+            let latest = &tag[1..];
+            let release = release(test, tag, latest, str::to_owned);
+            let said = replace(&release.releases, &release.program, running, "x86_64").unwrap();
+            assert!(
+                said.starts_with(&format!("Updated scramjet: {running}..{latest} (")),
+                "{said}"
+            );
+            assert_eq!(
+                fs::read_to_string(&release.program).unwrap(),
+                format!("#!/bin/sh\necho {latest}\n")
+            );
+            let mode = fs::metadata(&release.program).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o755);
+            let name = archive_name("scramjet", latest, "x86_64");
+            assert_eq!(
+                requests(&release),
+                [
+                    "/releases".to_owned(),
+                    format!("/download/{tag}/SHA256SUMS"),
+                    "/assets/SHA256SUMS".to_owned(),
+                    format!("/download/{tag}/{name}"),
+                    format!("/assets/{name}"),
+                ]
+            );
+            assert_eq!(leftovers(&release), ["assets", PROGRAM, "stage"]);
+        }
     }
 
     #[test]
     fn the_same_or_an_older_release_downloads_nothing() {
-        for (test, running) in [("same", "0.10.0"), ("older", "0.11.0")] {
-            let release = release(test, "v0.10.0", "0.10.0", str::to_owned);
-            let said = replace(&release.gh, &release.program, running, "x86_64").unwrap();
+        for (test, tag, running) in [
+            ("same", "v2.140.0", "2.140.0"),
+            ("older", "v2.140.0", "2.141.0"),
+            ("final", "v2.0.0-alpha.3", "2.0.0"),
+        ] {
+            let release = release(test, tag, &tag[1..], str::to_owned);
+            let said = replace(&release.releases, &release.program, running, "x86_64").unwrap();
             assert_eq!(
                 said,
-                format!("scramjet {running} is up to date (newest release v0.10.0)")
+                format!("scramjet {running} is up to date (newest release {tag})")
             );
             assert_eq!(fs::read_to_string(&release.program).unwrap(), "old");
-            assert!(!calls(&release).contains("download"));
+            assert_eq!(requests(&release), ["/releases"]);
         }
     }
 
@@ -465,39 +555,65 @@ mod tests {
         ];
         for (test, says, sums, problem) in cases {
             let release = release(test, "v0.10.0", says, sums);
-            let error = replace(&release.gh, &release.program, "0.9.3", "x86_64").unwrap_err();
+            let error =
+                replace(&release.releases, &release.program, "0.9.3", "x86_64").unwrap_err();
             assert!(error.contains(problem), "{test}: {error}");
             assert_eq!(fs::read_to_string(&release.program).unwrap(), "old");
-            assert_eq!(
-                leftovers(&release),
-                ["assets", "calls", "gh", PROGRAM, "stage"]
-            );
+            assert_eq!(leftovers(&release), ["assets", PROGRAM, "stage"]);
         }
     }
 
     #[test]
+    fn a_release_without_this_platform_or_an_unreachable_list_says_so() {
+        let release = release("platform", "v0.10.0", "0.10.0", str::to_owned);
+        let error = replace(&release.releases, &release.program, "0.9.3", "riscv64").unwrap_err();
+        assert_eq!(
+            error,
+            format!(
+                "release v0.10.0 of LeanAndMean/scramjet has no {} for this platform",
+                archive_name("scramjet", "0.10.0", "riscv64")
+            )
+        );
+        let gone = release.releases.replace("/releases", "/gone");
+        let error = replace(&gone, &release.program, "0.9.3", "x86_64").unwrap_err();
+        assert_eq!(
+            error,
+            "LeanAndMean/scramjet's release list answered HTTP 404"
+        );
+        assert_eq!(fs::read_to_string(&release.program).unwrap(), "old");
+    }
+
+    #[test]
     fn gh_missing_or_failing_says_what_to_do() {
-        let program = Path::new("/nonexistent/scramjet-rs");
-        let missing = replace(Path::new("/nonexistent/gh"), program, "0.1.0", "x86_64");
+        let missing = download(Path::new("/nonexistent/gh"), "o/r", "v1", "a.tar.gz");
         assert!(
             missing
                 .unwrap_err()
                 .contains("install `gh` and run `gh auth login`")
         );
-        let failing = replace(Path::new("/bin/false"), program, "0.1.0", "x86_64");
+        let failing = download(Path::new("/bin/false"), "o/r", "v1", "a.tar.gz");
         assert_eq!(
             failing.unwrap_err(),
             "gh release view failed; `gh auth status` shows whether it is logged in to an \
-             account that can read LeanAndMean/scramjet-rs"
+             account that can read o/r"
         );
     }
 
     #[test]
-    fn versions_compare_by_number() {
-        assert!(parsed("0.10.0") > parsed("0.9.12"));
-        assert_eq!(parsed("1.2"), None);
-        assert_eq!(parsed("1.2.3-rc1"), None);
-        assert_eq!(parsed("1.2.3.4"), None);
+    fn the_newest_is_by_version_drafts_left_out() {
+        let newest =
+            |tags: serde_json::Value| newest(&tags).map(|(version, _)| version.to_string());
+        let tags = serde_json::json!([
+            {"tag_name": "v2.0.0-alpha.9"},
+            {"tag_name": "v2.0.0-alpha.10", "prerelease": true},
+            {"tag_name": "v0.117.0"},
+            {"tag_name": "v3.0.0", "draft": true},
+            {"tag_name": "not-a-version"},
+        ]);
+        assert_eq!(newest(tags).unwrap(), "2.0.0-alpha.10");
+        let tags = serde_json::json!([{"tag_name": "v2.140.0"}, {"tag_name": "v2.99.1", "prerelease": true}]);
+        assert_eq!(newest(tags).unwrap(), "2.140.0");
+        assert_eq!(newest(serde_json::json!([])), None);
     }
 }
 
