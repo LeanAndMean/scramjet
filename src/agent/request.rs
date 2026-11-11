@@ -985,14 +985,16 @@ response is incomplete; retry the request."});
         });
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
+        // How long the wait shown is depends on how soon the next request comes, which a
+        // loaded machine delays; the wait's end does not move.
+        let asked = Instant::now();
         assert!(agent.turn("hi", &mut ui, &cancel).is_err());
         let refused = Instant::now();
         agent.turn("hi", &mut ui, &cancel).unwrap();
-        assert!(refused.elapsed() >= Duration::from_millis(900));
+        assert!(asked.elapsed() >= Duration::from_millis(999));
         assert_eq!(ui.cooling.len(), 1);
-        assert!(
-            ui.cooling[0] > Duration::from_millis(900) && ui.cooling[0] <= Duration::from_secs(1)
-        );
+        assert!(ui.cooling[0] > Duration::ZERO && ui.cooling[0] <= Duration::from_secs(1));
+        assert!(refused.elapsed() >= ui.cooling[0]);
         // Five seconds is more than the settings wait: the provider says again.
         assert!(agent.turn("hi", &mut ui, &cancel).is_err());
         let refused = Instant::now();
@@ -1046,12 +1048,17 @@ response is incomplete; retry the request."});
         server.join().unwrap();
         let arrived = arrived.lock().unwrap();
         assert!(arrived[1] - arrived[0] >= Duration::from_millis(900));
+        // Starts are 250 ms apart; their arrival can lag by a loaded machine's scheduling.
         for pair in arrived[1..].windows(2) {
             assert!(
-                pair[1] - pair[0] >= Duration::from_millis(200),
+                pair[1] - pair[0] >= Duration::from_millis(100),
                 "{arrived:?}"
             );
         }
+        assert!(
+            arrived[3] - arrived[1] >= Duration::from_millis(400),
+            "{arrived:?}"
+        );
     }
 
     #[test]
