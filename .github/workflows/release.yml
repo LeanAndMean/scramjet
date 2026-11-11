@@ -1,6 +1,7 @@
 # Builds, tests and packs scramjet for each platform, and publishes the GitHub release when a
-# version tag (vX.Y.Z, or vX.Y.Z-alpha.N published as a prerelease) is pushed. Run by hand, it does the same without publishing: a rehearsal
-# whose archives stay a day. Never on every push: macOS minutes cost about ten times Linux's.
+# version tag (vX.Y.Z) is pushed: a prerelease, titled alpha, until the user calls one stable.
+# Run by hand, it does the same without publishing: a rehearsal whose archives stay a day.
+# Never on every push: macOS minutes cost about ten times Linux's.
 name: release
 
 on:
@@ -154,9 +155,6 @@ jobs:
           previous=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // ""')
           scripts/release-notes.sh "$version" "${previous#v}" >notes.md
           title=$(sed -n "s/^## $version — //p" CHANGELOG.md)
-          case $version in
-            *-*) prerelease=--prerelease ;;
-            *) prerelease= ;;
-          esac
-          gh release create "$TAG" --verify-tag $prerelease --title "Scramjet $version — $title" \
+          gh release create "$TAG" --verify-tag --prerelease \
+            --title "Scramjet $version (alpha) — $title" \
             --notes-file notes.md dist/*.tar.gz dist/SHA256SUMS
