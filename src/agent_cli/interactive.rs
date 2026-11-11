@@ -216,6 +216,7 @@ impl Interactive {
         if self.screen.is_some() {
             notices.extend(update::start_check());
         }
+        notices.extend(super::import::offer());
         if !notices.is_empty() {
             if !std::mem::take(&mut self.spaced) {
                 self.blank();

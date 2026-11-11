@@ -4,8 +4,11 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.145.0 — Import Scramjet 1's setup
+
 ### Added
 
+- `scramjet import` copies your Scramjet 1 setup from `~/.scramjet/agent`: settings (merged into yours, your keys kept; paths made absolute, npm packages left out), `models.json` providers that have a `baseUrl` and an `api`, keybindings, ChatGPT's and GitHub Copilot's logins, your own agents, themes, skills and context files. It never replaces a file, lists what it leaves and why (API keys, providers that only changed a built-in one, command sets' agents, extensions, prompts, sessions), and `--dry-run` only lists. The first start that finds Scramjet 1's settings and none of yours says so, once.
 - `install.sh` (Linux, macOS) and `install.ps1` (Windows) install the newest release in one line, checked against its `SHA256SUMS`; on Windows the program's directory goes first on your user `Path`, ahead of Scramjet 1's npm directory, and on Linux and macOS the line to add is shown when another `scramjet` comes first.
 
 ## 2.144.0 — Unattended turns say why git and gh fail

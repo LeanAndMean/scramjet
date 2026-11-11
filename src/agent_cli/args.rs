@@ -15,6 +15,7 @@ pub(super) const USAGE: &str =
        scramjet --version
        scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
        scramjet lint [--strict] [--json] DIR...
+       scramjet import [--dry-run] [DIR]
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
 settings file (by default ~/.config/scramjet/models.json) and in installed command sets, in
@@ -215,7 +216,9 @@ its skills and themes directories come too. `update` pulls the packages not pinn
 and `remove REPO` deletes the clone. `update self` replaces the program with the newest
 release of LeanAndMean/scramjet; the full screen's start says when one newer than this is out,
 looking at most once a day (not with SCRAMJET_OFFLINE set). `lint DIR...` checks the sets in DIR as the harness loads
-them and as Scramjet 1's scramjet-command-lint does (`lint --help`).
+them and as Scramjet 1's scramjet-command-lint does (`lint --help`). `import` copies Scramjet
+1's setup from ~/.scramjet/agent, converted, never over a file here, and lists what it leaves
+and why (`import --help`); the first interactive start that finds one offers it.
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'
 compaction.enabled is false (Auto-compact in /settings).

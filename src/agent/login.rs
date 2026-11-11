@@ -217,6 +217,43 @@ pub(super) fn save(path: &Path, provider: &str, credential: Value) -> Result<(),
     })
 }
 
+/// Scramjet 1's logins in `from` (its `auth.json`, in the same format) that `/login` makes the
+/// same way, saved in `to` where it has none of that provider's; nothing saved when `dry`.
+/// Returns the logins carried over (or that would be), then those left, each with why.
+pub fn import(from: &Path, to: &Path, dry: bool) -> Result<(Vec<String>, Vec<String>), String> {
+    let theirs = read(from)?;
+    let ours = read(to)?;
+    let (mut taken, mut left) = (Map::new(), Vec::new());
+    for (provider, credential) in theirs {
+        let shown = shown_name(&provider).to_owned();
+        let ours_already = ours.contains_key(&provider);
+        match credential["type"].as_str() {
+            _ if ours_already => left.push(format!("{shown}: logged in here already")),
+            Some("oauth") if LOGINS.iter().any(|(name, _)| *name == provider) => {
+                taken.insert(provider, credential);
+            }
+            Some("api_key") => left.push(format!(
+                "{shown}'s API key: Scramjet 2 keeps with each key the servers it may go to; \
+                 enter it again under /login"
+            )),
+            _ => left.push(format!("{shown}: not a login Scramjet 2 makes; /login")),
+        }
+    }
+    let names = taken
+        .keys()
+        .map(|name| shown_name(name).to_owned())
+        .collect();
+    if !dry && !taken.is_empty() {
+        update(to, false, |saved| {
+            for (provider, credential) in taken {
+                saved.entry(provider).or_insert(credential);
+            }
+            Ok::<(), String>(())
+        })?;
+    }
+    Ok((names, left))
+}
+
 /// What a request to `provider` authenticates with: the access token its login keeps in `path`,
 /// renewed first when it has expired, by `program` when a package's does the login. A renewal
 /// that failed transiently may succeed if retried.

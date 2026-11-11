@@ -2022,7 +2022,7 @@ fn same_directory(a: &Path, b: &Path) -> bool {
         )
 }
 
-fn write_object(path: &Path, object: Map<String, Value>) -> Result<(), String> {
+pub(super) fn write_object(path: &Path, object: Map<String, Value>) -> Result<(), String> {
     let text = serde_json::to_string_pretty(&Value::Object(object)).map_err(|e| e.to_string())?;
     write_replacing(path, &(text + "\n")).map_err(|error| format!("{}: {error}", shown(path)))
 }
@@ -2032,7 +2032,7 @@ fn shown(path: &Path) -> String {
 }
 
 /// The settings in `path`; none when there is no file.
-fn read_object(path: &Path) -> Result<Map<String, Value>, String> {
+pub(super) fn read_object(path: &Path) -> Result<Map<String, Value>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Map::new()),

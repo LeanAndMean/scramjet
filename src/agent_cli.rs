@@ -31,6 +31,7 @@ mod footer;
 mod fuzzy;
 mod highlight;
 mod hotkeys;
+mod import;
 mod install;
 mod installed;
 mod interactive;
@@ -94,6 +95,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             return result;
         }
         if let Some(result) = lint::run(command, &rest) {
+            return result;
+        }
+        if let Some(result) = import::run(command, &rest) {
             return result;
         }
     }
