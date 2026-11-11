@@ -13,8 +13,8 @@ use super::screen::{Answer, Dialog, Optional, Relisting};
 use super::select::{self, Picker};
 use super::text::{clip, visible};
 use super::{clipboard, editor, style};
-use scramjet_rs::agent::login::{LoginProgram, Said};
-use scramjet_rs::agent::{KeyFrom, Listing, codex, copilot, login};
+use scramjet::agent::login::{LoginProgram, Said};
+use scramjet::agent::{KeyFrom, Listing, codex, copilot, login};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
@@ -454,7 +454,7 @@ pub(super) struct Kept {
 }
 
 impl Kept {
-    pub(super) fn of(providers: &scramjet_rs::agent::Providers) -> Self {
+    pub(super) fn of(providers: &scramjet::agent::Providers) -> Self {
         Self {
             programs: providers.login_programs().to_vec(),
             listings: providers.listings().to_vec(),
@@ -749,7 +749,7 @@ fn browser_opener(url: &str) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scramjet_rs::agent::Providers;
+    use scramjet::agent::Providers;
     use serde_json::json;
     use std::cell::Cell;
     use std::path::PathBuf;

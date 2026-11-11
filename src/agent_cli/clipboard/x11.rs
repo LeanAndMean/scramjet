@@ -45,7 +45,7 @@ const TEXT: [&str; 3] = ["UTF8_STRING", "text/plain;charset=utf-8", "STRING"];
 pub(super) fn copy(text: &str) -> Result<(), String> {
     let mut owner = Command::new("/proc/self/exe");
     owner
-        .arg0("scramjet-rs")
+        .arg0("scramjet")
         .args([SERVE, "CLIPBOARD"])
         .env_clear();
     // It may outlive scramjet-rs: what it needs to reach the X server, and nothing else.

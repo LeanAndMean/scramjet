@@ -15,7 +15,7 @@ use yaml_rust2::Yaml;
 /// Where a command set was found.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Origin {
-    /// Installed by reference (`scramjet-rs install`), listed in the settings.
+    /// Installed by reference (`scramjet install`), listed in the settings.
     Installed,
     /// Under Scramjet's global root.
     Global,

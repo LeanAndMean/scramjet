@@ -1,24 +1,24 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
-use scramjet_rs::agent::{HARNESS_TOOLS, SandboxMode, SystemPrompt};
+use scramjet::agent::{HARNESS_TOOLS, SandboxMode, SystemPrompt};
 use std::{ffi::OsString, path::PathBuf};
 
 pub(super) const USAGE: &str =
-    "Usage: scramjet-rs [--project DIR] [--model PATTERN] [--models PATTERNS]
+    "Usage: scramjet [--project DIR] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N]
 [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--system-prompt TEXT]
 [--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-s MODE] [-p]
 [@FILE...] [MESSAGE...]
-       scramjet-rs --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
-       scramjet-rs --version
-       scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
-       scramjet-rs lint [--strict] [--json] DIR...
+       scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
+       scramjet --version
+       scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
+       scramjet lint [--strict] [--json] DIR...
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
 settings file (by default ~/.config/scramjet/models.json) and in installed command sets, in
-Scramjet's format: each provider has a baseUrl (http:// or https://), an api (openai-responses,
+Scramjet 1's format: each provider has a baseUrl (http:// or https://), an api (openai-responses,
 anthropic-messages or openai-completions, with its compat), an apiKey (the value of the
 environment variable of that name, else the text; !command: what the command prints, run for
 each request, as headers' values may be) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
@@ -27,12 +27,12 @@ its credentialFiles the files holding their keys, hidden as --list-credential-st
 and its logins the programs that log in to more providers. /login adds the models of ChatGPT,
 GitHub Copilot and those logins, each saved in auth.json beside the settings.
   --project DIR          project directory (default: current directory)
-  --model PATTERN        model, as Scramjet finds it: the one whose provider/id or id PATTERN
+  --model PATTERN        model, as Scramjet 1 finds it: the one whose provider/id or id PATTERN
                          is (an id two providers offer: the first's), else the newest whose
                          id or name contains it (after provider/, among that provider's),
                          with an optional :LEVEL that sets the thinking level (default: the
                          one a resumed session last used; for a new session, the one last
-                         chosen in this project, else anywhere, as in Scramjet, else
+                         chosen in this project, else anywhere, as in Scramjet 1, else
                          gpt-6-luna)
   --models PATTERNS      the models Ctrl+P cycles through, comma-separated, in place of the
                          settings' enabledModels: each a model's id, part of its id or name,
@@ -51,20 +51,20 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
   --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
                          newest session of this project whose id (as /status shows it) starts
                          with ID, else of another project, which is forked here once you
-                         agree, as in Scramjet
+                         agree, as in Scramjet 1
   --fork FILE|ID         continue a copy of that session, its branches and name included, in a
                          new session of this project
-  --no-session           save no session, as Scramjet's: those of this run (/clear, /fork,
+  --no-session           save no session, as Scramjet 1's: those of this run (/clear, /fork,
                          /branch and /import too) are kept in a private temporary directory
                          removed at exit, and /resume lists only them
   --session-dir DIR      save and find sessions in DIR, in place of the project's directory
-                         under ~/.local/state/scramjet/sessions, as Scramjet's (default:
+                         under ~/.local/state/scramjet/sessions, as Scramjet 1's (default:
                          the settings' sessionDir); -c, -r, /resume and --session ID look
                          there, whatever project a session there was of
   --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
                          or the contents of the file it names (default: the project's
                          .scramjet/SYSTEM.md, else ~/.config/scramjet/SYSTEM.md, else
-                         scramjet-rs's), as in Scramjet
+                         the built-in one), as in Scramjet 1
   --append-system-prompt TEXT
                          text, or a file's contents, after the opening; several are joined
                          (default: an APPEND_SYSTEM.md found as SYSTEM.md is)
@@ -81,17 +81,17 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
   --no-themes            no themes but the built-in ones and those --theme names: none from
                          the theme directories or the settings' themes
   -t, --tools LIST       the only tools the agent has in this run, comma-separated, as in
-                         Scramjet: coding tools, in place of the settings' tools, and
-                         scramjet-rs's own (subagent, get_scramjet_user_input, delegate,
+                         Scramjet 1: coding tools, in place of the settings' tools, and
+                         Scramjet's own (subagent, get_scramjet_user_input, delegate,
                          report_scramjet_command_status…), left out unless named; without
                          report_scramjet_command_status a command cannot finish, and waits
                          for you after each reply
   -nt, --no-tools        no tools at all, unless --tools names some
   -nbt, --no-builtin-tools
-                         no coding tools, unless --tools names some; scramjet-rs's own stay
+                         no coding tools, unless --tools names some; Scramjet's own stay
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
-                         calls run without asking, as in Scramjet. Bash is not sandboxed
+                         calls run without asking, as in Scramjet 1. Bash is not sandboxed
                          unless --sandbox says so.
   -s, --sandbox MODE     confine the agent's tools, as Codex's modes do (default: the
                          settings' sandbox, else danger-full-access): read-only runs bash with
@@ -104,15 +104,15 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
                          refuses to start without it; on macOS it runs under Seatbelt
                          (sandbox-exec). `!` commands you type stay outside
   -p, --print            run the messages and exit; a message `-` is read from stdin
-  @FILE                  send FILE with the first message (or alone), as Scramjet does: a
+  @FILE                  send FILE with the first message (or alone), as Scramjet 1 does: a
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
                          as read scales it; a relative path is from the current directory
   MESSAGE                prompts sent one after another when the session starts
   --export FILE [OUTPUT] write the session file FILE as a web page to OUTPUT (default:
-                         scramjet-rs-session-<its name>.html here), as /export does, and exit
+                         scramjet-session-<its name>.html here), as /export does, and exit
   --list-models [SEARCH] list the providers' models (those SEARCH matches) by provider, with
                          their context window, output limit, and whether they reason and
-                         take images, as Scramjet lists them, and exit
+                         take images, as Scramjet 1 lists them, and exit
   --list-credential-stores
                          list the credential files and directories that subagents' tools, and
                          the agent's in turns nobody started (setting hideCredentials), do not
@@ -120,7 +120,7 @@ GitHub Copilot and those logins, each saved in auth.json beside the settings.
   -v, --version          print the version and exit
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt, and under it the project's directory and Git branch, the session's tokens, how full the
-context is and the model, as Scramjet's footer. Page Up/Down and the mouse wheel scroll the
+context is and the model, as Scramjet 1's footer. Page Up/Down and the mouse wheel scroll the
 conversation; Escape goes back to its end.
 In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
 line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G edits the
@@ -175,7 +175,7 @@ requests, tokens, cache hits, cost, days, weeks, providers, models and their spe
 screen it opens in the conversation's place on the current provider's; d shows its details,
 Tab (or Left and Right) all of it or another provider's, Escape closes it.
 /export [PATH] writes the session's current branch as a web page that runs no script and
-loads nothing (by default scramjet-rs-session-<id>.html here), or, to a PATH ending in .jsonl,
+loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
 clipboard. /release-notes (or /changelog) shows what changed in each version, the newest
@@ -195,14 +195,14 @@ Typed while a turn runs, /status, /usage, /release-notes, /hotkeys, /keybindings
 request, /reload and /mcp's
 changes are refused,
 and the other commands stop the turn and run once it has.
-Scramjet's names of the commands named otherwise here are accepted too (/new, /quit, /name,
+Scramjet 1's names of the commands named otherwise here are accepted too (/new, /quit, /name,
 /session, /clone), and so are Claude Code's /reset, /config, /continue and /help, and
 Codex's /keymap.
-As in Scramjet, /SET:COMMAND ARGS runs a command of a command set: its file
+As in Scramjet 1, /SET:COMMAND ARGS runs a command of a command set: its file
 commands/COMMAND.md (or SET:COMMAND.md) is sent with the arguments substituted, inside
 <scramjet-command>. Agent files may name tools as Claude Code does (Read, Grep, Glob, Bash). The
 sets are those installed, then those under $XDG_DATA_HOME/scramjet (~/.local/share/scramjet)
-and the project's .scramjet. `scramjet-rs install DIR` installs the set in DIR by reference,
+and the project's .scramjet. `scramjet install DIR` installs the set in DIR by reference,
 recorded in the settings' commandSets (~ for the home directory), or, as Pi installs a local
 path, DIR as a package in the settings' packages: the sets it holds as a package's clone holds
 them, and its skills and themes directories; `remove NAME|DIR` takes them out and `list`
@@ -213,12 +213,12 @@ $XDG_DATA_HOME/scramjet/git, recorded in the settings' packages: its sets are it
 directory when that is a set, else the sets at its top and those with a set.yaml deeper, and
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
 and `remove REPO` deletes the clone. `lint DIR...` checks the sets in DIR as the harness loads
-them and as Scramjet's scramjet-command-lint does (`lint --help`).
+them and as Scramjet 1's scramjet-command-lint does (`lint --help`).
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'
 compaction.enabled is false (Auto-compact in /settings).
 Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramjet/),
-with Scramjet's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
+with Scramjet 1's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
 defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, write (the

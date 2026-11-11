@@ -53,7 +53,7 @@ const SLASH_COMMANDS: [(&str, &str); 24] = [
         "mcp",
         "Show the MCP servers and their tools: /mcp [reconnect|enable|disable [SERVER|all]]",
     ),
-    ("exit", "Quit scramjet-rs"),
+    ("exit", "Quit Scramjet"),
 ];
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's

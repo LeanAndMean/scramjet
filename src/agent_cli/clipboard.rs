@@ -273,7 +273,7 @@ fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String
         .to_string_lossy()
         .into_owned();
     let failed = |error| format!("Cannot save the image to {path}: {error}");
-    let mut file = scramjet_rs::os::private_file(OpenOptions::new().write(true).create_new(true))
+    let mut file = scramjet::os::private_file(OpenOptions::new().write(true).create_new(true))
         .open(&path)
         .map_err(failed)?;
     if let Err(error) = file.write_all(bytes) {

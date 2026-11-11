@@ -14,7 +14,7 @@ use crate::agent_cli::terminal::{
     COMMAND_LINES, COOLING, Terminal, elapsed, retrying, spinner, waiting_for,
 };
 use crate::agent_cli::text::{Wrap, clip, columns, one_line, plain, visible};
-use scramjet_rs::agent::{Purpose, Shell, StreamProgress};
+use scramjet::agent::{Purpose, Shell, StreamProgress};
 use std::{
     fmt::Write as _,
     io::{self, Write},
@@ -578,7 +578,7 @@ fn painted(row: &str, base: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scramjet_rs::agent::AutoCompaction;
+    use scramjet::agent::AutoCompaction;
 
     #[test]
     fn the_status_line_says_what_runs_and_what_escape_does() {

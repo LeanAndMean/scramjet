@@ -8,7 +8,7 @@ use super::style::{
     TOOL_FAILED, TOOL_OUTPUT, WARNING,
 };
 use super::text::{Wrap, clip, printable, visible};
-use scramjet_rs::agent::{ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation};
+use scramjet::agent::{ChildItem, ChildRun, ChildState, ChildUsage, Children, Delegation};
 
 /// Items shown of a child while results are cut: Scramjet's `COLLAPSED_ITEM_COUNT` for one
 /// child, 5 for each of several.

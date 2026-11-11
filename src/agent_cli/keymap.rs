@@ -5,7 +5,7 @@
 //! name the keys in use.
 
 use super::keys::{ALT, CTRL, Code, Press, SHIFT};
-use scramjet_rs::agent::{Problem, shortened, write_replacing};
+use scramjet::agent::{Problem, shortened, write_replacing};
 use serde_json::{Map, Value};
 use std::{
     io,

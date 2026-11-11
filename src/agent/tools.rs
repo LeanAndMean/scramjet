@@ -1152,7 +1152,7 @@ fn temp_name(name: &std::ffi::OsStr) -> std::ffi::OsString {
     let count = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut temp = std::ffi::OsString::from(".");
     temp.push(name);
-    temp.push(format!(".{}-{count}.scramjet-rs", std::process::id()));
+    temp.push(format!(".{}-{count}.scramjet", std::process::id()));
     temp
 }
 

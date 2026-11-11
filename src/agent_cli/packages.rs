@@ -117,7 +117,7 @@ fn split_reference(path: &str) -> Result<(&str, Option<String>), String> {
 /// Where packages are cloned: `$XDG_DATA_HOME/scramjet/git`, by default
 /// `~/.local/share/scramjet/git`.
 pub(super) fn clones() -> Option<PathBuf> {
-    let data = scramjet_rs::os::base_directory("XDG_DATA_HOME", ".local/share")?;
+    let data = scramjet::os::base_directory("XDG_DATA_HOME", ".local/share")?;
     Some(data.join("scramjet").join("git"))
 }
 

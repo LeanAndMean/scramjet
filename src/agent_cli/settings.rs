@@ -8,7 +8,7 @@ use super::packages::{self, Source};
 use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     CODING_TOOLS, Compacting, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Retries, SandboxMode,
     Set, UserShell, offline, sets_in, shortened, state_directory, write_replacing,
 };
@@ -275,7 +275,7 @@ impl Row {
                 );
             }
             Self::StartupModel => {
-                "The model a new session starts with when scramjet-rs starts, unless --model names \
+                "The model a new session starts with when Scramjet starts, unless --model names \
                  one: the one last chosen in this project (else anywhere), or anywhere."
             }
             Self::ThinkingBlocks => {
@@ -297,8 +297,8 @@ impl Row {
             Self::Banner => {
                 let then = then(Binding::ToolsExpand, "shows every key and what was loaded.");
                 return format!(
-                    "What a session shows as it starts: header, as Scramjet's, or plain, card \
-                     or logo, Scramjet's logo.{then}"
+                    "What a session shows as it starts: header, as Scramjet 1's, or plain, card \
+                     or logo, Scramjet 1's logo.{then}"
                 );
             }
             Self::Steering => {
@@ -394,12 +394,12 @@ impl Row {
             Self::NextSteps => {
                 "What follows a command that finishes and recommends a next one: continue \
                  automatically, ask you, or let autopilot decide; command sets can suggest which. \
-                 Kept in Scramjet's autonomy.yaml files, which Scramjet reads too."
+                 Kept in the autonomy.yaml files, which Scramjet 1 reads too."
             }
             Self::Publishing => {
                 "Whether the issues, pull requests and comments a command publishes on GitHub wait \
                  for your approval, in the project's own repository; elsewhere they always do. \
-                 Kept in Scramjet's autonomy.yaml for all projects, which Scramjet reads too."
+                 Kept in the autonomy.yaml for all projects, which Scramjet 1 reads too."
             }
             Self::Installed => {
                 "What this session loaded: command sets, commands, agents, skills, system prompt, \
@@ -529,8 +529,8 @@ impl Settings {
     }
 
     fn loaded(cloning: bool) -> Self {
-        let path = scramjet_rs::agent::login::config_directory()
-            .map(|config| config.join("settings.json"));
+        let path =
+            scramjet::agent::login::config_directory().map(|config| config.join("settings.json"));
         let mut settings = Self::read_with(path, packages::clones(), cloning);
         settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
         settings
@@ -1041,11 +1041,11 @@ impl Settings {
     /// is relative to the settings file's directory.
     fn resolve(&self, entry: &str) -> PathBuf {
         let entry = entry.trim();
-        if let Some((rest, home)) = scramjet_rs::os::after_tilde(entry).zip(std::env::home_dir()) {
-            return scramjet_rs::os::join(&home, rest);
+        if let Some((rest, home)) = scramjet::os::after_tilde(entry).zip(std::env::home_dir()) {
+            return scramjet::os::join(&home, rest);
         }
         let directory = self.path.as_deref().and_then(Path::parent);
-        scramjet_rs::os::join(directory.unwrap_or(Path::new("/")), entry)
+        scramjet::os::join(directory.unwrap_or(Path::new("/")), entry)
     }
 
     /// Installs `directory` by reference: a command set goes in `commandSets`; another directory
@@ -1123,7 +1123,7 @@ impl Settings {
         if !moved.is_empty() {
             object.insert("commandSets".into(), json!(kept));
         }
-        packages.push(scramjet_rs::os::tilde(&directory));
+        packages.push(scramjet::os::tilde(&directory));
         object.insert("packages".into(), json!(packages));
         write_object(&path, object)?;
         self.command_sets.retain(|known| !moved.contains(known));
@@ -1175,7 +1175,7 @@ impl Settings {
                 ),
             });
         }
-        entries.push(scramjet_rs::os::tilde(&set.directory));
+        entries.push(scramjet::os::tilde(&set.directory));
         object.insert("commandSets".into(), json!(entries));
         write_object(&path, object)?;
         self.command_sets.push(set.directory.clone());
@@ -1206,7 +1206,7 @@ impl Settings {
                     }
                     for why in missing {
                         (self.warnings).push(format!(
-                            "{}: not downloaded: {why}; `scramjet-rs update {}` tries again",
+                            "{}: not downloaded: {why}; `scramjet update {}` tries again",
                             source.written, source.written
                         ));
                     }
@@ -1214,7 +1214,7 @@ impl Settings {
             }
             match directory.is_dir() {
                 false => self.warnings.push(format!(
-                    "{}: not cloned into {}{}; `scramjet-rs update` clones it",
+                    "{}: not cloned into {}{}; `scramjet update` clones it",
                     source.written,
                     shown(&directory),
                     failed.map(|why| format!(" ({why})")).unwrap_or_default()
@@ -1225,7 +1225,7 @@ impl Settings {
         for directory in &self.local_packages {
             match directory.is_dir() {
                 false => self.warnings.push(format!(
-                    "{0}: not a directory; `scramjet-rs remove {0}` takes it out of packages",
+                    "{0}: not a directory; `scramjet remove {0}` takes it out of packages",
                     shown(directory)
                 )),
                 true => loaded.push((shown(directory), directory.clone())),
@@ -1252,8 +1252,8 @@ impl Settings {
         &mut self,
         reference: &str,
     ) -> Result<Option<PathBuf>, String> {
-        let given = match scramjet_rs::os::after_tilde(reference).zip(std::env::home_dir()) {
-            Some((rest, home)) => scramjet_rs::os::join(&home, rest),
+        let given = match scramjet::os::after_tilde(reference).zip(std::env::home_dir()) {
+            Some((rest, home)) => scramjet::os::join(&home, rest),
             None => std::path::absolute(reference).map_err(|e| e.to_string())?,
         };
         let Some(directory) = (self.local_packages.iter())
@@ -1383,8 +1383,8 @@ impl Settings {
             )
         })?;
         // `~` too, which Windows' shells leave as typed.
-        let given = match scramjet_rs::os::after_tilde(reference).zip(std::env::home_dir()) {
-            Some((rest, home)) => Some(scramjet_rs::os::join(&home, rest)),
+        let given = match scramjet::os::after_tilde(reference).zip(std::env::home_dir()) {
+            Some((rest, home)) => Some(scramjet::os::join(&home, rest)),
             None => std::path::absolute(reference).ok(),
         };
         let position = entries.iter().position(|entry| {
@@ -1678,7 +1678,7 @@ impl Settings {
                 .join(", "),
             Row::DefaultShell => {
                 let used = UserShell::used(self.default_shell);
-                match (self.default_shell, scramjet_rs::agent::found(used.name())) {
+                match (self.default_shell, scramjet::agent::found(used.name())) {
                     (None, _) => format!("{} (default)", used.name()),
                     (Some(_), true) => used.name().into(),
                     (Some(_), false) => format!("{} (not found)", used.name()),
@@ -2880,11 +2880,11 @@ mod tests {
             seen(Row::DoubleEscape, &mut settings),
             ["opens /tree", "opens /fork", "does nothing", "opens /tree"]
         );
-        let found = |shell: &str| match scramjet_rs::agent::found(shell) {
+        let found = |shell: &str| match scramjet::agent::found(shell) {
             true => shell.to_owned(),
             false => format!("{shell} (not found)"),
         };
-        let bash = scramjet_rs::agent::found("bash");
+        let bash = scramjet::agent::found("bash");
         assert_eq!(
             seen(Row::DefaultShell, &mut settings),
             [
@@ -3078,8 +3078,8 @@ mod tests {
         let other = scratch.0.join("other").join("scramjet");
         std::fs::create_dir_all(other.join("commands")).unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let mach12 = scramjet_rs::os::tilde(&package.join("mach12"));
-        let elsewhere = scramjet_rs::os::tilde(&other);
+        let mach12 = scramjet::os::tilde(&package.join("mach12"));
+        let elsewhere = scramjet::os::tilde(&other);
         let settings_with = |sets: &[&str]| {
             std::fs::write(&path, json!({"commandSets": sets}).to_string()).unwrap();
             Settings::read(Some(path.clone()))
@@ -3112,7 +3112,7 @@ mod tests {
             (Some(package.join("skills")), Some(package.join("themes")))
         );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let written = scramjet_rs::os::tilde(&package);
+        let written = scramjet::os::tilde(&package);
         assert_eq!(saved, json!({"commandSets": [], "packages": [written]}));
         let read = Settings::read(Some(path.clone()));
         assert_eq!(
@@ -3146,7 +3146,7 @@ mod tests {
         assert_eq!(
             Settings::read(Some(path.clone())).warnings,
             [format!(
-                "{0}: not a directory; `scramjet-rs remove {0}` takes it out of packages",
+                "{0}: not a directory; `scramjet remove {0}` takes it out of packages",
                 shown(&package)
             )]
         );
@@ -3165,7 +3165,7 @@ mod tests {
         let scratch = Scratch::new("sets");
         let path = scratch.0.join("config/settings.json");
         let set = |name: &str| {
-            let directory = scramjet_rs::os::join(&scratch.0, name);
+            let directory = scramjet::os::join(&scratch.0, name);
             std::fs::create_dir_all(directory.join("commands")).unwrap();
             directory
         };
@@ -3184,7 +3184,7 @@ mod tests {
         );
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         // Under the home, as Windows' temporary directory is, it is written with `~`.
-        let written = scramjet_rs::os::tilde(&mach12);
+        let written = scramjet::os::tilde(&mach12);
         assert_eq!(
             saved,
             json!({"theme": "x", "commandSets": ["../rs", written]})

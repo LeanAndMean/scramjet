@@ -24,12 +24,12 @@ pub(super) const PROGRAM: &str = "bwrap";
 
 /// Why `--sandbox` is refused on Windows, where scramjet-rs has only subagents' read-only one.
 #[cfg(windows)]
-const UNAVAILABLE: &str = "scramjet-rs has no sandbox for the main agent on Windows yet";
+const UNAVAILABLE: &str = "Scramjet has no sandbox for the main agent on Windows yet";
 
 /// Why a command whose credential stores are to be hidden does not run on Windows. The main
 /// agent's run there with nothing hidden instead (`tools::HIDES_COMMANDS`).
 #[cfg(windows)]
-const NOT_HIDDEN: &str = "scramjet-rs has no sandbox on Windows yet, so it cannot run commands \
+const NOT_HIDDEN: &str = "Scramjet has no sandbox on Windows yet, so it cannot run commands \
     with the credential stores hidden, as the hideCredentials setting asks for this turn (by \
     default, turns nobody started: -p, autopilot, a next step that runs by itself)";
 
@@ -719,7 +719,7 @@ fn confined(
 #[cfg(windows)]
 pub(super) fn low(root: &Path) -> Result<Command, String> {
     let program = std::env::current_exe()
-        .map_err(|error| format!("cannot find scramjet-rs's own program: {error}"))?;
+        .map_err(|error| format!("cannot find Scramjet's own program: {error}"))?;
     let mut process = Command::new(program);
     process.arg(crate::os::LOW_INTEGRITY).current_dir(root);
     Ok(process)

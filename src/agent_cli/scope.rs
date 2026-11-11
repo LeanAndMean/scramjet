@@ -10,7 +10,7 @@ use super::settings::{Settings, card_level};
 use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
 use super::terminal;
 use super::text::{clip, visible};
-use scramjet_rs::agent::{Agent, ModelOption, login};
+use scramjet::agent::{Agent, ModelOption, login};
 use unicode_width::UnicodeWidthStr;
 
 /// What the scope is called, after `models`: `Models for Ctrl+P`.

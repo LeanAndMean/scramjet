@@ -1,4 +1,4 @@
-"""Drives `scramjet-rs` in a pseudo-terminal against closed and scripted endpoints: the session
+"""Drives `scramjet` in a pseudo-terminal against closed and scripted endpoints: the session
 on the full screen, and the full screen's own features."""
 import atexit
 import base64
@@ -2504,7 +2504,7 @@ def settings_menu(read, until, send, output):
 def banner_choice(read, until, send, output):
     shown, on_screen = full_screen(80)(read, output)
     rows = on_screen('\u2500' * 20)
-    assert rows[0].startswith('\u256d\u2500 scramjet-rs v'), rows
+    assert rows[0].startswith('\u256d\u2500 scramjet v'), rows
     assert rows[1].startswith('\u2502 model    gpt-6-luna \u00b7 thinking medium '), rows
     assert 'Esc interrupt \u00b7 Ctrl+C/D clear/exit \u00b7 / commands \u00b7 ! bash \u00b7 Ctrl+O more' in rows, rows
     # Ctrl+O shows every key, and again only the main ones.
@@ -2517,7 +2517,7 @@ def banner_choice(read, until, send, output):
     on_screen('Settings  \u2191\u2193 move')
     rows = select_row(read, shown, send, 'Banner', b'\x1b[B')
     assert '\u203a ' + setting('Banner', 'card') in rows, rows
-    assert "  What a session shows as it starts: header, as Scramjet's, or plain, card or" in rows, rows
+    assert "  What a session shows as it starts: header, as Scramjet 1's, or plain, card or" in rows, rows
     send(b'\r')
     on_screen('\u203a ' + setting('Banner', 'logo'))
     send(b'\x1b')
@@ -2918,11 +2918,11 @@ def resume_at_start(read, until, send, output):
     shown, on_screen = full_screen(100)(read, output)
     # The sessions show first, the newest selected: no session is current yet.
     rows = on_screen('\u203a mango second (2 items, now)')
-    assert not any(row.startswith('scramjet-rs v') for row in rows), rows
+    assert not any(row.startswith('scramjet v') for row in rows), rows
     send(b'\r')
     rows = on_screen('\u2713 Resumed session \u00b7 gpt-6-luna')
     text = '\n'.join(rows)
-    assert ' \u203a mango second\n\n\n Mango reply.' in text and 'scramjet-rs v' not in text, rows
+    assert ' \u203a mango second\n\n\n Mango reply.' in text and 'scramjet v' not in text, rows
     send(b'\x04')
 
 
@@ -3036,7 +3036,7 @@ ran = subprocess.run([*agent(serve_replies([], models=scope_models), named),
                       '--model', 'sol', '-p', 'go'], cwd=project, env=dict(env, XDG_CONFIG_HOME=named),
                      capture_output=True, timeout=30)
 assert (ran.returncode, ran.stdout, ran.stderr) == (
-    1, b'', b'scramjet-rs: --model "sol" names none of the providers\' models (--list-models lists them)\n'), ran
+    1, b'', b'scramjet: --model "sol" names none of the providers\' models (--list-models lists them)\n'), ran
 assert set(session_files()) == known, set(session_files()) - known
 ran = subprocess.run([*agent(serve_replies([], models=scope_models)), '--list-models', 'terra'], cwd=project,
                      env=env, capture_output=True, timeout=30)
@@ -3307,7 +3307,7 @@ def installed_view(read, until, send, output):
     assert selected.split() == ['\u203a', project_file, 'next', 'steps,', 'this', 'project'], rows
     assert '  Settings files' in rows, rows
     note = ' '.join(row.strip() for row in rows[rows.index('  ' + project_file) + 1:])
-    assert note == "Scramjet's, which it reads too: what follows each command in this project. Not there " \
+    assert note == "Scramjet 1's, read here too: what follows each command in this project. Not there " \
         "yet: changing a next step for this project writes it.", rows
     # Enter on a row without a file leaves the list as it was.
     send(b'\r')
@@ -4409,7 +4409,7 @@ def prompt_keys(read, until, send, output):
     send(b'\x1b[1;5H')
     # Shortened, beside the hand-off.
     rows = on_screen('\u219342')
-    assert rows[0] == 'scramjet-rs v' + VERSION and ' \u203a go' in rows, rows
+    assert rows[0] == 'scramjet v' + VERSION and ' \u203a go' in rows, rows
     send(b'\x1b[1;5F')
     rows = on_screen('Row 40 of the reply.')
     assert 'Row 1 of the reply.' not in '\n'.join(rows), rows
@@ -4577,7 +4577,7 @@ def fullscreen_mouse(read, until, send, output):
     # A press on the track puts the thumb's middle there, as far as it goes: at the top, the start.
     send(b'\x1b[<0;60;1M\x1b[<0;60;1m')
     rows = on_screen('more lines below')
-    assert rows[0].startswith('scramjet-rs v'), rows
+    assert rows[0].startswith('scramjet v'), rows
     below = int(re.search(r'(\d+) more lines below', '\n'.join(rows)).group(1))
     assert thumb == track * track // (track + below), (thumb, track, below)
     assert bar() == '\u2588' * thumb + '\u2502' * (track - thumb) + at_end[track:], bar()
@@ -5190,7 +5190,7 @@ for arguments in [[], ['--system-prompt', 'Given.', '--append-system-prompt', ap
 found, given = (body['instructions'] for body in sent_bodies)
 assert found.startswith('From SYSTEM.md.\n\n# Project Context\n'), found
 assert '\n## %s\n\nContext here.\n' % os.path.realpath(context_file) in found, found
-assert given.startswith('Given.\n\nFrom a file.\n\nInline.\n\n# scramjet-rs\n'), given
+assert given.startswith('Given.\n\nFrom a file.\n\nInline.\n\n# Scramjet\n'), given
 os.remove(context_file)
 os.remove(system_md)
 print('agent editor journeys passed')

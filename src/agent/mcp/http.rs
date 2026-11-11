@@ -234,7 +234,7 @@ fn unauthorized(status: StatusCode, body: &[u8]) -> Error {
         said => format!(" ({said})"),
     };
     failed(format!(
-        "HTTP {status}{said}: it needs authorization, which scramjet-rs gives it only as the \
+        "HTTP {status}{said}: it needs authorization, which Scramjet gives it only as the \
 headers of its entry in mcpServers (OAuth sign-in is not supported yet)"
     ))
 }

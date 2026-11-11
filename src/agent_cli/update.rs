@@ -1,4 +1,4 @@
-//! `scramjet-rs update self`: the newest release of `LeanAndMean/scramjet-rs` replaces this
+//! `scramjet update self`: the newest release of `LeanAndMean/scramjet-rs` replaces this
 //! program. While the repository is private the download goes through `gh`, run as a program,
 //! so its token is never read here; the archive is checked against the release's `SHA256SUMS`
 //! and the program in it must run and say the release's version before it is renamed into place.
@@ -16,15 +16,15 @@ use std::{
 
 const REPOSITORY: &str = "LeanAndMean/scramjet-rs";
 const PROGRAM: &str = if cfg!(windows) {
-    "scramjet-rs.exe"
+    "scramjet.exe"
 } else {
-    "scramjet-rs"
+    "scramjet"
 };
 
 pub(super) fn update_self() -> Result<(), String> {
     let program =
         std::env::current_exe().map_err(|error| format!("cannot find this program: {error}"))?;
-    let gh = scramjet_rs::os::program("gh", None);
+    let gh = scramjet::os::program("gh", None);
     println!(
         "{}",
         replace(
@@ -58,10 +58,10 @@ fn replace(gh: &Path, program: &Path, current: &str, arch: &str) -> Result<Strin
     };
     if newest <= running {
         return Ok(format!(
-            "scramjet-rs {current} is up to date (newest release {tag})"
+            "scramjet {current} is up to date (newest release {tag})"
         ));
     }
-    let name = archive_name("scramjet-rs", latest, arch);
+    let name = archive_name("scramjet", latest, arch);
     let archive = download(gh, REPOSITORY, tag, &name)?;
     let bytes = unpacked(&archive, PROGRAM)
         .ok_or_else(|| format!("{name} holds no {PROGRAM}; nothing was replaced"))?;
@@ -75,7 +75,7 @@ fn replace(gh: &Path, program: &Path, current: &str, arch: &str) -> Result<Strin
     }
     result?;
     Ok(format!(
-        "Updated scramjet-rs: {current}..{latest} ({}); What's new opens at its next start",
+        "Updated scramjet: {current}..{latest} ({}); What's new opens at its next start",
         program.display()
     ))
 }
@@ -338,7 +338,7 @@ mod tests {
             fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         };
         executable(&stage.join(PROGRAM), &format!("#!/bin/sh\necho {says}\n"));
-        let name = archive_name("scramjet-rs", tag.trim_start_matches('v'), "x86_64");
+        let name = archive_name("scramjet", tag.trim_start_matches('v'), "x86_64");
         let made = Command::new("tar")
             .arg("-czf")
             .arg(assets.join(&name))
@@ -398,7 +398,7 @@ mod tests {
         let release = release("newer", "v0.10.0", "0.10.0", str::to_owned);
         let said = replace(&release.gh, &release.program, "0.9.3", "x86_64").unwrap();
         assert!(
-            said.starts_with("Updated scramjet-rs: 0.9.3..0.10.0 ("),
+            said.starts_with("Updated scramjet: 0.9.3..0.10.0 ("),
             "{said}"
         );
         assert_eq!(
@@ -414,7 +414,7 @@ mod tests {
              release view v0.10.0 --repo LeanAndMean/scramjet-rs --json assets --jq \
              .assets[].name\n\
              release download v0.10.0 --repo LeanAndMean/scramjet-rs --pattern \
-             scramjet-rs-0.10.0-x86_64-"
+             scramjet-0.10.0-x86_64-"
             ),
             "{calls}"
         );
@@ -431,7 +431,7 @@ mod tests {
             let said = replace(&release.gh, &release.program, running, "x86_64").unwrap();
             assert_eq!(
                 said,
-                format!("scramjet-rs {running} is up to date (newest release v0.10.0)")
+                format!("scramjet {running} is up to date (newest release v0.10.0)")
             );
             assert_eq!(fs::read_to_string(&release.program).unwrap(), "old");
             assert!(!calls(&release).contains("download"));
@@ -441,7 +441,7 @@ mod tests {
     #[test]
     fn a_wrong_checksum_or_version_replaces_nothing() {
         let wrong_hash = |line: &str| format!("{}{}", "0".repeat(64), &line[64..]);
-        let other_file = |line: &str| line.replace("scramjet-rs-", "other-");
+        let other_file = |line: &str| line.replace("scramjet-", "other-");
         type Sums<'a> = &'a dyn Fn(&str) -> String;
         let cases: [(&str, &str, Sums, &str); 3] = [
             (

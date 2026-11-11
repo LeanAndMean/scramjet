@@ -3,7 +3,7 @@
 # cargo build --release inside an Ubuntu 20.04 Docker image, for the host's architecture, with
 # this repository's toolchain and offline cargo cache mounted, so nothing is installed on the
 # host. Fails if the binary asks for a newer glibc. Arguments go to cargo build; the binary is
-# target/glibc-2.31/release/scramjet-rs, apart from the host's own builds.
+# target/glibc-2.31/release/scramjet, apart from the host's own builds.
 set -e
 cd "$(dirname "$0")/.."
 image=scramjet-rs-focal
@@ -19,7 +19,7 @@ docker run --rm -u "$(id -u):$(id -g)" \
   -e RUSTUP_TOOLCHAIN="$(rustup show active-toolchain | cut -d' ' -f1)" \
   -e PATH="$cargo/bin:/usr/bin:/bin" -e CARGO_TARGET_DIR=target/glibc-2.31 \
   "$image" cargo build --offline --locked --release "$@"
-binary=target/glibc-2.31/release/scramjet-rs
+binary=target/glibc-2.31/release/scramjet
 newest=$(objdump -T "$binary" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n 1)
 if [ "$(printf '%s\n2.31\n' "$newest" | sort -V | tail -n 1)" != 2.31 ]; then
   echo "$binary needs glibc $newest, newer than 2.31" >&2

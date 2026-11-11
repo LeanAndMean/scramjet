@@ -52,7 +52,7 @@ jobs:
           scripts/build-linux.sh
       - name: Pack and smoke-test
         run: |
-          archive=$(scripts/package.sh target/glibc-2.31/release/scramjet-rs ${{ matrix.platform }})
+          archive=$(scripts/package.sh target/glibc-2.31/release/scramjet ${{ matrix.platform }})
           python3 scripts/smoke.py "$archive"
           docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" scramjet-rs-focal \
             python3 scripts/smoke.py --unhidden "$archive"
@@ -75,7 +75,7 @@ jobs:
         run: |
           cargo fetch --locked
           scripts/build-windows.sh --release
-          scripts/package.sh target/x86_64-pc-windows-gnu/release/scramjet-rs.exe x86_64-windows
+          scripts/package.sh target/x86_64-pc-windows-gnu/release/scramjet.exe x86_64-windows
       - uses: actions/upload-artifact@v4
         with:
           name: x86_64-windows
@@ -114,12 +114,12 @@ jobs:
         # Seatbelt's checks have not run before on a Mac (docs/TASKS.md): their findings are shown
         # without holding the release back.
         continue-on-error: true
-        run: python3 scripts/try-sandbox.py --binary target/release/scramjet-rs
+        run: python3 scripts/try-sandbox.py --binary target/release/scramjet
       - name: Pack and smoke-test
         run: |
-          archive=$(scripts/package.sh target/release/scramjet-rs aarch64-macos)
+          archive=$(scripts/package.sh target/release/scramjet aarch64-macos)
           python3 scripts/smoke.py "$archive"
-          scripts/package.sh target/x86_64-apple-darwin/release/scramjet-rs x86_64-macos
+          scripts/package.sh target/x86_64-apple-darwin/release/scramjet x86_64-macos
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -149,10 +149,10 @@ jobs:
             echo "tag $TAG is not Cargo.toml's version $version" >&2
             exit 1
           fi
-          ls dist/scramjet-rs-"$version"-*.tar.gz
+          ls dist/scramjet-"$version"-*.tar.gz
           scripts/package.sh sums
           previous=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // ""')
           scripts/release-notes.sh "$version" "${previous#v}" >notes.md
           title=$(sed -n "s/^## $version — //p" CHANGELOG.md)
-          gh release create "$TAG" --verify-tag --title "scramjet-rs $version — $title" \
+          gh release create "$TAG" --verify-tag --title "Scramjet $version — $title" \
             --notes-file notes.md dist/*.tar.gz dist/SHA256SUMS

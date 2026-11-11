@@ -11,7 +11,7 @@ use super::settings::scramjet_level;
 use super::style::{self, Band, Style};
 use super::text;
 use super::tree::{Filter, View};
-use scramjet_rs::agent::{Choice, FRESH_MARK, Label, ModelOption};
+use scramjet::agent::{Choice, FRESH_MARK, Label, ModelOption};
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 

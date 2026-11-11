@@ -6,7 +6,7 @@ use super::keymap::{self, Binding};
 use super::screen;
 use super::text::{clip, one_line};
 use super::{editor, select, style, tree};
-use scramjet_rs::agent::{AgentError, Navigated, Removal, SessionInfo, shortened};
+use scramjet::agent::{AgentError, Navigated, Removal, SessionInfo, shortened};
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 

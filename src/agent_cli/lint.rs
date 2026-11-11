@@ -1,9 +1,9 @@
-//! `scramjet-rs lint [--strict] [--json] DIR...`: checks command sets without loading a session,
+//! `scramjet lint [--strict] [--json] DIR...`: checks command sets without loading a session,
 //! in place of Scramjet's `scramjet-command-lint`, whose output it writes.
-use scramjet_rs::agent::{Diagnostic, Origin, Set, Severity, lint, sets_in};
+use scramjet::agent::{Diagnostic, Origin, Set, Severity, lint, sets_in};
 use std::path::{Path, PathBuf};
 
-pub(super) const USAGE: &str = "Usage: scramjet-rs lint [--strict] [--json] DIR...
+pub(super) const USAGE: &str = "Usage: scramjet lint [--strict] [--json] DIR...
 DIR: a command set, or a package holding sets. Errors are files the harness would skip, warnings
 what it would ignore and commands without an early ## Goals list or with their arguments outside
 one <user-context> (delegate-only: <caller-context>) block. --strict fails on warnings too.";

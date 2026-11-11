@@ -1106,7 +1106,7 @@ fn http_servers_that_cannot_be_reached_or_refuse_say_why() {
     assert_eq!(
         why_refused,
         "HTTP 401 Unauthorized ({\"error\": \"unauthorized\"}): it needs authorization, which \
-scramjet-rs gives it only as the headers of its entry in mcpServers (OAuth sign-in is not \
+Scramjet gives it only as the headers of its entry in mcpServers (OAuth sign-in is not \
 supported yet)"
     );
     assert_eq!(

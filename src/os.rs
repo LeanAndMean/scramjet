@@ -595,7 +595,7 @@ mod windows {
 
     pub(super) fn low_integrity(arguments: &[std::ffi::OsString]) -> ! {
         if let Err(error) = lower() {
-            eprintln!("scramjet-rs: cannot lower the integrity level, so nothing runs: {error}");
+            eprintln!("scramjet: cannot lower the integrity level, so nothing runs: {error}");
             std::process::exit(125);
         }
         let Some((program, rest)) = arguments.split_first() else {
@@ -617,7 +617,7 @@ mod windows {
         let code = match command.status() {
             Ok(status) => status.code().unwrap_or(1),
             Err(error) => {
-                eprintln!("scramjet-rs: cannot start {}: {error}", program.display());
+                eprintln!("scramjet: cannot start {}: {error}", program.display());
                 127
             }
         };

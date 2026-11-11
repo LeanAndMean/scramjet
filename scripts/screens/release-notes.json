@@ -2,7 +2,7 @@
   "size": "100x40",
   "settings": {"theme": "scramjet-dark"},
   "steps": [
-    {"until": "scramjet-rs"},
+    {"until": "scramjet"},
     {"type": "/release"},
     {"until": "View release notes"},
     {"shot": "completion"},

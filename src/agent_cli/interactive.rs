@@ -12,7 +12,7 @@ use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
 use super::theme::{ThemeOptions, Themes, Watched};
 use super::{editor, footer, installed, keymap, scope, select, settings, style, terminal, tree};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, EarlierSession, Installed,
     Next, Problem, Reopened, Source, Step, Suggested,
 };

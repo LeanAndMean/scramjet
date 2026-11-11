@@ -60,7 +60,7 @@ pub(super) struct Opening {
     pub(super) agents: usize,
 }
 
-const NAME: &str = "scramjet-rs";
+const NAME: &str = "scramjet";
 const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
 /// Scramjet's logo (`packages/scramjet/assets/scramjet-logo.png` in its repository) in quarter
@@ -246,7 +246,7 @@ fn flow(parts: &[String], separator: &str, width: usize) -> Vec<String> {
 }
 
 fn shown(path: &Path) -> String {
-    scramjet_rs::agent::shortened(&path.display().to_string())
+    scramjet::agent::shortened(&path.display().to_string())
 }
 
 /// A context file as Scramjet's list names it: relative to the project when in it.
@@ -501,7 +501,7 @@ mod tests {
         let mut opening = sample();
         assert_eq!(
             super::plain(&opening),
-            "scramjet-rs · gpt-6-luna · thinking medium · /work/words\nsession /state/sessions/1.jsonl"
+            "scramjet · gpt-6-luna · thinking medium · /work/words\nsession /state/sessions/1.jsonl"
         );
         opening.session = None;
         assert!(super::plain(&opening).ends_with("\nsession not saved (--no-session)"));
@@ -510,7 +510,7 @@ mod tests {
     #[test]
     fn the_header_shows_the_main_keys_then_what_was_loaded_and_every_key_expanded() {
         let rows = shown(Banner::Header, &sample(), 100, false);
-        assert_eq!(rows[0], format!("scramjet-rs {VERSION}"));
+        assert_eq!(rows[0], format!("scramjet {VERSION}"));
         assert_eq!(
             rows[1],
             "Esc interrupt · Ctrl+C/D clear/exit · / commands · ! bash · Ctrl+O more"
@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn the_card_boxes_what_was_loaded_within_the_width() {
         let rows = shown(Banner::Card, &sample(), 100, false);
-        let title = format!("─ scramjet-rs {VERSION} ");
+        let title = format!("─ scramjet {VERSION} ");
         let top = format!("╭{title}{}╮", "─".repeat(59 - title.chars().count()));
         assert_eq!(
             rows[..6],
@@ -610,7 +610,7 @@ mod tests {
         assert_eq!(
             rows[..3],
             [
-                format!("scramjet-rs {VERSION}"),
+                format!("scramjet {VERSION}"),
                 "gpt-6-luna · thinking medium".into(),
                 "/work/words".into()
             ]

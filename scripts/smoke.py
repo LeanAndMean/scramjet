@@ -3,7 +3,7 @@
 says the archive's version and runs one `-p` turn against a local scripted server: a bash call,
 whose output must come back in the next request, then a reply that must be printed.
 
-    python3 scripts/smoke.py [--unhidden] dist/scramjet-rs-VERSION-ARCH-OS.tar.gz
+    python3 scripts/smoke.py [--unhidden] dist/scramjet-VERSION-ARCH-OS.tar.gz
 
 --unhidden sets hideCredentials to "never", where the bash call could not hide the stores (in a
 Docker container bubblewrap cannot make its namespaces).
@@ -74,11 +74,11 @@ def main():
     if len(args) != 1 + unhidden:
         sys.exit(__doc__)
     archive = args[-1]
-    found = re.fullmatch(r'scramjet-rs-(\d+\.\d+\.\d+)-[a-z0-9_]+-([a-z]+)\.tar\.gz', os.path.basename(archive))
+    found = re.fullmatch(r'scramjet-(\d+\.\d+\.\d+)-[a-z0-9_]+-([a-z]+)\.tar\.gz', os.path.basename(archive))
     if not found:
         sys.exit('%s is not named as scripts/package.sh names archives' % archive)
     version, system = found.groups()
-    name = 'scramjet-rs.exe' if system == 'windows' else 'scramjet-rs'
+    name = 'scramjet.exe' if system == 'windows' else 'scramjet'
     failed = []
 
     def check(label, good, detail=''):
@@ -88,7 +88,7 @@ def main():
             if detail:
                 print('\n'.join('      ' + line for line in detail.strip().splitlines()))
 
-    with tempfile.TemporaryDirectory(prefix='scramjet-rs-smoke-') as scratch:
+    with tempfile.TemporaryDirectory(prefix='scramjet-smoke-') as scratch:
         with tarfile.open(archive) as tar:
             members = tar.getnames()
             check('the archive holds only %s' % name, members == [name], repr(members))

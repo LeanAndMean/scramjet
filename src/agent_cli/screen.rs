@@ -25,7 +25,7 @@ use super::terminal::next_spin;
 use super::theme::Watched;
 use super::theme_editor::{self, ThemeEditor};
 use super::{external, job, style};
-use scramjet_rs::agent::{self, EffortCycle, Shell, Tokens};
+use scramjet::agent::{self, EffortCycle, Shell, Tokens};
 use std::{
     io::{self, PipeReader, PipeWriter, Write},
     path::PathBuf,

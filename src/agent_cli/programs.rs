@@ -5,7 +5,7 @@
 //! release's `SHA256SUMS` and unpack its NAME (`NAME.exe` on Windows) to PATH, from the
 //! `models.json`'s directory. The download goes through `gh`, as `update self`'s.
 use super::{packages, update};
-use scramjet_rs::agent::sets_in;
+use scramjet::agent::sets_in;
 use std::{
     fs,
     path::{Component, Path, PathBuf},
@@ -23,7 +23,7 @@ struct Wanted {
 
 /// What the package cloned in `directory` downloaded, and what it could not.
 pub(super) fn fetch(directory: &Path) -> (Vec<String>, Vec<String>) {
-    let gh = scramjet_rs::os::program("gh", None);
+    let gh = scramjet::os::program("gh", None);
     fetch_with(&gh, directory, std::env::consts::ARCH)
 }
 
@@ -142,7 +142,7 @@ fn wanted(set: &Path, package: &Path) -> Result<Option<Wanted>, String> {
 
 fn with_extension(path: &Path) -> PathBuf {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    path.with_file_name(scramjet_rs::os::program_file(&name))
+    path.with_file_name(scramjet::os::program_file(&name))
 }
 
 fn download(gh: &Path, program: &Wanted, tag: &str, arch: &str, file: &Path) -> Result<(), String> {
@@ -154,7 +154,7 @@ fn download(gh: &Path, program: &Wanted, tag: &str, arch: &str, file: &Path) -> 
     let version = tag.strip_prefix('v').unwrap_or(tag);
     let archive_name = update::archive_name(&name, version, arch);
     let archive = update::download(gh, &program.repository, tag, &archive_name)?;
-    let inner = scramjet_rs::os::program_file(&name);
+    let inner = scramjet::os::program_file(&name);
     let bytes = update::unpacked(&archive, &inner)
         .ok_or_else(|| format!("{archive_name} holds no {inner}"))?;
     let parent = file.parent().unwrap_or(file);

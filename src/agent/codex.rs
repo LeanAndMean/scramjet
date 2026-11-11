@@ -218,7 +218,7 @@ impl BrowserLogin {
             _ => ("400 Bad Request", "Missing authorization code.", None),
         };
         let page = format!(
-            "<!doctype html><html><head><meta charset=\"utf-8\"><title>scramjet-rs</title></head>\
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Scramjet</title></head>\
              <body><p>{said}</p></body></html>"
         );
         let answer = format!(

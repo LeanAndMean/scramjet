@@ -958,7 +958,7 @@ tasks.\nUse the read tool to load a skill's file when the task matches its descr
         assert!(instructions.contains(&format!(
             "<available_skills>\n  <skill>\n    <name>pdf</name>\n    <description>Fills PDF \
 forms.</description>\n    <location>{}</location>\n  </skill>\n</available_skills>\n\n# \
-scramjet-rs\n",
+Scramjet\n",
             file.display()
         )));
         // Gone since, it is said so and sent as typed; neither is a command, so no status check.

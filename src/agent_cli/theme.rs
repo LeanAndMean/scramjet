@@ -4,7 +4,7 @@
 //! them, else as the nearest of its 256, as Scramjet sends them. Beyond Scramjet's format, a
 //! theme may color the main `background` among its `colors`.
 
-use scramjet_rs::agent::{Problem, config_directory};
+use scramjet::agent::{Problem, config_directory};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -227,7 +227,7 @@ impl Themes {
             let user = config_directory().map(|directory| directory.join("themes"));
             places.extend(user.map(|directory| (directory, Place::Directory)));
             places.push((
-                scramjet_rs::os::join(root, ".scramjet/themes"),
+                scramjet::os::join(root, ".scramjet/themes"),
                 Place::Directory,
             ));
             places.extend(listed.iter().map(|path| (path.clone(), Place::Listed)));
@@ -536,7 +536,7 @@ fn stamp(file: &Path) -> Option<Stamp> {
     Some((
         metadata.modified().ok(),
         metadata.len(),
-        scramjet_rs::os::inode(&metadata),
+        scramjet::os::inode(&metadata),
     ))
 }
 
@@ -677,7 +677,7 @@ fn terminal_colors() -> Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scramjet_rs::agent::ProblemFile;
+    use scramjet::agent::ProblemFile;
 
     #[test]
     fn without_a_setting_the_theme_follows_the_background_as_scramjets() {
@@ -970,7 +970,7 @@ mod tests {
                 .map(|problem| (problem.text.clone(), problem.file.clone()))
                 .collect()
         };
-        let shown = |name: &str| scramjet_rs::os::join(root, name).display().to_string();
+        let shown = |name: &str| scramjet::os::join(root, name).display().to_string();
 
         let themes = Themes::discover(root, &settings, &options);
         assert_eq!(names(&themes), ["Project", "Listed", "File", "Given"]);

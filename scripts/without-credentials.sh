@@ -8,7 +8,7 @@ empty=$(mktemp "${TMPDIR:-/tmp}/without-credentials.XXXXXX")
 args="--dev-bind / / --die-with-parent"
 # The stores as the scramjet-rs built beside this script lists them, with those packages name
 # (credentialFiles); else the common ones of src/agent/sandbox.rs.
-built="$(dirname "$0")/../target/release/scramjet-rs"
+built="$(dirname "$0")/../target/release/scramjet"
 if ! stores=$("$built" --list-credential-stores 2>/dev/null) || [ -z "$stores" ]; then
   echo "without-credentials.sh: $built cannot list the credential stores; only the common ones are hidden" >&2
   stores=""

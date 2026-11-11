@@ -1,7 +1,7 @@
 //! `/settings`' Installed: what the session loaded, each with where it comes from, and what is
 //! wrong there, so that the user can find and fix it. Launch says at most one line about it.
 use super::keymap::{self, Binding};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     AgentSource, Command, Installed, Origin, Problem, ProblemFile, ProjectApproval, Skill,
     shortened,
 };
@@ -118,7 +118,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
             let found = match set.origin {
                 Origin::Installed => match &settings {
                     Some(settings) => format!(
-                        "Installed by reference, listed in {settings} (commandSets); `scramjet-rs \
+                        "Installed by reference, listed in {settings} (commandSets); `scramjet \
                          remove {}` takes it out.",
                         set.name
                     ),
@@ -234,11 +234,11 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 true => (
                     "replaces the opening",
                     "In the instructions in place of their opening (the tools and guidelines), as \
-                     Scramjet's SYSTEM.md or --system-prompt; /reload reads it again.",
+                     Scramjet 1's SYSTEM.md or --system-prompt; /reload reads it again.",
                 ),
                 false => (
                     "after the opening",
-                    "In the instructions after their opening, as Scramjet's APPEND_SYSTEM.md or \
+                    "In the instructions after their opening, as Scramjet 1's APPEND_SYSTEM.md or \
                      --append-system-prompt; /reload reads it again.",
                 ),
             };
@@ -263,15 +263,15 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     let keybindings = loaded.settings.map(super::keymap::path);
     let mut files = Vec::new();
     if let Some(path) = loaded.settings {
-        let what = "scramjet-rs's settings: those in this list, saved as you change them.";
+        let what = "Scramjet's settings: those in this list, saved as you change them.";
         files.push((path, "settings", what, "a setting"));
     }
     if let Some(path) = &keybindings {
-        let what = "scramjet-rs's keys, in Scramjet's format: those /hotkeys changes.";
+        let what = "Scramjet's keys, in Scramjet 1's format: those /hotkeys changes.";
         files.push((path, "keys", what, "a key in /hotkeys"));
     }
     if let Some(path) = global {
-        let what = "Scramjet's, which it reads too: what follows each command, and whether its \
+        let what = "Scramjet 1's, read here too: what follows each command, and whether its \
                     publications ask first, in all projects.";
         let label = "next steps and publishing, all projects";
         files.push((
@@ -281,7 +281,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
             "a next step or publishing for all projects",
         ));
     }
-    let what = "Scramjet's, which it reads too: what follows each command in this project.";
+    let what = "Scramjet 1's, read here too: what follows each command in this project.";
     files.push((
         project,
         "next steps, this project",
@@ -386,7 +386,7 @@ fn shown(path: &Path) -> String {
 
 /// `text` with the home directory shown as `~` wherever a path in it starts with it.
 fn home_shortened(text: &str) -> String {
-    match scramjet_rs::os::home_prefix() {
+    match scramjet::os::home_prefix() {
         Some(home) => text.replace(&home, &format!("~{}", std::path::MAIN_SEPARATOR)),
         None => text.to_owned(),
     }
@@ -395,7 +395,7 @@ fn home_shortened(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scramjet_rs::agent::{AgentFile, Commands, Sets, Skills};
+    use scramjet::agent::{AgentFile, Commands, Sets, Skills};
     use std::{fs, path::PathBuf};
 
     struct Scratch(PathBuf);
@@ -415,22 +415,22 @@ mod tests {
     fn lists_what_is_loaded_with_its_source_under_headings_problems_first() {
         let base = std::env::temp_dir().join(format!("scramjet-installed-{}", std::process::id()));
         let _scratch = Scratch(base.clone());
-        let set = scramjet_rs::os::join(&base, "sets/demo");
+        let set = scramjet::os::join(&base, "sets/demo");
         write(
-            &scramjet_rs::os::join(&set, "commands/greet.md"),
+            &scramjet::os::join(&set, "commands/greet.md"),
             "---\ndescription: Greet someone\n---\nHi $ARGUMENTS\n",
         );
         write(
-            &scramjet_rs::os::join(&set, "commands/inner.md"),
+            &scramjet::os::join(&set, "commands/inner.md"),
             "---\ndescription: Help\ndelegate-only: true\n---\nHelp\n",
         );
-        write(&scramjet_rs::os::join(&set, "agents/helper.md"), "");
+        write(&scramjet::os::join(&set, "agents/helper.md"), "");
         let root = base.join("project");
         write(
-            &scramjet_rs::os::join(&root, ".scramjet/skills/pdf/SKILL.md"),
+            &scramjet::os::join(&root, ".scramjet/skills/pdf/SKILL.md"),
             "---\nname: pdf\ndescription: Fills PDF forms.\n---\nUse ./fill.sh\n",
         );
-        let settings = scramjet_rs::os::join(&base, "config/settings.json");
+        let settings = scramjet::os::join(&base, "config/settings.json");
         write(&settings, "{}");
         let sets = Sets::find(std::slice::from_ref(&set), None, &root.join(".scramjet"));
         let commands = Commands::discover(&sets);
@@ -446,23 +446,23 @@ mod tests {
             agents: vec![
                 agent(
                     "mine",
-                    scramjet_rs::os::join(&base, "user/mine.md"),
+                    scramjet::os::join(&base, "user/mine.md"),
                     AgentSource::User,
                 ),
                 agent(
                     "demo:helper",
-                    scramjet_rs::os::join(&set, "agents/helper.md"),
+                    scramjet::os::join(&set, "agents/helper.md"),
                     AgentSource::Set("demo".into()),
                 ),
             ],
             context_files: vec![root.join("AGENTS.md")],
             prompt_files: vec![
-                (scramjet_rs::os::join(&root, ".scramjet/SYSTEM.md"), true),
+                (scramjet::os::join(&root, ".scramjet/SYSTEM.md"), true),
                 (base.join("more.md"), false),
             ],
             autonomy: (
-                scramjet_rs::os::join(&root, ".scramjet/autonomy.yaml"),
-                Some(scramjet_rs::os::join(&base, "config/autonomy.yaml")),
+                scramjet::os::join(&root, ".scramjet/autonomy.yaml"),
+                Some(scramjet::os::join(&base, "config/autonomy.yaml")),
             ),
             problems: Vec::new(),
         };
@@ -477,9 +477,9 @@ mod tests {
             settings: Some(&settings),
             problems: &problems,
         };
-        let shown = |path: &Path| scramjet_rs::os::tilde(path);
+        let shown = |path: &Path| scramjet::os::tilde(path);
         let list = listing(&loaded);
-        let project_file = shown(&scramjet_rs::os::join(&root, ".scramjet/autonomy.yaml"));
+        let project_file = shown(&scramjet::os::join(&root, ".scramjet/autonomy.yaml"));
         let width = project_file.len();
         assert_eq!(
             list.rows,
@@ -498,20 +498,17 @@ mod tests {
                 "Skills".into(),
                 format!(
                     "  pdf  {}",
-                    shown(&scramjet_rs::os::join(
-                        &root,
-                        ".scramjet/skills/pdf/SKILL.md"
-                    ))
+                    shown(&scramjet::os::join(&root, ".scramjet/skills/pdf/SKILL.md"))
                 ),
                 "System prompt".into(),
                 format!(
                     "  {}  replaces the opening",
-                    shown(&scramjet_rs::os::join(&root, ".scramjet/SYSTEM.md"))
+                    shown(&scramjet::os::join(&root, ".scramjet/SYSTEM.md"))
                 ),
                 format!(
                     "  {:w$}  after the opening",
                     shown(&base.join("more.md")),
-                    w = shown(&scramjet_rs::os::join(&root, ".scramjet/SYSTEM.md")).len()
+                    w = shown(&scramjet::os::join(&root, ".scramjet/SYSTEM.md")).len()
                 ),
                 "Context files".into(),
                 format!("  {}", shown(&root.join("AGENTS.md"))),
@@ -519,11 +516,11 @@ mod tests {
                 format!("  {:width$}  settings", shown(&settings)),
                 format!(
                     "  {:width$}  keys",
-                    shown(&scramjet_rs::os::join(&base, "config/keybindings.json"))
+                    shown(&scramjet::os::join(&base, "config/keybindings.json"))
                 ),
                 format!(
                     "  {:width$}  next steps and publishing, all projects",
-                    shown(&scramjet_rs::os::join(&base, "config/autonomy.yaml"))
+                    shown(&scramjet::os::join(&base, "config/autonomy.yaml"))
                 ),
                 format!("  {project_file}  next steps, this project"),
             ]
@@ -544,15 +541,15 @@ mod tests {
             files,
             [
                 (1, settings.as_path()),
-                (6, &scramjet_rs::os::join(&set, "commands/greet.md")),
-                (7, &scramjet_rs::os::join(&set, "commands/inner.md")),
-                (9, &scramjet_rs::os::join(&base, "user/mine.md")),
-                (10, &scramjet_rs::os::join(&set, "agents/helper.md")),
+                (6, &scramjet::os::join(&set, "commands/greet.md")),
+                (7, &scramjet::os::join(&set, "commands/inner.md")),
+                (9, &scramjet::os::join(&base, "user/mine.md")),
+                (10, &scramjet::os::join(&set, "agents/helper.md")),
                 (
                     12,
-                    &scramjet_rs::os::join(&root, ".scramjet/skills/pdf/SKILL.md")
+                    &scramjet::os::join(&root, ".scramjet/skills/pdf/SKILL.md")
                 ),
-                (14, &scramjet_rs::os::join(&root, ".scramjet/SYSTEM.md")),
+                (14, &scramjet::os::join(&root, ".scramjet/SYSTEM.md")),
                 (15, &base.join("more.md")),
                 (17, &root.join("AGENTS.md")),
                 (19, &settings),
@@ -560,7 +557,7 @@ mod tests {
         );
         assert!(list.notes[15].ends_with(
             "\nIn the instructions after their opening, as \
-            Scramjet's APPEND_SYSTEM.md or --append-system-prompt; /reload reads it again."
+            Scramjet 1's APPEND_SYSTEM.md or --append-system-prompt; /reload reads it again."
         ));
         // After an edit, the list comes back on the row Enter was pressed on, not the
         // problem's row of the same file.
@@ -573,7 +570,7 @@ mod tests {
             list.notes[4],
             format!(
                 "{}\n2 commands, 1 agent. Installed by reference, listed in {} (commandSets); \
-                 `scramjet-rs remove demo` takes it out.",
+                 `scramjet remove demo` takes it out.",
                 shown(&set),
                 shown(&settings)
             )
@@ -582,7 +579,7 @@ mod tests {
             list.notes[7],
             format!(
                 "{}\nRun by other commands, so not in the / list; typed in full, it runs.\nHelp",
-                shown(&scramjet_rs::os::join(&set, "commands/inner.md"))
+                shown(&scramjet::os::join(&set, "commands/inner.md"))
             )
         );
         assert!(list.notes[9].ends_with("\nIn your agent directory. Does mine."));
@@ -612,10 +609,7 @@ mod tests {
             agents: Vec::new(),
             context_files: Vec::new(),
             prompt_files: Vec::new(),
-            autonomy: (
-                scramjet_rs::os::join(&root, ".scramjet/autonomy.yaml"),
-                None,
-            ),
+            autonomy: (scramjet::os::join(&root, ".scramjet/autonomy.yaml"), None),
             problems: Vec::new(),
         };
         let empty = Loaded {
@@ -631,7 +625,7 @@ mod tests {
 
     #[test]
     fn project_agents_say_whether_the_approval_covers_them_and_offer_to_forget_it() {
-        let directory = scramjet_rs::os::join(Path::new(""), "/repo/.scramjet/agents");
+        let directory = scramjet::os::join(Path::new(""), "/repo/.scramjet/agents");
         let shown = |name: &str| directory.join(name).display().to_string();
         let agent = |name: &str, approval| AgentFile {
             name: name.to_owned(),

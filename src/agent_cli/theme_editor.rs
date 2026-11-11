@@ -16,7 +16,7 @@ use super::record::Event;
 use super::style::{self, Band, RESET};
 use super::text::{self, Wrap};
 use super::theme::{self, Color, KEYS, Mode, TOKENS, Theme, Token};
-use scramjet_rs::agent::{Compaction, Ending, StreamProgress, ToolDetail, UserCommand};
+use scramjet::agent::{Compaction, Ending, StreamProgress, ToolDetail, UserCommand};
 use serde_json::{Map, Value, json};
 use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
@@ -1190,8 +1190,8 @@ fn about(token: Token) -> &'static str {
         T::SyntaxString => "Strings in highlighted code.",
         T::SyntaxNumber => "Numbers, and values such as true, in highlighted code.",
         T::SyntaxType => "Types and built-ins in highlighted code.",
-        T::SyntaxOperator => "Operators in Scramjet's highlighted code; scramjet-rs leaves them plain.",
-        T::SyntaxPunctuation => "Punctuation in Scramjet's highlighted code; scramjet-rs leaves it plain.",
+        T::SyntaxOperator => "Operators in Scramjet 1's highlighted code; Scramjet leaves them plain.",
+        T::SyntaxPunctuation => "Punctuation in Scramjet 1's highlighted code; Scramjet leaves it plain.",
         T::ThinkingOff => "The rules above and below the prompt with thinking off, or for a model that does not reason.",
         T::ThinkingMinimal => "The rules above and below the prompt at minimal thinking.",
         T::ThinkingLow => "The rules above and below the prompt at low thinking.",
@@ -1199,7 +1199,7 @@ fn about(token: Token) -> &'static str {
         T::ThinkingHigh => "The rules above and below the prompt at high thinking.",
         T::ThinkingXhigh => "The rules above and below the prompt at extra high and max thinking.",
         T::BashMode => "Commands you run with !: the prompt's rules while it starts with !, the rules around their output and the command's line.",
-        T::SpellcheckError => "Misspelled words in the prompt, in Scramjet; scramjet-rs does not check spelling yet.",
+        T::SpellcheckError => "Misspelled words in the prompt, in Scramjet 1; Scramjet does not check spelling yet.",
     }
 }
 

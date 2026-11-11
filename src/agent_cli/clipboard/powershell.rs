@@ -143,7 +143,7 @@ impl Reader {
     /// while an external editor or `!` command has it; it ends when its input closes, as when
     /// scramjet-rs exits.
     fn start(program: &str, arguments: &[&str], max: usize) -> io::Result<Self> {
-        let mut child = scramjet_rs::os::own_group(&mut Command::new(program))
+        let mut child = scramjet::os::own_group(&mut Command::new(program))
             .args(arguments)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

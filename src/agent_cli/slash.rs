@@ -7,7 +7,7 @@ use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
-use scramjet_rs::agent::{Agent, AgentError, McpState, Providers};
+use scramjet::agent::{Agent, AgentError, McpState, Providers};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -207,7 +207,7 @@ impl Interactive {
         };
         match written {
             Ok(Some(path)) => {
-                let path = scramjet_rs::os::canonicalize(&path).unwrap_or(path);
+                let path = scramjet::os::canonicalize(&path).unwrap_or(path);
                 let said = format!("Session exported to: {}", path.display());
                 self.say_styled(style::MUTED, &said)
             }
@@ -222,7 +222,7 @@ impl Interactive {
         let id = self.agent.session_id();
         let path = match path {
             Some(path) => PathBuf::from(path),
-            None => PathBuf::from(format!("scramjet-rs-session-{id}.html")),
+            None => PathBuf::from(format!("scramjet-session-{id}.html")),
         };
         let path = std::path::absolute(path)?;
         let tools = self.agent.tool_definitions();
@@ -305,12 +305,12 @@ impl Interactive {
     /// files, or with `details` the details behind it; on the full screen, a view of both,
     /// provider by provider.
     fn usage(&mut self, details: bool) {
-        let sessions = match scramjet_rs::agent::state_directory() {
+        let sessions = match scramjet::agent::state_directory() {
             Ok(state) => state.join("sessions"),
             Err(error) => return self.say(&format!("Error: {error}")),
         };
         let current = self.agent.session_path();
-        let history = scramjet_rs::agent::usage::History::read(&sessions, current);
+        let history = scramjet::agent::usage::History::read(&sessions, current);
         let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
             .map_or(0, |since| since.as_millis() as u64);
         let model = self.agent.model();
@@ -340,7 +340,7 @@ impl Interactive {
         let enabled = self.agent.mcp_names().len() - disabled.len();
         if servers.is_empty() && (disabled.is_empty() || enabled > 0) {
             let settings = (self.settings.path()).map_or("the settings".into(), |path| {
-                scramjet_rs::agent::shortened(&path.to_string_lossy())
+                scramjet::agent::shortened(&path.to_string_lossy())
             });
             return match self.settings.mcp_servers.is_empty() {
                 true => self.say_styled(
@@ -508,12 +508,12 @@ impl Interactive {
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
         self.settings.reload();
-        scramjet_rs::agent::set_shell(
+        scramjet::agent::set_shell(
             self.settings.shell_path.clone(),
             self.settings.shell_command_prefix.clone(),
         );
-        scramjet_rs::agent::set_user_shell(self.settings.default_shell);
-        scramjet_rs::agent::set_images(self.settings.resize_images, self.settings.block_images);
+        scramjet::agent::set_user_shell(self.settings.default_shell);
+        scramjet::agent::set_images(self.settings.resize_images, self.settings.block_images);
         self.discover_themes();
         self.use_theme();
         self.keybindings = keymap::load(self.settings.path());
@@ -531,7 +531,7 @@ impl Interactive {
         self.agent.set_compacting(settings.compacting);
         self.agent.set_providers(Providers::read(
             settings.models_files(),
-            scramjet_rs::agent::login::Logins::user(),
+            scramjet::agent::login::Logins::user(),
         ));
         if let Some(screen) = &mut self.screen {
             (screen.link).reloaded(completions(&self.agent), &self.settings);
@@ -662,7 +662,7 @@ fn session_info(agent: &Agent) -> String {
     }
     let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
         .map_or(0, |since| since.as_millis() as u64);
-    let quotas = scramjet_rs::agent::quota::read();
+    let quotas = scramjet::agent::quota::read();
     if let Some(quota) = super::usage::status_quota(&quotas, agent.model(), now) {
         info += "\n";
         info += &quota;

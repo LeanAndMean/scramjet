@@ -1,5 +1,5 @@
 //! Text as the terminal shows it: wrapped between words, cut to a width, made safe to print.
-use scramjet_rs::agent::terminal_line;
+use scramjet::agent::terminal_line;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Marks in text rendered for the full screen, which takes them out of its lines

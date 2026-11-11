@@ -1120,7 +1120,7 @@ fn a_fork_from_a_session_file_holds_all_of_it_in_a_new_session_of_the_project() 
         .err()
         .unwrap()
         .to_string();
-    assert!(error.contains("not a scramjet-rs session"), "{error}");
+    assert!(error.contains("not a Scramjet session"), "{error}");
     let missing = scratch.0.join("missing.jsonl");
     let error = Session::fork_from(&here, root, &missing)
         .err()
@@ -2001,7 +2001,7 @@ fn an_export_holds_the_current_branch_and_an_import_continues_in_a_copy() {
     let notes = scratch.0.join("shared/notes.jsonl");
     std::fs::write(&notes, "{\"type\":\"note\"}\n").unwrap();
     let error = agent.import_session(&notes).unwrap_err().to_string();
-    assert!(error.contains("not a scramjet-rs session"), "{error}");
+    assert!(error.contains("not a Scramjet session"), "{error}");
     let missing = scratch.0.join("shared/missing.jsonl");
     let error = agent.import_session(&missing).unwrap_err().to_string();
     assert!(error.contains("missing.jsonl"), "{error}");

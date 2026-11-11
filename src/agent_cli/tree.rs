@@ -7,7 +7,7 @@
 use super::style::{RESET, SELECTOR_TREE, Style, TREE_ASSISTANT, TREE_COMPACTION, TREE_ERROR};
 use super::style::{TREE_LABEL, TREE_LABEL_TIME, TREE_OTHER, TREE_PATH, TREE_SUMMARY, TREE_USER};
 use super::text;
-use scramjet_rs::agent::{Label, SessionTree, TreeEntry, TreeItem};
+use scramjet::agent::{Label, SessionTree, TreeEntry, TreeItem};
 use std::collections::{HashMap, HashSet};
 
 /// Which entries the tree shows, as Scramjet's filters choose them.
@@ -571,7 +571,7 @@ fn label(item: &TreeItem, paint: &dyn Fn(Style, &str) -> String) -> String {
         }
         TreeItem::Command(command) => paint(TREE_OTHER, &format!("[bash]: {}", clean(command))),
         TreeItem::Tool(name, summary) | TreeItem::Call(name, summary)
-            if scramjet_rs::agent::is_shell(name) =>
+            if scramjet::agent::is_shell(name) =>
         {
             let command = text::one_line(summary);
             let call = match command.char_indices().nth(50) {

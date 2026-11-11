@@ -6,7 +6,7 @@ use super::settings::scramjet_level;
 use super::style::{FOOTER, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
 use super::terminal::{dollars, rate, tokens};
 use super::text::{clip, one_line, visible};
-use scramjet_rs::agent::{Agent, Children, Tokens};
+use scramjet::agent::{Agent, Children, Tokens};
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -75,7 +75,7 @@ pub(super) struct Footer {
 
 impl Footer {
     pub(super) fn new(root: &Path) -> Self {
-        let directory = scramjet_rs::os::tilde(root);
+        let directory = scramjet::os::tilde(root);
         let head = head(root);
         let folder = (root.file_name()).map_or(directory.clone(), |name| {
             name.to_string_lossy().into_owned()
@@ -135,8 +135,8 @@ impl Footer {
     /// the project's folder, on one line with control characters escaped.
     pub(super) fn title(&self) -> String {
         let title = match &self.shown.name {
-            Some(name) => format!("scramjet-rs - {name} - {}", self.folder),
-            None => format!("scramjet-rs - {}", self.folder),
+            Some(name) => format!("scramjet - {name} - {}", self.folder),
+            None => format!("scramjet - {}", self.folder),
         };
         visible(&one_line(&title))
     }
@@ -420,7 +420,7 @@ mod tests {
 
     #[test]
     fn a_running_subagent_calls_spending_counts_until_the_session_has_it() {
-        use scramjet_rs::agent::{ChildRun, ChildState, ChildUsage, Delegation};
+        use scramjet::agent::{ChildRun, ChildState, ChildUsage, Delegation};
         let child = |turns, cost| ChildRun {
             agent: "scout".into(),
             source: "user".into(),
@@ -577,12 +577,12 @@ mod tests {
 
     #[test]
     fn the_title_names_the_session_and_the_folder_as_scramjets() {
-        assert_eq!(footer(opus()).title(), "scramjet-rs - Refactor - project");
+        assert_eq!(footer(opus()).title(), "scramjet - Refactor - project");
         let unnamed = Shown {
             name: None,
             ..opus()
         };
-        assert_eq!(footer(unnamed).title(), "scramjet-rs - project");
+        assert_eq!(footer(unnamed).title(), "scramjet - project");
         // Nothing in a name ends the title's sequence or starts another.
         let named = Shown {
             name: Some("a\x07b\x1b]0;c\u{202e}".into()),
@@ -590,7 +590,7 @@ mod tests {
         };
         assert_eq!(
             footer(named).title(),
-            "scramjet-rs - a b ]0;c\\u{202e} - project"
+            "scramjet - a b ]0;c\\u{202e} - project"
         );
         assert_eq!(Footer::new(Path::new("/")).folder, "/");
         assert_eq!(Footer::new(Path::new("/tmp/x y")).folder, "x y");

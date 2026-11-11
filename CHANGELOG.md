@@ -4,6 +4,13 @@ What changed in each version of scramjet-rs, for the people using it. The newest
 
 ## Unreleased
 
+## 0.139.0 — The command is `scramjet`
+
+### Changed
+
+- The program is `scramjet` (`scramjet.exe` on Windows), no longer `scramjet-rs`: `--help`, error messages, the banner, the terminal's title and the instructions name it so, `/export` writes `scramjet-session-….html`, and release archives are `scramjet-VERSION-ARCH-OS.tar.gz`. Scramjet 1's npm package also installs a `scramjet`: whichever comes first on the `PATH` runs (`which -a scramjet`). `cargo install --path .` installs the new name beside an older `scramjet-rs`, which stays until removed.
+- Text that compares with Scramjet 1 now says "Scramjet 1".
+
 ## 0.138.1 — Scramjet 1's agent directory under a ~
 
 ### Fixed

@@ -6,7 +6,7 @@ use super::style::{
     DIFF_ADDED, DIFF_CHANGED, DIFF_CHANGED_END, DIFF_CONTEXT, DIFF_REMOVED, RESET, Style,
 };
 use super::text::{Wrap, clip, printable};
-use scramjet_rs::agent::sequence_diff;
+use scramjet::agent::sequence_diff;
 use unicode_width::UnicodeWidthStr;
 
 /// Screen rows a diff may take in a tool block, besides the note about the lines left out.

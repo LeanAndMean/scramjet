@@ -12,7 +12,7 @@ use std::{
 /// on Windows from a build made in Linux (`scripts/test-windows.sh`).
 fn binary() -> std::path::PathBuf {
     std::env::var_os("SCRAMJET_RS_BINARY")
-        .map_or_else(|| env!("CARGO_BIN_EXE_scramjet-rs").into(), Into::into)
+        .map_or_else(|| env!("CARGO_BIN_EXE_scramjet").into(), Into::into)
 }
 
 /// `binary` to run with the user's directories in a scratch one of the tests', so that no test
@@ -50,7 +50,7 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(
-            text.starts_with("Usage: scramjet-rs [--project DIR]"),
+            text.starts_with("Usage: scramjet [--project DIR]"),
             "{text}"
         );
     }
@@ -59,24 +59,24 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         assert!(!output.status.success());
         let text = String::from_utf8(output.stderr).unwrap();
         assert!(
-            text.starts_with(&format!("scramjet-rs: unknown argument \"{word}\"")),
+            text.starts_with(&format!("scramjet: unknown argument \"{word}\"")),
             "{text}"
         );
-        assert!(text.contains("Usage: scramjet-rs"), "{text}");
+        assert!(text.contains("Usage: scramjet"), "{text}");
     }
     let refused = |arguments: &[&str]| {
         let output = program(binary).args(arguments).output().unwrap();
         assert!(!output.status.success());
         String::from_utf8(output.stderr).unwrap()
     };
-    assert!(refused(&["-p"]).starts_with("scramjet-rs: -p needs a message or an @FILE\n"));
-    assert!(refused(&["-"]).starts_with("scramjet-rs: the message - (read from stdin) needs -p\n"));
+    assert!(refused(&["-p"]).starts_with("scramjet: -p needs a message or an @FILE\n"));
+    assert!(refused(&["-"]).starts_with("scramjet: the message - (read from stdin) needs -p\n"));
     // Before a session is started.
     let missing = refused(&["-p", "@/nonexistent/notes.md"]);
     let absolute = std::path::absolute("/nonexistent/notes.md").unwrap();
     assert_eq!(
         missing,
-        format!("scramjet-rs: file not found: {}\n", absolute.display())
+        format!("scramjet: file not found: {}\n", absolute.display())
     );
     for option in ["--thinking", "--effort"] {
         let output = program(binary).args([option, "hgih"]).output().unwrap();
@@ -84,7 +84,7 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
             format!(
-                "scramjet-rs: invalid {option} \"hgih\": valid levels are off, minimal, low, \
+                "scramjet: invalid {option} \"hgih\": valid levels are off, minimal, low, \
 medium, high, xhigh, max\n"
             )
         );
@@ -267,7 +267,7 @@ fn https_providers_are_reached_over_tls_and_untrusted_certificates_refused_once(
     assert_eq!(
         stderr.lines().last().unwrap_or_default(),
         format!(
-            "scramjet-rs: provider: TLS handshake with localhost:{port} (provider test) failed: \
+            "scramjet: provider: TLS handshake with localhost:{port} (provider test) failed: \
 invalid peer certificate: UnknownIssuer; HTTPS trusts the system's certificates, or those \
 SSL_CERT_FILE and SSL_CERT_DIR name"
         ),
@@ -412,22 +412,22 @@ fn session_and_fork_find_a_session_by_the_start_of_its_id() {
     };
     assert_eq!(
         first_line(&["--fork", "x", "-c"]),
-        "scramjet-rs: --fork cannot be combined with --continue"
+        "scramjet: --fork cannot be combined with --continue"
     );
     assert_eq!(
         first_line(&["-r", "--session", "a", "--fork", "b", "-c"]),
-        "scramjet-rs: --fork cannot be combined with --session, --continue, --resume"
+        "scramjet: --fork cannot be combined with --session, --continue, --resume"
     );
     for option in ["--session", "--fork"] {
         assert_eq!(
             run(&[option, "1999", "-p", "hi"]),
-            "scramjet-rs: no session found matching \"1999\""
+            "scramjet: no session found matching \"1999\""
         );
     }
     // Another project's is forked here only once the user agrees on a terminal.
     assert_eq!(
         run(&["--session", "1700", "-p", "hi"]),
-        "scramjet-rs: session \"1700\" belongs to another project, /work/other; --fork \"1700\" \
+        "scramjet: session \"1700\" belongs to another project, /work/other; --fork \"1700\" \
 continues it in a new session of this one"
     );
     // Sessions, not Windows' `.lock` (`os::lock_directory`).
@@ -440,7 +440,7 @@ continues it in a new session of this one"
     assert_eq!(listed(), 1);
 
     // The requests fail (nothing listens), after the prompt is saved in the session.
-    let refused = "scramjet-rs: provider: cannot connect to 127.0.0.1:9";
+    let refused = "scramjet: provider: cannot connect to 127.0.0.1:9";
     assert!(run(&["--session", "16", "-p", "again"]).starts_with(refused));
     let saved = std::fs::read_to_string(&ours).unwrap();
     assert!(saved.contains("\"content\":\"again\""), "{saved}");
@@ -559,7 +559,7 @@ fn session_dir_saves_and_finds_sessions_there_whatever_their_project() {
             .collect()
     };
     let read = |path: &std::path::Path| std::fs::read_to_string(path).unwrap();
-    let refused = "scramjet-rs: provider: cannot connect to 127.0.0.1:9";
+    let refused = "scramjet: provider: cannot connect to 127.0.0.1:9";
     let projects = scratch.0.join("state/scramjet/sessions");
 
     // Relative to the current directory, as Scramjet's.
@@ -603,7 +603,7 @@ fn session_dir_saves_and_finds_sessions_there_whatever_their_project() {
     std::fs::copy(&theirs, &other).unwrap();
     assert_eq!(
         run(&["--session", "1800", "-p", "hi"]),
-        "scramjet-rs: session \"1800\" belongs to another project, /work/other; --fork \"1800\" \
+        "scramjet: session \"1800\" belongs to another project, /work/other; --fork \"1800\" \
 continues it in a new session of this one"
     );
     std::fs::write(&settings, r#"{"sessionDir": 7}"#).unwrap();
@@ -693,7 +693,7 @@ fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
             "300",
             "python3",
             "tests/agent_editor_pty.py",
-            env!("CARGO_BIN_EXE_scramjet-rs"),
+            env!("CARGO_BIN_EXE_scramjet"),
         ])
         .output()
         .unwrap();
@@ -830,7 +830,7 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
     )
     .unwrap();
     let up_to_date = format!(
-        "scramjet-rs {} is up to date (newest release v0.0.0)\n",
+        "scramjet {} is up to date (newest release v0.0.0)\n",
         env!("CARGO_PKG_VERSION")
     );
     let run = |arguments: &[&str]| {
@@ -891,20 +891,20 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
 
     let (ok, _, err) = run(&["install", &source]);
     assert!(!ok);
-    assert_eq!(err, format!("scramjet-rs: {source} is already installed\n"));
+    assert_eq!(err, format!("scramjet: {source} is already installed\n"));
     let pinned = format!("{source}@{first}");
     let (ok, _, err) = run(&["install", &pinned]);
     assert!(!ok);
     let identity = format!("git:localhost{}", scratch.0.join("upstream").display());
     assert_eq!(
         err,
-        format!("scramjet-rs: {identity} is installed as {source}; remove it first\n")
+        format!("scramjet: {identity} is installed as {source}; remove it first\n")
     );
     let (ok, _, err) = run(&["remove", "mach12"]);
     assert!(!ok);
     assert!(
         err.contains(&format!(
-            "mach12 came with {source}; `scramjet-rs remove {source}`"
+            "mach12 came with {source}; `scramjet remove {source}`"
         )),
         "{err}"
     );
@@ -936,7 +936,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert!(ok);
     assert!(
         err.contains(&format!(
-            "{source}: not cloned into {shown_clone}; `scramjet-rs update` clones it"
+            "{source}: not cloned into {shown_clone}; `scramjet update` clones it"
         )),
         "{err}"
     );
@@ -1010,7 +1010,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert_eq!(
         err,
         format!(
-            "scramjet-rs: {inner} would be cloned into {shown_clone}/inner, which nests with the \
+            "scramjet: {inner} would be cloned into {shown_clone}/inner, which nests with the \
              clone of {source}; remove that first\n"
         )
     );
@@ -1026,7 +1026,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert_eq!(
         err,
         format!(
-            "scramjet-rs: {source}'s clone in {shown_clone} holds the clone of {inner}; remove \
+            "scramjet: {source}'s clone in {shown_clone} holds the clone of {inner}; remove \
              that first\n"
         )
     );
@@ -1040,7 +1040,7 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     assert!(!ok);
     assert_eq!(
         err,
-        format!("scramjet-rs: {shown_clone} exists and is not a clone; left as it is\n")
+        format!("scramjet: {shown_clone} exists and is not a clone; left as it is\n")
     );
     std::fs::write(
         &settings,
@@ -1066,11 +1066,11 @@ mach12 (packages/kit/mach12): 1 command, 0 agents\n  providers (providers): 0 co
     let plain = format!("file://{}", plain.display());
     let (ok, _, err) = run(&["install", &plain]);
     assert!(!ok);
-    assert!(err.ends_with(&format!("scramjet-rs: {plain} holds no command set (no commands, agents or models.json at its top or in its top directories, and no set.yaml deeper) and no skills or themes directory\n")), "{err}");
+    assert!(err.ends_with(&format!("scramjet: {plain} holds no command set (no commands, agents or models.json at its top or in its top directories, and no set.yaml deeper) and no skills or themes directory\n")), "{err}");
     let missing = format!("file://{}", scratch.0.join("missing.git").display());
     let (ok, _, err) = run(&["install", &missing]);
     assert!(!ok);
-    assert!(err.ends_with("scramjet-rs: git clone failed\n"), "{err}");
+    assert!(err.ends_with("scramjet: git clone failed\n"), "{err}");
     assert_eq!(std::fs::read_dir(&clones).unwrap().count(), 0);
     assert_eq!(packages(), serde_json::json!([]));
 
@@ -1121,7 +1121,7 @@ commandSets.\n"
     assert!(!ok);
     assert!(
         err.ends_with(
-            "mach12 came with ~/work; `scramjet-rs remove ~/work` removes it with the package's \
+            "mach12 came with ~/work; `scramjet remove ~/work` removes it with the package's \
 other command sets\n"
         ),
         "{err}"
@@ -1138,7 +1138,7 @@ other command sets\n"
     assert!(!ok);
     assert!(
         err.ends_with(&format!(
-            "scramjet-rs: {} is not a command set: it has no commands or agents directory, nor \
+            "scramjet: {} is not a command set: it has no commands or agents directory, nor \
 a models.json, and holds no set (none in its top directories, nor one with a set.yaml deeper) \
 and no skills or themes directory\n",
             notes.display()

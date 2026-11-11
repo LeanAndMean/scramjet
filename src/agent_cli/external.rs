@@ -108,7 +108,7 @@ fn create_prompt_file() -> io::Result<(PathBuf, File)> {
             "scramjet-prompt-{}-{nanos}-{attempt}.md",
             std::process::id()
         ));
-        match scramjet_rs::os::private_file(OpenOptions::new().write(true).create_new(true))
+        match scramjet::os::private_file(OpenOptions::new().write(true).create_new(true))
             .open(&path)
         {
             Ok(file) => return Ok((path, file)),

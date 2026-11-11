@@ -3,7 +3,7 @@
 Linux, Seatbelt on macOS. Each check runs a release build in `-p` against a local scripted server
 whose replies call bash; the commands' outputs come back in the next requests and are judged.
 
-    python3 scripts/try-sandbox.py [--binary target/release/scramjet-rs] [--scratch DIR] [--keep]
+    python3 scripts/try-sandbox.py [--binary target/release/scramjet] [--scratch DIR] [--keep]
 
 Standard library only, for macOS's own python3 (3.9). Nothing reaches a provider, the user's
 settings or credential stores: the home directory is a scratch one (default
@@ -119,7 +119,7 @@ def case_insensitive(directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--binary', default=os.path.join(ROOT, 'target/release/scramjet-rs'))
+    parser.add_argument('--binary', default=os.path.join(ROOT, 'target/release/scramjet'))
     cache = os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache')
     parser.add_argument('--scratch', default=os.path.join(cache, 'scramjet-rs-try-sandbox'))
     parser.add_argument('--keep', action='store_true', help='leave the scratch directory')

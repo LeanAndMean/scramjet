@@ -629,7 +629,7 @@ fn not_hidden(ui: &mut dyn AgentUi) {
     static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
         ui.notice(
-            "Commands run with the credential stores not hidden: scramjet-rs has no sandbox \
+            "Commands run with the credential stores not hidden: Scramjet has no sandbox \
              on Windows yet (setting hideCredentials)",
         );
     }
@@ -832,7 +832,7 @@ You review code.\n",
             .collect();
         assert_eq!(tools, ["read", "ls", "bash"]);
         let instructions = child["instructions"].as_str().unwrap();
-        assert!(instructions.starts_with("You are a subagent of scramjet-rs"));
+        assert!(instructions.starts_with("You are a subagent of Scramjet"));
         assert!(instructions.contains("\n\nYou review code.\nCurrent date: "));
         assert_eq!(
             child["input"],
@@ -1246,7 +1246,7 @@ the tool call it was making did not run"
                 body["instructions"]
                     .as_str()
                     .unwrap()
-                    .starts_with("You are scramjet-rs")
+                    .starts_with("You are Scramjet")
             })
             .collect();
         assert_eq!(parents.len(), 4);

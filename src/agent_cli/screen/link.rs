@@ -14,7 +14,7 @@ use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
 use crate::agent_cli::theme_editor::ThemeEditor;
 use crate::agent_cli::{clipboard, console, spelling};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
     EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
 };

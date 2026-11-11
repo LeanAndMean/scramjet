@@ -6,7 +6,7 @@ use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::settings::MarkdownReads;
 use crate::agent_cli::terminal::Terminal;
-use scramjet_rs::agent::{Purpose, StreamProgress};
+use scramjet::agent::{Purpose, StreamProgress};
 use std::sync::{Arc, atomic::AtomicBool};
 
 /// How the conversation is rendered.

@@ -1,4 +1,4 @@
-//! `scramjet-rs lint`: what the harness would say about a command set when loading it, as
+//! `scramjet lint`: what the harness would say about a command set when loading it, as
 //! errors for files it skips and warnings for what it ignores, then the shape Scramjet's
 //! `scramjet-command-lint` asks of each command: an early `## Goals` list, and its arguments in
 //! one context block. The set's skills are checked as they load.

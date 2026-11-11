@@ -779,7 +779,7 @@ async fn start(
 ) -> Result<Ready, String> {
     let client = ClientConfig::new(
         ClientCapabilities::default(),
-        Implementation::new("scramjet-rs", env!("CARGO_PKG_VERSION")),
+        Implementation::new("scramjet", env!("CARGO_PKG_VERSION")),
     );
     let lifecycle = ClientLifecycleMode::Auto {
         preferred_versions: vec![ProtocolVersion::LATEST],

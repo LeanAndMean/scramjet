@@ -1,6 +1,6 @@
 ---
 name: writing-scramjet-commands
-description: Use when creating, revising, reviewing, or diagnosing Scramjet commands and command sets for scramjet-rs.
+description: Use when creating, revising, reviewing, or diagnosing Scramjet commands and command sets for Scramjet 2.
 ---
 
 # Writing Scramjet Commands
@@ -152,7 +152,7 @@ Treat the context window as shared working memory.
 
 ## Subagents
 
-The main agent works with the user and owns orchestration, synthesis, mutation, consequential decisions, and exception presentation. Subagents in scramjet-rs are read-only: their shell runs confined, with files read-only and no network.
+The main agent works with the user and owns orchestration, synthesis, mutation, consequential decisions, and exception presentation. Subagents in Scramjet 2 are read-only: their shell runs confined, with files read-only and no network.
 
 Use a subagent only when isolation provides a concrete benefit:
 
@@ -180,7 +180,7 @@ A command can be internally clear and still fail as part of a set. Check:
 
 Do not add handoff fields without a named consumer.
 
-## The format scramjet-rs reads
+## The format Scramjet 2 reads
 
 A command set is a directory, named `<set>` by its `set.yaml`'s `name` (else the directory's name). It holds:
 
@@ -189,7 +189,7 @@ A command set is a directory, named `<set>` by its `set.yaml`'s `name` (else the
 - `skills/<name>/SKILL.md`: skills the set brings, as a Claude Code plugin's, with `name` and `description` frontmatter.
 - `autonomy-defaults.yaml`: the set's defaults for `edges` (from a command to a next step: `chain` runs it, `pause` offers it) and `publications` (per command and tool: `auto-approve` or `require-approval`). The user's `autonomy.yaml` overrides them.
 
-File names hold no `:`, so a set checks out on Windows; Scramjet's `<set>:<name>.md` files load too.
+File names hold no `:`, so a set checks out on Windows; Scramjet 1's `<set>:<name>.md` files load too.
 
 `next` declares a command's continuations: `mode: forced` with a `target`; `mode: closed` with `candidates` (each a `name` and optional `hint`); `mode: open` with `candidates` and an optional `blacklist` of commands never to offer; or `mode: ask` with an optional `hint`. The executing agent offers the concrete next steps and recommends one when it reports.
 
@@ -201,7 +201,7 @@ The harness wraps an invoked command in `<scramjet-command name="…">`, a top-l
 
 Discover authoritative project-native tools from repository guidance and established usage. Prefer existing checks and scripts over improvised substitutes, but inspect unfamiliar or mutating tools before use.
 
-Run `scramjet-rs lint --strict <set-or-package>` after creating or editing a set's files. Its errors are files the harness would skip; its warnings are what it would ignore, a missing or late `## Goals`, and arguments outside their context block. Resolve errors and address warnings, or explain an intentional exception.
+Run `scramjet lint --strict <set-or-package>` after creating or editing a set's files. Its errors are files the harness would skip; its warnings are what it would ignore, a missing or late `## Goals`, and arguments outside their context block. Resolve errors and address warnings, or explain an intentional exception.
 
 A clean structural check proves only its deterministic contract. It does not prove that a command is useful, correctly interpreted, or operationally effective.
 
@@ -243,7 +243,7 @@ Before finalizing a command, ask:
 - Are side effects and command interactions owned clearly?
 - Is framing precise and economical?
 - Could deterministic tooling replace any prose?
-- Does `scramjet-rs lint --strict` pass?
+- Does `scramjet lint --strict` pass?
 - Is this shorter and more adaptable than the process it replaces?
 
 ## References

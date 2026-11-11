@@ -9,7 +9,7 @@ use super::keys::Press;
 use super::select::{self, Picker, Spot};
 use super::text::clip;
 use super::{editor, style};
-use scramjet_rs::agent::{shortened, write_replacing};
+use scramjet::agent::{shortened, write_replacing};
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -266,7 +266,7 @@ impl Interactive {
         let shown = shortened(&path.display().to_string());
         if self.screen.is_none() {
             return self.say(&format!(
-                "Keys go in {shown}, as in Scramjet's keybindings.json: {EXAMPLE}. \
+                "Keys go in {shown}, as in Scramjet 1's keybindings.json: {EXAMPLE}. \
                  /reload reads it again."
             ));
         }
@@ -324,7 +324,7 @@ fn printed(settings: Option<&Path>) -> String {
     if let Some(settings) = settings {
         let file = shortened(&keymap::path(settings).display().to_string());
         text += &format!(
-            "\nOther keys for an action go in {file}, as in Scramjet's keybindings.json: \
+            "\nOther keys for an action go in {file}, as in Scramjet 1's keybindings.json: \
              {EXAMPLE}. /reload reads it again.\n"
         );
     }

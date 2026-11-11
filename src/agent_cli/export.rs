@@ -9,7 +9,7 @@ use super::slash::grouped;
 use super::terminal::{command_body, framed, lines as lines_count};
 use super::text::visible;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     AgentError, AgentUi, Answer, AutoCompaction, Branch, ChildItem, ChildRun, ChildState, Children,
     Choice, CompactRead, Compaction, DELEGATE, DELEGATE_SCOPE_WARNING, Delegation, Ending,
     PUBLICATION_TOOLS, Purpose, Stats, StreamProgress, ToolDetail, UserCommand, read_branch,
@@ -35,7 +35,7 @@ pub(super) struct Setup<'a> {
 }
 
 /// `--export FILE [OUTPUT]`, as Scramjet's: the page of the session saved in `file`, where a
-/// resume would continue it, written to `output`, by default `scramjet-rs-session-<its id>.html`
+/// resume would continue it, written to `output`, by default `scramjet-session-<its id>.html`
 /// in the current directory. Returns where it went.
 pub(super) fn file(file: &Path, output: Option<PathBuf>) -> Result<PathBuf, String> {
     let branch = read_branch(file).map_err(|error| match error.kind() {
@@ -43,7 +43,7 @@ pub(super) fn file(file: &Path, output: Option<PathBuf>) -> Result<PathBuf, Stri
         _ => format!("{}: {error}", file.display()),
     })?;
     let id = file.file_stem().unwrap_or_default().to_string_lossy();
-    let output = output.unwrap_or_else(|| format!("scramjet-rs-session-{id}.html").into());
+    let output = output.unwrap_or_else(|| format!("scramjet-session-{id}.html").into());
     let page = page(&branch, &id, None);
     std::fs::write(&output, page).map_err(|error| format!("{}: {error}", output.display()))?;
     Ok(output)

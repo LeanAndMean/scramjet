@@ -113,7 +113,7 @@ with relevant checks.",
     let mut text = match &loaded.opening {
         Some(opening) => opening.clone(),
         None => format!(
-            "You are scramjet-rs, a coding agent. You help the user with software engineering \
+            "You are Scramjet, a coding agent. You help the user with software engineering \
 tasks in the project directory {root}, using the tools below.
 
 Available tools:
@@ -140,14 +140,14 @@ Guidelines:
     text.trim_end().to_owned()
 }
 
-/// Scramjet's `# Scramjet` section, for scramjet-rs.
+/// The `# Scramjet` section, as Scramjet 1's.
 fn orientation() -> String {
-    let mut text = "# scramjet-rs
+    let mut text = "# Scramjet
 
-scramjet-rs is the harness you are running under: a coding agent that loads command sets —
+Scramjet is the harness you are running under: a coding agent that loads command sets —
 directories of user-defined slash commands and their agents — and wires them into emergent
 workflows through declared next-step policies (forced / closed / open / ask) and command
-delegation, as Scramjet does. Mach 12 is one such command set (the issue → plan → review →
+delegation. Mach 12 is one such command set (the issue → plan → review →
 implement → PR → ship methodology); other sets can sit alongside it.
 "
     .to_owned();
@@ -161,7 +161,7 @@ implement → PR → ship methodology); other sets can sit alongside it.
     let docs: Vec<String> = [readme, help].into_iter().flatten().collect();
     if !docs.is_empty() {
         text += &format!(
-            "\nscramjet-rs documentation (read only when the user asks about scramjet-rs itself — \
+            "\nScramjet documentation (read only when the user asks about Scramjet itself — \
 its commands, command sets, next steps, delegation, settings, keys or the /autopilot on/off \
 flag): {}\n",
             docs.join("; ")
@@ -299,7 +299,7 @@ directory is a private /tmp discarded after each command"
     guidelines.push("- Be concise in your responses".to_owned());
     guidelines.push("- Show file paths clearly when working with files".to_owned());
     let mut text = format!(
-        "You are a subagent of scramjet-rs, a coding agent: you are given a task, and your final \
+        "You are a subagent of Scramjet, a coding agent: you are given a task, and your final \
 reply is its result.
 
 Available tools:
@@ -656,7 +656,7 @@ model: \"Reviewed by x\"\n- Multiple credited models: describe each model's cont
             &Loaded::default(),
         );
         let at = |heading: &str| text.find(&format!("\n# {heading}\n")).unwrap();
-        assert!(at("scramjet-rs") < at("Prior-session fallback"));
+        assert!(at("Scramjet") < at("Prior-session fallback"));
         assert!(at("Command framing") < at("Executing actions with care"));
         assert!(text.ends_with(
             "\n# Release preparation timing\n - Version bumps, changelog \
@@ -671,7 +671,7 @@ earlier causes version conflicts between parallel PRs."
             false => String::new(),
         };
         assert!(text.contains(&format!(
-            "about scramjet-rs itself — its commands, command sets, \
+            "about Scramjet itself — its commands, command sets, \
 next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`{} --help` \
 (every option, key and built-in command)\n",
             std::env::current_exe().unwrap().display()
@@ -777,7 +777,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
         );
         let context = format!(
             "You review code.\n\nFirst.\n\nSecond.\n\n# Project Context\n\nProject-specific \
-instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
+instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             scratch.join("AGENTS.md").display()
         );
         assert!(text.starts_with(&context), "{text}");
@@ -798,7 +798,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# scramjet-rs\n",
             &loaded,
         );
         assert!(text.contains(
-            "- Show file paths clearly when working with files\n\nAfter.\n\n# scramjet-rs\n"
+            "- Show file paths clearly when working with files\n\nAfter.\n\n# Scramjet\n"
         ));
         assert!(!text.contains("# Project Context"));
     }

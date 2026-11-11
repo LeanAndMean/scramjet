@@ -1,15 +1,15 @@
-//! `scramjet-rs install`, `remove`, `update` and `list`: command sets installed by reference,
+//! `scramjet install`, `remove`, `update` and `list`: command sets installed by reference,
 //! recorded in the settings' `commandSets` without being copied, as Pi installs a local path,
 //! and packages from git, cloned and recorded in `packages` (`super::packages`); `list` also
 //! shows the skills.
 use super::packages::{self, Source};
 use super::settings::{self, Installed, Settings};
 use super::theme;
-use scramjet_rs::agent::{Inventory, Problem, Set, inventory, sets_in, shortened};
+use scramjet::agent::{Inventory, Problem, Set, inventory, sets_in, shortened};
 use std::path::{Path, PathBuf};
 
 pub(super) const USAGE: &str =
-    "Usage: scramjet-rs install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
+    "Usage: scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
 REPO: git:github.com/USER/REPO[@REF], git:git@github.com:USER/REPO or a git URL";
 
 /// Runs `command` with its `arguments` when it is one of these; `None` when it is not.
@@ -211,7 +211,7 @@ fn install_package(source: Source) -> Result<(), String> {
     }
     for why in failed {
         println!(
-            "Not downloaded: {why}; `scramjet-rs update {}` tries again",
+            "Not downloaded: {why}; `scramjet update {}` tries again",
             source.written
         );
     }
@@ -312,7 +312,7 @@ fn remove(reference: &str) -> Result<(), String> {
                 (None, None) => return Err(error),
             };
             Err(format!(
-                "{reference} came with {package}; `scramjet-rs remove {package}` removes it with \
+                "{reference} came with {package}; `scramjet remove {package}` removes it with \
                  the package's other command sets"
             ))
         }
@@ -340,7 +340,7 @@ fn update(reference: Option<&str>) -> Result<(), String> {
         },
     };
     if chosen.is_empty() {
-        println!("No packages. `scramjet-rs install git:github.com/USER/REPO` installs one.");
+        println!("No packages. `scramjet install git:github.com/USER/REPO` installs one.");
         return Ok(());
     }
     let (mut failed, mut changed) = (0, Vec::new());
@@ -410,7 +410,7 @@ fn list() -> Result<(), String> {
     let found = here(&settings)?;
     let sets = found.sets.list();
     if sets.is_empty() {
-        println!("No command sets. `scramjet-rs install DIR|REPO` installs one.");
+        println!("No command sets. `scramjet install DIR|REPO` installs one.");
     }
     let rows: Vec<[String; 4]> = (sets.iter())
         .map(|set| {
@@ -509,7 +509,7 @@ fn print_warnings(warnings: &[&Problem]) {
 
 /// `texts` under a heading, with the home directory in them as `~`.
 fn print_texts<'a>(texts: impl IntoIterator<Item = &'a str>) {
-    let home = scramjet_rs::os::home_prefix();
+    let home = scramjet::os::home_prefix();
     let tilde = format!("~{}", std::path::MAIN_SEPARATOR);
     for (number, text) in texts.into_iter().enumerate() {
         if number == 0 {

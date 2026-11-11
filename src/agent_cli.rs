@@ -50,7 +50,7 @@ mod update;
 mod usage;
 
 use args::{Options, Start, USAGE};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
     Next, Providers, Sandbox, Session, SessionChoice, SkillOptions,
 };
@@ -140,12 +140,12 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
     settings.retries_given = options.retries;
-    scramjet_rs::agent::set_shell(
+    scramjet::agent::set_shell(
         settings.shell_path.clone(),
         settings.shell_command_prefix.clone(),
     );
-    scramjet_rs::agent::set_user_shell(settings.default_shell);
-    scramjet_rs::agent::set_images(settings.resize_images, settings.block_images);
+    scramjet::agent::set_user_shell(settings.default_shell);
+    scramjet::agent::set_images(settings.resize_images, settings.block_images);
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let session_dir = (options.session_dir.as_deref())
         .or(settings.session_dir.as_deref())
@@ -228,8 +228,7 @@ fn project_root(project: Option<PathBuf>) -> Result<PathBuf, String> {
         Some(path) => path,
         None => std::env::current_dir().map_err(|e| e.to_string())?,
     };
-    let root =
-        scramjet_rs::os::canonicalize(&root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let root = scramjet::os::canonicalize(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     if !root.is_dir() {
         return Err(format!("{} is not a directory", root.display()));
     }
@@ -319,7 +318,7 @@ fn start(
         .filter(|name| {
             !CODING_TOOLS.contains(&name.as_str()) && !HARNESS_TOOLS.contains(&name.as_str())
         })
-        .map(|name| format!("--tools: {name} is not one of scramjet-rs's tools; ignored"))
+        .map(|name| format!("--tools: {name} is not one of Scramjet's tools; ignored"))
         .collect();
     let missing_shells =
         agent::missing_shells(options.only_tools.as_ref().unwrap_or(&settings.tools));
@@ -526,7 +525,7 @@ fn write_held_at_exit(agent: &mut Agent) {
             eprintln!("Session written, with what was kept in memory.");
             return;
         }
-        let size = scramjet_rs::agent::byte_size(held);
+        let size = scramjet::agent::byte_size(held);
         if let Some(directory) = agent.held_kept_in() {
             eprintln!(
                 "Session not written for want of room: the {size} kept in memory wait in {}, for \

@@ -124,7 +124,7 @@ fn exit(startup: Option<&console::Mode>) -> ! {
     if let Some(prompt) = PROMPT.lock().unwrap_or_else(PoisonError::into_inner).take() {
         let _ = std::fs::remove_file(prompt);
     }
-    scramjet_rs::agent::end();
+    scramjet::agent::end();
     super::terminal::clear_on_exit();
     let mut stderr = io::stderr().lock();
     if let Some(leave) = screen::leave_on_exit() {

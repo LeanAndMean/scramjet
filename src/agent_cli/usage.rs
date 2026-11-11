@@ -8,8 +8,8 @@ use super::slash::grouped;
 use super::style;
 use super::terminal;
 use super::tree::local;
-use scramjet_rs::agent::quota::{Credits, Quota, Window};
-use scramjet_rs::agent::usage::{History, Response, civil_days};
+use scramjet::agent::quota::{Credits, Quota, Window};
+use scramjet::agent::usage::{History, Response, civil_days};
 use std::path::Path;
 
 const HOUR: u64 = 60 * 60 * 1000;
@@ -1009,7 +1009,7 @@ mod tests {
     use super::*;
     use crate::agent_cli::keys::{Code, Key, Press};
     use crate::agent_cli::report::Took;
-    use scramjet_rs::agent::usage::Summary;
+    use scramjet::agent::usage::Summary;
 
     fn response(at: u64, model: &str, cost: Option<f64>, session: usize) -> Response {
         Response {

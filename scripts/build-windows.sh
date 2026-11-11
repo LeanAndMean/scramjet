@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds a native Windows scramjet-rs.exe on Linux: cargo for x86_64-pc-windows-gnu (rustup
+# Builds a native Windows scramjet.exe on Linux: cargo for x86_64-pc-windows-gnu (rustup
 # target add x86_64-pc-windows-gnu) inside a Docker image holding Debian's MinGW-w64 compiler,
 # which compiles the dependencies' C (ring, oniguruma) and links. This repository's own
 # toolchain and offline cargo cache are mounted, so nothing is installed on the host. Arguments go

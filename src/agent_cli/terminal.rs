@@ -11,7 +11,7 @@ use super::settings::MarkdownReads;
 use super::style::{self, Band, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, printable, style_at, visible};
 use super::{children, console, diff, editor, job, markdown, record};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
     DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE,
     StreamProgress, ToolDetail, UserCommand, publication_choices, read_line_too_long,
@@ -550,7 +550,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             (name, None) if PUBLICATION_TOOLS.contains(&name) => {
                 styled(preview(output, Shown::All, width))
             }
-            (name, None) if scramjet_rs::agent::is_shell(name) => styled(preview(
+            (name, None) if scramjet::agent::is_shell(name) => styled(preview(
                 &bash_shown(output, failed),
                 shown(Shown::Last(BASH_LINES)),
                 width,
@@ -567,8 +567,8 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         self.padded(outcome, &gutter, &rows);
         // The other looks say it in the call's heading.
         let took = took.filter(|_| self.design == Design::Classic);
-        if let Some(took) = took
-            .filter(|took| scramjet_rs::agent::is_shell(name) && *took >= Duration::from_secs(1))
+        if let Some(took) =
+            took.filter(|took| scramjet::agent::is_shell(name) && *took >= Duration::from_secs(1))
         {
             let took = self.dim(&format!("Took {:.1}s", took.as_secs_f64()));
             self.err(&format!("{}{took}\n", gutter.rest));
@@ -1092,7 +1092,7 @@ impl AgentUi for Terminal {
             Design::Classic => self.dim(&call_line(name, &summary, width, self.marked)),
             design => {
                 let took = (took.filter(|took| {
-                    scramjet_rs::agent::is_shell(tool) && *took >= Duration::from_secs(1)
+                    scramjet::agent::is_shell(tool) && *took >= Duration::from_secs(1)
                 }))
                 .map(|took| format!("{:.1}s", took.as_secs_f64()));
                 design.heading(name, &summary, outcome, took.as_deref(), width, self.marked)
@@ -1380,7 +1380,7 @@ impl Terminal {
     pub(super) fn release_notes(&mut self, notes: &str) {
         self.clear();
         let version = env!("CARGO_PKG_VERSION");
-        let heading = format!("What changed in scramjet-rs, newest first (this is {version})");
+        let heading = format!("What changed in Scramjet, newest first (this is {version})");
         let heading = self.styled(style::SUMMARY, &heading);
         let body = Some(notes).filter(|notes| !notes.is_empty());
         let block = self.message_box("release notes", &heading, body);

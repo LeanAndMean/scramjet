@@ -341,7 +341,7 @@ fn parse(path: &Path, mut reader: impl BufRead) -> io::Result<Entries> {
         };
         if index == 0 {
             if value["type"] != "session" {
-                return Err(invalid(path, "not a scramjet-rs session"));
+                return Err(invalid(path, "not a Scramjet session"));
             }
             parent = value["parentSession"].as_str().map(PathBuf::from);
             header = value;

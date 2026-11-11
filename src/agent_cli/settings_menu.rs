@@ -8,7 +8,7 @@ use super::text::clip;
 use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
 use super::theme_editor::ThemeEditor;
 use super::{background, editor, installed, palette, select, style};
-use scramjet_rs::agent::{
+use scramjet::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
     Publication, Scope, Setting, config_directory, shortened, write_replacing,
 };
@@ -227,8 +227,8 @@ impl Interactive {
             self.hide_thinking
                 .store(self.settings.hide_thinking_block, Ordering::Relaxed);
             self.agent.set_compacting(self.settings.compacting);
-            scramjet_rs::agent::set_images(self.settings.resize_images, self.settings.block_images);
-            scramjet_rs::agent::set_user_shell(self.settings.default_shell);
+            scramjet::agent::set_images(self.settings.resize_images, self.settings.block_images);
+            scramjet::agent::set_user_shell(self.settings.default_shell);
             self.ui.markdown_reads = self.settings.markdown_reads;
             if let Some(screen) = &mut self.screen {
                 (screen.link).reloaded(completions(&self.agent), &self.settings);
@@ -476,7 +476,7 @@ impl Interactive {
                 .collect();
             let notes = (CODING_TOOLS.iter())
                 .map(
-                    |tool| match !cfg!(windows) || scramjet_rs::agent::found(tool) {
+                    |tool| match !cfg!(windows) || scramjet::agent::found(tool) {
                         true => tool_note(tool).to_owned(),
                         false => format!("{}; not found, so off", tool_note(tool)),
                     },

@@ -15,7 +15,7 @@ use crate::agent_cli::style;
 use crate::agent_cli::theme::{self, Theme};
 use crate::agent_cli::theme_editor::Ended;
 use crate::agent_cli::{clipboard, console};
-use scramjet_rs::agent;
+use scramjet::agent;
 use std::{
     io::{self, PipeReader, Read},
     sync::atomic::Ordering,

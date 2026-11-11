@@ -5,7 +5,7 @@ use super::banner::Opening;
 use super::design::Outcome;
 use super::style::Style;
 use super::terminal::Terminal;
-use scramjet_rs::agent::{
+use scramjet::agent::{
     AgentUi, Answer, AutoCompaction, Children, CompactRead, Compaction, Purpose, StreamProgress,
     ToolDetail, UserCommand,
 };

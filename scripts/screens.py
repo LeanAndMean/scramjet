@@ -9,7 +9,7 @@ shows it, written as ANSI text (`cat` it in a terminal) and as a PNG in Windows 
 default colors.
 
     uv run scripts/screens.py SCENARIO.json OUTDIR [--size 100x50] [--set KEY=VALUE]...
-                              [--binary target/release/scramjet-rs] [--name PREFIX]
+                              [--binary target/release/scramjet] [--name PREFIX]
                               [--background RRGGBB] [--foreground RRGGBB] [--silent]
 
 The terminal answers OSC 11, 10 and 4 with its background, text color and 16 colors, as Windows
@@ -334,7 +334,7 @@ def main():
     parser.add_argument('outdir')
     parser.add_argument('--size', help='COLUMNSxROWS (default: the scenario\'s "size", else 100x50)')
     parser.add_argument('--set', action='append', default=[], metavar='KEY=VALUE')
-    parser.add_argument('--binary', default=os.path.join(ROOT, 'target/release/scramjet-rs'))
+    parser.add_argument('--binary', default=os.path.join(ROOT, 'target/release/scramjet'))
     parser.add_argument('--name', default='', help='put before each shot\'s name')
     parser.add_argument('--timeout', type=float, default=30)
     parser.add_argument('--background', default=BACKGROUND, help='the terminal\'s own background')
