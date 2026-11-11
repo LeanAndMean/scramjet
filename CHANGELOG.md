@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.157.1 — No Scramjet 1 warnings in the home directory
+
+### Fixed
+
+- Started in the home directory, Scramjet 2 no longer takes Scramjet 1's `~/.scramjet/agent` (or `SCRAMJET_CODING_AGENT_DIR`) for a project command set named `agent`, which listed it in `scramjet list`, took the providers of Scramjet 1's `models.json`, and warned of each `mach12:` and `scramjet:` agent link there.
+
 ## 2.157.0 — Packages say which Scramjet they need
 
 ### Added

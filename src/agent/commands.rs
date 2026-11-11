@@ -163,6 +163,19 @@ impl Sets {
     /// A set under a root whose name an installed set has is skipped with a warning, as is an
     /// installed one that is missing.
     pub fn find(installed: &[PathBuf], global: Option<&Path>, project: &Path) -> Self {
+        Self::find_besides(installed, global, project, None)
+    }
+
+    /// As `find`, never taking `scramjet_1`, Scramjet 1's agent directory, for a project set:
+    /// in the home directory, the project's `.scramjet` is Scramjet 1's, and its `agent`
+    /// directory, with its `agents`, looks like one.
+    fn find_besides(
+        installed: &[PathBuf],
+        global: Option<&Path>,
+        project: &Path,
+        scramjet_1: Option<&Path>,
+    ) -> Self {
+        let scramjet_1 = scramjet_1.map(|v1| std::fs::canonicalize(v1).unwrap_or(v1.to_path_buf()));
         let mut sets = Self::default();
         for directory in installed {
             match Set::at(directory, Origin::Installed) {
@@ -185,6 +198,13 @@ impl Sets {
         for (root, origin) in roots.into_iter().chain([(project, Origin::Project)]) {
             for name in set_directories(root) {
                 let directory = root.join(name);
+                if origin == Origin::Project
+                    && scramjet_1.as_deref().is_some_and(|v1| {
+                        directory == v1 || std::fs::canonicalize(&directory).is_ok_and(|d| d == v1)
+                    })
+                {
+                    continue;
+                }
                 let Ok(set) = Set::at(&directory, origin) else {
                     continue;
                 };
@@ -217,7 +237,14 @@ impl Sets {
     /// root and the project's `.scramjet` directory, then the program's own `scramjet` set unless
     /// one of them has its name, as one installed from a checkout does.
     pub fn for_project(installed: &[PathBuf], root: &Path) -> Self {
-        let mut sets = Self::find(installed, global_root().as_deref(), &root.join(".scramjet"));
+        let project = root.join(".scramjet");
+        let (global, scramjet_1) = (global_root(), scramjet_1_directory());
+        let mut sets = Self::find_besides(
+            installed,
+            global.as_deref(),
+            &project,
+            scramjet_1.as_deref(),
+        );
         if cfg!(test) {
             return sets;
         }
@@ -314,6 +341,19 @@ pub struct Commands {
 
 /// Scramjet's global root for command sets: `$SCRAMJET_CACHE`, else `$XDG_DATA_HOME/scramjet`,
 /// else `~/.local/share/scramjet`.
+/// Scramjet 1's directory: `SCRAMJET_CODING_AGENT_DIR` (a leading `~` expanded, as Scramjet 1
+/// does), else `~/.scramjet/agent`.
+pub fn scramjet_1_directory() -> Option<PathBuf> {
+    let home = std::env::home_dir();
+    match std::env::var("SCRAMJET_CODING_AGENT_DIR") {
+        Ok(set) if !set.is_empty() => match crate::os::after_tilde(&set).zip(home) {
+            Some((rest, home)) => Some(crate::os::join(&home, rest)),
+            None => Some(PathBuf::from(set)),
+        },
+        _ => home.map(|home| home.join(".scramjet").join("agent")),
+    }
+}
+
 fn global_root() -> Option<PathBuf> {
     if let Some(cache) = std::env::var_os("SCRAMJET_CACHE") {
         return Some(PathBuf::from(cache));
@@ -983,6 +1023,36 @@ mod tests {
     /// The sets of `project` alone, as a session without installed sets or a global root.
     fn project_sets(project: &Path) -> Sets {
         Sets::find(&[], None, project)
+    }
+
+    #[test]
+    fn scramjet_1s_agent_directory_is_no_project_set_in_the_home_directory() {
+        let scratch = Scratch::new("home-dot-scramjet");
+        let home = scratch.0.join(".scramjet");
+        scratch.file(".scramjet/agent/agents/mach12:code-reviewer.md", "x");
+        scratch.file(".scramjet/agent/settings.json", "{}");
+        scratch.file(".scramjet/mine/commands/mine:x.md", "x");
+        let names = |sets: &Sets| {
+            sets.list()
+                .iter()
+                .map(|set| set.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&project_sets(&home)), ["agent", "mine"]);
+        let v1 = home.join("agent");
+        let besides = Sets::find_besides(&[], None, &home, Some(&v1));
+        assert_eq!(names(&besides), ["mine"]);
+        assert!(besides.warnings().is_empty());
+        // Also when Scramjet 1's directory is reached through a link.
+        #[cfg(unix)]
+        {
+            let link = scratch.0.join("v1");
+            std::os::unix::fs::symlink(&v1, &link).unwrap();
+            assert_eq!(
+                names(&Sets::find_besides(&[], None, &home, Some(&link))),
+                ["mine"]
+            );
+        }
     }
 
     #[test]

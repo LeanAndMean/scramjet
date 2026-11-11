@@ -35,7 +35,7 @@ fn import_command(arguments: &[String]) -> Result<(), String> {
         }
     }
     let from = from
-        .or_else(v1_directory)
+        .or_else(scramjet::agent::scramjet_1_directory)
         .ok_or("HOME is not set: give Scramjet 1's directory")?;
     let to = login::config_directory().ok_or("HOME is not set")?;
     if !from.is_dir() {
@@ -63,19 +63,6 @@ fn import_command(arguments: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// Scramjet 1's directory: `SCRAMJET_CODING_AGENT_DIR` (a leading `~` expanded, as Scramjet 1
-/// does), else `~/.scramjet/agent`.
-fn v1_directory() -> Option<PathBuf> {
-    let home = std::env::home_dir();
-    match std::env::var("SCRAMJET_CODING_AGENT_DIR") {
-        Ok(set) if !set.is_empty() => match scramjet::os::after_tilde(&set).zip(home) {
-            Some((rest, home)) => Some(scramjet::os::join(&home, rest)),
-            None => Some(PathBuf::from(set)),
-        },
-        _ => home.map(|home| home.join(".scramjet").join("agent")),
-    }
-}
-
 /// What to tell the user at an interactive start, once: that Scramjet 1's setup can be
 /// imported, when it has settings and these have none. Recorded as said in the state directory.
 pub(super) fn offer() -> Option<String> {
@@ -83,7 +70,7 @@ pub(super) fn offer() -> Option<String> {
         .ok()?
         .join("scramjet-1-import-offered");
     let ours = login::config_directory()?.join("settings.json");
-    offer_in(&v1_directory()?, &ours, &said)
+    offer_in(&scramjet::agent::scramjet_1_directory()?, &ours, &said)
 }
 
 fn offer_in(theirs: &Path, ours: &Path, said: &Path) -> Option<String> {
