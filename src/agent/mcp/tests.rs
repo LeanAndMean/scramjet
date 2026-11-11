@@ -4,7 +4,13 @@ use crate::agent::{Agent, instructions};
 use crate::provider_fixture as fixture;
 use std::sync::atomic::AtomicBool;
 
-const SERVER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/support/mcp_server.py");
+/// A script of `tests/support`, in the `CARGO_MANIFEST_DIR` the tests run with (on Windows a
+/// copy, `scripts/test-windows.sh`), else the build's.
+fn support(name: &str) -> String {
+    let root = std::env::var("CARGO_MANIFEST_DIR");
+    let root = root.unwrap_or_else(|_| env!("CARGO_MANIFEST_DIR").to_owned());
+    format!("{root}/tests/support/{name}")
+}
 
 fn scratch(name: &str) -> ScratchDir {
     let path = std::env::temp_dir().join(format!("sjrs-mcp-{name}-{}", std::process::id()));
@@ -25,7 +31,7 @@ fn program(name: &str, command: &str, args: Vec<String>, env: &[(&str, String)])
 }
 
 fn test_server(name: &str, env: &[(&str, String)]) -> Server {
-    program(name, "python3", vec![SERVER.to_owned()], env)
+    program(name, "python3", vec![support("mcp_server.py")], env)
 }
 
 /// `name` on the host outside `/tmp`, which the sandbox replaces with its own: in this checkout's
@@ -304,7 +310,7 @@ fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
     let inside = project.join("log");
     // In the project, as the server's script may be under `/tmp`, hidden in the sandbox.
     let script = project.join("mcp_server.py");
-    std::fs::copy(SERVER, &script).unwrap();
+    std::fs::copy(support("mcp_server.py"), &script).unwrap();
     let server = |env: &[(&str, String)]| {
         program("test", "python3", vec![script.display().to_string()], env)
     };
@@ -985,11 +991,6 @@ fn servers_ended_as_they_start_leave_no_process() {
     assert!(left.is_empty(), "{} of {} left", left.len(), started.len());
 }
 
-const HTTP_SERVER: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/support/mcp_http_server.py"
-);
-
 /// The test server over HTTP, run with `env`, and the port it listens on; killed on drop.
 struct Remote(std::process::Child, u16);
 
@@ -997,7 +998,7 @@ impl Remote {
     fn start(env: &[(&str, String)]) -> Self {
         use std::io::BufRead;
         let mut child = std::process::Command::new("python3")
-            .arg(HTTP_SERVER)
+            .arg(support("mcp_http_server.py"))
             .envs(env.iter().map(|(key, value)| (key, value)))
             .stdout(std::process::Stdio::piped())
             .spawn()

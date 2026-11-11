@@ -522,8 +522,11 @@ mod tests {
         write(&v1.join("AGENTS.md"), "own");
         write(&v1.join("agents/mine.md"), "agent");
         write(&v1.join("agents/mine.md.bak"), "old");
-        write(&v1.join("agents/mach12:code-reviewer.md"), "set");
-        write(&v1.join("agents/mach12:code-explorer.md"), "set");
+        // Windows' file names take no `:`, so Scramjet 1 had no set agents there.
+        if cfg!(unix) {
+            write(&v1.join("agents/mach12:code-reviewer.md"), "set");
+            write(&v1.join("agents/mach12:code-explorer.md"), "set");
+        }
         write(&v1.join("themes/t.json"), "{}");
         write(&v1.join("skills/s/SKILL.md"), "skill");
         for directory in ["extensions", "prompts", "sessions", "git"] {
@@ -551,7 +554,7 @@ mod tests {
         assert_eq!(dry, report);
 
         let settings = read(&to.join("settings.json"));
-        let home = |rest: &str| shown(&from.join(rest));
+        let home = |rest: &str| shown(&scramjet::os::join(&from, rest));
         assert_eq!(
             settings,
             json!({
@@ -609,7 +612,10 @@ mod tests {
             "AGENTS.md: there already",
             "auth.json: openrouter's API key:",
             "auth.json: anthropic: not a login Scramjet 2 makes",
-            "agents/: 2 agents of command sets (mach12)",
+            match cfg!(unix) {
+                true => "agents/: 2 agents of command sets (mach12)",
+                false => "extensions/:",
+            },
             "extensions/:",
             "prompts/:",
             "sessions/:",

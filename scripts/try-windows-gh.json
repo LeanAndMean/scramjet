@@ -1,0 +1,38 @@
+{
+  "files": {
+    "README.md": "Project\n"
+  },
+  "agents": {
+    "reader": "---\nname: reader\ndescription: Reads the project\ntools: Read, Bash\n---\nRead and report.\n"
+  },
+  "prompt": "Have a subagent look at the repository",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "reader",
+          "task": "Look at the repository"
+        }
+      }
+    ],
+    [
+      {
+        "call": "powershell",
+        "arguments": {
+          "command": "$env:GH_CONFIG_DIR = \"$env:APPDATA\\GitHub CLI\"; (whoami /groups | Select-String 'Mandatory Label').ToString().Trim().Substring(0, 37); gh --version | Select-Object -First 1; gh auth status 2>&1 | Select-Object -First 2; gh api user --jq .login; gh repo view LeanAndMean/scramjet --json name,visibility; $pr = (gh pr list -R LeanAndMean/scramjet-v1 --state all --limit 1 --json number | ConvertFrom-Json).number; gh pr view $pr -R LeanAndMean/scramjet-v1 --json state; gh release list -R LeanAndMean/scramjet --limit 1; \"exit=$LASTEXITCODE\""
+        }
+      }
+    ],
+    [
+      {
+        "text": "Child done."
+      }
+    ],
+    [
+      {
+        "text": "Finished."
+      }
+    ]
+  ]
+}

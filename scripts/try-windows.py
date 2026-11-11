@@ -110,9 +110,11 @@ if scenario.get('path'):
     ahead = [os.path.join(win, directory) for directory in scenario['path']]
     unix = [subprocess.run(['wslpath', '-u', d], capture_output=True, text=True).stdout.strip()
             for d in windows_path.split(';') if d]
-    env['PATH'] = ':'.join(ahead + [d for d in unix if d])
+    # Named as Windows names it: given as PATH, Windows' own Path would come too, and a Rust
+    # child's environment, rebuilt case-insensitively, would keep that one.
+    env['Path'] = ':'.join(ahead + [d for d in unix if d])
 # WSLENV's /p would turn a value that is no path, such as a URL, into a mangled one.
-env['WSLENV'] = ':'.join(name + ('/l' if name == 'PATH' else '/p' if value.startswith('/') else '')
+env['WSLENV'] = ':'.join(name + ('/l' if name == 'Path' else '/p' if value.startswith('/') else '')
                          for name, value in env.items())
 args = [binary, '--model', 'screens/gpt-6-luna'] + scenario.get('args', [])
 project = os.path.join(work, 'proj')
