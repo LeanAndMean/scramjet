@@ -956,16 +956,21 @@ fn escape_stops_a_search_waiting_for_a_server_to_list_its_tools() {
 fn servers_ended_as_they_start_leave_no_process() {
     let scratch = scratch("ended-early");
     let log = scratch.0.join("log");
-    // A server that never reads its input, so that only killing it ends it.
-    let server = program(
-        "sleeper",
-        "sh",
-        vec![
-            "-c".to_owned(),
-            format!("echo pid $$ >> '{}'; exec sleep 30", log.display()),
-        ],
-        &[],
-    );
+    // A server that never reads its input, so that only killing it ends it. On Windows Git's
+    // `sh` knows only MSYS's process IDs: Python says Windows' own.
+    let server = if cfg!(windows) {
+        if crate::agent::tests::missing("python3") {
+            return;
+        }
+        let script = format!(
+            "import os, time\nopen(r'{}', 'a').write('pid %d\\n' % os.getpid())\ntime.sleep(30)",
+            log.display()
+        );
+        program("sleeper", "python3", vec!["-c".to_owned(), script], &[])
+    } else {
+        let script = format!("echo pid $$ >> '{}'; exec sleep 30", log.display());
+        program("sleeper", "sh", vec!["-c".to_owned(), script], &[])
+    };
     for round in 0..40 {
         let servers = Servers::start(std::slice::from_ref(&server), &scratch.0, None);
         std::thread::sleep(Duration::from_micros(round * 50));
