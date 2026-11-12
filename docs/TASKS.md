@@ -6,6 +6,8 @@ Last steer: e3dacc1
 
 ## Current focus
 
+**First, before item 38 (user, 2026-11-12):** a session preparing v2.198.0's release found a problem and patched it on the local branch `release-2.198.0` (one commit, e64be13 "Sandbox grant tests expect macOS's writable temporary directory"; checked out in another worktree, `git worktree list`). Find what was wrong and what the fix does, integrate it on `main` as an ordinary commit (no branch kept for it), then delete the branch and its worktree once nothing in that worktree is left uncommitted.
+
 Set at the steer of 2026-11-12: item 38, RPC mode on ACP: the proposal rewritten, then built from stage 1. What is left of 51, 44 and 48 goes on alongside where the loop can act on it, much of it waiting on the user. After that: macOS (35), from testers' reports on the alphas and by hand once the user has a Mac, and last item 7, the lowest priority, kept in mind so that nothing built now corners it ([design](DESIGN.md#current-direction-2026-11-03)). What is left of 49 waits for tries on the user's PCs, the chain forms in `/resume` (25) for the user to see them, and what is left of 17 needs the user.
 
 ## Next candidates
