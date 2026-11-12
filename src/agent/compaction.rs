@@ -806,6 +806,20 @@ impl Agent {
             result => result.map(drop),
         }
     }
+
+    /// Before each request of a turn on a model a local runtime serves, the check made before a
+    /// prompt: such a runtime cuts a prompt longer than its window instead of refusing it
+    /// (Ollama 0.40.16 answers 200 and drops the prompt's start), so no overflow error makes room.
+    pub(super) fn compact_for_runtime(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(), AgentError> {
+        match self.info.runtime {
+            Some(_) => self.compact_before_prompt(ui, cancel),
+            None => Ok(()),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1666,6 +1680,63 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         events.push(json!({"type":"error","code":"context_length_exceeded",
             "message":"Your input exceeds the context window of this model."}));
         events
+    }
+
+    #[test]
+    fn the_threshold_check_the_runtime_window_comes_before_each_request_of_a_turn() {
+        let call = || {
+            let events = fixture::call_events(r#"{"command":"true"}"#, full_usage(14_000));
+            let text = serde_json::to_string(&events).unwrap();
+            stream(
+                &serde_json::from_str::<Vec<Value>>(&text.replace("\"inert\"", "\"bash\""))
+                    .unwrap(),
+            )
+        };
+        let run = |runtime: Option<crate::agent::local::Runtime>, name: &str| {
+            let mut responses = vec![call()];
+            if runtime.is_some() {
+                responses.push(stream(&fixture::text_events(
+                    "summary",
+                    fixture::known_usage(),
+                )));
+            }
+            responses.push(stream(&fixture::text_events(
+                "done",
+                fixture::known_usage(),
+            )));
+            let (endpoint, server) = serve(responses);
+            let (mut agent, _scratch) = agent(endpoint, name);
+            agent.set_context_window(Some(30_000));
+            agent.info.runtime = runtime;
+            let model = agent.config.model.clone();
+            (agent.runtime_windows).insert(model, super::super::turn::RuntimeWindow::Read(30_000));
+            seed_long_conversation(&mut agent);
+            let mut ui = Recorder::default();
+            agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+            (ui, server.join().unwrap())
+        };
+        // Ollama answers a prompt past its window, cut: compaction comes before the request.
+        let (ui, requests) = run(
+            Some(crate::agent::local::Runtime::Ollama),
+            "runtime-threshold",
+        );
+        assert_eq!(
+            ui.waits,
+            [
+                Purpose::Reply,
+                Purpose::Compaction(Some(AutoCompaction::Threshold)),
+                Purpose::Reply
+            ]
+        );
+        assert_eq!(requests[2]["input"][0], summary_message("summary"));
+        assert_eq!(
+            requests[2]["input"].as_array().unwrap().last().unwrap()["type"],
+            "function_call_output"
+        );
+        // A provider refuses one with an error, so the request goes as Scramjet sends it.
+        let (ui, requests) = run(None, "provider-threshold");
+        assert_eq!(ui.waits, [Purpose::Reply, Purpose::Reply]);
+        assert_eq!(requests[1]["input"][0]["content"], "remember the goal");
     }
 
     #[test]

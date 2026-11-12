@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.171.0 — Local models compact within a turn
+
+### Changed
+
+- On a model a local runtime serves (`/login` → Local models), automatic compaction is checked before each request of a turn, not only between turns: a runtime such as Ollama drops what does not fit its window without an error, so a turn reading large files could lose its instructions before the overflow compaction other providers trigger could help.
+
 ## 2.170.0 — Local models follow their runtime's window
 
 ### Changed
