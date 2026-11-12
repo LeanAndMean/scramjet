@@ -3,7 +3,7 @@
 use super::banner::{self, Opening};
 use super::changelog;
 use super::completion::Completions;
-use super::drive::{self, Front, Offer, Picked, Session, Start};
+use super::drive::{self, Change, Front, Offer, Picked, Session, Start};
 use super::editor::Note;
 use super::record::{self, Event};
 use super::screen::{self, Handle};
@@ -16,7 +16,6 @@ use super::{
 };
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, EarlierSession, Installed, Problem,
-    Reopened,
 };
 use std::{
     io::{BufRead, IsTerminal},
@@ -346,11 +345,6 @@ impl Interactive {
         self.run_turn(Some(prompt), start)
     }
 
-    /// Asks again the question going back in the session reached (`drive::ask_again`).
-    pub(super) fn ask_again(&mut self) {
-        drive::ask_again(self);
-    }
-
     fn run_turn(&mut self, prompt: Option<&str>, start: Start) -> Option<(String, Start)> {
         drive::run_turn(self, prompt, start)
     }
@@ -471,11 +465,6 @@ impl Interactive {
         self.ui.clear();
         self.cancel.store(false, Ordering::Relaxed);
         result
-    }
-
-    /// Offers again the next-step list going back in the session reached (`drive::reopen`).
-    pub(super) fn reopen(&mut self, offer: Reopened, prompt: Option<String>) {
-        drive::reopen(self, offer, prompt);
     }
 
     /// Remembers the session's model as the one chosen last (`drive::remember_model`).
@@ -798,8 +787,16 @@ impl Front for Interactive {
         self.spaced = true;
     }
 
-    fn session_changed(&mut self, message: &str) {
+    /// The conversation shown again; a resumed or imported session's prompts are those Up
+    /// recalls, and one in another folder brings its themes, completions and problems.
+    fn session_changed(&mut self, message: &str, change: Change) {
+        if change != Change::Kept {
+            self.remember_prompts();
+        }
         self.replaced(message);
+        if change == Change::Moved {
+            self.moved();
+        }
     }
 }
 

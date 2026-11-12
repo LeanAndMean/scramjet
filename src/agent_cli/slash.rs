@@ -3,16 +3,12 @@
 //! `settings_menu.rs`; `/hotkeys` and `/keybindings` in `hotkeys.rs`; `/resume`, `/fork`,
 //! `/branch`, `/clone` and `/tree` in `sessions.rs`; `/model` and `/scoped-models` in
 //! `scope.rs`; `/login` and `/logout` in `login.rs`.
-use super::interactive::{Interactive, completions, model_line, saved_line};
+use super::interactive::{Interactive, completions};
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
 use super::{drive, terminal};
 use scramjet::agent::{Agent, AgentError, McpState, Providers, Remembered, Sandbox, SandboxMode};
-use std::{
-    io::IsTerminal,
-    path::{Path, PathBuf},
-    sync::atomic::Ordering,
-};
+use std::{io::IsTerminal, path::PathBuf, sync::atomic::Ordering};
 
 /// A built-in command as typed, with its argument.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -247,18 +243,7 @@ impl Interactive {
                 return self.say("Import cancelled");
             }
         }
-        match self.session.agent.import_session(Path::new(path)) {
-            Ok(()) => {
-                self.session.agent.load_model_info();
-                self.remember_prompts();
-                self.replaced(&format!(
-                    "✓ Imported session from {path} · {}\n{}",
-                    model_line(&self.session.agent),
-                    saved_line(&self.session.agent),
-                ));
-            }
-            Err(error) => self.say(&format!("Error: failed to import the session: {error}")),
-        }
+        drive::import(self, path);
     }
 
     /// `/copy`, as Scramjet's: the last reply's text, as the model wrote it, to the clipboard.

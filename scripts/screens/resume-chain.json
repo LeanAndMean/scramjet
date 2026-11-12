@@ -17,11 +17,13 @@
     ]
   ],
   "steps": [
-    {"until": "Select next step"},
+    {"until": "0: /flow:step two"},
+    {"sleep": 0.3},
     {"type": "\r"},
-    {"until": "Select next step"},
+    {"until": "0: /flow:step three"},
+    {"sleep": 0.3},
     {"type": "\r"},
-    {"until": "/flow:step three"},
+    {"until": "› /flow:step three"},
     {"sleep": 1.5},
     {"type": "/resume\r"},
     {"until": "Resume session"},

@@ -1,12 +1,13 @@
 //! The built-in commands that move to another session or entry: `/resume`, `/fork`,
 //! `/branch`, `/clone` and `/tree`.
+use super::drive;
 use super::fuzzy::Haystack;
-use super::interactive::{Interactive, model_line, saved_line};
+use super::interactive::Interactive;
 use super::keymap::{self, Binding};
 use super::screen;
 use super::text::{clip, one_line};
 use super::{editor, select, style, tree};
-use scramjet::agent::{AgentError, Navigated, Removal, SessionInfo, shortened};
+use scramjet::agent::{AgentError, Removal, SessionInfo, shortened};
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
 
@@ -84,49 +85,7 @@ impl Interactive {
         let Some(session) = chosen else {
             return false;
         };
-        let path = &session.path;
-        // As in Scramjet, a session continues in its own folder; one whose folder is gone is
-        // forked into this project.
-        let root = (session.root.as_deref()).filter(|root| root.is_dir());
-        let here = self.session.agent.session_here(path);
-        let moved = root.filter(|root| *root != self.session.agent.root() || !here);
-        let done = match (moved, here) {
-            (Some(root), _) => (self.session.agent.resume_session_in(path, root))
-                .map(|()| format!("Resumed session in {}", folder(&session))),
-            (None, true) => {
-                (self.session.agent.resume_session(path)).map(|()| "Resumed session".to_owned())
-            }
-            (None, false) => (self.session.agent.fork_session_file(path)).map(|()| {
-                let gone = if session.root.is_some() {
-                    ", as that folder is gone"
-                } else {
-                    ""
-                };
-                format!(
-                    "Forked session from {} into this project{gone}",
-                    folder(&session)
-                )
-            }),
-        };
-        match done {
-            Ok(done) => {
-                self.session.agent.load_model_info();
-                self.remember_prompts();
-                self.replaced(&format!(
-                    "✓ {done} · {}\n{}",
-                    model_line(&self.session.agent),
-                    saved_line(&self.session.agent),
-                ));
-                if moved.is_some() {
-                    self.moved();
-                }
-                true
-            }
-            Err(error) => {
-                self.say(&format!("Error: {error}"));
-                false
-            }
-        }
+        drive::resume(self, &session)
     }
 
     /// Chooses a session on the full screen, as Scramjet's session selector does: forks under
@@ -373,43 +332,13 @@ impl Interactive {
         let Some(index) = chosen else {
             return;
         };
-        match self.session.agent.fork(index) {
-            Ok(Some((prompt, offer))) => {
-                self.session.agent.load_model_info();
-                self.replaced(&format!(
-                    "✓ Forked to new session · {}\n{}",
-                    model_line(&self.session.agent),
-                    saved_line(&self.session.agent),
-                ));
-                match offer {
-                    Some(offer) => self.reopen(offer, Some(prompt)),
-                    None => self.set_text(prompt),
-                }
-            }
-            Ok(None) => self.say(&format!(
-                "Error: no message numbered {} (/fork lists them)",
-                index + 1
-            )),
-            Err(error) => self.say(&format!("Error: {error}")),
-        }
+        drive::fork(self, index);
     }
 
     /// `/branch`, with the session's name, or `name` when given.
     pub(super) fn clone_session(&mut self, name: &str) {
-        match self.session.agent.clone_session() {
-            Ok(true) => {
-                self.session.agent.load_model_info();
-                self.replaced(&format!(
-                    "✓ Cloned to new session · {}\n{}",
-                    model_line(&self.session.agent),
-                    saved_line(&self.session.agent),
-                ));
-                if !name.is_empty() {
-                    self.name(name);
-                }
-            }
-            Ok(false) => self.say("Nothing to clone yet"),
-            Err(error) => self.say(&format!("Error: {error}")),
+        if drive::clone_session(self) && !name.is_empty() {
+            self.name(name);
         }
     }
 
@@ -499,26 +428,7 @@ impl Interactive {
                 },
             };
             match result {
-                Ok(Navigated::AlreadyThere) => self.say("Already at this point"),
-                Ok(Navigated::Moved {
-                    prompt,
-                    offer,
-                    question,
-                }) => {
-                    self.replaced("✓ Navigated to selected point");
-                    if question {
-                        self.ask_again();
-                        return;
-                    }
-                    match offer {
-                        Some(offer) => self.reopen(offer, prompt),
-                        None => {
-                            if let Some(prompt) = prompt {
-                                self.set_text(prompt);
-                            }
-                        }
-                    }
-                }
+                Ok(navigated) => drive::navigated(self, navigated),
                 Err(AgentError::Cancelled) => {
                     self.say("Branch summarization cancelled");
                     (wanted, reopen) = ("", Some(index));
@@ -625,14 +535,6 @@ impl Sort {
 /// Whether the session has a name, as `/name` gives one.
 fn named(session: &SessionInfo) -> bool {
     (session.name.as_deref()).is_some_and(|name| !name.trim().is_empty())
-}
-
-/// The folder of the project a session belongs to, `~` for the home directory's.
-fn folder(session: &SessionInfo) -> String {
-    match &session.root {
-        Some(root) => shortened(&root.display().to_string()),
-        None => "an unknown folder".to_owned(),
-    }
 }
 
 /// A `/resume` line: the session's name or first prompt (for a step of a `chain`, its latest

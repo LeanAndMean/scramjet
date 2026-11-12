@@ -3,8 +3,10 @@
 //! from how each front end shows it (`Front`).
 use super::settings::Settings;
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Completed, Next, Reopened, Source, Step, Suggested,
+    Agent, AgentError, AgentUi, Completed, Navigated, Next, Reopened, SessionInfo, Source, Step,
+    Suggested, shortened,
 };
+use std::path::Path;
 use std::time::Duration;
 
 /// How long `/autopilot on` waits before it chooses the recommended next step, as Scramjet.
@@ -81,7 +83,19 @@ pub(super) trait Front {
     fn recorded(&mut self, record: &str);
     /// Shows that the agent's session was replaced (a new, resumed or forked one, or a move in
     /// the tree), with `message`.
-    fn session_changed(&mut self, message: &str);
+    fn session_changed(&mut self, message: &str, change: Change);
+}
+
+/// What a session change brought besides another conversation.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Change {
+    /// The prompts typed so far stay those Up recalls: a new session, a fork, a clone, a move
+    /// in the tree.
+    Kept,
+    /// Another session's prompts are those Up recalls: a resumed or imported one.
+    Loaded,
+    /// As `Loaded`, in another folder, whose themes, completions and problems now apply.
+    Moved,
 }
 
 /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was left
@@ -298,13 +312,144 @@ pub(super) fn new_session(front: &mut dyn Front) -> bool {
     match agent.new_session() {
         Ok(()) => {
             let saved = super::interactive::saved_line(agent);
-            front.session_changed(&format!("✓ New session started\n{saved}"));
+            front.session_changed(&format!("✓ New session started\n{saved}"), Change::Kept);
             true
         }
         Err(error) => {
             front.say(&format!("Error: {error}"));
             false
         }
+    }
+}
+
+/// Continues in `session` (`/resume`); returns whether it did. As in Scramjet, a session
+/// continues in its own folder; one whose folder is gone is forked into this project.
+pub(super) fn resume(front: &mut dyn Front, session: &SessionInfo) -> bool {
+    let agent = &mut front.session().agent;
+    let path = &session.path;
+    let root = (session.root.as_deref()).filter(|root| root.is_dir());
+    let here = agent.session_here(path);
+    let moved = root.filter(|root| *root != agent.root() || !here);
+    let done = match (moved, here) {
+        (Some(root), _) => (agent.resume_session_in(path, root))
+            .map(|()| format!("Resumed session in {}", folder(session))),
+        (None, true) => agent
+            .resume_session(path)
+            .map(|()| "Resumed session".to_owned()),
+        (None, false) => agent.fork_session_file(path).map(|()| {
+            let gone = match session.root {
+                Some(_) => ", as that folder is gone",
+                None => "",
+            };
+            format!(
+                "Forked session from {} into this project{gone}",
+                folder(session)
+            )
+        }),
+    };
+    let change = match moved {
+        Some(_) => Change::Moved,
+        None => Change::Loaded,
+    };
+    match done {
+        Ok(done) => changed(front, &done, change),
+        Err(error) => {
+            front.say(&format!("Error: {error}"));
+            return false;
+        }
+    }
+    true
+}
+
+/// Continues in a copy of the session file at `path` (`/import`).
+pub(super) fn import(front: &mut dyn Front, path: &str) {
+    match front.session().agent.import_session(Path::new(path)) {
+        Ok(()) => changed(
+            front,
+            &format!("Imported session from {path}"),
+            Change::Loaded,
+        ),
+        Err(error) => front.say(&format!("Error: failed to import the session: {error}")),
+    }
+}
+
+/// Continues in a new session holding the conversation before the prompt at `index` (`/fork`),
+/// that prompt to edit and send again, or its next-step list offered again.
+pub(super) fn fork(front: &mut dyn Front, index: usize) {
+    match front.session().agent.fork(index) {
+        Ok(Some((prompt, offer))) => {
+            changed(front, "Forked to new session", Change::Kept);
+            match offer {
+                Some(offer) => reopen(front, offer, Some(prompt)),
+                None => front.edit(prompt),
+            }
+        }
+        Ok(None) => front.say(&format!(
+            "Error: no message numbered {} (/fork lists them)",
+            index + 1
+        )),
+        Err(error) => front.say(&format!("Error: {error}")),
+    }
+}
+
+/// Continues in a new session holding the whole conversation (`/branch`); returns whether it
+/// did.
+pub(super) fn clone_session(front: &mut dyn Front) -> bool {
+    match front.session().agent.clone_session() {
+        Ok(true) => {
+            changed(front, "Cloned to new session", Change::Kept);
+            true
+        }
+        Ok(false) => {
+            front.say("Nothing to clone yet");
+            false
+        }
+        Err(error) => {
+            front.say(&format!("Error: {error}"));
+            false
+        }
+    }
+}
+
+/// Shows where `Agent::navigate` moved the conversation (`/tree`), then asks again the
+/// question gone back to, offers again the list, or starts the next prompt with the prompt.
+pub(super) fn navigated(front: &mut dyn Front, navigated: Navigated) {
+    let Navigated::Moved {
+        prompt,
+        offer,
+        question,
+    } = navigated
+    else {
+        return front.say("Already at this point");
+    };
+    front.session_changed("✓ Navigated to selected point", Change::Kept);
+    if question {
+        return ask_again(front);
+    }
+    match (offer, prompt) {
+        (Some(offer), prompt) => reopen(front, offer, prompt),
+        (None, Some(prompt)) => front.edit(prompt),
+        (None, None) => {}
+    }
+}
+
+/// Shows the session `done` changed to, with its model and where it is saved.
+fn changed(front: &mut dyn Front, done: &str, change: Change) {
+    let agent = &mut front.session().agent;
+    agent.load_model_info();
+    let message = format!(
+        "✓ {done} · {}\n{}",
+        super::interactive::model_line(agent),
+        super::interactive::saved_line(agent),
+    );
+    front.session_changed(&message, change);
+}
+
+/// The folder of the project a session belongs to, `~` for the home directory's.
+pub(super) fn folder(session: &SessionInfo) -> String {
+    match &session.root {
+        Some(root) => shortened(&root.display().to_string()),
+        None => "an unknown folder".to_owned(),
     }
 }
 
