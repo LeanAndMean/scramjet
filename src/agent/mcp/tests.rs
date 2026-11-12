@@ -47,13 +47,7 @@ fn outside_tmp(name: &str) -> PathBuf {
 
 /// `configs` started in `root` and settled, each given ten seconds.
 fn started(configs: &[Server], root: &Path) -> Servers {
-    confined(configs, root, None)
-}
-
-/// As `started`, those that run as programs in `sandbox`.
-fn confined(configs: &[Server], root: &Path, sandbox: Option<Sandbox>) -> Servers {
-    let confined = sandbox.map(|sandbox| Arc::new((sandbox, Vec::new())));
-    let servers = Servers::start_within(configs, root, Duration::from_secs(10), confined);
+    let servers = Servers::start_within(configs, root, Duration::from_secs(10));
     servers.settle(&AtomicBool::new(false));
     servers
 }
@@ -294,109 +288,46 @@ fn stopped_servers_get_their_input_closed_then_sigterm_then_sigkill() {
 }
 
 #[test]
-fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
-    use crate::agent::SandboxMode;
-    if sandbox::available().is_err() {
+fn under_the_sandbox_a_server_runs_outside_it_and_changing_it_keeps_the_server() {
+    use crate::agent::{Sandbox, SandboxMode};
+    if crate::agent::tests::missing("python3") {
         return;
     }
-    let scratch = scratch("sandboxed");
-    let project = scratch.0.join("project");
-    std::fs::create_dir_all(&project).unwrap();
-    let log = |path: &Path| [("MCP_TEST_LOG", path.display().to_string())];
+    let (endpoint, _server) = serve(Vec::new());
+    let (mut agent, _scratch) = agent(endpoint, "mcp-unsandboxed");
     let sandbox = |mode| Sandbox {
         mode,
         network: false,
         writable: Vec::new(),
     };
-    let inside = project.join("log");
-    // In the project, as the server's script may be under `/tmp`, hidden in the sandbox.
-    let script = project.join("mcp_server.py");
-    std::fs::copy(support("mcp_server.py"), &script).unwrap();
-    let server = |env: &[(&str, String)]| {
-        program("test", "python3", vec![script.display().to_string()], env)
-    };
-    let servers = confined(
-        &[server(&log(&inside))],
-        &project,
-        Some(sandbox(SandboxMode::WorkspaceWrite)),
-    );
+    agent.set_sandbox(Some(sandbox(SandboxMode::WorkspaceWrite)));
+    // Outside the project and `/tmp`, where the sandbox would refuse the write.
+    let log = outside_tmp("sjrs-mcp-outside");
+    let _ = std::fs::remove_file(&log);
+    agent.config.mcp_servers = vec![test_server(
+        "test",
+        &[("MCP_TEST_LOG", log.display().to_string())],
+    )];
+    agent.start_mcp();
+    agent.mcp.as_ref().unwrap().settle(&AtomicBool::new(false));
     assert!(
-        matches!(servers.states()[..], [(_, State::Ready { .. })]),
+        matches!(agent.mcp_servers()[0].1, State::Ready { .. }),
         "{:?}",
-        servers.states()
+        agent.mcp_servers()
     );
-    assert_eq!(
-        call(&servers, "echo", json!({"text": "hi"})).unwrap().text,
-        "echo: hi"
-    );
-    // The first process of its own namespace's, after bubblewrap's (Seatbelt has no namespaces).
-    let logged = std::fs::read_to_string(&inside).unwrap();
+    // Its own process id, not one of a namespace of its own.
+    let first = pids(&log);
     assert!(
-        cfg!(not(target_os = "linux"))
-            || logged.starts_with("pid 2\n")
-            || logged.starts_with("pid 3\n"),
-        "{logged}"
+        matches!(first[..], [pid] if pid > 3 && alive(pid)),
+        "{first:?}"
     );
-    drop(servers);
-    let outside = outside_tmp("sjrs-mcp-outside");
-    for (mode, path) in [
-        (SandboxMode::WorkspaceWrite, outside),
-        (SandboxMode::ReadOnly, inside),
-    ] {
-        let servers = confined(&[server(&log(&path))], &project, Some(sandbox(mode)));
-        let [(_, State::Failed(why))] = &servers.states()[..] else {
-            panic!("{mode:?}: {:?}", servers.states());
-        };
-        assert!(
-            why.starts_with(&format!(
-                "in the sandbox (--sandbox {}), which hides credential stores and variables: it \
-                 ended before it answered; it wrote:\n",
-                mode.name()
-            )),
-            "{why}"
-        );
-        let refused = crate::agent::tests::REFUSED_WRITE;
-        assert!(why.contains(refused), "{mode:?}: {why}");
-        if mode == SandboxMode::WorkspaceWrite {
-            assert!(!path.exists());
-        }
-    }
-}
-
-#[test]
-fn a_server_started_again_in_the_sandbox_cannot_read_a_store_made_since() {
-    use crate::agent::SandboxMode;
-    if sandbox::available().is_err() {
-        return;
-    }
-    let scratch = scratch("store-since");
-    let store = outside_tmp("sjrs-mcp-store");
-    let _ = std::fs::remove_file(&store);
-    let script = format!("cat '{}' >&2; exit 1", store.display());
-    let server = program("cat", "bash", vec!["-c".to_owned(), script], &[]);
-    let sandbox = Sandbox {
-        mode: SandboxMode::WorkspaceWrite,
-        network: false,
-        writable: Vec::new(),
-    };
-    let confined = || Some((sandbox.clone(), vec![store.clone()]));
-    let configs = std::slice::from_ref(&server);
-    let mut servers = Servers::start_within(
-        configs,
-        &scratch.0,
-        Duration::from_secs(10),
-        confined().map(Arc::new),
-    );
-    servers.settle(&AtomicBool::new(false));
-    std::fs::write(&store, "secret-token").unwrap();
-    servers.update(configs, &scratch.0, confined());
-    servers.settle(&AtomicBool::new(false));
-    let states = servers.states();
-    let _ = std::fs::remove_file(&store);
-    let [(_, State::Failed(why))] = &states[..] else {
-        panic!("{states:?}");
-    };
-    assert!(!why.contains("secret-token"), "{why}");
+    agent.set_sandbox(Some(sandbox(SandboxMode::ReadOnly)));
+    agent.set_sandbox(None);
+    agent.start_mcp();
+    agent.mcp.as_ref().unwrap().settle(&AtomicBool::new(false));
+    assert_eq!(pids(&log), first);
+    drop(agent);
+    let _ = std::fs::remove_file(&log);
 }
 
 #[test]
@@ -466,7 +397,6 @@ fn a_server_that_does_not_answer_is_given_up_and_killed() {
         &[test_server("test", &env)],
         &scratch.0,
         Duration::from_secs(1),
-        None,
     );
     assert_eq!(servers.starting(), ["test"]);
     servers.settle(&AtomicBool::new(false));
@@ -1034,7 +964,7 @@ fn servers_ended_as_they_start_leave_no_process() {
         program("sleeper", "sh", vec!["-c".to_owned(), script], &[])
     };
     for round in 0..40 {
-        let servers = Servers::start(std::slice::from_ref(&server), &scratch.0, None);
+        let servers = Servers::start(std::slice::from_ref(&server), &scratch.0);
         std::thread::sleep(Duration::from_micros(round * 50));
         drop(servers);
     }

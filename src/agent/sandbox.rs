@@ -744,7 +744,7 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
 
 /// `bash -c command` in `root`, confined.
 pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Result<Command, String> {
-    let mut process = confined(root, hidden, None, None)?;
+    let mut process = confined(root, hidden, None)?;
     process.arg(super::tools::shell_program()?);
     super::tools::bash_runs(&mut process, command);
     Ok(process)
@@ -757,34 +757,9 @@ pub(super) fn sandboxed(
     hidden: &Hidden,
     sandbox: &Sandbox,
 ) -> Result<Command, String> {
-    let mut process = confined(root, hidden, Some(sandbox), None)?;
+    let mut process = confined(root, hidden, Some(sandbox))?;
     process.arg(super::tools::shell_program()?);
     super::tools::bash_runs(&mut process, command);
-    Ok(process)
-}
-
-/// `program` (its arguments to follow) in `root`, confined as `sandbox` says: an MCP server.
-/// Its package managers' caches (uv's, npm's, and others' under `XDG_CACHE_HOME`) are moved to
-/// a directory only sandboxed servers use, writable to them, as `uvx` and `npx` fail on a
-/// read-only cache; nothing outside the sandbox runs what is put there.
-pub(super) fn server(
-    root: &Path,
-    program: &str,
-    hidden: &Hidden,
-    sandbox: &Sandbox,
-) -> Result<Command, String> {
-    let cache = super::session::state_directory().map(|directory| directory.join("sandbox-cache"));
-    let cache = (cache.ok())
-        .filter(|cache| std::fs::create_dir_all(cache).is_ok())
-        .and_then(|cache| std::fs::canonicalize(cache).ok());
-    let mut process = confined(root, hidden, Some(sandbox), cache.as_deref())?;
-    if let Some(cache) = &cache {
-        process
-            .env("XDG_CACHE_HOME", cache)
-            .env("UV_CACHE_DIR", cache.join("uv"))
-            .env("npm_config_cache", cache.join("npm"));
-    }
-    process.arg(program);
     Ok(process)
 }
 
@@ -833,15 +808,9 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
 /// symlink) in case it is under `/tmp` or `/run`, before what is hidden, so that it stays
 /// hidden in them. A `sandbox` makes `root` writable in `workspace-write`, but what stays
 /// protected in it, and shares the network as it says, with the name servers that
-/// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's). `writable_too`, a real
-/// path, is mounted writable last.
+/// `/etc/resolv.conf` leads to under `/run` or `/tmp` (systemd-resolved's).
 #[cfg(windows)]
-fn confined(
-    root: &Path,
-    _: &Hidden,
-    sandbox: Option<&Sandbox>,
-    _: Option<&Path>,
-) -> Result<Command, String> {
+fn confined(root: &Path, _: &Hidden, sandbox: Option<&Sandbox>) -> Result<Command, String> {
     if sandbox.is_some() {
         return Err(UNAVAILABLE.to_owned());
     }
@@ -859,12 +828,7 @@ pub(super) fn low(root: &Path) -> Result<Command, String> {
 }
 
 #[cfg(unix)]
-fn confined(
-    root: &Path,
-    hidden: &Hidden,
-    sandbox: Option<&Sandbox>,
-    writable_too: Option<&Path>,
-) -> Result<Command, String> {
+fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<Command, String> {
     let writable = sandbox.is_some_and(|sandbox| sandbox.mode == SandboxMode::WorkspaceWrite);
     let network = sandbox.is_some_and(|sandbox| sandbox.network);
     let granted: Vec<PathBuf> = sandbox
@@ -875,15 +839,7 @@ fn confined(
         .collect();
     let kept = sandbox.map_or_else(Vec::new, |sandbox| sandbox.protected_paths(root));
     if cfg!(target_os = "macos") {
-        return Ok(closed(
-            root,
-            hidden,
-            writable,
-            network,
-            &granted,
-            &kept,
-            writable_too,
-        ));
+        return Ok(closed(root, hidden, writable, network, &granted, &kept));
     }
     let mut process = Command::new(PROGRAM);
     process.args([
@@ -954,9 +910,6 @@ fn confined(
     if let Some(own) = &hidden.tmux {
         process.arg("--tmpfs").arg(own).arg("--remount-ro").arg(own);
     }
-    if let Some(path) = writable_too {
-        process.arg("--bind").arg(path).arg(path);
-    }
     process.arg("--chdir").arg(root).arg("--");
     Ok(process)
 }
@@ -972,7 +925,6 @@ fn closed(
     network: bool,
     granted: &[PathBuf],
     kept: &[PathBuf],
-    writable_too: Option<&Path>,
 ) -> Command {
     let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
     let mut closed = seatbelt::Closed {
@@ -1008,7 +960,6 @@ fn closed(
     closed.anchored.extend(above.map(Path::to_owned));
     closed.anchored.sort();
     closed.anchored.dedup();
-    closed.writable.extend(writable_too.map(Path::to_owned));
     let (files, directories) = hidden.mounted();
     // Servers that commands with the stores hidden started run what a client asks writable and
     // on the network.

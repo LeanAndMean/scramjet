@@ -307,7 +307,6 @@ mod tests {
             false,
             &[],
             &[],
-            None,
         ));
         std::fs::remove_dir_all(&scratch).unwrap();
         let (tmp, root) = (tmp.display(), root.display());
@@ -341,7 +340,6 @@ mod tests {
             false,
             &granted,
             &kept,
-            None,
         );
         let text = spelled(&profile);
         let not = |path: &str| {

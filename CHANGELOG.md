@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.192.0 — MCP servers outside the sandbox
+
+### Changed
+
+- MCP servers no longer start inside `--sandbox` (or the `sandbox` setting): they run with your environment and credential stores, as in Codex and Claude Code, so a server whose key is in a credential store (a search server's, say) works under the sandbox. Changing the sandbox with `/sandbox` no longer restarts them, and Scramjet's separate `sandbox-cache` for their `uvx` and `npx` is no longer used (it can be deleted from `~/.local/state/scramjet`).
+
 ## 2.191.0 — Ollama counts a long request before compaction
 
 ### Changed

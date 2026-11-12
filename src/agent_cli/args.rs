@@ -115,11 +115,10 @@ but to NO_PROXY's hosts and this machine.
                          every file read-only, a private /tmp, its own processes and the
                          credential stores hidden, and refuses write and edit;
                          workspace-write lets both change the project but its .git,
-                         .scramjet and .agents. MCP servers that run as programs start
-                         inside too. Commands reach the network unless the
+                         .scramjet and .agents. Commands reach the network unless the
                          setting sandboxNetwork is false. It needs bubblewrap (bwrap) and
                          refuses to start without it; on macOS it runs under Seatbelt
-                         (sandbox-exec). `!` commands you type stay outside
+                         (sandbox-exec). `!` commands you type and MCP servers stay outside
   --add-dir DIR          let the sandbox's commands, write and edit change DIR too (its
                          .git, .scramjet and .agents kept read-only); repeatable. /sandbox
                          and /add-dir grant more while working

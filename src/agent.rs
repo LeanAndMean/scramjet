@@ -277,7 +277,7 @@ pub struct AgentConfig {
     pub mcp_servers: Vec<McpServer>,
     /// The names of those not started (`disabledMcpServers`, `/mcp disable`).
     pub mcp_disabled: Vec<String>,
-    /// How the coding tools and the MCP servers that run as programs are confined; `None`
+    /// How the coding tools are confined (MCP servers never are); `None`
     /// leaves them as `Agent::set_hide_credentials` says.
     pub sandbox: Option<Sandbox>,
     /// `--session-dir` or the settings' `sessionDir`: where this run's sessions are saved and
@@ -873,11 +873,9 @@ impl Agent {
             return;
         }
         // Calls still running keep the servers they had.
-        let confined = (self.config.sandbox.clone())
-            .map(|sandbox| (sandbox, self.config.providers.credential_files().to_vec()));
         match self.mcp.as_mut().and_then(Arc::get_mut) {
-            Some(running) => running.update(wanted, root, confined),
-            None => self.mcp = Some(Arc::new(mcp::Servers::start(wanted, root, confined))),
+            Some(running) => running.update(wanted, root),
+            None => self.mcp = Some(Arc::new(mcp::Servers::start(wanted, root))),
         }
     }
 
@@ -1780,26 +1778,10 @@ impl Agent {
 
     /// Confines the coding tools as `sandbox` says, the credential stores hidden too, or, with
     /// `None`, no more than `set_hide_credentials` says. Where bubblewrap cannot run, their
-    /// commands fail (`Sandbox::check` says so first). A `!` command stays outside. The MCP
-    /// servers start again in it.
-    /// The directories granted (`Sandbox::writable`) reach the MCP servers only when they start
-    /// again for another reason, so that a grant does not cut their sessions; one taken back
-    /// starts them again, as it must leave them too.
+    /// commands fail (`Sandbox::check` says so first). A `!` command and the MCP servers stay
+    /// outside.
     pub fn set_sandbox(&mut self, sandbox: Option<Sandbox>) {
-        let confinement = |sandbox: &Option<Sandbox>| {
-            (sandbox.as_ref()).map(|sandbox| (sandbox.mode, sandbox.network))
-        };
-        let revoked = |old: &Sandbox, new: &Sandbox| {
-            (old.writable.iter()).any(|granted| !new.writable.contains(granted))
-        };
-        let restart = confinement(&self.config.sandbox) != confinement(&sandbox)
-            || (self.config.sandbox.as_ref().zip(sandbox.as_ref()))
-                .is_some_and(|(old, new)| revoked(old, new));
         self.config.sandbox = sandbox;
-        if restart {
-            self.mcp = None;
-            self.start_mcp();
-        }
     }
 
     pub fn sandbox(&self) -> Option<&Sandbox> {
