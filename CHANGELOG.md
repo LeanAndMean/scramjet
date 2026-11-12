@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.182.1 — gpt-oss finds grep
+
+### Fixed
+
+- gpt-oss calls grep `search`, the name of its training's browser tool, and kept calling it however often it was told no such tool exists: one task on Ollama's gpt-oss:20b ran 274 requests, 158 of them to `search`, and never finished. Such a call, carrying grep's `pattern`, now runs grep and stays in the conversation as grep.
+- A call to a tool that is not offered is answered with the names of those that are.
+
 ## 2.182.0 — gpt-oss's thinking levels on vLLM
 
 ### Changed

@@ -373,7 +373,7 @@ impl Agent {
         }
         ui.tool_call(call.name, &call.summary(), compact.as_ref());
         if !self.offers(call.name) {
-            let output = format!("Tool {} not found", call.name);
+            let output = tools::not_found(call.name, &self.offered());
             ui.tool_result(call.name, &output, None, true);
             return Called::Done(failure(output), false);
         }
@@ -895,7 +895,10 @@ You review code.\n",
         let bash = last_output(&bodies[2]);
         assert!(bash.starts_with("original\n"), "{bash}");
         assert!(bash.contains(crate::agent::tests::REFUSED_WRITE), "{bash}");
-        assert_eq!(last_output(&bodies[3]), "Tool write not found");
+        assert_eq!(
+            last_output(&bodies[3]),
+            "Tool write not found. Available tools: read, ls, bash"
+        );
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "original\n");
         let result = "Agent invocation warnings:\n- write: left out, as subagents run read-only \
 here\n\nkept.txt says original";
@@ -1717,7 +1720,13 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             .collect();
         assert_eq!(
             outputs,
-            ["a.txt:1: a needle", "a.txt", "Tool write not found"]
+            [
+                "a.txt:1: a needle",
+                "a.txt",
+                "Tool write not found. Available tools: read, grep, ls, \
+report_scramjet_command_status, create_issue, create_pr, add_issue_comment, add_pr_comment, \
+get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scramjet_next_steps"
+            ]
         );
         assert!(!agent.root().join("x.txt").exists());
     }
@@ -1728,6 +1737,12 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             tool_calls(&[
                 ("read", json!({"path":"a.txt"})),
                 (subagent::NAME, json!({"agent":"x","task":"y"})),
+                // gpt-oss's name for grep, with grep's arguments, and without.
+                (
+                    "search",
+                    json!({"pattern":"a","path":"a.txt","max_results":5}),
+                ),
+                ("search", json!({"query":"a"})),
             ]),
             tool_call("call_2", "bash", json!({"command":"touch x.txt"})),
             tool_call(
@@ -1769,9 +1784,26 @@ sed.\n- Be concise";
             outputs,
             [
                 "a\n",
-                "Tool subagent not found",
-                "Tool bash not found",
-                "Tool get_scramjet_user_input not found"
+                "Tool subagent not found. Available tools: read, grep",
+                "a.txt:1: a",
+                "Tool search not found. Available tools: read, grep",
+                "Tool bash not found. Available tools: read, grep",
+                "Tool get_scramjet_user_input not found. Available tools: read, grep"
+            ]
+        );
+        let called: Vec<_> = (agent.conversation().iter())
+            .filter(|item| item["type"] == "function_call")
+            .map(|item| item["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            called,
+            [
+                "read",
+                subagent::NAME,
+                "grep",
+                "search",
+                "bash",
+                question::NAME
             ]
         );
         assert!(!agent.root().join("x.txt").exists());

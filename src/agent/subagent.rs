@@ -1314,7 +1314,8 @@ fn run_child(
         }
         report(Event::Usage(run.shown_usage()));
         let mut calls = Vec::new();
-        for item in reply.items {
+        for mut item in reply.items {
+            tools::rename_habit(&mut item, tools);
             match item["type"].as_str() {
                 Some("message") => {
                     let text = super::message_text(&item);
@@ -1348,7 +1349,7 @@ fn run_child(
                             .run_read_only(&job.cwd, &hidden, cancel)
                             .map(|output| output.sent())
                             .unwrap_or_else(|error| json!(format!("Error: {error}"))),
-                        false => json!(format!("Tool {} not found", call.name)),
+                        false => json!(tools::not_found(call.name, tools)),
                     }
                 }
                 Err(error) => json!(format!("Error: {error}")),

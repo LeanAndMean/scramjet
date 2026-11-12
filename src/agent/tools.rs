@@ -150,6 +150,34 @@ pub const HARNESS_TOOLS: [&str; 13] = [
 /// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
 /// harness's own, those for MCP servers' tools only with `mcp` (servers are configured); with
 /// `only` (`--tools`), those it names alone, as Scramjet's allowlist.
+/// A call to a tool not offered; names those offered, as a model trained on other tools' names
+/// (gpt-oss's `search`) otherwise keeps calling them.
+pub(super) fn not_found(name: &str, offered: &[impl AsRef<str>]) -> String {
+    let offered: Vec<&str> = offered.iter().map(AsRef::as_ref).collect();
+    match offered.is_empty() {
+        true => format!("Tool {name} not found"),
+        false => format!(
+            "Tool {name} not found. Available tools: {}",
+            offered.join(", ")
+        ),
+    }
+}
+
+/// Renames a reply's call to the tool it means when a model calls it by a name of its training:
+/// gpt-oss calls grep `search` (its built-in browser tool's), with grep's arguments, and keeps
+/// calling it however often it is told the name is not a tool. Its history then shows grep.
+pub(super) fn rename_habit(item: &mut Value, offered: &[impl AsRef<str>]) {
+    let offers = |tool: &str| offered.iter().any(|name| name.as_ref() == tool);
+    if item["type"] != "function_call" || item["name"] != "search" || offers("search") {
+        return;
+    }
+    let arguments: Value =
+        serde_json::from_str(item["arguments"].as_str().unwrap_or("")).unwrap_or_default();
+    if arguments["pattern"].is_string() && offers("grep") {
+        item["name"] = json!("grep");
+    }
+}
+
 pub(super) fn offered(
     coding: &[String],
     only: Option<&[String]>,
