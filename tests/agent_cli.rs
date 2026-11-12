@@ -2074,3 +2074,85 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
     let status = child.wait().unwrap();
     assert!(status.success());
 }
+
+/// The `tool_call` update and the completed one of a prompt turn in `project` whose reply
+/// calls `name` with `input`.
+#[cfg(unix)]
+fn acp_call(
+    scratch: &std::path::Path,
+    project: &std::path::Path,
+    name: &str,
+    input: &serde_json::Value,
+) -> (serde_json::Value, serde_json::Value) {
+    let (port, _bodies) = serve_call(name, input.clone());
+    let (mut child, mut stdin, messages) = acp(scratch, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (answer, updates) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let update = |found: &dyn Fn(&serde_json::Value) -> bool| {
+        (updates.iter())
+            .map(|message| message["params"]["update"].clone())
+            .find(|update| found(update))
+            .unwrap()
+    };
+    (
+        update(&|update| update["sessionUpdate"] == "tool_call"),
+        update(&|update| update["status"] == "completed"),
+    )
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_tool_calls_carry_their_input_locations_and_diffs() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-edit-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("a.txt");
+    std::fs::write(&path, "one\n").unwrap();
+    let input =
+        serde_json::json!({"path": "a.txt", "edits": [{"oldText": "one", "newText": "two"}]});
+    let (call, completed) = acp_call(&scratch.0, &project, "edit", &input);
+    assert_eq!(call["kind"], "edit", "{call}");
+    assert_eq!(call["rawInput"], input);
+    assert_eq!(call["locations"], serde_json::json!([{"path": path}]));
+    assert_eq!(completed["content"][0]["type"], "content", "{completed}");
+    assert_eq!(
+        completed["content"][1],
+        serde_json::json!({"type": "diff", "path": path, "oldText": "one", "newText": "two"})
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+    // A write making its file: a diff from nothing; one replacing a file: its output only.
+    let input = serde_json::json!({"path": "b.txt", "content": "new\n"});
+    let (_, completed) = acp_call(&scratch.0, &project, "write", &input);
+    let path = project.join("b.txt");
+    assert_eq!(
+        completed["content"][1],
+        serde_json::json!({"type": "diff", "path": path, "oldText": null, "newText": "new\n"}),
+        "{completed}"
+    );
+    let (_, completed) = acp_call(&scratch.0, &project, "write", &input);
+    assert_eq!(
+        completed["content"].as_array().unwrap().len(),
+        1,
+        "{completed}"
+    );
+}

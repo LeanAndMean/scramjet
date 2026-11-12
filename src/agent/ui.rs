@@ -38,6 +38,9 @@ pub trait AgentUi {
     fn assistant(&mut self, text: &str);
     /// `compact`: the call is a read Scramjet shows in one line until expanded.
     fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>);
+    /// The arguments the model gave the tool call `tool_call` announces next, for an interface
+    /// that shows them; not called for calls shown again from a session.
+    fn tool_input(&mut self, _arguments: &Value) {}
     /// The tool call announced last started running at `since`, after any approval: before it
     /// was announced when it ran beside the calls before it.
     fn tool_running(&mut self, since: Instant);

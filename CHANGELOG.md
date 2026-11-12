@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.200.0 — ACP tool calls with their arguments and diffs
+
+### Added
+
+- In `scramjet acp`, each tool call carries its arguments (`rawInput`) and, for a read, edit or write, the absolute path it works on (`locations`, with a read's first line), so a client can follow along; a finished edit adds a `diff` per replacement, and a write that made its file a `diff` from nothing, beside the output.
+
 ## 2.199.0 — `scramjet acp`, a start of RPC mode
 
 ### Added

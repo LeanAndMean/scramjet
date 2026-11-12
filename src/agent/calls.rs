@@ -371,6 +371,7 @@ impl Agent {
         if together {
             ui.of_call(Some(0));
         }
+        ui.tool_input(&call.arguments);
         ui.tool_call(call.name, &call.summary(), compact.as_ref());
         if !self.offers(call.name) {
             let output = tools::not_found(call.name, &self.offered());

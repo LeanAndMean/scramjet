@@ -403,6 +403,10 @@ impl Worker {
             responses: 0,
             streamed: false,
             calls: 0,
+            root: session.agent.root().to_path_buf(),
+            input: Value::Null,
+            call: (String::new(), Value::Null),
+            new_file: false,
             window: None,
             used: None,
             stopped: None,
@@ -558,6 +562,13 @@ struct Updates {
     streamed: bool,
     /// The tool calls so far, which number them.
     calls: usize,
+    /// The project directory, which relative paths in tool calls are in.
+    root: PathBuf,
+    /// The arguments of the tool call announced next, then its name and them.
+    input: Value,
+    call: (String, Value),
+    /// The write announced last makes its file.
+    new_file: bool,
     window: Option<u64>,
     /// The usage last sent, which is not sent again.
     used: Option<(u64, u64, f64)>,
@@ -602,6 +613,59 @@ impl Updates {
         self.update(
             json!({"sessionUpdate": "usage_update", "used": used, "size": size, "cost": cost}),
         );
+    }
+    /// Where the tool call announced last reads or changes files, as absolute paths.
+    fn locations(&self) -> Vec<Value> {
+        let (name, arguments) = &self.call;
+        let path = match (name.as_str(), arguments["path"].as_str()) {
+            ("read" | "edit" | "write", Some(path)) => self.path(path),
+            _ => return Vec::new(),
+        };
+        let mut location = json!({"path": path});
+        // ACP's lines count from 0, as Zed reads them; `read`'s offset from 1.
+        if let (Some(offset), "read") = (arguments["offset"].as_u64(), name.as_str()) {
+            location["line"] = json!(offset.saturating_sub(1));
+        }
+        vec![location]
+    }
+    /// `path` as the tools resolve it: a leading `~` is the home directory.
+    fn path(&self, path: &str) -> PathBuf {
+        match scramjet::os::after_tilde(path).zip(std::env::home_dir()) {
+            Some((rest, home)) => home.join(rest),
+            None => self.root.join(path),
+        }
+    }
+    /// What the edit or write announced last changed, as ACP's diffs: for an edit the text each
+    /// replacement replaced, for a write to a new file its content.
+    fn diffs(&self, new_file: bool) -> Vec<Value> {
+        let (name, arguments) = &self.call;
+        let Some(path) = arguments["path"].as_str().map(|path| self.path(path)) else {
+            return Vec::new();
+        };
+        match (name.as_str(), arguments["content"].as_str()) {
+            ("edit", _) => {}
+            ("write", Some(content)) if new_file => {
+                return vec![
+                    json!({"type": "diff", "path": path, "oldText": null, "newText": content}),
+                ];
+            }
+            _ => return Vec::new(),
+        }
+        let parsed;
+        let mut edits: Vec<&Value> = match &arguments["edits"] {
+            Value::Array(edits) => edits.iter().collect(),
+            Value::String(text) => {
+                parsed = serde_json::from_str::<Value>(text).ok();
+                (parsed.as_ref().and_then(Value::as_array))
+                    .map_or_else(Vec::new, |edits| edits.iter().collect())
+            }
+            _ => Vec::new(),
+        };
+        edits.push(arguments);
+        (edits.into_iter())
+            .filter_map(|edit| Some((edit["oldText"].as_str()?, edit["newText"].as_str()?)))
+            .map(|(old, new)| json!({"type": "diff", "path": path, "oldText": old, "newText": new}))
+            .collect()
     }
     fn say(&self, severity: &str, text: &str) {
         match self.notices {
@@ -654,18 +718,33 @@ impl AgentUi for Updates {
     }
     fn tool_call(&mut self, name: &str, summary: &str, _compact: Option<&CompactRead>) {
         self.calls += 1;
+        self.call = (name.to_owned(), std::mem::take(&mut self.input));
         let title = match summary.trim() {
             "" => name,
             summary => summary,
         };
-        self.update(json!({
+        let mut update = json!({
             "sessionUpdate": "tool_call",
             "toolCallId": self.call_id(),
             "title": title,
             "name": name,
             "kind": kind(name),
             "status": "pending",
-        }));
+        });
+        if !self.call.1.is_null() {
+            update["rawInput"] = self.call.1.clone();
+        }
+        let locations = self.locations();
+        if !locations.is_empty() {
+            update["locations"] = json!(locations);
+        }
+        // Whether a write makes its file is known only before it runs.
+        self.new_file = name == "write"
+            && (self.call.1["path"].as_str()).is_some_and(|path| !self.path(path).exists());
+        self.update(update);
+    }
+    fn tool_input(&mut self, arguments: &Value) {
+        self.input = arguments.clone();
     }
     fn tool_running(&mut self, _since: Instant) {
         self.call_update(json!({"status": "in_progress"}));
@@ -685,7 +764,11 @@ impl AgentUi for Updates {
             Some(ToolDetail::Diff(diff)) if !failed => format!("```diff\n{diff}\n```"),
             _ => output.to_owned(),
         };
-        let content = json!([{"type": "content", "content": {"type": "text", "text": text}}]);
+        let mut content =
+            vec![json!({"type": "content", "content": {"type": "text", "text": text}})];
+        if !failed {
+            content.extend(self.diffs(self.new_file));
+        }
         let status = match failed {
             true => "failed",
             false => "completed",
