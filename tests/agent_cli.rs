@@ -3575,7 +3575,7 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
 
 #[test]
 #[cfg(unix)]
-fn acp_lists_resumes_and_closes_saved_sessions() {
+fn acp_lists_resumes_closes_and_deletes_saved_sessions() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-sessions-{}", std::process::id())),
     );
@@ -3617,7 +3617,7 @@ fn acp_lists_resumes_and_closes_saved_sessions() {
     let capabilities = &initialized.0["result"]["agentCapabilities"]["sessionCapabilities"];
     assert_eq!(
         *capabilities,
-        serde_json::json!({"list": {}, "resume": {}, "close": {}})
+        serde_json::json!({"list": {}, "resume": {}, "close": {}, "delete": {}})
     );
     // Three sessions with a turn each, two in `project`, the newest last.
     let mut started = Vec::new();
@@ -3720,6 +3720,31 @@ fn acp_lists_resumes_and_closes_saved_sessions() {
         body.contains("more of it") && body.contains("and then"),
         "{body}"
     );
+
+    // Deleting an open session is refused; a closed one goes from the list, and deleting it
+    // again, or one never saved, succeeds.
+    let params = serde_json::json!({"sessionId": started[1]});
+    let (answer, _) = request(&mut stdin, "session/delete", params.clone());
+    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    request(&mut stdin, "session/close", params.clone());
+    for params in [
+        params.clone(),
+        params,
+        serde_json::json!({"sessionId": "1-2"}),
+        serde_json::json!({"sessionId": "../other"}),
+    ] {
+        let (answer, _) = request(&mut stdin, "session/delete", params.clone());
+        assert_eq!(
+            answer["result"],
+            serde_json::json!({}),
+            "{params}: {answer}"
+        );
+    }
+    let answer = request(&mut stdin, "session/list", serde_json::json!({})).0;
+    let listed: Vec<_> = (answer["result"]["sessions"].as_array().unwrap().iter())
+        .map(|session| session["sessionId"].clone())
+        .collect();
+    assert_eq!(listed, [started[0].clone(), started[2].clone()], "{answer}");
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }

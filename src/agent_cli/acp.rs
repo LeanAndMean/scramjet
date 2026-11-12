@@ -348,6 +348,7 @@ impl Connection {
             "session/load" => self.open(&id, &params, Opening::Load),
             "session/list" => self.list(&id, &params),
             "session/close" => self.close(&id, &params),
+            "session/delete" => self.delete(&id, &params),
             "session/prompt" => self.prompt(id, &params),
             "session/set_config_option" => self.set_config_option(&id, &params),
             HOLD => match self.hold(&params) {
@@ -425,7 +426,7 @@ impl Connection {
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
                 "loadSession": true,
-                "sessionCapabilities": {"list": {}, "resume": {}, "close": {}},
+                "sessionCapabilities": {"list": {}, "resume": {}, "close": {}, "delete": {}},
                 "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
                 "mcpCapabilities": {"http": true, "sse": false},
             },
@@ -659,6 +660,43 @@ impl Connection {
             self.closed.push(handle.thread);
         }
         self.out.respond(id, json!({}));
+    }
+
+    /// Removes a saved session as Ctrl+D in `/resume` does: to the trash when a `trash` command
+    /// exists. One open on this connection is refused; one not found is deleted already (ACP).
+    fn delete(&self, id: &Value, params: &Value) {
+        let wanted = params["sessionId"].as_str().unwrap_or_default();
+        let valid = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+        if wanted.is_empty() || !wanted.chars().all(valid) {
+            return self.out.respond(id, json!({}));
+        }
+        if self.handle(params).is_some() {
+            let message = format!("session {wanted} is open: close it first");
+            return self.out.error(id, INVALID_PARAMS, &message);
+        }
+        let directories = match &self.saved {
+            Saved::Nowhere => Vec::new(),
+            Saved::In(directory) => {
+                let base = std::env::current_dir().unwrap_or_default();
+                vec![super::given_path(directory, &base)]
+            }
+            Saved::ByProject => (scramjet::agent::projects_directory().into_iter())
+                .flat_map(std::fs::read_dir)
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path())
+                .collect(),
+        };
+        let file = (directories.iter())
+            .map(|directory| directory.join(format!("{wanted}.jsonl")))
+            .find(|file| file.is_file());
+        match file.map(|file| scramjet::agent::Session::delete(&file)) {
+            None | Some(Ok(_)) => self.out.respond(id, json!({})),
+            Some(Err(error)) => {
+                let message = format!("Failed to delete: {error}");
+                self.out.error(id, INTERNAL_ERROR, &message)
+            }
+        }
     }
 
     fn prompt(&mut self, id: Value, params: &Value) {

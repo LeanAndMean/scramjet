@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.214.0 — ACP deletes saved sessions
+
+### Added
+
+- `scramjet acp` deletes a saved session (`session/delete`), as Ctrl+D in `/resume` does: to the trash when a `trash` command is installed, else for good. A session open on the connection is refused until it is closed; one already gone or never saved counts as deleted.
+
 ## 2.213.0 — ACP loads saved sessions
 
 ### Added
