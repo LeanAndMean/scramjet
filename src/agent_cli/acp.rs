@@ -7,7 +7,7 @@ use super::drive::{self, Change, Front, Messages, Offer, Picked, Session, Start}
 use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
-    AgentError, AgentUi, Answer, Attached, Choice, CompactRead, Compaction, McpServer,
+    AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction, McpServer,
     McpTransport, Purpose, SessionChoice, StreamProgress, Tokens, ToolDetail, UserCommand,
 };
 use serde_json::{Value, json};
@@ -1006,6 +1006,13 @@ impl AgentUi for Updates {
         let content = json!([{"type": "content", "content": {"type": "text", "text": output}}]);
         self.call_update(json!({"content": content}));
     }
+    /// A line per child as the content, for clients that read no `_meta`.
+    fn subagents(&mut self, children: &Children) {
+        let text = super::children::activity(children, 1000).join("\n");
+        let content = json!([{"type": "content", "content": {"type": "text", "text": text}}]);
+        let meta = json!({"io.github.leanandmean.scramjet": {"children": children}});
+        self.call_update(json!({"content": content, "_meta": meta}));
+    }
     fn tool_result(
         &mut self,
         _name: &str,
@@ -1026,7 +1033,11 @@ impl AgentUi for Updates {
             true => "failed",
             false => "completed",
         };
-        self.call_update(json!({"status": status, "content": content}));
+        let mut update = json!({"status": status, "content": content});
+        if let Some(ToolDetail::Subagents(children)) = detail {
+            update["_meta"] = json!({"io.github.leanandmean.scramjet": {"children": children}});
+        }
+        self.call_update(update);
     }
     fn command_started(&mut self, _command: &str, _include: bool) {}
     fn command_result(&mut self, _ran: &UserCommand) {}

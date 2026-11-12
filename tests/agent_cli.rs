@@ -2358,6 +2358,109 @@ fn acp_tool_calls_carry_their_input_locations_and_diffs() {
 
 #[test]
 #[cfg(unix)]
+fn acp_subagent_calls_carry_their_children() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-child-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let agents = scratch.0.join("config/scramjet/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let agent = "---\nname: helper\ndescription: Helps.\ntools: Read\n---\n\nHelp.\n";
+    std::fs::write(agents.join("helper.md"), agent).unwrap();
+    let start = |id: &str| {
+        serde_json::json!({"type": "message_start", "message": {"id": id,
+            "usage": {"input_tokens": 3, "output_tokens": 1}}})
+        .to_string()
+    };
+    let end = |reason: &str| {
+        [
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            serde_json::json!({"type": "message_delta", "delta": {"stop_reason": reason},
+                "usage": {"output_tokens": 4}})
+            .to_string(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]
+    };
+    let text = |id: &str, text: &str| {
+        let mut events = vec![
+            start(id),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#
+                .to_owned(),
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}})
+            .to_string(),
+        ];
+        events.extend(end("end_turn"));
+        events
+    };
+    let input = serde_json::json!({"agent": "helper", "task": "look around"}).to_string();
+    let mut call = vec![
+        start("msg_1"),
+        serde_json::json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "subagent",
+                "input": {}}})
+        .to_string(),
+        serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": input}})
+        .to_string(),
+    ];
+    call.extend(end("tool_use"));
+    let (port, _bodies) = serve_events(vec![
+        call,
+        text("msg_2", "Found it."),
+        text("msg_3", "Done."),
+    ]);
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (answer, updates) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let calls: Vec<&serde_json::Value> = (updates.iter())
+        .map(|message| &message["params"]["update"])
+        .filter(|update| update["sessionUpdate"] == "tool_call_update")
+        .collect();
+    let children = |update: &serde_json::Value| {
+        update["_meta"]["io.github.leanandmean.scramjet"]["children"].clone()
+    };
+    // While it runs: the child as it starts, then with its reply, and a line of each.
+    let running = (calls.iter())
+        .find(|update| children(update)["runs"][0]["state"] == "running")
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    let run = &children(running)["runs"][0];
+    assert_eq!(run["agent"], "helper", "{running}");
+    assert_eq!(run["task"], "look around", "{running}");
+    assert_eq!(children(running)["mode"], "single", "{running}");
+    let line = running["content"][0]["content"]["text"].as_str().unwrap();
+    assert!(line.contains("helper"), "{running}");
+    let completed = (calls.iter())
+        .find(|update| update["status"] == "completed")
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    let run = &children(completed)["runs"][0];
+    assert_eq!(run["state"], "done", "{completed}");
+    assert_eq!(run["items"], serde_json::json!([{"text": "Found it."}]));
+    assert!(completed.to_string().contains("Found it."), "{completed}");
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_sessions_start_the_clients_mcp_servers() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-mcp-{}", std::process::id())));

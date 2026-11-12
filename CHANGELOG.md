@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.205.0 — ACP shows subagents' children
+
+### Added
+
+- In `scramjet acp`, a `subagent` call's updates carry its children (agent, task, state, replies and tool calls, usage) in `_meta`, as they run and in its result, and a line per child as the call's content for clients that read no `_meta`.
+
 ## 2.204.0 — ACP shows compactions and what commands sent
 
 ### Added
