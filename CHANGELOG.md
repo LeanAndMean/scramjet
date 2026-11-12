@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.198.0 — Local models' context counted as for every model
+
+### Changed
+
+- Compaction for a local model no longer corrects its chars/4 estimate by the runtime's count of earlier requests, nor asks Ollama to count a long request first: it goes by the larger of the usage the runtime reports and the estimate, as since 2.173.0. Session files no longer store `_scramjet_calibration` (those written by 2.179.0 to 2.197.0 read as before).
+
 ## 2.197.0 — Search tools answer as Claude Code's do
 
 ### Changed

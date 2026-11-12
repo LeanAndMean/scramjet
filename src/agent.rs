@@ -112,10 +112,6 @@ const PRODUCER: &str = "_scramjet_model";
 /// resumed session knows how full the context is before its first reply, as Scramjet reads it
 /// from saved usage. Never sent.
 const CONTEXT: &str = "_scramjet_context_tokens";
-/// Stored with a response's last item when a local runtime's count of its request was taken to
-/// correct chars/4: the request's `estimate` and its `input` as counted, so a later process
-/// starts corrected. Never sent.
-const CALIBRATION: &str = "_scramjet_calibration";
 /// Stored with a response's last item when the response reported its usage: the tokens it counted
 /// (`input` neither read from the cache nor written to it, `output`, `cache_read`, `cache_write`)
 /// and, when its model's prices say, its `cost` in dollars, which `/session` and the footer
@@ -630,9 +626,6 @@ pub struct Agent {
     identities: HashMap<String, instructions::Identity>,
     /// What local runtimes said of their models' windows, by model reference (`follow_runtime`).
     runtime_windows: HashMap<String, turn::RuntimeWindow>,
-    /// The last request to each model a local runtime serves that it surely did not cut, by
-    /// chars/4 and by its count (`calibrate`).
-    calibrations: HashMap<String, compaction::Calibration>,
     /// The models of the user's scope (`set_model_scope`); empty: all.
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
@@ -795,7 +788,6 @@ impl Agent {
             provider: None,
             identities: HashMap::new(),
             runtime_windows: HashMap::new(),
-            calibrations: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
             unattended: false,
@@ -819,7 +811,6 @@ impl Agent {
                 ..Usage::default()
             },
         };
-        agent.conversation_replaced();
         agent.load();
         agent.start_mcp();
         agent.answer_interrupted_calls()?;
@@ -1468,7 +1459,6 @@ impl Agent {
             context_tokens,
             ..Usage::default()
         };
-        self.conversation_replaced();
         self.restore_command();
         if let Some(model) = model {
             self.info = self.config.providers.info(&model);
@@ -1497,7 +1487,6 @@ impl Agent {
         self.conversation.clear();
         self.prompts.clear();
         self.usage = Usage::default();
-        self.conversation_replaced();
         self.restore_command();
         Ok(())
     }

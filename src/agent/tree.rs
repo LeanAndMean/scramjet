@@ -240,7 +240,6 @@ impl Agent {
         };
         self.conversation = self.session.move_to(destination.leaf)?;
         self.usage.context_tokens = self.session.context_tokens();
-        self.conversation_replaced();
         self.autopilot = self.session.autopilot().unwrap_or(self.autopilot);
         self.restore_command();
         let question = destination.question.is_some();

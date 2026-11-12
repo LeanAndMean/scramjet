@@ -3,9 +3,9 @@
 use super::calls::Calls;
 use super::request::Replying;
 use super::{
-    Agent, AgentError, AgentUi, AutoCompaction, CALIBRATION, CONTEXT, Completed, MAX_STEPS, PROBE,
-    PRODUCER, Routing, Source, Step, Suggested, TIMING, TYPED, USAGE, autonomy, message_text,
-    status, suggest,
+    Agent, AgentError, AgentUi, AutoCompaction, CONTEXT, Completed, MAX_STEPS, PROBE, PRODUCER,
+    Routing, Source, Step, Suggested, TIMING, TYPED, USAGE, autonomy, message_text, status,
+    suggest,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -288,7 +288,7 @@ finish and is not checked on. Reply to continue.",
     /// read it, until `cancel`). Said when it changes.
     fn follow_runtime(&mut self, ui: &mut dyn AgentUi, again: bool, cancel: &AtomicBool) {
         self.keep_runtime_window();
-        let (Some(runtime), Some(_)) = (self.info.runtime, &self.info.route) else {
+        let (Some(runtime), Some(route)) = (self.info.runtime, &self.info.route) else {
             return;
         };
         let model = self.config.model.clone();
@@ -303,11 +303,13 @@ finish and is not checked on. Reply to continue.",
             Some(RuntimeWindow::Unread { tries, last }) => (*last, if again { 0 } else { *tries }),
             None => (None, 0),
         };
-        let Some((url, key)) = self.runtime_url() else {
-            return;
-        };
-        let Some(window) = super::local::window_now(&url, key.as_deref(), &self.info.id, cancel)
-        else {
+        let scheme = if route.tls { "https" } else { "http" };
+        let base = format!("{scheme}://{}{}", route.authority, route.path);
+        let url = base.strip_suffix("/v1").unwrap_or(&base);
+        let key = (route.headers.iter())
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .and_then(|(_, value)| value.strip_prefix("Bearer "));
+        let Some(window) = super::local::window_now(url, key, &self.info.id, cancel) else {
             let tries = tries + 1;
             (self.runtime_windows).insert(model, RuntimeWindow::Unread { tries, last });
             return;
@@ -333,18 +335,6 @@ finish and is not checked on. Reply to continue.",
             self.info.id
         ));
         self.info.window = Some(window);
-    }
-
-    /// The address of the runtime serving the current model, without `/v1`, and its key.
-    pub(super) fn runtime_url(&self) -> Option<(String, Option<String>)> {
-        let route = self.info.route.as_ref()?;
-        let scheme = if route.tls { "https" } else { "http" };
-        let base = format!("{scheme}://{}{}", route.authority, route.path);
-        let url = base.strip_suffix("/v1").unwrap_or(&base).to_owned();
-        let key = (route.headers.iter())
-            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-            .and_then(|(_, value)| value.strip_prefix("Bearer "));
-        Some((url, key.map(str::to_owned)))
     }
 
     /// Model requests and tool calls until a final answer. As in Pi, messages the user sends
@@ -377,14 +367,13 @@ finish and is not checked on. Reply to continue.",
                     }
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui, false, cancel);
-                    self.measure_for_runtime(cancel);
                     self.compact_for_runtime(ui, cancel)?;
                     let mut request = self.request();
                     self.fit_for_runtime(&mut request, &mut past_window_said, ui);
                     self.start_reply(request)?
                 }
             };
-            let (model, estimate) = (replying.model.clone(), replying.estimate);
+            let model = replying.model.clone();
             let reply = match self.wait_reply(replying, ui, cancel) {
                 Ok(reply) => reply,
                 Err(AgentError::ContextOverflow(message)) if !self.config.compacting.automatic => {
@@ -411,12 +400,6 @@ to a larger-context model)"
                 Err(error) => return Err(error),
             };
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
-            let calibration = reply
-                .usage
-                .as_ref()
-                .and_then(|usage| usage.input_tokens)
-                .filter(|&input| self.calibrate(&model, estimate, input))
-                .map(|input| json!({"estimate": estimate, "input": input}));
             let mut calls = Vec::new();
             let last = reply.items.len().saturating_sub(1);
             let saved = saved_usage(&reply);
@@ -426,9 +409,6 @@ to a larger-context model)"
                     object.insert(PRODUCER.into(), json!(model));
                     if let Some(tokens) = self.usage.context_tokens.filter(|_| index == last) {
                         object.insert(CONTEXT.into(), json!(tokens));
-                    }
-                    if let Some(calibration) = calibration.as_ref().filter(|_| index == last) {
-                        object.insert(CALIBRATION.into(), calibration.clone());
                     }
                     if let Some(usage) = saved.as_ref().filter(|_| index == last) {
                         object.insert(USAGE.into(), usage.clone());
@@ -629,17 +609,14 @@ mod tests {
                 reply(json!({"models": [{"model": "qwen3:1.7b", "context_length": window}]})),
             ]
         };
-        // Instructions and tools alone pass these windows: before each request Ollama is asked
-        // to count it, and refuses it.
-        let refused = || crate::agent::tests::ollama_refusal(9_000);
         let mut responses = probe(None);
         responses.extend(load(2048));
-        responses.extend([refused(), chat("one")]);
+        responses.push(chat("one"));
         responses.extend(probe(Some(4096)));
-        responses.extend([refused(), chat("two")]);
+        responses.push(chat("two"));
         responses.extend(probe(None));
         responses.extend(load(4096));
-        responses.extend([refused(), chat("three")]);
+        responses.push(chat("three"));
         let (endpoint, server) = serve(responses);
         let (mut agent, _scratch) = agent(endpoint, "runtime-window");
         agent.set_providers(crate::agent::providers::Providers::given(
@@ -700,10 +677,7 @@ mod tests {
             .filter(|body| **body == json!({"model": "qwen3:1.7b", "stream": false}))
             .count();
         let posted = requests.iter().filter(|body| !body.is_null()).count();
-        let counts = (requests.iter())
-            .filter(|body| body["truncate"] == false && body["options"]["num_predict"] == 1)
-            .count();
-        assert_eq!((requests.len(), posted, loads, counts), (22, 8, 2, 3));
+        assert_eq!((requests.len(), posted, loads), (19, 5, 2));
     }
 
     #[test]
