@@ -798,8 +798,8 @@ impl Front for Interactive {
         self.spaced = true;
     }
 
-    fn new_session(&mut self) -> bool {
-        Interactive::new_session(self)
+    fn session_changed(&mut self, message: &str) {
+        self.replaced(message);
     }
 }
 

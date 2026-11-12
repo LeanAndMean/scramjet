@@ -4,9 +4,9 @@
 //! `/branch`, `/clone` and `/tree` in `sessions.rs`; `/model` and `/scoped-models` in
 //! `scope.rs`; `/login` and `/logout` in `login.rs`.
 use super::interactive::{Interactive, completions, model_line, saved_line};
-use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
+use super::{drive, terminal};
 use scramjet::agent::{Agent, AgentError, McpState, Providers, Remembered, Sandbox, SandboxMode};
 use std::{
     io::IsTerminal,
@@ -134,7 +134,7 @@ impl Interactive {
             Some(Builtin::Import(path)) => self.import(path),
             Some(Builtin::Copy) => self.copy_reply(),
             Some(Builtin::Clear(name)) => {
-                if self.new_session() && !name.is_empty() {
+                if drive::new_session(self) && !name.is_empty() {
                     self.name(name);
                 }
             }
@@ -164,21 +164,6 @@ impl Interactive {
             Some(Builtin::Exit) | None => return false,
         }
         true
-    }
-
-    /// `/clear`, also before a next step that wants a fresh session. Returns whether it started.
-    pub(super) fn new_session(&mut self) -> bool {
-        match self.session.agent.new_session() {
-            Ok(()) => {
-                let session = saved_line(&self.session.agent);
-                self.replaced(&format!("✓ New session started\n{session}"));
-                true
-            }
-            Err(error) => {
-                self.say(&format!("Error: {error}"));
-                false
-            }
-        }
     }
 
     pub(super) fn name(&mut self, name: &str) {

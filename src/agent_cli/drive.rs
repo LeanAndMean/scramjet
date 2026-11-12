@@ -79,8 +79,9 @@ pub(super) trait Front {
     fn notices(&mut self, notices: &[String]);
     /// Shows that a next step was recorded (`Agent::record_next_step`).
     fn recorded(&mut self, record: &str);
-    /// Starts a new session; false if it could not.
-    fn new_session(&mut self) -> bool;
+    /// Shows that the agent's session was replaced (a new, resumed or forked one, or a move in
+    /// the tree), with `message`.
+    fn session_changed(&mut self, message: &str);
 }
 
 /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was left
@@ -251,7 +252,7 @@ pub(super) fn take_step(
         front.edit(step.message);
         return None;
     };
-    if step.fresh_session && !front.new_session() {
+    if step.fresh_session && !new_session(front) {
         return None;
     }
     take_route(front, routed);
@@ -289,6 +290,22 @@ fn take_route(front: &mut dyn Front, routed: Routed) {
         super::interactive::model_line(&front.session().agent)
     );
     front.note(&line);
+}
+
+/// Starts a new session (`/clear`, a next step's fresh session); returns whether it started.
+pub(super) fn new_session(front: &mut dyn Front) -> bool {
+    let agent = &mut front.session().agent;
+    match agent.new_session() {
+        Ok(()) => {
+            let saved = super::interactive::saved_line(agent);
+            front.session_changed(&format!("✓ New session started\n{saved}"));
+            true
+        }
+        Err(error) => {
+            front.say(&format!("Error: {error}"));
+            false
+        }
+    }
 }
 
 /// Remembers the session's model as the one chosen last, here and anywhere, which sessions
