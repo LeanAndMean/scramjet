@@ -371,6 +371,64 @@ fn thinking(item: &Value) -> String {
         .join("\n")
 }
 
+/// A Responses request's tokens at chars/4: its instructions, tools and input.
+fn request_estimate(request: &Value) -> u64 {
+    let tools = request
+        .get("tools")
+        .map_or(0, |tools| tools.to_string().chars().count());
+    let instructions = request["instructions"].as_str().unwrap_or_default();
+    let input = request["input"].as_array().map_or(&[][..], Vec::as_slice);
+    (instructions.chars().count() + tools).div_ceil(4) as u64 + estimate(input)
+}
+
+/// Cuts the text outputs of `input`'s tool results, largest first, until together they hold
+/// at most `budget` characters, each cut one keeping its start and end around `note` of the
+/// characters it lost. Returns how many were cut.
+fn fit_outputs(input: &mut [Value], budget: u64, note: impl Fn(usize) -> String) -> usize {
+    let sizes: Vec<(usize, usize)> = (input.iter().enumerate())
+        .filter(|(_, item)| item["type"] == "function_call_output")
+        .filter_map(|(i, item)| Some((i, item["output"].as_str()?.chars().count())))
+        .collect();
+    let budget = budget as usize;
+    let total: usize = sizes.iter().map(|&(_, size)| size).sum();
+    if total <= budget {
+        return 0;
+    }
+    let room = note(usize::MAX).chars().count();
+    // The largest size each output may keep, its note included, for all of them to fit.
+    let kept = |cap: usize| -> usize { sizes.iter().map(|&(_, size)| size.min(cap)).sum() };
+    let (mut low, mut high) = (0, sizes.iter().map(|&(_, size)| size).max().unwrap_or(0));
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if kept(mid) <= budget {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    let cap = low.max(room * 2);
+    let mut cut = 0;
+    for (i, size) in sizes {
+        if size <= cap {
+            continue;
+        }
+        let chars: Vec<char> = input[i]["output"]
+            .as_str()
+            .unwrap_or_default()
+            .chars()
+            .collect();
+        let keep = cap - room;
+        let (head, tail) = (keep.div_ceil(2), keep / 2);
+        let text: String = (chars[..head].iter())
+            .chain(note(size - keep).chars().collect::<Vec<_>>().iter())
+            .chain(chars[size - tail..].iter())
+            .collect();
+        input[i]["output"] = Value::String(text);
+        cut += 1;
+    }
+    cut
+}
+
 /// Content only, including full tool output (not the truncated summarization view).
 pub(super) fn estimate(items: &[Value]) -> u64 {
     items
@@ -836,35 +894,92 @@ impl Agent {
     /// such a runtime cuts a prompt longer than its window instead of refusing it (Ollama 0.40.16
     /// answers 200, keeps half its window and reports the tokens it kept), so neither an overflow
     /// error nor the reported usage shows it, and the request is measured by estimate too.
-    /// When the context still passes the window, says so unless `said`, and sets it.
     pub(super) fn compact_for_runtime(
         &mut self,
-        said: &mut bool,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        let Some(runtime) = self.info.runtime else {
+        if self.info.runtime.is_none() {
             return Ok(());
+        }
+        self.compact_if_full(self.runtime_context(), ui, cancel)
+    }
+
+    /// On a model a local runtime serves, makes `request` fit the window less the reserve for
+    /// the reply when compaction could not: its largest tool outputs are cut to their start and
+    /// end in this request only, the session keeping them whole; when the rest of the request
+    /// leaves less room, half of what is left below the window, and when it fills the window,
+    /// nothing is cut. When the request still passes the window, or outputs
+    /// were cut, says so once per turn (`said`).
+    pub(super) fn fit_for_runtime(
+        &self,
+        request: &mut Value,
+        said: &mut bool,
+        ui: &mut dyn AgentUi,
+    ) {
+        let (Some(runtime), Some(window)) = (self.info.runtime, self.info.window) else {
+            return;
         };
-        self.compact_if_full(self.runtime_context(), ui, cancel)?;
-        let tokens = self.runtime_context();
-        let Some(window) = self.info.window.filter(|&window| tokens > window && !*said) else {
-            return Ok(());
-        };
-        *said = true;
-        let outcome = match runtime {
-            super::local::Runtime::Ollama => {
-                "Ollama drops the conversation's start without saying so"
+        let (reserve, _) = self.reserve_and_kept();
+        let target = window.saturating_sub(reserve);
+        let mut tokens = request_estimate(request);
+        let mut cut = 0;
+        if tokens > target
+            && let Some(input) = request["input"].as_array_mut()
+        {
+            let outputs: u64 = (input.iter())
+                .filter(|item| item["type"] == "function_call_output")
+                .map(|item| estimate(std::slice::from_ref(item)))
+                .sum();
+            let rest = tokens - outputs;
+            // When the rest leaves less than the reserve, the outputs take half what is left.
+            let room = target
+                .saturating_sub(rest)
+                .max(window.saturating_sub(rest) / 2);
+            if room > 0 {
+                let note = |chars: usize| {
+                    format!(
+                        "\n[… {chars} characters cut here: the whole output does not fit {}'s \
+                         {window}-token window. Ask for less at a time …]\n",
+                        self.info.id
+                    )
+                };
+                // At two characters a token: chars/4 undercounts output such as `seq`'s, whose digits
+                // qwen3 takes one token each (live, such a request filled 12,224 of 12,288).
+                cut = fit_outputs(input, room * 2, note);
+                tokens = request_estimate(request);
             }
-            _ => "the runtime may refuse the request",
-        };
-        ui.notice(&format!(
-            "The next request, about {tokens} tokens with the system prompt and tools, is past \
-             {}'s {window}-token window, and compaction cannot cut it further: {outcome}. Load \
-             the model with a larger window, or ask for less output",
-            self.info.id
-        ));
-        Ok(())
+        }
+        if *said {
+            return;
+        }
+        if tokens > window {
+            *said = true;
+            let outcome = match runtime {
+                super::local::Runtime::Ollama => {
+                    "Ollama drops the conversation's start without saying so"
+                }
+                _ => "the runtime may refuse the request",
+            };
+            ui.notice(&format!(
+                "The next request, about {tokens} tokens with the system prompt and tools, is \
+                 past {}'s {window}-token window, and compaction cannot cut it further: \
+                 {outcome}. Load the model with a larger window, or ask for less output",
+                self.info.id
+            ));
+        } else if cut > 0 {
+            *said = true;
+            let outputs = if cut == 1 {
+                "a tool output"
+            } else {
+                "tool outputs"
+            };
+            ui.notice(&format!(
+                "Cut {outputs} in the middle for the next request to fit {}'s {window}-token \
+                 window; the session keeps them whole",
+                self.info.id
+            ));
+        }
     }
 
     /// The larger of the context as reported and the next request by estimate: its instructions,
@@ -1800,12 +1915,9 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         assert_eq!(requests[1]["input"][0]["content"], "remember the goal");
     }
 
-    #[test]
-    fn a_runtime_model_compacts_before_an_output_too_large_to_keep_and_says_when_it_still_overflows()
-     {
-        if crate::agent::tests::missing("bash") {
-            return;
-        }
+    /// A turn on an Ollama model with a `window`: a 4,000-character output, then a 60,000 one,
+    /// then a reply. Returns the agent, what it showed and the requests.
+    fn large_output_turn(window: u64, name: &str) -> (Agent, ScratchDir, Recorder, Vec<Value>) {
         let call = |chars: u64, total: u64| {
             let arguments = json!({"command": format!("head -c {chars} /dev/zero | tr '\\0' x")});
             let events = fixture::call_events(&arguments.to_string(), full_usage(total));
@@ -1821,17 +1933,27 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             stream(&fixture::text_events("prefix", fixture::known_usage())),
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);
-        let (mut agent, _scratch) = agent(endpoint, "runtime-large-output");
-        agent.set_context_window(Some(12_000));
+        let (mut agent, scratch) = agent(endpoint, name);
+        agent.set_context_window(Some(window));
         agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);
         let model = agent.config.model.clone();
-        (agent.runtime_windows).insert(model, super::super::turn::RuntimeWindow::Read(12_000));
+        (agent.runtime_windows).insert(model, super::super::turn::RuntimeWindow::Read(window));
         let mut ui = Recorder::default();
         agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
-        let requests = server.join().unwrap();
+        (agent, scratch, ui, server.join().unwrap())
+    }
+
+    #[test]
+    fn a_runtime_model_compacts_before_an_output_too_large_to_keep_and_cuts_it_to_fit() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
+        let (agent, _scratch, ui, requests) = large_output_turn(16_000, "runtime-output-cut");
         // The first output fits; the second, cut at the tool's 50 KB, alone passes
-        // `keepRecentTokens` (3,000 here) and the window: the turn's start and first call are
-        // summarized, the second call is kept whole, and the user is told it still overflows.
+        // `keepRecentTokens` (4,000 here) and the window: the turn's start and first call are
+        // summarized, the second call is kept, and its output is cut to half the room the rest
+        // of the request leaves below the window (about 9,800 tokens of 16,000) at two
+        // characters a token, the session keeping it whole.
         assert_eq!(
             ui.waits,
             [
@@ -1845,16 +1967,81 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         assert_eq!(input.len(), 3);
         assert!(text(&input[0]).contains("prefix"));
         assert_eq!(input[1]["type"], "function_call");
-        assert!(tools::result_text(&input[2]["output"]).len() > 40_000);
+        let sent = tools::result_text(&input[2]["output"]);
+        assert!(sent.len() < 8_000 && sent.len() > 4_000, "{}", sent.len());
+        assert!(sent.starts_with("[Output truncated") && sent.trim_end().ends_with("xxxx"));
+        assert!(sent.contains("characters cut here: the whole output does not fit m's 16000"));
+        assert!(request_estimate(&requests[3]) <= 12_000);
+        let kept = (agent.conversation.iter())
+            .rfind(|item| item["type"] == "function_call_output")
+            .unwrap();
+        assert!(tools::result_text(&kept["output"]).len() > 40_000);
         let notices: Vec<&String> = (ui.shown.iter())
             .filter(|s| s.starts_with("notice"))
             .collect();
         assert_eq!(notices.len(), 1);
         assert!(
-            notices[0].contains("past m's 12000-token window")
+            notices[0].contains("Cut a tool output in the middle")
+                && notices[0].contains("m's 16000-token window"),
+            "{notices:?}"
+        );
+    }
+
+    #[test]
+    fn a_runtime_model_whose_instructions_and_tools_alone_pass_the_window_cuts_nothing_and_says_so()
+    {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
+        // The test agent's instructions and tools are about 9,800 tokens, past an 8,000-token
+        // window: cutting outputs cannot make a request fit.
+        let (_agent, _scratch, ui, requests) = large_output_turn(8_000, "runtime-output-kept");
+        let outputs: Vec<String> = (requests.iter())
+            .flat_map(|request| request["input"].as_array().unwrap())
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| tools::result_text(&item["output"]))
+            .collect();
+        assert!(outputs.iter().any(|output| output.len() > 40_000));
+        assert!(
+            !outputs
+                .iter()
+                .any(|output| output.contains("characters cut here"))
+        );
+        let notices: Vec<&String> = (ui.shown.iter())
+            .filter(|s| s.starts_with("notice"))
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0].contains("past m's 8000-token window")
                 && notices[0].contains("Ollama drops the conversation's start"),
             "{notices:?}"
         );
+    }
+
+    #[test]
+    fn outputs_are_cut_largest_first_to_fit_their_budget() {
+        let output =
+            |text: String| json!({"type":"function_call_output","call_id":"a","output":text});
+        let mut input = vec![
+            json!({"role":"user","content":"x".repeat(5_000)}),
+            output("a".repeat(500)),
+            output(format!("{}{}", "b".repeat(5_000), "c".repeat(5_000))),
+            output("d".repeat(3_000)),
+            json!({"type":"function_call_output","call_id":"i","output":[{"type":"input_image"}]}),
+        ];
+        let note = |chars: usize| format!("[{chars} cut]");
+        assert_eq!(fit_outputs(&mut input, 20_000, note), 0);
+        assert_eq!(fit_outputs(&mut input, 4_500, note), 2);
+        let sizes: Vec<usize> = (input[1..4].iter())
+            .map(|item| item["output"].as_str().unwrap().chars().count())
+            .collect();
+        assert_eq!(sizes[0], 500);
+        assert!(sizes.iter().sum::<usize>() <= 4_500, "{sizes:?}");
+        assert!(sizes[1] >= 1_900 && sizes[1] == sizes[2], "{sizes:?}");
+        let cut = input[2]["output"].as_str().unwrap();
+        assert!(cut.starts_with("bbb") && cut.ends_with("ccc"));
+        assert!(cut.contains(" cut]"));
+        assert_eq!(input[0]["content"].as_str().unwrap().len(), 5_000);
     }
 
     #[test]

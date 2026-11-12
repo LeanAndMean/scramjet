@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.174.0 — Local models fit a tool output too large for their window
+
+### Changed
+
+- On a model a local runtime serves, when compaction cannot bring a request under the window less the reserve for the reply, the request's largest tool outputs are cut in the middle, with a note saying so to the model, and a notice tells you once per turn; the session keeps them whole. Before, Ollama cut such a prompt to half its window without an error (20,681 tokens to 6,146 here). When the system prompt and tools alone fill the window, nothing is cut and the overflow notice stays.
+
 ## 2.173.0 — Local models say when a request overflows
 
 ### Changed

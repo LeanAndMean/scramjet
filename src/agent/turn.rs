@@ -340,8 +340,9 @@ finish and is not checked on. Reply to continue.",
                     }
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui);
-                    self.compact_for_runtime(&mut past_window_said, ui, cancel)?;
-                    let request = self.request();
+                    self.compact_for_runtime(ui, cancel)?;
+                    let mut request = self.request();
+                    self.fit_for_runtime(&mut request, &mut past_window_said, ui);
                     self.start_reply(request)?
                 }
             };
