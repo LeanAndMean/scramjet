@@ -1,8 +1,10 @@
-# RPC mode: proposal
+# RPC mode on ACP: proposal
 
-**Status: signed off at the steer of 2026-11-12, to be rewritten before anything is built.** The user took decisions 1–3 and 6 as below, reversed 5 (sign-in over RPC, by ACP's `authenticate` and `logout`), and for 4 chose the Agent Client Protocol (ACP) as the base in place of Scramjet's protocol and message shape, Scramjet's extras as extensions ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). Sections 2–6 still describe Scramjet's protocol until that rewrite; section 1 and its build order stand. Written 2026-11-09 against scramjet-rs 0.125.0 and Scramjet's `packages/coding-agent/docs/rpc.md`.
+**Status: signed off at the steer of 2026-11-12 and rewritten around the Agent Client Protocol (ACP) on 2026-11-12; built from stage 1** ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). The user's decisions stand: approvals and questions asked of the client (1), the autopilot countdown in the core (2), built-ins sent as prompt text refused (3), ACP in place of Scramjet 1's protocol and message shape (4), sign-in over the protocol by `authenticate` and `logout` (5), and the build order with the full screen's refactor first (6). The choices this rewrite made within them are `Choice:` trailers in its commit, for the next steer. Written against scramjet-rs 2.198.0 and ACP v1's pages at agentclientprotocol.com (`/protocol/v1/*.md`, fetched 2026-11-12).
 
-`scramjet --mode rpc [options]` runs headless. A program that starts it writes commands to its stdin and reads responses, events and requests from its stdout, one JSON object per line. A client written for Scramjet's RPC mode should mostly work: names and shapes follow Scramjet's wherever scramjet-rs has the feature. Diagnostics go to stderr, never stdout.
+`scramjet acp [options]` runs headless as an ACP agent: the client starts it, writes JSON-RPC 2.0 to its stdin and reads its stdout, one message per line. ACP's clients (Zed, JetBrains IDEs, Neovim, Emacs's agent-shell, Toad, acpx) can run Scramjet, and what ACP lacks comes as extensions that other clients ignore. The options are the full screen's (`--model`, `--ask`, `--sandbox`, `--tools`, …); diagnostics go to stderr, never stdout.
+
+**ACP v1.** v1 is the version clients speak. v2 is labelled draft and its migration guide tells agents to keep serving v1, so a client asking for 2 is answered 1 for now. v2's changes (the prompt's response only acknowledging it, updates as upserts) are added beside v1 once v2 is stable and a client needs it.
 
 ## 1. One core: what moves out of the full screen
 
@@ -10,14 +12,14 @@ Today the agent library (`src/agent`) runs a turn and reports it through `AgentU
 
 | Part | Where it is today | Proposed |
 |---|---|---|
-| A turn, its pauses for commands typed meanwhile (`AgentError::Paused`, `resume_turn`) | Core, with the loop in `turn_on_screen` (`interactive.rs:414`) | Core loop |
-| Routing a completed command's next step (forced, closed, open, ask; chains; autopilot) | Core: `Agent::route`, `status::route` (`status.rs:714`), `record_next_step` | Stays |
-| Offering the steps, the autopilot countdown, the model and effort chosen for a step, a fresh session, running the chosen step, a text step into the editor | Front end: `next_step`, `offer`, `take_step`, `take_route` (`interactive.rs:523-694`), the countdown in the picker | Core loop; the front end only shows the list and returns the pick |
+| A turn, its pauses for commands typed meanwhile (`AgentError::Paused`, `resume_turn`) | Core, with the loop in `turn_on_screen` (`interactive.rs:412`) | Core loop |
+| Routing a completed command's next step (forced, closed, open, ask; chains; autopilot) | Core: `Agent::route`, `status::route`, `record_next_step` | Stays |
+| Offering the steps, the autopilot countdown, the model and effort chosen for a step, a fresh session, running the chosen step, a text step into the editor | Front end: `next_step`, `offer`, `take_step`, `take_route` (`interactive.rs:521-690`), the countdown in the picker | Core loop; the front end only shows the list and returns the pick |
 | Suggested steps (`suggest_scramjet_next_steps`), lists reopened by going back, a question asked again | Front end: `suggested`, `reopen`, `ask_again` | Core loop |
-| Steering and follow-up queue, its modes | The screen's `Queue` (`screen.rs:208`), handed out by `Link` | Core loop owns the queue; each front end adds to it |
-| `!` commands while a turn runs | The screen's thread (`screen.rs:1008`), results through `add_shells` | Core loop |
+| Steering and follow-up queue, its modes | The screen's `Queue` (`screen.rs`), handed out by `Link` | Core loop owns the queue; each front end adds to it |
+| `!` commands while a turn runs | The screen's thread, results through `add_shells` | Core loop |
 | Remembering a model or effort in the settings | Front end (`remember_model`, `set_default_thinking_level`) | Core loop, through the settings it is given |
-| Built-in commands (`/model`, `/resume`, `/tree`, `/compact`, …) | `slash.rs` and friends, choosing through the screen's pickers | Each splits into an action (core loop) and its picker (full screen). RPC mode calls the actions as commands |
+| Built-in commands (`/model`, `/resume`, `/tree`, `/compact`, …) | `slash.rs` and friends, choosing through the screen's pickers | Each splits into an action (core loop) and its picker (full screen). ACP mode calls the actions from its methods |
 
 The core loop is a `Session` driver in the binary crate (`src/agent_cli/drive.rs`). It sits beside `Interactive` rather than in the library, because it needs the user's `Settings`. Front ends implement `Front`: `AgentUi` plus what happens between turns.
 - `offer(Offer) -> Option<Picked>`: next steps and suggestions. `Offer` carries the steps, the recommended one and the countdown's deadline. `Picked` carries the step, the model, the effort and the fresh-session choice.
@@ -25,182 +27,161 @@ The core loop is a `Session` driver in the binary crate (`src/agent_cli/drive.rs
 - `session_changed`: a new, resumed or forked session, or a move in the tree.
 - `say(text)`: a message for the user.
 
-The full screen, line mode and RPC mode drive the same `Session`. `-p` stays as it is.
+The full screen, line mode and ACP mode drive the same `Session`. `-p` stays as it is.
 
 **Build order, each stage committed working:**
 1. Extract the driver and move the full screen and line mode onto it, with no change of behavior. The PTY journeys (`tests/agent_editor_pty.py`) and the scripted screens (`scripts/screens/*.json`) show it.
-2. RPC mode with `prompt`, `abort`, `get_state` and the turn's events.
-3. Requests: approvals, questions and next steps.
-4. Sessions, the tree, models and the other commands.
-5. Clients that attach later: `get_events`, and the waiting request in `get_state`.
+2. `scramjet acp` with `initialize`, `session/new`, `session/prompt`, `session/cancel` and the turn's updates (sections 2–4); tried in an ACP client if one runs here.
+3. Requests: permissions, elicitations and next steps (section 5).
+4. Sessions (`session/load`, `resume`, `list`, `close`, `delete`), config options, the extensions' methods, and sign-in (sections 3, 6–8).
+5. Catch-up: sequence numbers, `state` and `events` (section 9).
 
-## 2. Framing and envelope
+## 2. Transport and initialization
 
-These follow Scramjet:
-- **Records:** LF is the only record separator; a trailing `\r` on input is stripped. A line that is not a JSON object gets `{"type":"response","command":"parse","success":false,"error":…}`.
-- **Responses:** every command may carry an `id`, which its `response` repeats. Every command gets exactly one `response`. `success: true` on `prompt` means the prompt was accepted; a failure after that comes as events.
+- **Framing:** ACP's stdio transport: UTF-8, one JSON-RPC message per line, no embedded newlines (`serde_json` escapes U+2028 too); a trailing `\r` on input is stripped. A line that is not JSON gets `-32700`, one that is not a request `-32600`, and any request before `initialize` `-32600`. Batches are refused.
+- **`initialize`:** answered with `protocolVersion: 1`, `agentInfo` (`name: "scramjet"`, `title: "Scramjet"`, the version) and `authMethods` (section 6). `agentCapabilities`:
+  - `loadSession: true`; `sessionCapabilities` with `list`, `resume`, `close` and `delete`.
+  - `promptCapabilities`: `image` and `embeddedContext` true, `audio` false.
+  - `mcpCapabilities`: `http` true, `sse` false (the older transport is refused, as in `settings.json`).
+  - `auth.logout: {}`.
+  - `_meta["io.github.leanandmean.scramjet"]`: `{"version": 1}` and the extensions offered (section 8).
+- **What the client offers** is kept per connection: `elicitation.form` and `.url` (section 5), `session.notices`, `session.compaction`, `session.configOptions.boolean`, and the `_meta["io.github.leanandmean.scramjet"]` object of a client that knows Scramjet's extensions (next steps, catch-up). An update or request the client has not offered is not sent; its fallback is said where it applies.
+- **The client's file system and terminals are not used.** Scramjet's own tools run every call, so the sandbox, the low integrity level on Windows, approvals and the output the model sees stay those of the full screen. The cost is that an IDE's unsaved buffers are not seen, and its terminal panel does not show the agent's commands.
+- **End:** at EOF on stdin, every running turn is cancelled, requests waiting on the client are dropped, and the process exits once the session files are written. SIGTERM does the same.
 
-Added:
-- **Start:** `{"type":"ready","protocolVersion":1,"version":"0.126.0"}` is the first record. `get_state` repeats `protocolVersion`. An incompatible change raises it.
-- **Sequence numbers:** every event and request carries `seq`, numbered from 1 in each process, so a client can tell what it missed (section 6). Responses carry none.
-- **End of input:** at EOF on stdin, a running turn is cancelled, an open request is answered as cancelled, and the process exits once the session file is written. SIGTERM does the same.
+## 3. Sessions
 
-## 3. Commands
+ACP lets a connection hold several sessions, so a client may open several threads on one process. Each is a `Session` driver of its own, with its own working directory, model, queue and turn; they run independently. Settings, logins, the 8 child slots and the providers' cooldowns are shared, as they are today between a process's children.
 
-**Kept from Scramjet, same names and shapes:**
+- **`session/new`** `{cwd, mcpServers, additionalDirectories?}`: `cwd` is the project, as `--project`. The client's MCP servers join the user's for that session (stdio and HTTP); their `env` and `headers` values are never echoed, logged or written to the session file, which records only their names. `additionalDirectories` is not offered yet; `/add-dir`'s directories would be its counterpart. The result has the `sessionId`, the `configOptions` (section 7), and `_meta` with the session file's path. `available_commands_update` follows (section 4).
+- **The `sessionId`** is the session file's id (`<created>-<pid>`, as in its name), so `session/list` and the files agree.
+- **`session/load`** `{sessionId, cwd, mcpServers}`: replays the current branch as updates: `user_message_chunk`, `agent_message_chunk`, `agent_thought_chunk` (the reasoning summary shown, never encrypted reasoning), each tool call as one `tool_call` with its final status and content, compactions and branch summaries as `compaction_update` if the client offered `session.compaction`, else as an agent message. The response comes after the last update. A `cwd` other than the session's is refused with `-32602`.
+- **`session/resume`:** the same without the replay.
+- **`session/list`** `{cwd?, cursor?}`: `/resume`'s list, newest first, 50 a page, every project's when `cwd` is omitted. Each has `sessionId`, `cwd`, `title` (its name, else its first prompt), `updatedAt`, and `_meta` with `parentSession` (its chain) and the session file's path.
+- **`session/close`:** cancels the session's turn and drops its driver; the file stays. **`session/delete`:** as Ctrl+D in `/resume` (to the trash where a `trash` command exists): refused for a session active on the connection.
+- **Forks, branches, the tree, names:** extensions (section 8). A new session from a next step's `freshSession` or `/clear` in the core sends `_io.github.leanandmean.scramjet/session_changed` with the new `sessionId` (a Scramjet client follows it); other clients see the old session end its turn, and `session/list` shows the new one.
 
-| Command | Notes |
+## 4. A prompt turn
+
+- **`session/prompt`** `{sessionId, prompt}`: the blocks become one user message: `text` as typed; `image` as a pasted image; `resource` (embedded) as text headed by its URI, and `resource_link` as its path or URI in the text. A prompt starting with `/` runs a command set's command or a skill as typed (`/rs:loop …`). A built-in (`/model`, `/compact`, …) is refused with `-32602`, naming the method that does it, e.g. `session/set_config_option` with `configId: "model"`.
+- **The response** `{stopReason}` comes when the turn ends, next steps that run on their own (forced, or autopilot's) included: `end_turn`; `cancelled` after `session/cancel`; `max_tokens` when the model stopped on its output limit; `refusal` when the provider reports one. A turn that fails for good (a provider's error after its retries, a broken stream) gets a JSON-RPC error `-32603` with the redacted message (section 10) and `data: {"kind": …}`.
+- **A prompt during a turn** of the same session is queued as the full screen queues a message typed meanwhile, by `steeringMode`, or as a follow-up with `_meta["io.github.leanandmean.scramjet"]: {"queue": "followUp"}`. Its response comes when the turn that took it ends. ACP does not say what a second prompt means.
+- **`session/cancel`:** as Escape: the request and the running tools stop, a pending permission is answered as cancelled, and the response is `cancelled`, never an error.
+
+**Updates** (`session/update`), from the `AgentUi` calls that exist:
+
+| ACP update | From |
 |---|---|
-| `prompt` | `message`, `images` (base64 with `mimeType`) and `streamingBehavior` (`steer`, `followUp`) during a turn, as Scramjet. A `/command` of a command set or a skill expands as typed. A built-in, such as `/model`, gets `success:false` naming the RPC command that does it (Choice 3). |
-| `steer`, `follow_up`, `abort` | Into the core loop's queue; `abort` as Escape. |
-| `new_session` | With an optional `parentSession`, as `/new`. |
-| `get_state` | Scramjet's fields, plus `protocolVersion`, `seq`, `autopilot`, `ask`, `sandbox`, `cwd`, `pendingRequest` (section 5) and `waitingForUser` (a parked freetext question, or a command waiting). |
-| `get_messages` | Section 4. |
-| `set_model`, `cycle_model`, `get_available_models` | `Model` as Scramjet's, without headers or keys (section 7). `cycle_model` cycles `enabledModels`, as Ctrl+P. |
-| `set_thinking_level`, `cycle_thinking_level` | The model's own levels, as Shift+Tab. |
-| `set_steering_mode`, `set_follow_up_mode` | As the `steeringMode` and `followUpMode` settings, for this process only. |
-| `compact`, `set_auto_compaction` | As `/compact` and `compaction.enabled`, the latter for this process only. |
-| `set_auto_retry`, `abort_retry` | As `retry.enabled`; `abort_retry` cancels the wait, as Escape does. |
-| `bash`, `abort_bash` | As `!`: the output goes into the conversation with the next prompt. `"exclude":true` is `!!`. |
-| `get_session_stats` | From `/session` and the usage line: tokens, cost, context. |
-| `export_html` | As `/export`. |
-| `switch_session` | As `/resume <path>`. |
-| `fork`, `clone`, `get_fork_messages` | As `/fork` and `/clone`. Entries are named by `entryId` (section 4). |
-| `get_last_assistant_text`, `set_session_name` | As `/copy`'s text and `/name`. |
-| `get_commands` | Command sets' commands (`source: "command"`, with the set), skills, and the built-ins RPC mode runs. |
+| `user_message_chunk` | A prompt the client did not send: a next step's, a follow-up's, a command's expansion; and replays. |
+| `agent_message_chunk`, `agent_thought_chunk` | `progress`: text and reasoning deltas, with a `messageId` per model response. |
+| `tool_call` | `tool_call`: `toolCallId`, `name`, `title` (the summary the full screen shows), `kind` (`read`; `edit` for edit and write; `search` for grep and find; `execute` for bash, PowerShell and cmd; `other`), `status: pending`, `rawInput` (the arguments), `locations` (the path of a read, edit or write). |
+| `tool_call_update` | `tool_running` → `in_progress`; `tool_output` → `content` with the output so far, replacing the last; `tool_result` → `completed` or `failed` with the output as text, and for edits a `diff` block per edit (`path`, `oldText`, `newText`, from its arguments) and for a write one with the new text (`oldText` null for a new file). A `subagent` call's children go in its `_meta`. |
+| `usage_update` | `usage`: `used` and `size` are the context and the window, `cost` the session's in USD; tokens and the output rate in `_meta`. |
+| `compaction_update` | `waiting(Compaction)` → `in_progress`; `compacted` → `completed` with the summary; `compaction_failed` → `failed`. Without `session.compaction`, an agent message says it. |
+| `notice` | `notice`, `retrying` (warning), `cooling` (info). Without `session.notices`, a notice that matters goes as an agent message and the rest are dropped. |
+| `available_commands_update` | At session start and after `reload`: command sets' commands and skills, with `description` and `input.hint` from `argument-hint`. Built-ins are not listed. |
+| `config_option_update` | The model or level changed by `switch_scramjet_model` or a next step. |
+| `session_info_update` | The session renamed (`rename`) or titled by its first prompt. |
 
-**Added, for what scramjet-rs has and Scramjet's RPC lacks:**
-
-| Command | What it does |
-|---|---|
-| `extension_ui_response` | Answers a request (section 5). The name is Scramjet's. |
-| `hold_request` | Stops a next-step list's autopilot countdown, as a key pressed on the full screen does. |
-| `get_sessions` | The sessions `/resume` lists, with their chains (`parentSession`), in this folder or all. |
-| `get_tree`, `navigate_tree`, `set_label` | `/tree`: its entries with `entryId`, labels and the current leaf. Going to an entry, with an optional branch summary, gives back the prompt to edit. A list or question that was open there comes back as a request again. |
-| `set_autopilot` | `/autopilot on|off`. |
-| `get_events` | `{"since": seq}`: the events and requests after `seq` that are still held (section 6). |
-| `reload` | `/reload`. |
-| `get_usage` | `/usage`'s summary as data. |
-
-**Dropped, with the reason:**
-- `/login`, `/logout`: a sign-in opens a browser or shows a device code, and handles tokens; it stays in the terminal.
-- `/settings`, themes, `/hotkeys`, `/keybindings`, the clipboard and `/changelog`: they belong to the screen, and the client has its own.
-- `install`, `update`, packages: subcommands for a terminal.
-- `--model-definition` (Scramjet's invocation-scoped models): not built (item 9).
-- `extension_error`: there are no extensions.
-
-## 4. Messages and entries
-
-`get_messages`, `agent_end` and `message_end` give Scramjet's message shape:
-- `role`: `user`, `assistant`, `toolResult` or `bashExecution`.
-- `content`: blocks of type `text`, `thinking` (the reasoning summary shown) and `toolCall` (`id`, `name`, `arguments`).
-- An assistant message also has `usage`, `stopReason` and `model`. Converting from the session's Responses-shaped items is done in one place.
-- Encrypted reasoning is never sent.
-
-Each message carries `entryId`: its line in the session file. Lines are append-only, so the id stays valid for the session. `fork`, `get_tree` and `navigate_tree` take these ids. Compactions and branch summaries come as `compaction` and `branchSummary` entries, as `/tree` lists them.
-
-## 5. Approvals, questions and next steps as requests
-
-The core asks the user for an answer at six points:
-- `--ask` approvals
-- publication approvals
-- the agent's select and confirm questions
-- a status report's abandon question
-- project agents' consent
-- next-step and suggestion lists
-
-In RPC mode each is an `extension_ui_request` with an `id` and `method` `select` or `confirm`, as Scramjet's. A Scramjet client shows them as plain dialogs. In Scramjet's own RPC mode they never reach the client: its next-step lists, questions and publication approval are `ctx.ui.custom()` widgets, which RPC mode answers with nothing (`rpc-mode.ts:227`), so they come out dismissed. Added fields say more:
-
-```json
-{"type":"extension_ui_request","seq":41,"id":"r7","method":"select","kind":"approval",
- "title":"Allow bash?","options":["Allow","Allow all this session","Deny"],
- "tool":{"name":"bash","arguments":{"command":"rm -rf target"}},"cwd":"/home/u/p"}
-```
-
-- `kind`: `approval`, `publication`, `question`, `abandon`, `projectAgents`, `nextStep` or `suggestion`.
-- `optionDetails`: one entry per option, with its `label`, `description` and whether it is `recommended`.
-- `message`: the question's or the publication's markdown, which the full screen shows before the options. For a publication this is the whole preview: repository, title and body.
-- Approvals carry `tool` (name and arguments). For `mcp_call` they also carry the arguments the user has not seen.
-- Next steps: each option has its `command` or `text`, `reason` and `freshSession`. With autopilot the request has `autoselectMs`.
-
-**Answers:** `extension_ui_response` with the request's `id` and one of:
-- `value`: the option's label, as Scramjet's.
-- `index`: its position.
-- `confirmed`: for confirm.
-- `cancelled: true`: dismisses the request.
-
-A next-step answer may add `model`, `thinkingLevel` and `freshSession`, as the full screen's list lets the user change them.
-- A response to the answer says whether it was taken. The answer is refused if the request is gone or the index is out of range.
-- An `extension_ui_request_closed` event with `id` and `outcome` (`answered`, `cancelled`, `autoselected`, `abort`) tells every client that the request is no longer open.
-
-**Rules:**
-- **One request at a time.** Parallel tool calls' approvals queue in order, as the full screen asks them.
-- **No timeout.** As on the full screen, an approval waits until it is answered, cancelled, the turn is aborted or input ends. The only timed request is autopilot's countdown, which the core runs: the recommended step is chosen when `autoselectMs` passes without an answer or a `hold_request`.
-- **Freetext questions.** They are not requests: as on the full screen, the turn ends and the next `prompt` answers. A `question` event carries the message, and `get_state.waitingForUser` says so.
-- **Who answers.** The client's answers count as the user's, with the same policy as the full screen. A publication the full screen would ask about is asked as a request, not refused as Scramjet's RPC mode refuses it (Choice 1).
-- **Other messages.** Notices and other fire-and-forget messages are `extension_ui_request` with method `notify` and no answer, as Scramjet's.
-
-## 6. Events
-
-Scramjet's events, from the `AgentUi` calls that exist:
-
-| Event | From |
-|---|---|
-| `agent_start`, `agent_end` (messages of the turn) | A turn starts and ends; `stopped` adds `error` or `cancelled` to `agent_end`. |
-| `turn_start`, `turn_end` | Each model request (`waiting`) and its end. |
-| `message_start`, `message_update`, `message_end` | `progress`. `text_delta` and `thinking_delta` stream. `toolcall_start` comes when a call starts streaming. `toolcall_end` carries the parsed call. No `toolcall_delta`: the parser does not report arguments as they stream. |
-| `tool_execution_start`, `_update`, `_end` | `tool_call` and `tool_running`, `tool_output` (the end of the output so far, which replaces the last), `tool_result`. Parallel calls are told apart by `toolCallId`. |
-| `queue_update` | The core loop's queue changes. |
-| `compaction_start`, `compaction_end` | `waiting(Compaction)`, `compacted`, `compaction_failed`; `reason` is `manual`, `threshold` or `overflow`. |
-| `auto_retry_start`, `auto_retry_end` | `retrying` and the request's end. |
-
-Added (unknown types are skipped by a Scramjet client):
-- `subagents`: the children of a running `subagent` call, as the serialized `Children` (`ui.rs:286`).
-- `cooldown`: a request held for a provider's Retry-After (`cooling`).
-- `usage`: session tokens, context and output rate after each response.
-- `model_changed`: from `switch_scramjet_model` or a next step's model.
-- `bash_start` and `bash_end`: `!` commands, also those of `bash` while a turn runs.
-- `session_changed`: new, resumed, forked or moved in the tree, with `sessionFile` and the leaf's `entryId`.
+**Extension notifications** (`_io.github.leanandmean.scramjet/…`, ignored by other clients):
+- `status`: what the full screen's working line says (waiting for the model, compacting, retrying in N s, held for a provider's Retry-After).
 - `next_step`: Scramjet's record of the step chosen or the list dismissed.
-- `question`: a freetext question's message.
+- `question`: a freetext question was asked; the turn has ended and the next prompt answers it.
+- `user_command`: a `!` command's start and result (section 8's `bash`).
+- `session_changed`: section 3.
 
-**A client that attaches later** (a browser front end's server reconnecting a phone) gets the whole state from `get_state`, `get_messages` and, if a request is open, `pendingRequest`, the same object that was sent. `get_state.seq` is the last sequence number sent. Events of the running turn are held from its `agent_start` on, at most 8 MB, oldest dropped first. `get_events {since}` gives those after `since`, with `"complete":false` when some were dropped. In that case the client takes `get_messages` again after `agent_end`.
+## 5. Requests to the client
 
-## 7. Nothing secret in the output
+The core asks the user at six points. Each becomes a request to the client, whose answer counts as the user's under the same policy as the full screen (decision 1):
 
-The rule: no credential, token or auth header in any event, response, request or error.
-- **Models:** `Model` objects have `id`, `name`, `provider`, `api`, `baseUrl`, limits, `reasoning`, `input` and `cost`. They never have `headers`, `apiKey` or a provider's command.
-- **Errors:** provider errors are passed on today as `HTTP {status}: {body}` (`client.rs:412`), and a body could echo a header. Before any string leaves the process, the core replaces every secret it holds with `[redacted]`: the routes' header values, the keys resolved from `auth.json`, commands and variables, and MCP servers' header values. The same applies to the full screen's error lines. The unit test is a scripted provider that echoes its `Authorization` header.
-- **Tool and `!` output:** sent as it is, as the session file keeps it: it is what the user's commands printed, and hiding credential stores (`hideCredentials`) is what keeps it clean.
-- **Sign-in:** stays in the terminal (section 3).
+| Point | Request | Without the client's support |
+|---|---|---|
+| `--ask` approvals | `session/request_permission` with the call (`toolCallId`, `title`, `kind`, `rawInput`, `locations`) and options `allow_once` "Allow", `allow_always` "Allow all calls this session", `reject_once` "Deny" | Every client has it. |
+| Publication approvals | `session/request_permission` on the publication's call, its whole preview (repository, title, body) as text content | As above. |
+| Project agents' consent | `session/request_permission` on the `subagent` call, naming the agents | As above. |
+| The agent's select and confirm questions | `elicitation/create`, form mode: a select is a required string property with `oneOf` (`const` and `title` per option, the recommended one as `default`), a confirm a required boolean | Asked as a freetext question: the turn ends and the next prompt answers. |
+| A status report's abandon question | `elicitation/create`, a confirm | As above. |
+| Next-step and suggestion lists | `_io.github.leanandmean.scramjet/next_step` (below) | The list goes out as an agent message; forced steps and autopilot still run. |
 
-## 8. While a turn runs
+- **`next_step`** `{sessionId, kind: "nextStep"|"suggestion", steps: [{message, reason, freshSession}], recommended, autoselectMs?, model, thinkingLevel}`. The result is `{"index": n}`, optionally with `model`, `thinkingLevel` and `freshSession` as the full screen's list lets the user change them, or `{"cancelled": true}`.
+- **The countdown** runs in the core (decision 2): when `autoselectMs` passes with no answer, the core takes the recommended step and sends `$/cancel_request` for its request. `_io.github.leanandmean.scramjet/hold` `{sessionId}` stops it, as a key on the full screen does. With no client that knows the extension, the countdown runs the same, and a prompt sent during it stops it and is sent as usual.
+- **One request at a time** per session: parallel calls' approvals are asked in order, as the full screen asks them. Different sessions' requests may be open together.
+- **No timeout,** as on the full screen: a request waits until it is answered, the turn is cancelled, the session closed or input ends. An outcome Scramjet does not recognize is a denial.
+- **The answer refused:** a `selected` with an `optionId` not offered, or an elicitation whose content does not fit its schema, is a denial and is said in a notice.
 
-A thread reads stdin. During a turn:
-- The core answers queries (`get_state`, `get_messages`, `get_events`, `get_commands`, `get_available_models`, `get_session_stats`, `get_tree`, `get_sessions`).
-- It applies `steer`, `follow_up`, `abort`, `abort_retry`, `abort_bash`, `extension_ui_response`, `hold_request`, `set_steering_mode` and `set_follow_up_mode`.
-- `set_model`, `cycle_model`, the thinking levels and `set_autopilot` pause the turn between its requests, as the same built-ins typed on the full screen do (`Builtin::interrupts`), and it goes on after them.
-- `bash` runs alongside the turn, as a `!` typed meanwhile does. Its output goes into the conversation when the turn ends.
-- Those that would stop the turn get `success:false` with `"busy"`: `new_session`, `switch_session`, `fork`, `clone`, `navigate_tree`, `compact` and `reload`, which the full screen also refuses during a turn. The client aborts first if it means to.
+## 6. Sign-in
 
-## 9. Not in this proposal
+- **`authMethods`:** one `agent`-type method per sign-in `/login` offers: ChatGPT, GitHub Copilot, and each package's login program, with `id` (`chatgpt`, `copilot`, `<package>/<login>`), `name` and `description`. API-key providers and local models are not methods (below). No `terminal` method: scramjet-rs has no login-only invocation yet.
+- **`authenticate {methodId}`:** runs that sign-in. Its URL, or its device code with the page to enter it, goes to the client as `elicitation/create` in URL mode, the code in `message`; a client without URL mode gets it in a `notice`, and one with neither an error saying to sign in from a terminal with `/login`. The response is `{}` once the sign-in ends, or an error saying why it failed. The tokens stay in `auth.json`, never in the output (section 10).
+- **API keys:** `_io.github.leanandmean.scramjet/set_api_key` `{provider, key}` keeps the key in `auth.json`, as `/login`'s key entry does. ACP forbids asking for secrets in a form, so the client asks in its own field; the key is never echoed.
+- **`logout {}`:** signs out of every method in `authMethods`; `_meta["io.github.leanandmean.scramjet"]: {"methodId": …}` signs out of one. Running sessions keep going until a request is refused.
+- **`-32000` (authentication required):** `session/new` or a prompt whose model's provider has no login.
 
-- A listening port, HTTP, WebSocket, authentication or TLS; a daemon with the full screen as a client ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)).
-- Attaching to a session started in the terminal: an open question of its own ([tasks](TASKS.md), Open questions). Section 6's state and catch-up would serve a local socket, if one is chosen.
-- `--mode json` (item 9): the same events for one `-p` turn, without commands or requests. It would come after stage 2 with no extra design.
-- Several sessions in one process: a client starts one process per session.
+## 7. Models and levels as config options
 
-## 10. To verify
+`configOptions`, in every session's result, `session/set_config_option`'s answer and `config_option_update`:
+- `model` (category `model`): the models `/model` lists, grouped by provider, values `provider/id`.
+- `thought_level` (category `thought_level`): the current model's levels, as Shift+Tab cycles them; it changes with the model.
+- `autopilot` (category `_autopilot`): a boolean for clients offering boolean options, else a select `on`/`off`; as `/autopilot on|off`.
 
-- Each stage: scripted clients in Python (standard library) over pipes against the release build and a local scripted provider (`serve` in `src/agent/tests.rs`). They check framing (U+2028 inside strings, `\r\n`, a bad line), every command's response, the events of a turn with parallel calls, approvals answered, cancelled and at EOF, a next-step list with the countdown and with `hold_request`, a fresh-session step, a client attaching mid-turn, and the redaction.
+`--ask` and `--sandbox` stay launch options. A change during a turn waits for the turn's next pause between requests, as the same built-ins typed on the full screen do (`Builtin::interrupts`). A model or level chosen is remembered in the settings as the full screen remembers it. Session modes (deprecated in favor of config options) are not offered.
+
+## 8. Extensions
+
+Methods named `_io.github.leanandmean.scramjet/<name>`, following ACP's reverse-DNS convention for a domain the project controls (its GitHub account's Pages domain). Every one takes `sessionId` unless said:
+
+| Method | What it does |
+|---|---|
+| `next_step` (agent → client), `hold` | Section 5. |
+| `set_api_key` | Section 6. No `sessionId`. |
+| `fork`, `branch` `{entryId?}` | `/fork` and `/branch`; the result has the new `sessionId`. |
+| `tree`, `navigate_tree` `{entryId, summarize?}`, `set_label` | `/tree`: its entries with `entryId`, labels and the current leaf. Navigating gives back the prompt to edit; a list or question that was open there is asked again. |
+| `compact` `{instructions?}` | `/compact`. |
+| `bash` `{command, exclude?}`, `abort_bash` | `!` and `!!`: the output goes into the conversation with the next prompt. |
+| `rename` `{name}` | `/rename`. |
+| `reload` | `/reload`. No `sessionId`. |
+| `usage` | `/usage`'s summary as data. No `sessionId`. |
+| `export_html` `{path?}` | `/export`. |
+| `state`, `events` | Section 9. |
+
+`entryId` is an entry's line in the session file. Lines are append-only, so the id stays valid for the session; the replayed messages carry theirs in `_meta`.
+
+**Not offered:** `/settings`, themes, `/hotkeys`, `/keybindings`, the clipboard and `/changelog` (the client has its own); `install`, `update` and packages (subcommands for a terminal).
+
+## 9. A client that comes back
+
+ACP over stdio has one client per process. A browser front end's server keeps the process and its connection, and reconnects a phone that slept: it needs to know what the phone missed.
+- Every `session/update`, extension notification and request to the client carries `_meta["io.github.leanandmean.scramjet"].seq`, numbered from 1 per session, offered only to a client that knows the extension.
+- `state` gives what the full screen shows: whether a turn runs, the open request (the same params that were sent, with its id), whether a freetext question waits, the queue, autopilot, `--ask`, the sandbox, the model and level, usage, and the last `seq`.
+- Updates are held from a turn's start, at most 8 MB, oldest dropped first. `events {since}` gives those after `since`, with `complete: false` when some were dropped; the server then takes `session/load`'s replay after the turn.
+
+## 10. Nothing secret in the output
+
+No credential, token or auth header in any update, response, request or error:
+- **Models:** config options carry names and ids only, never `headers`, `apiKey` or a provider's command.
+- **Errors:** provider errors are passed on today as `HTTP {status}: {body}` (`src/agent/client.rs:415`), and a body could echo a header. Before any string leaves the process, the core replaces every secret it holds with `[redacted]`: the routes' header values, the keys resolved from `auth.json`, commands and variables, MCP servers' header and environment values, the client's included. The same applies to the full screen's error lines. The unit test is a scripted provider that echoes its `Authorization` header.
+- **Tool and `!` output:** sent as it is, as the session file keeps it: it is what the user's commands printed, and hiding the credential stores (`hideCredentials`) is what keeps it clean.
+- **Sign-in:** URLs and device codes go out; tokens and keys only come in.
+
+## 11. While a turn runs
+
+A thread reads stdin, so a session answers while its turn runs:
+- Queries (`session/list`, `state`, `events`, `tree`, `usage`) and the other sessions' methods are answered at once.
+- `session/cancel`, the answers to requests, `hold`, `abort_bash` and a prompt (queued, section 4) apply at once.
+- `session/set_config_option` waits for the turn's next pause (section 7).
+- `bash` runs alongside, as a `!` typed meanwhile does.
+- Those that would replace the session's state are refused with `-32602` and "a turn is running": `session/load` and `resume` of the same session, `fork`, `branch`, `navigate_tree`, `compact` and `reload`, which the full screen also refuses during a turn. The client cancels first if it means to.
+
+## 12. Not in this proposal
+
+- A listening port, HTTP, WebSocket, authentication or TLS; a daemon with the full screen as a client ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). ACP's remote transport is a draft RFD.
+- Attaching to a session started in the terminal: an open question of its own ([tasks](TASKS.md), Open questions). Section 9 would serve a local socket, if one is chosen.
+- ACP v2, the client's file system and terminals (section 2), session modes, `plan` updates (scramjet-rs has no plan tool), audio, `additionalDirectories`, `systemPrompt` on session setup.
+- `--mode json` (item 9): the same updates for one `-p` turn, after stage 2.
+
+## 13. To verify
+
+- Each stage: scripted clients in Python (standard library) over pipes against the release build and a local scripted provider (`serve` in `src/agent/tests.rs`). They check framing (U+2028 inside strings, `\r\n`, a bad line, a request before `initialize`), every method's result and errors, a turn's updates with parallel calls, two sessions at once, permissions answered, cancelled and at EOF, elicitations and their fallbacks, a next-step list with the countdown and with `hold`, a fresh-session step, a client coming back mid-turn, and the redaction.
+- ACP's Test Compatibility Kit (`agentclientprotocol/acp-tck`, experimental) once stage 2 runs, if it runs here without more than a scratch environment; and a real client (Toad installs with `uv`; Zed and JetBrains need the user's desktop).
 - Stage 1: the full screen unchanged, through the PTY journeys and the scripted screens.
-- 1–5 live requests through the company's proxy for the streamed events (claude-haiku-5-5, gpt-6-luna).
-
-## Decisions for the sign-off
-
-1. **Approvals and publications in RPC mode** are asked of the client as requests, counting as the user's answer under the same policy as the full screen. The alternative is to refuse them as Scramjet's RPC mode does.
-2. **The core loop owns the next-step countdown** under autopilot, so `autoselectMs` passes the same with or without a client watching. The alternative is to leave timing to each client, so no step is autoselected when no client is attached.
-3. **Built-ins through `prompt`** (`"/model x"`) are refused and point to the RPC command. Scramjet's RPC mode does not run built-ins either. The alternative is to run the ones that have an RPC command.
-4. **Scramjet's message shape** (section 4) rather than the session file's Responses-shaped items, so that Scramjet clients render them. The alternative is the raw items, which are complete but provider-shaped.
-5. **Sign-in stays in the terminal**: there is no `/login` over RPC.
-6. **The build order** of section 1, starting with the refactor of the full screen onto the shared core, which risks its behavior. It is checked against the PTY journeys and scripted screens before anything is added.
+- 1–5 live requests through the local proxy for the streamed updates (claude-haiku-5-5, gpt-6-luna).
