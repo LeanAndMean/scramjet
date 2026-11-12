@@ -121,8 +121,9 @@ fn ollama_is_told_apart_and_its_models_described() {
         (qwen.id.as_str(), qwen.window, qwen.trained, qwen.reasoning),
         ("qwen3:1.7b", Some(32768), Some(40960), true)
     );
-    assert_eq!(qwen.unfit, None);
+    assert_eq!((&qwen.unfit, qwen.switch), (&None, Some(Switch::Effort)));
     let gemma = &server.models[1];
+    assert_eq!(gemma.switch, None);
     // Not loaded: Ollama has not chosen its window yet.
     assert_eq!((gemma.window, gemma.images), (None, true));
     assert_eq!(
@@ -289,6 +290,130 @@ fn the_tool_check_passes_on_a_call_and_names_what_else_happened() {
         failed,
         problem(Step::Loading, "HTTP 500: model failed to load")
     );
+}
+
+#[test]
+fn thinking_is_seen_apart_or_between_tags() {
+    let seen = |message: Value| thinking(&message);
+    assert_eq!(
+        seen(json!({"content": "391", "reasoning_content": "17 × 23…"})),
+        (true, false)
+    );
+    assert_eq!(
+        seen(json!({"content": "", "reasoning": " "})),
+        (false, false)
+    );
+    assert_eq!(
+        seen(json!({"content": "<think>\n17 × 23…\n</think>\n\n391"})),
+        (false, true)
+    );
+    // A template that opens the tag in the prompt.
+    assert_eq!(
+        seen(json!({"content": "17 × 23…</think>391"})),
+        (false, true)
+    );
+    // Cut off while thinking.
+    assert_eq!(seen(json!({"content": "<think>17 × 23"})), (false, true));
+    // Thinking turned off leaves an empty block.
+    assert_eq!(
+        seen(json!({"content": "<think>\n\n</think>\n\n391"})),
+        (false, false)
+    );
+    assert_eq!(seen(json!({"content": "391"})), (false, false));
+}
+
+#[test]
+fn the_check_finds_whether_thinking_turns_off() {
+    let url = serve(|_, path, body| {
+        assert_eq!(path, "/v1/chat/completions");
+        let off = body["chat_template_kwargs"]["enable_thinking"] == false;
+        let call = json!([{"function": {"name": CHECK_TOOL, "arguments": "{}"}}]);
+        let message = match (body["model"].as_str().unwrap(), off) {
+            ("switched" | "stubborn", false) => {
+                json!({"content": "", "reasoning_content": "Call it.", "tool_calls": call})
+            }
+            ("switched", true) => json!({"content": "391"}),
+            ("stubborn", true) => json!({"content": "391", "reasoning_content": "17 × 23…"}),
+            ("tagged", false) => json!({"content": "<think>Call it.</think>", "tool_calls": call}),
+            ("tagged", true) => json!({"content": "<think>\n\n</think>\n\n391"}),
+            ("plain", false) => json!({"content": "", "tool_calls": call}),
+            (model, off) => panic!("{model} asked again (thinking off: {off})"),
+        };
+        (200, json!({"choices": [{"message": message}]}))
+    });
+    let vllm = server(&url, Runtime::Vllm);
+    let switched = check_tools(&vllm, "switched", None).unwrap();
+    assert_eq!(
+        (switched.thinks, switched.switch, switched.thinking_as_text),
+        (true, Some(Switch::ChatTemplate), None)
+    );
+    let stubborn = check_tools(&vllm, "stubborn", None).unwrap();
+    assert_eq!((stubborn.thinks, stubborn.switch), (true, None));
+    let tagged = check_tools(&vllm, "tagged", None).unwrap();
+    assert_eq!(tagged.switch, Some(Switch::ChatTemplate));
+    assert!(
+        tagged
+            .thinking_as_text
+            .unwrap()
+            .contains("--reasoning-parser")
+    );
+    let plain = check_tools(&vllm, "plain", None).unwrap();
+    assert_eq!((plain.thinks, plain.switch), (false, None));
+}
+
+#[test]
+fn a_saved_switch_sends_the_thinking_level() {
+    let scratch = scratch("switch");
+    let file = scratch.0.join("models.json");
+    let ollama = server("http://localhost:11434", Runtime::Ollama);
+    let thinking = |id: &str, switch| LocalModel {
+        reasoning: true,
+        switch,
+        ..model(id, Some(40960))
+    };
+    let effort = thinking("qwen3:1.7b", Some(Switch::Effort));
+    save(&file, "ollama", &ollama, &effort).unwrap();
+    let vllm = server("http://localhost:8000", Runtime::Vllm);
+    save(
+        &file,
+        "vllm",
+        &vllm,
+        &thinking("Qwen3", Some(Switch::ChatTemplate)),
+    )
+    .unwrap();
+    // One that thinks whatever it is asked is offered no levels.
+    save(&file, "vllm", &vllm, &thinking("R1", None)).unwrap();
+    let providers = super::super::Providers::read(vec![file.clone()], None);
+    assert!(
+        providers.problems().is_empty(),
+        "{:?}",
+        providers.problems()
+    );
+    let sent = |name: &str, effort: &str| {
+        let info = &providers.find(name).unwrap().info;
+        let request = json!({"model": "m", "input": [], "reasoning": {"effort": effort}});
+        let body = super::super::completions::request(&request, info);
+        (
+            body["reasoning_effort"].clone(),
+            body["chat_template_kwargs"].clone(),
+        )
+    };
+    assert_eq!(
+        sent("ollama/qwen3:1.7b", "none"),
+        (json!("none"), Value::Null)
+    );
+    assert_eq!(
+        sent("ollama/qwen3:1.7b", "high"),
+        (json!("high"), Value::Null)
+    );
+    let off = sent("vllm/Qwen3", "none");
+    assert_eq!(
+        (off.0, off.1["enable_thinking"].clone()),
+        (Value::Null, json!(false))
+    );
+    assert_eq!(sent("vllm/Qwen3", "medium").1["enable_thinking"], true);
+    assert_eq!(sent("vllm/R1", "high"), (Value::Null, Value::Null));
+    assert!(!providers.find("vllm/R1").unwrap().info.reasoning);
 }
 
 struct Scratch(std::path::PathBuf);

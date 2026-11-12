@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.169.0 — Thinking levels for local models
+
+### Added
+
+- A local model that thinks gets thinking levels that work: Ollama's are sent as `reasoning_effort` (off as `none`), and on vLLM and llama.cpp a model whose thinking stops when its chat template is asked (Qwen3's) gets off and high. The check in `/login` → Local models says which, and when the thinking comes as text in the answer, which flag of the runtime sends it apart. Check a saved model again to get them.
+
+### Fixed
+
+- Saving a local model when the session's model is one no provider offers (as on a first start with none) switches the session to it, instead of leaving it on a model it cannot reach.
+
 ## 2.168.0 — Local models in /login
 
 ### Added

@@ -3,12 +3,12 @@
 //! harmless tool and saved as a provider of the user's `models.json`; saved ones are checked
 //! again, or removed, the same way. The runtime itself is never started, changed or stopped.
 
-use super::interactive::Interactive;
+use super::interactive::{self, Interactive};
 use super::screen::{Answer, Dialog, Optional};
 use super::select::{self, Picker};
 use super::style;
 use super::text::{clip, visible};
-use scramjet::agent::local::{self, LocalModel, Problem, Runtime, Server, Step};
+use scramjet::agent::local::{self, LocalModel, Problem, Runtime, Server, Step, Switch};
 use scramjet::agent::{Providers, login};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -262,22 +262,21 @@ impl Interactive {
                 self.say(&format!("{} is left out: {unfit}", visible(&model.id)));
                 continue;
             }
-            if let Some(window) = self.local_check(&server, &model, key.as_deref()) {
-                let model = LocalModel { window, ..model };
+            if let Some(model) = self.local_check(&server, model, key.as_deref()) {
                 self.local_save(file, &name, &server, &model, key.as_deref());
                 server.models[index] = model;
             }
         }
     }
 
-    /// Checks that `model` calls a tool; the window to save, as the runtime said it or the user
-    /// gave it, `Some(None)` when unknown; `None` when it failed or was stopped.
+    /// Checks that `model` calls a tool; the model to save, with the window the runtime said or
+    /// the user gave and how it thinks; `None` when it failed or was stopped.
     fn local_check(
         &mut self,
         server: &Server,
-        model: &LocalModel,
+        mut model: LocalModel,
         key: Option<&str>,
-    ) -> Option<Option<u64>> {
+    ) -> Option<LocalModel> {
         let id = visible(&model.id);
         self.say_styled(
             style::MUTED,
@@ -306,9 +305,33 @@ impl Interactive {
             local::CHECK_TOOL,
             checked.arguments
         ));
-        let window = checked.window.or(model.window);
-        if window.is_some() {
-            return Some(window);
+        if server.runtime != Runtime::Ollama {
+            model.reasoning = checked.thinks;
+            model.switch = checked.switch;
+        }
+        if let Some(hint) = checked.thinking_as_text {
+            self.say(&format!(
+                "Note: {id}'s thinking came as text in its answer, where it will show and be \
+                 sent back; {hint}"
+            ));
+        }
+        match (model.reasoning, model.switch) {
+            (_, Some(Switch::Effort)) => self.say(&format!(
+                "{id} thinks; its thinking level is sent as reasoning_effort, off as none"
+            )),
+            (_, Some(Switch::ChatTemplate)) => self.say(&format!(
+                "{id} thinks, and stopped when asked not to (chat_template_kwargs \
+                 enable_thinking): its thinking level turns it on and off"
+            )),
+            (true, None) => self.say(&format!(
+                "Note: {id} thinks, and asking it not to (chat_template_kwargs enable_thinking) \
+                 did not stop it, so no thinking level is offered for it"
+            )),
+            (false, None) => {}
+        }
+        model.window = checked.window.or(model.window);
+        if model.window.is_some() {
+            return Some(model);
         }
         let title = format!(
             "{}'s context window in tokens; empty leaves it unknown{}",
@@ -322,10 +345,13 @@ impl Interactive {
             let typed = self.typed(&title, Optional::Yes)?;
             let typed = typed.trim().replace([',', '_'], "");
             if typed.is_empty() {
-                return Some(None);
+                return Some(model);
             }
             match typed.parse::<u64>() {
-                Ok(window) if window > 0 => return Some(Some(window)),
+                Ok(window) if window > 0 => {
+                    model.window = Some(window);
+                    return Some(model);
+                }
                 _ => self.say(&format!("Error: {typed} is not a number of tokens")),
             }
         }
@@ -371,6 +397,22 @@ impl Interactive {
             );
         }
         self.providers_changed();
+        let reference = format!("{name}/{}", model.id);
+        if self.agent.offered_model(self.agent.model()).is_none()
+            && let Some(reference) = self.agent.offered_model(&reference)
+        {
+            match self.agent.set_model(&reference) {
+                Ok(()) => {
+                    self.agent.load_model_info();
+                    let line = interactive::model_line(&self.agent);
+                    self.say_styled(style::MUTED, &format!("This session now uses {line}"));
+                }
+                Err(error) => self.say(&format!("Error: model not set to {reference}: {error}")),
+            }
+            if let Some(screen) = &self.screen {
+                screen.footer(super::footer::Shown::of(&self.agent));
+            }
+        }
     }
 
     /// The user's own `models.json`, beside the settings.

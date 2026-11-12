@@ -22,6 +22,9 @@ const ANSWER_BYTES: usize = 4 << 20;
 pub const CHECK_TOOL: &str = "echo_word";
 /// What the check asks the model.
 pub const CHECK_PROMPT: &str = "Call the tool echo_word with the word \"scramjet\".";
+/// What a model that thinks is asked with its thinking turned off.
+const SWITCH_PROMPT: &str = "What is 17 times 23? Answer with the number only.";
+const REASONING_FIELDS: [&str; 3] = ["reasoning_content", "reasoning", "reasoning_text"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Runtime {
@@ -89,6 +92,29 @@ impl Runtime {
             Runtime::Other => "the server or the model may not support tool calls",
         }
     }
+
+    /// What to change when a model's thinking comes as text in its answer.
+    fn thinking_hint(self) -> &'static str {
+        match self {
+            Runtime::Vllm => {
+                "vllm serve sends it apart when started with the model's --reasoning-parser \
+                 (qwen3 for Qwen3, deepseek_r1 for DeepSeek-R1)"
+            }
+            Runtime::LlamaCpp => {
+                "llama-server sends it apart when started with --jinja --reasoning-format deepseek"
+            }
+            Runtime::Ollama | Runtime::Other => "the server does not send it apart",
+        }
+    }
+}
+
+/// How requests turn a model's thinking on and off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Switch {
+    /// `reasoning_effort`, `none` for off: Ollama's.
+    Effort,
+    /// `chat_template_kwargs.enable_thinking`: Qwen3's chat templates, on vLLM and llama.cpp.
+    ChatTemplate,
 }
 
 /// A runtime found, with its models.
@@ -108,7 +134,10 @@ pub struct LocalModel {
     pub window: Option<u64>,
     /// The model's own maximum, when the runtime says it apart from the window.
     pub trained: Option<u64>,
+    /// It thinks before answering.
     pub reasoning: bool,
+    /// How its thinking is turned off; `None` when it does not think or cannot be asked not to.
+    pub switch: Option<Switch>,
     pub images: bool,
     /// Why it cannot serve the agent, as the runtime says: it only embeds, or takes no tools.
     pub unfit: Option<String>,
@@ -121,6 +150,7 @@ impl LocalModel {
             window: None,
             trained: None,
             reasoning: false,
+            switch: None,
             images: false,
             unfit: None,
         }
@@ -172,6 +202,12 @@ pub struct Checked {
     pub arguments: String,
     /// The window the runtime loaded the model with, when it says so only once loaded (Ollama).
     pub window: Option<u64>,
+    /// It thought before answering. Not judged for Ollama, which says so of its models.
+    pub thinks: bool,
+    /// How its thinking was turned off, when asking it not to think worked.
+    pub switch: Option<Switch>,
+    /// Its thinking came as text in the answer, and what would send it apart.
+    pub thinking_as_text: Option<&'static str>,
 }
 
 /// `typed` as a runtime's address: `http://` when no scheme is given, without a last `/` or
@@ -329,6 +365,7 @@ fn ollama_models(tags: &Value, loaded: &Value) -> Vec<LocalModel> {
         if let Some(capabilities) = tag["capabilities"].as_array() {
             let has = |name: &str| capabilities.iter().any(|c| c == name);
             model.reasoning = has("thinking");
+            model.switch = model.reasoning.then_some(Switch::Effort);
             model.images = has("vision");
             model.unfit = match (has("completion"), has("tools")) {
                 (false, _) => Some("Ollama says it does not chat".into()),
@@ -391,19 +428,9 @@ pub fn check_tools(server: &Server, model: &str, key: Option<&str>) -> Result<Ch
     super::login::blocking(check(server, model, key))
 }
 
-async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checked, Problem> {
-    let body = json!({
-        "model": model,
-        "messages": [{"role": "user", "content": CHECK_PROMPT}],
-        "tools": [{"type": "function", "function": {
-            "name": CHECK_TOOL,
-            "description": "Echoes a word back. It does nothing else.",
-            "parameters": {"type": "object", "properties": {"word": {"type": "string"}},
-                "required": ["word"]},
-        }}],
-        "max_tokens": 2048,
-        "stream": false,
-    });
+/// The answer of a non-streamed Chat Completions request `body` to `server`, or its HTTP status
+/// and what the server said.
+async fn complete(server: &Server, key: Option<&str>, body: Value) -> Result<Value, Problem> {
     let url = format!("{}/v1/chat/completions", server.url);
     let bearer = key.map(|key| format!("Bearer {key}"));
     let mut headers = vec![("accept", "application/json")];
@@ -434,8 +461,8 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
         clipped(text.trim(), 300)
     };
     match fetched.status {
-        200..300 => {}
-        401 | 403 => return Err(problem(Step::Key, said(&answer))),
+        200..300 => Ok(answer),
+        401 | 403 => Err(problem(Step::Key, said(&answer))),
         status => {
             let text = said(&answer);
             // vLLM refuses a request with tools when not started to call them.
@@ -447,9 +474,44 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
                 Step::NoToolCalls => format!(". {}", server.runtime.tools_hint()),
                 _ => String::new(),
             };
-            return Err(problem(step, format!("HTTP {status}: {text}{hint}")));
+            Err(problem(step, format!("HTTP {status}: {text}{hint}")))
         }
     }
+}
+
+/// Whether `message` carries thinking: apart, in a reasoning field, or as text between `<think>`
+/// tags (a template may give the opening tag in the prompt).
+fn thinking(message: &Value) -> (bool, bool) {
+    let apart = (REASONING_FIELDS.iter()).any(|field| {
+        message[field]
+            .as_str()
+            .is_some_and(|text| !text.trim().is_empty())
+    });
+    let content = message["content"].as_str().unwrap_or_default();
+    let thought = match content.find("</think>") {
+        Some(end) => &content[..end],
+        None => content.split_once("<think>").map_or("", |(_, after)| after),
+    };
+    let thought = thought
+        .split_once("<think>")
+        .map_or(thought, |(_, after)| after);
+    (apart, !thought.trim().is_empty())
+}
+
+async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checked, Problem> {
+    let body = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": CHECK_PROMPT}],
+        "tools": [{"type": "function", "function": {
+            "name": CHECK_TOOL,
+            "description": "Echoes a word back. It does nothing else.",
+            "parameters": {"type": "object", "properties": {"word": {"type": "string"}},
+                "required": ["word"]},
+        }}],
+        "max_tokens": 2048,
+        "stream": false,
+    });
+    let answer = complete(server, key, body).await?;
     let message = &answer["choices"][0]["message"];
     let call = message["tool_calls"]
         .as_array()
@@ -469,14 +531,25 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
                     format!("it called {CHECK_TOOL} with arguments that are not JSON: {arguments}"),
                 ));
             }
-            let window = match server.runtime {
-                Runtime::Ollama => {
-                    let loaded = optional(format!("{}/api/ps", server.url), key, PROBE_WAIT);
-                    ollama_window(&loaded.await, model)
-                }
-                _ => None,
+            let mut checked = Checked {
+                arguments,
+                window: None,
+                thinks: false,
+                switch: None,
+                thinking_as_text: None,
             };
-            Ok(Checked { arguments, window })
+            if server.runtime == Runtime::Ollama {
+                let loaded = optional(format!("{}/api/ps", server.url), key, PROBE_WAIT);
+                checked.window = ollama_window(&loaded.await, model);
+                return Ok(checked);
+            }
+            let (apart, as_text) = thinking(message);
+            checked.thinks = apart || as_text;
+            checked.thinking_as_text = as_text.then(|| server.runtime.thinking_hint());
+            if checked.thinks && switches_off(server, model, key).await {
+                checked.switch = Some(Switch::ChatTemplate);
+            }
+            Ok(checked)
         }
         Some(function) => Err(problem(
             Step::NoToolCalls,
@@ -493,6 +566,24 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
                 format!("it answered {content}. {}", server.runtime.tools_hint()),
             ))
         }
+    }
+}
+
+/// Whether `model` answers without thinking when its chat template is asked not to.
+async fn switches_off(server: &Server, model: &str, key: Option<&str>) -> bool {
+    let body = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": SWITCH_PROMPT}],
+        "chat_template_kwargs": {"enable_thinking": false},
+        "max_tokens": 256,
+        "stream": false,
+    });
+    match complete(server, key, body).await {
+        Ok(answer) => {
+            let message = &answer["choices"][0]["message"];
+            message.is_object() && thinking(message) == (false, false)
+        }
+        Err(_) => false,
     }
 }
 
@@ -617,7 +708,10 @@ pub fn remove_model(file: &Path, name: &str, id: &str) -> Result<(), String> {
 fn model_entry(model: &LocalModel) -> Json {
     let mut entry = vec![
         ("id".to_owned(), Json::from(json!(model.id))),
-        ("reasoning".to_owned(), Json::from(json!(model.reasoning))),
+        (
+            "reasoning".to_owned(),
+            Json::from(json!(model.switch.is_some())),
+        ),
     ];
     if let Some(window) = model.window {
         entry.push(("contextWindow".to_owned(), Json::from(json!(window))));
@@ -629,6 +723,31 @@ fn model_entry(model: &LocalModel) -> Json {
     entry.push(("input".to_owned(), Json::from(input)));
     let free = json!({"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0});
     entry.push(("cost".to_owned(), Json::from(free)));
+    let (levels, compat) = match model.switch {
+        // Ollama takes every level, and `none` stops a model thinking (0.40.16).
+        Some(Switch::Effort) => (
+            vec![("off", json!("none"))],
+            json!({"supportsReasoningEffort": true}),
+        ),
+        // The template knows thinking or none.
+        Some(Switch::ChatTemplate) => (
+            vec![
+                ("off", json!("none")),
+                ("minimal", Value::Null),
+                ("low", Value::Null),
+                ("medium", Value::Null),
+            ],
+            json!({"thinkingFormat": "qwen-chat-template"}),
+        ),
+        None => return Json::Object(entry),
+    };
+    let levels = levels.into_iter();
+    let levels = levels.map(|(level, sent)| (level.to_owned(), Json::Plain(sent)));
+    entry.push((
+        "thinkingLevelMap".to_owned(),
+        Json::Object(levels.collect()),
+    ));
+    entry.push(("compat".to_owned(), Json::from(compat)));
     Json::Object(entry)
 }
 
