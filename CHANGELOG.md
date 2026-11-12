@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.166.0 — Write access kept for a project
+
+### Added
+
+- When the agent asks for write access, you can allow it always for this project as well as for the session. The grant is kept in `sandbox-grants.json` beside your settings, under the project's path, never in the repository; each later session with a sandbox in that project starts with it. `/sandbox` lists it under "Always here", and `/sandbox remove DIR` forgets it.
+
 ## 2.165.0 — The agent asks for write access
 
 ### Added

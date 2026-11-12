@@ -389,8 +389,9 @@ fn start(
         network: settings.sandbox_network,
         writable: Vec::new(),
     });
-    if sandbox.is_some() {
+    if let Some(sandbox) = &mut sandbox {
         Sandbox::check()?;
+        warnings.extend(sandbox.grant_remembered(&root));
     }
     for directory in &options.add_dirs {
         match &mut sandbox {

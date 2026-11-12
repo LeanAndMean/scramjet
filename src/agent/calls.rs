@@ -1169,7 +1169,7 @@ here\n\nkept.txt says original";
         }));
         let cancel = AtomicBool::new(false);
         let mut ui = Recorder {
-            choices: vec![Some(1), Some(0)],
+            choices: vec![Some(2), Some(1)],
             ..Recorder::default()
         };
         agent.turn("write", &mut ui, &cancel).unwrap();
@@ -1187,8 +1187,20 @@ here\n\nkept.txt says original";
         let instructions = bodies[0]["instructions"].as_str().unwrap();
         assert!(instructions.contains("\n\n# Sandbox\n"), "{instructions}");
         assert!(last_output(&bodies[1]).contains("The user declined"));
-        assert!(last_output(&bodies[2]).contains("The user allowed writing"));
+        let allowed = last_output(&bodies[2]);
+        assert!(allowed.contains("in this project from now on"), "{allowed}");
         assert_eq!(granted, std::slice::from_ref(&other));
+        let remembered = super::super::Remembered::user().unwrap();
+        let root = agent.root().to_owned();
+        assert_eq!(remembered.of(&root).unwrap(), std::slice::from_ref(&other));
+        let mut fresh = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            network: false,
+            writable: Vec::new(),
+        };
+        assert!(fresh.grant_remembered(&root).is_empty());
+        assert_eq!(fresh.writable, std::slice::from_ref(&other));
+        assert!(remembered.remove(&root, &other).unwrap());
         assert_eq!(std::fs::read_to_string(&written).unwrap(), "w\n");
         let again = last_output(&bodies[4]);
         assert!(again.contains("already writable"), "{again}");

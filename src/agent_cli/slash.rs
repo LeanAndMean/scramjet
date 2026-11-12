@@ -7,7 +7,7 @@ use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
-use scramjet::agent::{Agent, AgentError, McpState, Providers, Sandbox, SandboxMode};
+use scramjet::agent::{Agent, AgentError, McpState, Providers, Remembered, Sandbox, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -330,20 +330,7 @@ impl Interactive {
                     return self.say("No sandbox: commands reach the network as you can");
                 }
             },
-            ("remove", directory) if !directory.is_empty() => {
-                let root = self.agent.root().to_owned();
-                let Some(mut sandbox) = current else {
-                    return self.say("No sandbox: nothing was granted");
-                };
-                match sandbox.revoke(&root, directory) {
-                    Some(path) => {
-                        self.agent.set_sandbox(Some(sandbox));
-                        let said = format!("{} is read-only again", path.display());
-                        return self.say_styled(style::MUTED, &said);
-                    }
-                    None => return self.say(&format!("{directory} was not granted")),
-                }
-            }
+            ("remove", directory) if !directory.is_empty() => return self.remove_dir(directory),
             (mode, "") if let Some(mode) = SandboxMode::parse(mode) => {
                 if mode.is_some()
                     && current.is_none()
@@ -358,11 +345,17 @@ impl Interactive {
                 };
                 let sandbox = match current {
                     Some(sandbox) => Sandbox { mode, ..sandbox },
-                    None => Sandbox {
-                        mode,
-                        network: self.settings.sandbox_network,
-                        writable: Vec::new(),
-                    },
+                    None => {
+                        let mut sandbox = Sandbox {
+                            mode,
+                            network: self.settings.sandbox_network,
+                            writable: Vec::new(),
+                        };
+                        for warning in sandbox.grant_remembered(self.agent.root()) {
+                            self.say(&format!("Warning: {warning}"));
+                        }
+                        sandbox
+                    }
                 };
                 self.agent.set_sandbox(Some(sandbox));
                 let said = format!("Sandbox: {}", mode.name());
@@ -377,6 +370,37 @@ impl Interactive {
         };
         self.agent.set_sandbox(Some(changed));
         self.say_styled(style::MUTED, said);
+    }
+
+    /// `/sandbox remove DIR`: takes back the grant of `DIR`, and forgets it if it was granted
+    /// always in this project.
+    fn remove_dir(&mut self, directory: &str) {
+        let root = self.agent.root().to_owned();
+        let mut sandbox = self.agent.sandbox().cloned();
+        let revoked = (sandbox.as_mut()).and_then(|sandbox| sandbox.revoke(&root, directory));
+        let path = (revoked.clone()).unwrap_or_else(|| Sandbox::resolve(&root, directory));
+        let forgotten = match Remembered::user().map(|kept| kept.remove(&root, &path)) {
+            Some(Ok(forgotten)) => forgotten,
+            Some(Err(error)) => return self.say(&format!("Error: {error}")),
+            None => false,
+        };
+        if revoked.is_some() {
+            self.agent.set_sandbox(sandbox);
+        }
+        let said = match (revoked.is_some(), forgotten) {
+            (_, true) => format!(
+                "{} is no longer granted in this project{}",
+                path.display(),
+                if revoked.is_some() {
+                    "; read-only again"
+                } else {
+                    ""
+                }
+            ),
+            (true, false) => format!("{} is read-only again", path.display()),
+            (false, false) => return self.say(&format!("{directory} was not granted")),
+        };
+        self.say_styled(style::MUTED, &said);
     }
 
     /// `/add-dir DIR`: the sandbox lets the agent change `DIR` too, for the rest of the session.
@@ -745,6 +769,11 @@ the hideCredentials setting says.\n";
         .collect();
     if !missing.is_empty() {
         info += &row("Granted, gone:", listed(&missing));
+    }
+    if let Some(always) = Remembered::user().and_then(|kept| kept.of(root).ok())
+        && !always.is_empty()
+    {
+        info += &row("Always here:", listed(&always));
     }
     let mut kept = sandbox.protected_paths(root);
     if sandbox.read_only_project(root).is_some()

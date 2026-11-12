@@ -1,0 +1,102 @@
+{
+  "size": "100x48",
+  "settings": {
+    "sandbox": "read-only"
+  },
+  "files": {
+    "README.md": "Project\n",
+    "docs/index.md": "Docs\n"
+  },
+  "replies": [
+    [
+      {
+        "call": "request_permissions",
+        "arguments": {
+          "write": [
+            "docs"
+          ],
+          "reason": "The task adds a page to the documentation."
+        }
+      }
+    ],
+    [
+      {
+        "text": "Docs are writable now."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "Add a usage page\r"
+    },
+    {
+      "until": "Allow writing there?"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "asked"
+    },
+    {
+      "type": "\u001b[B"
+    },
+    {
+      "sleep": 0.2
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Docs are writable now."
+    },
+    {
+      "type": "/sandbox off\r"
+    },
+    {
+      "until": "No sandbox:"
+    },
+    {
+      "type": "/sandbox read-only\r"
+    },
+    {
+      "until": "Sandbox: read-only"
+    },
+    {
+      "type": "/sandbox\r"
+    },
+    {
+      "until": "Always here:"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "remembered"
+    },
+    {
+      "type": "/sandbox remove docs\r"
+    },
+    {
+      "until": "no longer granted"
+    },
+    {
+      "type": "/sandbox\r"
+    },
+    {
+      "until": "Mode: read-only"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "forgotten"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}

@@ -160,19 +160,33 @@ and why; they can grant them with /add-dir DIR, or start with --add-dir DIR."
             message += &format!("\n\nNot asked: {}", notes.replace('\n', "; "));
         }
         ui.question(&message);
-        let choices = [
-            (
-                "Allow for this session",
-                "/sandbox remove DIR takes it back",
-            ),
-            ("Deny", "they stay read-only"),
-        ]
-        .map(|(label, description)| Choice {
-            label: label.into(),
-            description: Some(description.into()),
-            value: label.into(),
-        });
-        let allowed = ui.choose("Allow writing there?", &choices, None) == Some(0);
+        let remembered = super::sandbox::Remembered::user();
+        let kept_in = (remembered.as_ref())
+            .map(|remembered| super::tools::shortened(&remembered.file().display().to_string()));
+        let mut choices = vec![(
+            "Allow for this session",
+            "/sandbox remove DIR takes it back".to_owned(),
+        )];
+        if let Some(kept_in) = &kept_in {
+            choices.push((
+                "Always for this project",
+                format!("kept in {kept_in}; /sandbox remove DIR forgets it"),
+            ));
+        }
+        choices.push(("Deny", "they stay read-only".to_owned()));
+        let choices: Vec<Choice> = (choices.into_iter())
+            .map(|(label, description)| Choice {
+                label: label.into(),
+                description: Some(description),
+                value: label.into(),
+            })
+            .collect();
+        let chosen = ui.choose("Allow writing there?", &choices, None);
+        let chosen = chosen.map(|index| choices[index].label.as_str());
+        let allowed = matches!(
+            chosen,
+            Some("Allow for this session" | "Always for this project")
+        );
         let mut text = match allowed {
             true => {
                 self.set_sandbox(Some(with));
@@ -183,6 +197,23 @@ and why; they can grant them with /add-dir DIR, or start with --add-dir DIR."
 work within the writable directories or ask the user how to go on."
             ),
         };
+        if chosen == Some("Always for this project")
+            && let Some(remembered) = &remembered
+        {
+            match remembered.add(&root, &asked) {
+                Ok(()) => {
+                    text = text.replace(
+                        " for the rest of the session.",
+                        " in this project from now on.",
+                    )
+                }
+                Err(error) => {
+                    let said = format!("Not kept for later sessions: {error}");
+                    ui.notice(&said);
+                    text += &format!("\n{said}");
+                }
+            }
+        }
         if !notes.is_empty() {
             text += &format!("\nNot asked:\n{notes}");
         }

@@ -7,8 +7,11 @@
 //! level (`os::low_integrity`), which keeps them from changing the user's files on local disks
 //! but hides nothing, and the rest is refused.
 
+mod remembered;
 #[cfg(unix)]
 mod seatbelt;
+
+pub use remembered::Remembered;
 
 use std::{
     path::{Path, PathBuf},
@@ -207,11 +210,38 @@ impl Sandbox {
         Ok(real)
     }
 
+    /// `path` as `grant` and `revoke` take it, by its real path where it exists.
+    pub fn resolve(root: &Path, path: &str) -> PathBuf {
+        let given = given(root, path);
+        std::fs::canonicalize(&given).unwrap_or(given)
+    }
+
+    /// Grants what the user granted always in the project at `root`; says what could not be.
+    pub fn grant_remembered(&mut self, root: &Path) -> Vec<String> {
+        let Some(remembered) = Remembered::user() else {
+            return Vec::new();
+        };
+        let listed = match remembered.of(root) {
+            Ok(listed) => listed,
+            Err(error) => return vec![error],
+        };
+        (listed.iter())
+            .filter_map(
+                |directory| match self.grant(root, &directory.to_string_lossy()) {
+                    Err(error) if !error.ends_with("already writable") => Some(format!(
+                        "{error}: granted always in this project; /sandbox remove {} forgets it",
+                        directory.display()
+                    )),
+                    _ => None,
+                },
+            )
+            .collect()
+    }
+
     /// Takes back the grant of `path`, given as `grant` takes it or as listed; returns the
     /// directory it was.
     pub fn revoke(&mut self, root: &Path, path: &str) -> Option<PathBuf> {
-        let given = given(root, path);
-        let real = std::fs::canonicalize(&given).unwrap_or(given);
+        let real = Self::resolve(root, path);
         let index = self.writable.iter().position(|granted| *granted == real)?;
         Some(self.writable.remove(index))
     }
