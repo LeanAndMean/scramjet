@@ -2212,6 +2212,208 @@ fn acp_asks_the_client_before_calls_under_ask() {
     assert!(child.wait().unwrap().success());
 }
 
+/// What a client offering `capabilities` sees of one turn whose reply calls `name` with
+/// `input`, `answer` giving the result for the request it is sent, if any: that request, the
+/// prompt's response, the messages between, and the request bodies after the first.
+#[cfg(unix)]
+fn acp_asked(
+    name: &str,
+    input: serde_json::Value,
+    given: &[&str],
+    capabilities: serde_json::Value,
+    answer: impl Fn(&serde_json::Value) -> serde_json::Value,
+) -> (
+    Option<serde_json::Value>,
+    serde_json::Value,
+    Vec<serde_json::Value>,
+    Vec<String>,
+) {
+    static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let scratch = Scratch(std::env::temp_dir().join(format!(
+        "scramjet-cli-acp-asked-{}-{run}",
+        std::process::id()
+    )));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (port, bodies) = serve_call(name, input);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings, given);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (mut request, mut seen) = (None, Vec::new());
+    let ended = loop {
+        let message = next(&messages);
+        if message.get("method").is_some() && message.get("id").is_some() {
+            assert!(request.is_none(), "asked twice: {message}");
+            assert_eq!(message["params"]["sessionId"], session);
+            let result = answer(&message);
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": message["id"], "result": result}),
+            );
+            request = Some(message);
+        } else if message.get("id").is_some() {
+            break message;
+        } else {
+            seen.push(message);
+        }
+    };
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let bodies: Vec<String> = bodies.try_iter().skip(1).collect();
+    (request, ended, seen, bodies)
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
+    let forms = serde_json::json!({"elicitation": {"form": {}}});
+    let select = serde_json::json!({"type": "select", "message": "Which one?",
+        "options": [{"value": "a", "label": "A"},
+            {"value": "b", "label": "B", "description": "bee"}],
+        "recommended": 1});
+    let accept = |answer: serde_json::Value| move |_: &serde_json::Value| serde_json::json!({"action": "accept", "content": {"answer": answer}});
+    let result = |seen: &[serde_json::Value]| {
+        (seen.iter())
+            .find(|message| {
+                let status = &message["params"]["update"]["status"];
+                status == "completed" || status == "failed"
+            })
+            .map(|message| message["params"]["update"]["content"].to_string())
+            .unwrap()
+    };
+    // A select: a string with an option per value, the recommended one the default.
+    let (asked, ended, seen, bodies) = acp_asked(
+        "get_scramjet_user_input",
+        select.clone(),
+        &[],
+        forms.clone(),
+        accept(serde_json::json!("b")),
+    );
+    let asked = asked.unwrap();
+    assert_eq!(asked["method"], "elicitation/create");
+    let params = &asked["params"];
+    assert_eq!(params["mode"], "form");
+    assert_eq!(params["message"], "Which one?");
+    let call = (seen.iter())
+        .find(|message| message["params"]["update"]["sessionUpdate"] == "tool_call")
+        .unwrap();
+    assert_eq!(params["toolCallId"], call["params"]["update"]["toolCallId"]);
+    let schema = &params["requestedSchema"];
+    assert_eq!(schema["required"], serde_json::json!(["answer"]));
+    let property = &schema["properties"]["answer"];
+    assert_eq!(property["type"], "string", "{property}");
+    assert_eq!(property["default"], "b");
+    assert_eq!(
+        property["oneOf"],
+        serde_json::json!([{"const": "a", "title": "A"},
+            {"const": "b", "title": "B", "description": "bee"}])
+    );
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert!(
+        bodies[0].contains(r#"{\"selected\":\"b\"}"#),
+        "{}",
+        bodies[0]
+    );
+    // An answer not offered cancels the question, which ends the turn.
+    let (_, ended, seen, bodies) = acp_asked(
+        "get_scramjet_user_input",
+        select.clone(),
+        &[],
+        forms.clone(),
+        accept(serde_json::json!("c")),
+    );
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert!(result(&seen).contains("cancelled"), "{seen:?}");
+    assert!(bodies.is_empty(), "{bodies:?}");
+    // A confirm: a boolean, `true` for yes.
+    let confirm = serde_json::json!({"type": "confirm", "message": "Go on?"});
+    let (asked, _, _, bodies) = acp_asked(
+        "get_scramjet_user_input",
+        confirm.clone(),
+        &[],
+        forms.clone(),
+        accept(serde_json::json!(true)),
+    );
+    let property = &asked.unwrap()["params"]["requestedSchema"]["properties"]["answer"];
+    assert_eq!(property["type"], "boolean", "{property}");
+    assert!(
+        bodies[0].contains(r#"{\"confirmed\":true}"#),
+        "{}",
+        bodies[0]
+    );
+    // Declined: cancelled.
+    let (_, _, seen, _) = acp_asked(
+        "get_scramjet_user_input",
+        confirm,
+        &[],
+        forms,
+        |_| serde_json::json!({"action": "decline"}),
+    );
+    assert!(result(&seen).contains("cancelled"), "{seen:?}");
+    // Without forms the question is a freetext one, its options listed for the next prompt.
+    let (asked, ended, seen, bodies) = acp_asked(
+        "get_scramjet_user_input",
+        select,
+        &[],
+        serde_json::json!({}),
+        |_| unreachable!(),
+    );
+    assert!(asked.is_none());
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let said: String = (seen.iter())
+        .filter(|message| message["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .filter_map(|message| message["params"]["update"]["content"]["text"].as_str())
+        .collect();
+    assert!(
+        said.contains("Which one?\n\nReply with one of:\n- A\n- B — bee"),
+        "{said}"
+    );
+    assert!(result(&seen).contains("parked"), "{seen:?}");
+    assert!(bodies.is_empty(), "{bodies:?}");
+    // A write grant: a permission request whose last option denies.
+    let grant = serde_json::json!({"write": ["/var/tmp"], "reason": "to build"});
+    let (asked, _, seen, _) = acp_asked(
+        "request_permissions",
+        grant,
+        &["--sandbox", "workspace-write"],
+        serde_json::json!({}),
+        |asked| {
+            let options = asked["params"]["options"].as_array().unwrap();
+            let last = &options[options.len() - 1];
+            serde_json::json!({"outcome": {"outcome": "selected", "optionId": last["optionId"]}})
+        },
+    );
+    let asked = asked.unwrap();
+    assert_eq!(asked["method"], "session/request_permission");
+    assert!(
+        asked.to_string().contains("Allow writing there?"),
+        "{asked}"
+    );
+    let kinds: Vec<_> = (asked["params"]["options"].as_array().unwrap().iter())
+        .map(|option| option["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds.first(), Some(&"allow_once"));
+    assert_eq!(kinds.last(), Some(&"reject_once"));
+    assert!(result(&seen).contains("stay read-only"), "{seen:?}");
+}
+
 #[test]
 #[cfg(unix)]
 fn acp_on_sigterm_cancels_turns_and_their_commands_then_exits() {

@@ -58,6 +58,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         initialized: false,
         notices: false,
         compaction: false,
+        forms: false,
         scramjet: false,
         sessions: HashMap::new(),
         renamed: Arc::default(),
@@ -219,6 +220,8 @@ struct Connection {
     notices: bool,
     /// The client offered `session.compaction`.
     compaction: bool,
+    /// The client offered `elicitation.form`.
+    forms: bool,
     /// The client knows Scramjet's extensions (`_meta["io.github.leanandmean.scramjet"]`).
     scramjet: bool,
     sessions: HashMap<String, Handle>,
@@ -302,6 +305,7 @@ impl Connection {
         let capabilities = &params["clientCapabilities"];
         self.notices = capabilities["session"]["notices"].is_object();
         self.compaction = capabilities["session"]["compaction"].is_object();
+        self.forms = capabilities["elicitation"]["form"].is_object();
         self.scramjet = capabilities["_meta"]["io.github.leanandmean.scramjet"].is_object();
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
@@ -339,6 +343,7 @@ impl Connection {
             out: self.out.clone(),
             notices: self.notices,
             compaction: self.compaction,
+            forms: self.forms,
             scramjet: self.scramjet,
             renamed: self.renamed.clone(),
             cancel: cancel.clone(),
@@ -625,6 +630,7 @@ struct Worker {
     out: Out,
     notices: bool,
     compaction: bool,
+    forms: bool,
     scramjet: bool,
     renamed: Renamed,
     cancel: Arc<AtomicBool>,
@@ -639,6 +645,7 @@ impl Worker {
             session: session.agent.session_id(),
             notices: self.notices,
             compaction: self.compaction,
+            forms: self.forms,
             compactions: 0,
             compacting: false,
             turn: self.turn.clone(),
@@ -848,6 +855,8 @@ struct Updates {
     notices: bool,
     /// The client offered `session.compaction`.
     compaction: bool,
+    /// The client offered `elicitation.form`.
+    forms: bool,
     /// The compactions so far, which number them, and whether the last one has not ended.
     compactions: usize,
     compacting: bool,
@@ -1039,14 +1048,14 @@ impl Updates {
         }
     }
     /// Asks the client's permission for the tool call announced last, `text` shown with it;
-    /// the id of the option of `options` (id, name, kind) chosen, `None` when cancelled or
+    /// the index of the option of `options` (id, name, kind) chosen, `None` when cancelled or
     /// answered with one not offered.
     fn permission(
         &mut self,
         text: &str,
-        options: &[(&'static str, &str, &str)],
+        options: &[(&str, &str, &str)],
         cancel: &AtomicBool,
-    ) -> Option<&'static str> {
+    ) -> Option<usize> {
         let content = json!([{"type": "content", "content": {"type": "text", "text": text}}]);
         let offered: Vec<Value> = (options.iter())
             .map(|(id, name, kind)| json!({"optionId": id, "name": name, "kind": kind}))
@@ -1061,7 +1070,7 @@ impl Updates {
         if outcome["outcome"] != "selected" {
             return None;
         }
-        let chosen = (options.iter()).find(|(id, ..)| outcome["optionId"] == *id);
+        let chosen = (options.iter()).position(|(id, ..)| outcome["optionId"] == *id);
         if chosen.is_none() {
             self.say(
                 "warning",
@@ -1071,7 +1080,53 @@ impl Updates {
                 ),
             );
         }
-        chosen.map(|(id, ..)| *id)
+        chosen
+    }
+    /// The text a request about the tool call announced last shows: what `question` showed
+    /// with `title` above it, else `title`.
+    fn asking(&mut self, title: &str) -> String {
+        match self.asked.take() {
+            Some(shown) => format!("{title}\n\n{shown}"),
+            None => title.to_owned(),
+        }
+    }
+    /// The answer the client's form gives for `property`, asked with what `question` showed;
+    /// `None` when declined or cancelled.
+    fn elicit(&mut self, title: &str, property: Value) -> Option<Value> {
+        let message = self.asked.take().unwrap_or_else(|| title.to_owned());
+        let schema = json!({"type": "object", "properties": {"answer": property},
+            "required": ["answer"]});
+        let params = json!({
+            "sessionId": self.session,
+            "toolCallId": self.call_id(),
+            "mode": "form",
+            "message": message,
+            "requestedSchema": schema,
+        });
+        let mut result = self.ask("elicitation/create", params, &self.cancel.clone())?;
+        match result["action"] == "accept" {
+            true => Some(result["content"]["answer"].take()),
+            false => None,
+        }
+    }
+    /// Without forms: `title` and `options` said after the question, for the next prompt to
+    /// answer.
+    fn unanswered(&mut self, title: &str, options: &[Choice]) -> Option<usize> {
+        let labels: Vec<String> = (options.iter())
+            .map(|option| format!("- {}", option.label))
+            .collect();
+        self.asked = None;
+        self.agent_message(&format!(
+            "\n\n{title} Reply with one of:\n{}",
+            labels.join("\n")
+        ));
+        None
+    }
+    fn refused(&self, answer: &Value) {
+        self.say(
+            "warning",
+            &format!("Cancelled: the client answered {answer}, which was not asked"),
+        );
     }
     fn say(&self, severity: &str, text: &str) {
         match self.notices {
@@ -1245,10 +1300,7 @@ impl AgentUi for Updates {
     fn compaction_summary(&mut self, _summary: &str) {}
     fn branch_summary(&mut self, _summary: &str) {}
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
-        let text = match self.asked.take() {
-            Some(shown) => format!("{question}\n\n{shown}"),
-            None => question.to_owned(),
-        };
+        let text = self.asking(question);
         let options = [
             ("allow_once", "Allow", "allow_once"),
             (
@@ -1259,22 +1311,19 @@ impl AgentUi for Updates {
             ("reject_once", "Deny", "reject_once"),
         ];
         match self.permission(&text, &options, cancel) {
-            Some("allow_once") => Answer::Allow,
-            Some("allow_always") => Answer::AllowAll,
+            Some(0) => Answer::Allow,
+            Some(1) => Answer::AllowAll,
             _ => Answer::Deny,
         }
     }
     /// The preview `question` showed, under `title`.
     fn approve_publication(&mut self, title: &str) -> bool {
-        let text = match self.asked.take() {
-            Some(preview) => format!("{title}\n\n{preview}"),
-            None => title.to_owned(),
-        };
+        let text = self.asking(title);
         let options = [
             ("approve", "Approve publication", "allow_once"),
             ("cancel", "Cancel", "reject_once"),
         ];
-        self.permission(&text, &options, &self.cancel.clone()) == Some("approve")
+        self.permission(&text, &options, &self.cancel.clone()) == Some(0)
     }
     /// What a question asks, which the next prompt answers.
     fn question(&mut self, message: &str) {
@@ -1296,12 +1345,82 @@ impl AgentUi for Updates {
     fn usage(&mut self, tokens: Tokens, context: Option<u64>, _rate: Option<f64>) {
         self.usage_update(context, tokens.cost);
     }
+    /// A form with one of `options`, each by its value, the recommended one the default.
     fn choose(
         &mut self,
-        _title: &str,
-        _options: &[Choice],
-        _recommended: Option<usize>,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
     ) -> Option<usize> {
-        None
+        if !self.forms {
+            return self.unanswered(title, options);
+        }
+        let one_of: Vec<Value> = (options.iter())
+            .map(|option| {
+                let mut one = json!({"const": option.value, "title": option.label});
+                if let Some(description) = &option.description {
+                    one["description"] = json!(description);
+                }
+                one
+            })
+            .collect();
+        let mut property = json!({"type": "string", "title": title, "oneOf": one_of});
+        if let Some(option) = recommended.and_then(|index| options.get(index)) {
+            property["default"] = json!(option.value);
+        }
+        let answer = self.elicit(title, property)?;
+        let chosen = (options.iter()).position(|option| answer == option.value.as_str());
+        if chosen.is_none() {
+            self.refused(&answer);
+        }
+        chosen
+    }
+    /// A form with a boolean, `true` the first of `options`.
+    fn confirm(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+    ) -> Option<usize> {
+        if !self.forms {
+            return self.unanswered(title, options);
+        }
+        let mut property = json!({"type": "boolean", "title": title});
+        if let Some(recommended) = recommended {
+            property["default"] = json!(recommended == 0);
+        }
+        match self.elicit(title, property)? {
+            Value::Bool(yes) => Some(if yes { 0 } else { 1 }),
+            answer => {
+                self.refused(&answer);
+                None
+            }
+        }
+    }
+    /// A permission request: the first option allows once, the last denies, any between
+    /// allows for longer.
+    fn permit(&mut self, title: &str, options: &[Choice]) -> Option<usize> {
+        let text = self.asking(title);
+        let last = options.len().saturating_sub(1);
+        let kinds: Vec<&str> = (0..options.len())
+            .map(|index| match index {
+                _ if index == last => "reject_once",
+                0 => "allow_once",
+                _ => "allow_always",
+            })
+            .collect();
+        let ids: Vec<String> = (kinds.iter().enumerate())
+            .map(|(index, kind)| match kinds[..index].contains(kind) {
+                true => format!("{kind}-{index}"),
+                false => kind.to_string(),
+            })
+            .collect();
+        let offered: Vec<(&str, &str, &str)> = (ids.iter().zip(options).zip(&kinds))
+            .map(|((id, option), kind)| (id.as_str(), option.label.as_str(), *kind))
+            .collect();
+        self.permission(&text, &offered, &self.cancel.clone())
+    }
+    fn offers_choices(&mut self) -> bool {
+        self.forms
     }
 }

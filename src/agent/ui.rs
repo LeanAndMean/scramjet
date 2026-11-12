@@ -147,6 +147,24 @@ pub trait AgentUi {
         options: &[Choice],
         recommended: Option<usize>,
     ) -> Option<usize>;
+    /// `choose` for a yes-or-no question, `options`' first saying yes.
+    fn confirm(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+    ) -> Option<usize> {
+        self.choose(title, options, recommended)
+    }
+    /// `choose` for allowing what `question` just showed, `options`' last denying it.
+    fn permit(&mut self, title: &str, options: &[Choice]) -> Option<usize> {
+        self.choose(title, options, None)
+    }
+    /// Whether the model's select and confirm questions can be answered from their options;
+    /// otherwise they are asked as freetext ones, which the user's next prompt answers.
+    fn offers_choices(&mut self) -> bool {
+        true
+    }
     /// Asks whether to publish what `question` just showed, under `title` with
     /// `publication_choices`; `true` only when approved.
     fn approve_publication(&mut self, title: &str) -> bool {

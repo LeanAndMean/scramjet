@@ -457,7 +457,7 @@ impl Agent {
                 status::Reported::Abandon(abandon) => {
                     ui.question(&abandon.message());
                     let choices = status::Abandon::choices();
-                    let chosen = ui.choose(&abandon.title(), &choices, Some(1));
+                    let chosen = ui.confirm(&abandon.title(), &choices, Some(1));
                     self.lifecycle.abandon(&abandon, chosen)
                 }
             };
@@ -711,6 +711,9 @@ fn ask(
     ui: &mut dyn AgentUi,
 ) -> (Output, bool) {
     let question = match question::Question::parse(arguments) {
+        Ok(question) if question.kind != question::Kind::Freetext && !ui.offers_choices() => {
+            question.into_freetext()
+        }
         Ok(question) => question,
         Err(error) => {
             ui.tool_result(question::NAME, &error, None, true);
@@ -726,7 +729,7 @@ fn ask(
     ui.question(&question.message);
     let chosen = match question.kind {
         question::Kind::Freetext => None,
-        question::Kind::Confirm => ui.choose("Confirm", &question.options, None),
+        question::Kind::Confirm => ui.confirm("Confirm", &question.options, None),
         question::Kind::Select => {
             ui.choose("Choose an option", &question.options, question.recommended)
         }

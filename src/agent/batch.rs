@@ -365,6 +365,27 @@ impl AgentUi for Relay {
         self.ask(move |ui| ui.choose(&title, &options, recommended))
             .flatten()
     }
+    fn confirm(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+    ) -> Option<usize> {
+        let (title, options) = (title.to_owned(), options.to_vec());
+        self.ask(move |ui| ui.confirm(&title, &options, recommended))
+            .flatten()
+    }
+    fn permit(&mut self, title: &str, options: &[Choice]) -> Option<usize> {
+        let (title, options) = (title.to_owned(), options.to_vec());
+        self.ask(move |ui| ui.permit(&title, &options)).flatten()
+    }
+    fn offers_choices(&mut self) -> bool {
+        self.ask(|ui| ui.offers_choices()).unwrap_or(true)
+    }
+    fn approve_publication(&mut self, title: &str) -> bool {
+        let title = title.to_owned();
+        (self.ask(move |ui| ui.approve_publication(&title))).unwrap_or(false)
+    }
     fn waiting(&mut self, _: super::Purpose) {}
     fn progress(&mut self, _: &super::StreamProgress) {}
     fn retrying(&mut self, _: &str, _: u32, _: u32, _: std::time::Duration) {}

@@ -133,6 +133,27 @@ and 'label'."
         Ok(question)
     }
 
+    /// The question asked as a freetext one, its options listed under its message for the
+    /// user's reply.
+    pub fn into_freetext(self) -> Self {
+        let options: Vec<String> = (self.options.iter())
+            .map(|option| match &option.description {
+                Some(description) => format!("- {} — {description}", option.label),
+                None => format!("- {}", option.label),
+            })
+            .collect();
+        Self {
+            kind: Kind::Freetext,
+            message: format!(
+                "{}\n\nReply with one of:\n{}",
+                self.message,
+                options.join("\n")
+            ),
+            options: Vec::new(),
+            recommended: None,
+        }
+    }
+
     /// What the model receives for the user's choice (`None`: cancelled), and whether the turn
     /// ends there, as Scramjet ends it after a freetext question or a cancelled one. `parked`:
     /// a freetext question left the active command waiting for the reply.
@@ -167,7 +188,7 @@ pub fn shown(arguments: &Value, output: &str) -> Option<(String, String)> {
         None => choice.label.clone(),
     };
     let text = match question.kind {
-        Kind::Freetext if answer.get("parked").is_some() => match answer["parked"] == true {
+        _ if answer.get("parked").is_some() => match answer["parked"] == true {
             true => "Waiting for your reply".to_owned(),
             false => "Reply at the prompt".to_owned(),
         },

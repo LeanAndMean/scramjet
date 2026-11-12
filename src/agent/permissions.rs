@@ -181,7 +181,7 @@ and why; they can grant them with /add-dir DIR, or start with --add-dir DIR."
                 value: label.into(),
             })
             .collect();
-        let chosen = ui.choose("Allow writing there?", &choices, None);
+        let chosen = ui.permit("Allow writing there?", &choices);
         let chosen = chosen.map(|index| choices[index].label.as_str());
         let allowed = matches!(
             chosen,

@@ -896,7 +896,7 @@ is added or changed.",
             directories.join(", ")
         ));
         let options = ["Yes", "No"].map(super::Choice::plain);
-        if ui.choose("Run project-local agents?", &options, None) != Some(0) {
+        if ui.permit("Run project-local agents?", &options) != Some(0) {
             let text = "Canceled: project-local agents not approved.".to_owned();
             return (plain(text, false), Usage::default());
         }

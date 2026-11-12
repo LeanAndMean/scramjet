@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.209.0 — ACP asks questions in the client's forms
+
+### Added
+
+- In `scramjet acp`, the agent's select and confirm questions and a status report's abandon question are `elicitation/create` forms when the client offers them; a client without forms gets them as freetext questions, their options listed, which the next prompt answers. Project agents' consent and write grants are permission requests, where they were denied.
+
 ## 2.208.0 — ACP asks the client's permission
 
 ### Added
