@@ -1855,6 +1855,14 @@ fn find(
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
     let found = search::find(root, &path, pattern, limit, hidden, cancel)?;
     if found.is_empty() {
+        // Models searching for text (gpt-oss) take the bare answer as "the text is nowhere".
+        if !pattern.contains(['*', '?', '[', '{', '/']) {
+            return Ok(
+                "No files found matching pattern\n\n[find matches file names by glob, \
+such as *.rs or *name*. To search file contents, use grep]"
+                    .into(),
+            );
+        }
         return Ok("No files found matching pattern".into());
     }
     let limited = (found.len() >= limit).then(|| {
@@ -2997,6 +3005,11 @@ to see full lines]",
                 .unwrap_err()
                 .contains("regex parse error")
         );
+        assert!(
+            run("grep", json!({"pattern":"find("}))
+                .unwrap_err()
+                .ends_with("\nTo search for the pattern as plain text, set literal: true")
+        );
         assert_eq!(
             run("grep", json!({"pattern":"x","path":"missing"})).unwrap_err(),
             format!("Path not found: {}", root.join("missing").display())
@@ -3014,6 +3027,11 @@ to see full lines]",
         assert_eq!(
             text("find", json!({"pattern":"*.md"})),
             "No files found matching pattern"
+        );
+        assert_eq!(
+            text("find", json!({"pattern":"tool find"})),
+            "No files found matching pattern\n\n[find matches file names by glob, such as *.rs \
+or *name*. To search file contents, use grep]"
         );
         let limited = text("find", json!({"pattern":"*.rs","limit":1}));
         assert!(

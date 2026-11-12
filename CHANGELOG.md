@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.184.1 — Hints after a missed search
+
+### Fixed
+
+- grep's error for a pattern that is not a valid regex says to set `literal: true` to search for it as plain text, and `find` given a pattern with no glob characters that matches nothing says it matches file names and that grep searches contents. Local models such as gpt-oss passed text with `(` to grep and phrases to find.
+
 ## 2.184.0 — Replacing every occurrence
 
 ### Added

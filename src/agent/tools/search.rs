@@ -68,7 +68,7 @@ pub(super) fn grep(
         .multi_line(true)
         .line_terminator(Some(b'\n'))
         .build(options.pattern)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("{e}\nTo search for the pattern as plain text, set literal: true"))?;
     let mut builder = walk(path, hidden, true, ".rgignore");
     if let Some(glob) = options.glob {
         let mut overrides = ignore::overrides::OverrideBuilder::new(root);
