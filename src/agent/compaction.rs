@@ -993,16 +993,18 @@ impl Agent {
     }
 
     /// Learns from a reply of `model` how far chars/4 was from the runtime's count of the
-    /// request's `input`, when that count is of the whole request: llama.cpp and vLLM refuse a
-    /// prompt past their window, while Ollama 0.40.16 cuts it to half its window and two tokens
-    /// and reports that, so its count is taken above half the window, or below it when the
-    /// request was too small by chars/4 to be cut.
+    /// request's `input`, when that count is of the whole request: llama.cpp, vLLM and LM Studio
+    /// refuse a prompt past their window, while Ollama 0.40.16 cuts it to half its window and
+    /// two tokens and reports that, so its count is taken above half the window, or below it
+    /// when the request was too small by chars/4 to be cut.
     pub(super) fn calibrate(&mut self, model: &str, estimate: u64, input: u64) {
         let (Some(runtime), Some(window)) = (self.info.runtime, self.info.window) else {
             return;
         };
         let whole = match runtime {
-            super::local::Runtime::LlamaCpp | super::local::Runtime::Vllm => true,
+            super::local::Runtime::LlamaCpp
+            | super::local::Runtime::Vllm
+            | super::local::Runtime::LmStudio => true,
             super::local::Runtime::Ollama => {
                 input > window / 2 + 64 || (input + 64 < window / 2 && estimate < window)
             }

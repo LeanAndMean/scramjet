@@ -186,6 +186,95 @@ fn llama_cpp_and_vllm_say_their_windows() {
     );
 }
 
+/// LM Studio's model lists (llmster 0.0.27, trimmed): its chat model loaded on the first
+/// request with an 8192-token window, an embedder, both answering `/v1/models` alike.
+fn lm_studio(loaded: bool) -> impl Fn(&str, &str, &Value) -> (u16, Value) {
+    move |_, path, body| {
+        let instances = match loaded {
+            true => json!([{"id": "qwen3-1.7b", "config": {"context_length": 8192}}]),
+            false => json!([]),
+        };
+        match path {
+            "/v1/models" => (
+                200,
+                json!({"object": "list", "data": [
+                {"id": "qwen3-1.7b", "owned_by": "organization_owner"},
+                {"id": "text-embedding-nomic-embed-text-v1.5", "owned_by": "organization_owner"}]}),
+            ),
+            "/api/version" => (
+                200,
+                json!({"error": "Unexpected endpoint or method. (GET /api/version)"}),
+            ),
+            "/api/v1/models" => (
+                200,
+                json!({"models": [
+                {"type": "llm", "key": "qwen3-1.7b", "loaded_instances": instances,
+                    "max_context_length": 40960, "capabilities": {"vision": false,
+                    "trained_for_tool_use": true,
+                    "reasoning": {"allowed_options": ["off", "on"], "default": "on"}}},
+                {"type": "embedding", "key": "text-embedding-nomic-embed-text-v1.5",
+                    "loaded_instances": [], "max_context_length": 2048}]}),
+            ),
+            "/v1/chat/completions" => {
+                let message = match body["reasoning_effort"] == "none" {
+                    true => json!({"content": "391"}),
+                    false => json!({"content": "", "reasoning_content": "Call it.",
+                        "tool_calls": [{"function": {"name": CHECK_TOOL,
+                        "arguments": "{\"word\":\"scramjet\"}"}}]}),
+                };
+                (200, json!({"choices": [{"message": message}]}))
+            }
+            _ => not_found(),
+        }
+    }
+}
+
+#[test]
+fn lm_studio_is_told_apart_and_its_window_read_once_loaded() {
+    let url = serve(lm_studio(false));
+    let server = probe(&url, None).unwrap();
+    assert_eq!((server.runtime, server.version), (Runtime::LmStudio, None));
+    let chat = &server.models[0];
+    assert_eq!(
+        (chat.window, chat.trained, chat.reasoning),
+        (None, Some(40960), true)
+    );
+    assert_eq!(chat.unfit, None);
+    let embedder = server.models[1].unfit.as_deref();
+    assert_eq!(embedder, Some("LM Studio says it does not chat"));
+
+    let loaded = serve(lm_studio(true));
+    assert_eq!(window_now(&loaded, None, "qwen3-1.7b"), Some(8192));
+    let server = probe(&loaded, None).unwrap();
+    let checked = check_tools(&server, "qwen3-1.7b", None).unwrap();
+    assert_eq!(checked.window, Some(8192));
+    assert_eq!(
+        (checked.thinks, checked.switch),
+        (true, Some(Switch::Effort))
+    );
+
+    // Before 0.4.0, only `/api/v0/models`.
+    let v0 = serve(|_, path, _| match path {
+        "/v1/models" => (200, json!({"data": [{"id": "qwen2-vl-7b-instruct"}]})),
+        "/api/v0/models" => (
+            200,
+            json!({"object": "list", "data": [
+            {"id": "qwen2-vl-7b-instruct", "type": "vlm", "state": "loaded",
+                "max_context_length": 32768, "loaded_context_length": 4096},
+            {"id": "nomic", "type": "embeddings", "state": "not-loaded"}]}),
+        ),
+        _ => not_found(),
+    });
+    let server = probe(&v0, None).unwrap();
+    assert_eq!(server.runtime, Runtime::LmStudio);
+    let vision = &server.models[0];
+    assert_eq!(
+        (vision.window, vision.trained, vision.images),
+        (Some(4096), Some(32768), true)
+    );
+    assert!(server.models[1].unfit.is_some());
+}
+
 #[test]
 fn each_failing_step_is_named() {
     let keyed = serve(|_, _, _| (401, json!({"error": "no key"})));

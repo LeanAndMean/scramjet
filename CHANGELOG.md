@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.176.0 — LM Studio in Local models
+
+### Added
+
+- `/login` → Local models finds LM Studio at port 1234 (or an address given) and saves its models under `lm-studio`, each with the window LM Studio loaded it with (read from its REST API once the check has loaded it; the model's own maximum is shown before), whether it sees images, and its embedders left out. A model that thinks is asked whether `reasoning_effort` none stops it, and then offers off. LM Studio refuses a prompt past its window rather than cutting it, so compaction corrects its estimate by LM Studio's token counts.
+
 ## 2.175.2 — gpt-oss on Ollama offers no off
 
 ### Fixed

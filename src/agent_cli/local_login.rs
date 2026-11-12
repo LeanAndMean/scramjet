@@ -1,5 +1,5 @@
-//! `/login` → Local models: a runtime found on this machine (Ollama, llama.cpp's server, vLLM at
-//! their default ports) or at an address given, then one of its models, checked to call a
+//! `/login` → Local models: a runtime found on this machine (Ollama, llama.cpp's server, vLLM,
+//! LM Studio at their default ports) or at an address given, then one of its models, checked to call a
 //! harmless tool and saved as a provider of the user's `models.json`; saved ones are checked
 //! again, or removed, the same way. The runtime itself is never started, changed or stopped.
 
@@ -398,6 +398,10 @@ impl Interactive {
                     "Ollama cuts a longer prompt from its start without saying so \
                      (OLLAMA_CONTEXT_LENGTH sets its window)"
                 }
+                Runtime::LmStudio => {
+                    "LM Studio refuses a request over its window (lms load MODEL -c TOKENS sets \
+                     it)"
+                }
                 _ => "a runtime refuses a request over its window",
             };
             self.say(&format!(
@@ -477,11 +481,11 @@ fn described(runtime: Runtime, model: &LocalModel) -> String {
         return format!("Left out: {unfit}");
     }
     let window = match (model.window, model.trained, runtime) {
-        (Some(window), _, Runtime::Ollama) => {
-            format!("window {window} tokens, as Ollama loaded it")
+        (Some(window), _, Runtime::Ollama | Runtime::LmStudio) => {
+            format!("window {window} tokens, as {} loaded it", runtime.name())
         }
         (Some(window), _, _) => format!("window {window} tokens"),
-        (None, Some(trained), Runtime::Ollama) => {
+        (None, Some(trained), Runtime::Ollama | Runtime::LmStudio) => {
             format!("window known once loaded (the model's own: {trained}); the check loads it")
         }
         (None, _, _) => "window unknown; you can give it after the check".to_owned(),
@@ -523,7 +527,8 @@ fn windows_hint() -> Option<String> {
         Some(gateway) => format!("the Windows host's address, {gateway}"),
         None => "the Windows host's address".to_owned(),
     };
-    let listen = "and the runtime must listen beyond localhost (Ollama: OLLAMA_HOST=0.0.0.0)";
+    let listen = "and the runtime must listen beyond localhost (Ollama: OLLAMA_HOST=0.0.0.0; \
+                  LM Studio: lms server start --bind 0.0.0.0)";
     Some(match mode.as_deref() {
         Some("mirrored") => {
             "A runtime on Windows is reached at localhost here (WSL's mirrored networking)".into()

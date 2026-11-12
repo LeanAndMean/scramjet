@@ -1,4 +1,5 @@
-//! Models served on this machine or at an address given: Ollama, llama.cpp's server and vLLM,
+//! Models served on this machine or at an address given: Ollama, llama.cpp's server, vLLM and
+//! LM Studio,
 //! found at their default ports or told apart by what they answer, each model's context window
 //! read from the runtime itself, and a check that a model calls a harmless tool, for `/login`
 //! to save them as a provider of the user's `models.json`.
@@ -31,19 +32,26 @@ pub enum Runtime {
     Ollama,
     LlamaCpp,
     Vllm,
+    LmStudio,
     /// An OpenAI-compatible server that is none of the others.
     Other,
 }
 
 impl Runtime {
     /// Those looked for at their default ports.
-    pub const LOOKED_FOR: [Runtime; 3] = [Runtime::Ollama, Runtime::LlamaCpp, Runtime::Vllm];
+    pub const LOOKED_FOR: [Runtime; 4] = [
+        Runtime::Ollama,
+        Runtime::LlamaCpp,
+        Runtime::Vllm,
+        Runtime::LmStudio,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Runtime::Ollama => "Ollama",
             Runtime::LlamaCpp => "llama.cpp",
             Runtime::Vllm => "vLLM",
+            Runtime::LmStudio => "LM Studio",
             Runtime::Other => "OpenAI-compatible server",
         }
     }
@@ -54,6 +62,7 @@ impl Runtime {
             Runtime::Ollama => "ollama",
             Runtime::LlamaCpp => "llama-cpp",
             Runtime::Vllm => "vllm",
+            Runtime::LmStudio => "lm-studio",
             Runtime::Other => "local",
         }
     }
@@ -63,6 +72,7 @@ impl Runtime {
             Runtime::Ollama,
             Runtime::LlamaCpp,
             Runtime::Vllm,
+            Runtime::LmStudio,
             Runtime::Other,
         ]
         .into_iter()
@@ -74,6 +84,7 @@ impl Runtime {
             Runtime::Ollama => Some(11434),
             Runtime::LlamaCpp => Some(8080),
             Runtime::Vllm => Some(8000),
+            Runtime::LmStudio => Some(1234),
             Runtime::Other => None,
         }
     }
@@ -89,6 +100,10 @@ impl Runtime {
                 "vllm serve calls tools only when started with --enable-auto-tool-choice and \
                  the model's --tool-call-parser"
             }
+            Runtime::LmStudio => {
+                "LM Studio calls tools when the model's chat template takes them; another model \
+                 may"
+            }
             Runtime::Other => "the server or the model may not support tool calls",
         }
     }
@@ -103,7 +118,9 @@ impl Runtime {
             Runtime::LlamaCpp => {
                 "llama-server sends it apart when started with --jinja --reasoning-format deepseek"
             }
-            Runtime::Ollama | Runtime::Other => "the server does not send it apart",
+            Runtime::Ollama | Runtime::LmStudio | Runtime::Other => {
+                "the server does not send it apart"
+            }
         }
     }
 }
@@ -111,7 +128,7 @@ impl Runtime {
 /// How requests turn a model's thinking on and off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Switch {
-    /// `reasoning_effort`, `none` for off: Ollama's.
+    /// `reasoning_effort`, `none` for off: Ollama's and LM Studio's.
     Effort,
     /// `reasoning_effort` levels, where `none` does not stop it: gpt-oss on Ollama 0.40.16.
     EffortNoOff,
@@ -341,7 +358,10 @@ async fn probe_within(url: &str, key: Option<&str>, wait: Duration) -> Result<Se
                 let models = ollama_models(&tags, &loaded);
                 (Runtime::Ollama, Some(version.to_owned()), models)
             }
-            None => (Runtime::Other, None, other(&data)),
+            None => match lm_studio_models(url, key, wait).await {
+                Some(models) => (Runtime::LmStudio, None, models),
+                None => (Runtime::Other, None, other(&data)),
+            },
         }
     };
     if models.is_empty() {
@@ -409,6 +429,52 @@ fn llama_cpp(data: &[Value], props: &Value) -> Vec<LocalModel> {
         Some(model)
     });
     models.collect()
+}
+
+/// LM Studio's models from its REST API, `None` when the server has none: `/api/v1/models`
+/// from 0.4.0 on, else `/api/v0/models` (from 0.3.6). A model's window is that of its loaded
+/// instance: LM Studio loads it on the first request with a default window (8192 in llmster
+/// 0.0.27), and `lms load -c` sets another.
+async fn lm_studio_models(url: &str, key: Option<&str>, wait: Duration) -> Option<Vec<LocalModel>> {
+    let v1 = optional(format!("{url}/api/v1/models"), key, wait).await;
+    if let Some(listed) = v1["models"].as_array() {
+        return Some(listed.iter().filter_map(lm_studio_v1).collect());
+    }
+    let v0 = optional(format!("{url}/api/v0/models"), key, wait).await;
+    let listed = v0["data"].as_array()?;
+    if !listed.iter().any(|model| model["state"].is_string()) {
+        return None;
+    }
+    Some(listed.iter().filter_map(lm_studio_v0).collect())
+}
+
+fn lm_studio_v1(listed: &Value) -> Option<LocalModel> {
+    let mut model = LocalModel::named(listed["key"].as_str()?);
+    let loaded = listed["loaded_instances"].as_array().into_iter().flatten();
+    model.window = loaded
+        .filter_map(|instance| positive(&instance["config"]["context_length"]))
+        .next();
+    model.trained = positive(&listed["max_context_length"]);
+    let capabilities = &listed["capabilities"];
+    model.images = capabilities["vision"] == true;
+    model.reasoning = capabilities["reasoning"]["allowed_options"]
+        .as_array()
+        .is_some_and(|options| options.iter().any(|option| option != "off"));
+    if listed["type"] != "llm" {
+        model.unfit = Some("LM Studio says it does not chat".into());
+    }
+    Some(model)
+}
+
+fn lm_studio_v0(listed: &Value) -> Option<LocalModel> {
+    let mut model = LocalModel::named(listed["id"].as_str()?);
+    model.window = positive(&listed["loaded_context_length"]);
+    model.trained = positive(&listed["max_context_length"]);
+    model.images = listed["type"] == "vlm";
+    if !matches!(listed["type"].as_str(), Some("llm" | "vlm")) {
+        model.unfit = Some("LM Studio says it does not chat".into());
+    }
+    Some(model)
 }
 
 fn vllm(data: &[Value]) -> Vec<LocalModel> {
@@ -565,6 +631,20 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
             let (apart, as_text) = thinking(message);
             checked.thinks = apart || as_text;
             checked.thinking_as_text = as_text.then(|| server.runtime.thinking_hint());
+            if server.runtime == Runtime::LmStudio {
+                let models = lm_studio_models(&server.url, key, PROBE_WAIT).await;
+                let loaded = models
+                    .into_iter()
+                    .flatten()
+                    .find(|listed| listed.id == model);
+                checked.window = loaded.and_then(|loaded| loaded.window);
+                // It takes `reasoning_effort` and ignores `chat_template_kwargs` (llmster 0.0.27).
+                let off = json!({"reasoning_effort": "none"});
+                if checked.thinks && stops(server, model, key, off).await {
+                    checked.switch = Some(Switch::Effort);
+                }
+                return Ok(checked);
+            }
             let off = json!({"chat_template_kwargs": {"enable_thinking": false}});
             if checked.thinks && stops(server, model, key, off).await {
                 checked.switch = Some(Switch::ChatTemplate);
