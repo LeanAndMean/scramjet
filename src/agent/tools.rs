@@ -307,14 +307,15 @@ fn definition(name: &str, sandboxed: bool) -> Value {
             "content":{"type":"string","description":"Content to write to the file"}},
           "required":["path","content"]}}),
         "edit" => json!({"type":"function","name":"edit","strict":false,
-         "description":"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+         "description":"Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file, unless its replaceAll is set. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
          "parameters":{"type":"object","properties":{
             "path":{"type":"string","description":"Path to the file to edit, relative to the project directory or absolute"},
             "edits":{"type":"array",
                 "description":"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
                 "items":{"type":"object","properties":{
-                "oldText":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."},
-                "newText":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["oldText","newText"]}}},
+                "oldText":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the original file unless replaceAll is set, and must not overlap with any other edits[].oldText in the same call."},
+                "newText":{"type":"string","description":"Replacement text for this targeted edit."},
+                "replaceAll":{"type":"boolean","description":"Replace every occurrence of oldText rather than requiring it to be unique (default false)."}},"required":["oldText","newText"]}}},
           "required":["path","edits"]}}),
         "bash" => json!({"type":"function","name":"bash","strict":false,
          "description":match sandboxed && !cfg!(windows) {
@@ -1347,7 +1348,11 @@ fn edit(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<
                 false => format!("edits[{index}].oldText must not be empty in {shown}."),
             });
         }
-        let (start, end, new) = match finder.find(old, new) {
+        // Claude Code's Edit calls it `replace_all`, which models trained on it may send.
+        let all = [&edit["replaceAll"], &edit["replace_all"]]
+            .iter()
+            .any(|flag| flag.as_bool() == Some(true));
+        let (ranges, new) = match finder.find(old, new, all) {
             Ok(span) => span,
             Err(matching::Miss::Absent) => {
                 return Err(match single {
@@ -1367,16 +1372,22 @@ including all whitespace and newlines."
                 return Err(match single {
                     true => format!(
                         "Found {occurrences} occurrences of the text in {shown}, {at}. The text \
-must be unique. Please provide more context to make it unique."
+must be unique. Please provide more context to make it unique, or set replaceAll to replace every \
+occurrence."
                     ),
                     false => format!(
                         "Found {occurrences} occurrences of edits[{index}] in {shown}, {at}. Each \
-oldText must be unique. Please provide more context to make it unique."
+oldText must be unique. Please provide more context to make it unique, or set its replaceAll to \
+replace every occurrence."
                     ),
                 });
             }
         };
-        spans.push((start, end, new, index));
+        spans.extend(
+            ranges
+                .into_iter()
+                .map(|(start, end)| (start, end, new.clone(), index)),
+        );
     }
     spans.sort_by_key(|span| span.0);
     if let Some(pair) = spans.windows(2).find(|pair| pair[0].1 > pair[1].0) {
@@ -1418,7 +1429,14 @@ might indicate an issue with special characters or the text not existing as expe
         .map(|&(start, end, new)| (start - skipped, end - skipped, new))
         .collect();
     Ok(Output {
-        text: format!("Applied {} edit(s) to {}", spans.len(), path.display()),
+        text: match spans.len() == edits.len() {
+            true => format!("Applied {} edit(s) to {shown}", edits.len()),
+            false => format!(
+                "Applied {} edit(s), {} replacements, to {shown}",
+                edits.len(),
+                spans.len()
+            ),
+        },
         detail: Some(ToolDetail::Diff(diff(text, &text_spans))),
         failed: false,
         image: None,
@@ -2427,7 +2445,8 @@ mod tests {
             run(json!([{"oldText":"beta","newText":"x"}])).unwrap_err(),
             format!(
                 "Found 2 occurrences of the text in {path}, all on line 1. The text must be \
-unique. Please provide more context to make it unique."
+unique. Please provide more context to make it unique, or set replaceAll to replace every \
+occurrence."
             )
         );
         assert_eq!(
@@ -2457,10 +2476,31 @@ all whitespace and newlines."
 disjoint regions."
             )
         );
-        run(json!([{"oldText":"gamma","newText":"G"},{"oldText":"alpha","newText":"A"}])).unwrap();
+        assert_eq!(
+            run(json!([{"oldText":"beta","newText":"B","replaceAll":true},{"oldText":"gamma beta","newText":"y"}]))
+                .unwrap_err(),
+            format!(
+                "edits[1] and edits[0] overlap in {path}. Merge them into one edit or target \
+disjoint regions."
+            )
+        );
+        let applied =
+            run(json!([{"oldText":"gamma","newText":"G"},{"oldText":"alpha","newText":"A"}]))
+                .unwrap();
+        assert_eq!(applied.text, format!("Applied 2 edit(s) to {path}"));
         assert_eq!(
             std::fs::read_to_string(root.join("f.txt")).unwrap(),
             "A beta G beta\n"
+        );
+        let applied = run(json!([{"oldText":"beta","newText":"B","replaceAll":true},{"oldText":"G","newText":"g","replace_all":true}]))
+            .unwrap();
+        assert_eq!(
+            applied.text,
+            format!("Applied 2 edit(s), 3 replacements, to {path}")
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("f.txt")).unwrap(),
+            "A B g B\n"
         );
         let written = call("write", json!({"path":"new/g.txt","content":"é\nx\n"}))
             .run(&root, None, &cancel, &mut |_| {})
@@ -3612,7 +3652,8 @@ to see full lines]",
                 .unwrap_err(),
             format!(
                 "Found 2 occurrences of the text in {path}, on lines 1 and 3. The text must be \
-unique. Please provide more context to make it unique."
+unique. Please provide more context to make it unique, or set replaceAll to replace every \
+occurrence."
             )
         );
         run(json!({"path":"f.txt","edits":[{"oldText":"say(\"hi\") - 1\nend","newText":"say('hi')\nend"}]}))

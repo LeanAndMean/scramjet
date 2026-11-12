@@ -68,16 +68,18 @@ impl View {
         original + (at - text)
     }
 
-    /// The original range of the one place `old` is in the text, else the lines of `original`
-    /// where each place starts.
-    fn find(&self, old: &str, original: &str) -> Result<(usize, usize), Miss> {
+    /// The original range of the one place `old` is in the text, or of every place when `all`,
+    /// else the lines of `original` where each place starts.
+    fn find(&self, old: &str, original: &str, all: bool) -> Result<Vec<(usize, usize)>, Miss> {
         if old.is_empty() {
             return Err(Miss::Absent);
         }
         let starts: Vec<usize> = self.text.match_indices(old).map(|(at, _)| at).collect();
+        let range = |&at: &usize| (self.origin(at), self.origin(at + old.len()));
         match starts[..] {
             [] => Err(Miss::Absent),
-            [start] => Ok((self.origin(start), self.origin(start + old.len()))),
+            [_] => Ok(starts.iter().map(range).collect()),
+            _ if all => Ok(starts.iter().map(range).collect()),
             _ => {
                 let (mut line, mut counted) = (1, 0);
                 let lines = starts.iter().map(|&at| {
@@ -128,8 +130,14 @@ impl<'a> Finder<'a> {
         }
     }
 
-    /// The range of the original that `old` stands for, and `new` as it is to be written there.
-    pub fn find(&self, old: &str, new: &str) -> Result<(usize, usize, String), Miss> {
+    /// The range of the original that `old` stands for, or every such range when `all`, and
+    /// `new` as it is to be written there.
+    pub fn find(
+        &self,
+        old: &str,
+        new: &str,
+        all: bool,
+    ) -> Result<(Vec<(usize, usize)>, String), Miss> {
         // A byte order mark starting `old`, or a `\r` ending it, is the file's, copied from `read`;
         // the match leaves it in place, so `new` must not bring it again.
         let (old, new) = match old.strip_prefix('\u{feff}') {
@@ -140,13 +148,15 @@ impl<'a> Finder<'a> {
             Some(old) => (old, new.strip_suffix('\r').unwrap_or(new)),
             None => (old, new),
         };
-        let (start, end) = self.locate(old)?;
-        Ok((start, end, self.with_endings(new)))
+        Ok((self.locate(old, all)?, self.with_endings(new)))
     }
 
-    /// The one place `old` is, line endings aside, else the one place it is loosely.
-    fn locate(&self, old: &str) -> Result<(usize, usize), Miss> {
-        match self.exact.find(&View::new(old, false).text, self.original) {
+    /// The one place (or every place, when `all`) `old` is, line endings aside, else loosely.
+    fn locate(&self, old: &str, all: bool) -> Result<Vec<(usize, usize)>, Miss> {
+        match self
+            .exact
+            .find(&View::new(old, false).text, self.original, all)
+        {
             Err(Miss::Absent) => {}
             found => return found,
         }
@@ -159,12 +169,12 @@ impl<'a> Finder<'a> {
         if !tail.is_empty() {
             let mut kept = trimmed.clone();
             kept.extend(tail.chars().map(|c| plain(c).map_or(c, |_| ' ')));
-            match loose.find(&kept, self.original) {
+            match loose.find(&kept, self.original, all) {
                 Err(Miss::Absent) => {}
                 found => return found,
             }
         }
-        loose.find(&trimmed, self.original)
+        loose.find(&trimmed, self.original, all)
     }
 
     /// `new` with the line ending of the file's first line, as Scramjet writes it.
@@ -183,7 +193,10 @@ mod tests {
     use super::*;
 
     fn found(original: &str, old: &str) -> Option<String> {
-        let (start, end, _) = Finder::new(original).find(old, "").ok()?;
+        let (ranges, _) = Finder::new(original).find(old, "", false).ok()?;
+        let [(start, end)] = ranges[..] else {
+            return None;
+        };
         Some(original[start..end].to_owned())
     }
 
@@ -218,25 +231,38 @@ mod tests {
             Some("now  \n\tthen\u{a0}go\t\n")
         );
         assert!(matches!(
-            Finder::new("“a”\r\n\r\n”a“\n").find("\"a\"", "").err(),
+            Finder::new("“a”\r\n\r\n”a“\n").find("\"a\"", "", false).err(),
             Some(Miss::Many(lines)) if lines == [1, 3]
         ));
         assert!(matches!(
-            Finder::new("a \n").find("\t", ""),
+            Finder::new("a \n").find("\t", "", false),
             Err(Miss::Absent)
         ));
         assert!(matches!(
-            Finder::new("ab").find("b\n", ""),
+            Finder::new("ab").find("b\n", "", false),
             Err(Miss::Absent)
         ));
     }
 
     #[test]
+    fn all_takes_every_place_old_text_is_exactly_else_loosely() {
+        let all = |original: &str, old: &str| {
+            let (ranges, _) = Finder::new(original).find(old, "", true).ok()?;
+            Some(ranges)
+        };
+        assert_eq!(all("ab ab\nab", "ab"), Some(vec![(0, 2), (3, 5), (6, 8)]));
+        assert_eq!(all("ab", "ab"), Some(vec![(0, 2)]));
+        assert_eq!(all("aaa", "aa"), Some(vec![(0, 2)]));
+        assert_eq!(all("“a” \n“a”\r\n", "\"a\""), Some(vec![(0, 7), (9, 16)]));
+        assert_eq!(all("ab", "c"), None);
+    }
+
+    #[test]
     fn what_old_text_copies_of_the_file_beyond_its_text_new_text_does_not_add_again() {
         let replaced = |original: &str, old: &str, new: &str| {
-            let (start, end, new) = Finder::new(original).find(old, new).ok()?;
+            let (ranges, new) = Finder::new(original).find(old, new, false).ok()?;
             let mut text = original.to_owned();
-            text.replace_range(start..end, &new);
+            text.replace_range(ranges[0].0..ranges[0].1, &new);
             Some(text)
         };
         let bom = "\u{feff}one\r\ntwo\r\n";

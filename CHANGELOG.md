@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.184.0 — Replacing every occurrence
+
+### Added
+
+- The edit tool takes `replaceAll` on an edit (Claude Code's `replace_all` too), replacing every occurrence of its text instead of refusing one that is not unique; that refusal now says so.
+
 ## 2.183.0 — Where a refused edit's text is
 
 ### Changed
