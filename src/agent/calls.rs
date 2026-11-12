@@ -1766,20 +1766,6 @@ get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scra
             tool_calls(&[
                 ("read", json!({"path":"a.txt"})),
                 (subagent::NAME, json!({"agent":"x","task":"y"})),
-                // gpt-oss's name for grep, with grep's arguments, its browser's, and neither.
-                (
-                    "search",
-                    json!({"pattern":"a","path":"a.txt","max_results":5}),
-                ),
-                (
-                    "search",
-                    json!({"query":"x.","path":"b.txt","ignore_case":true,"max_results":5}),
-                ),
-                ("search", json!({"q":"a"})),
-                ("open", json!({"path":"b.txt","line_start":2,"line_end":2})),
-                ("read", json!({"path":"b.txt","line_start":1,"line_end":1})),
-                // Its find-in-page: text to look for in files.
-                ("find", json!({"query":"Xa","path":"b.txt","max_results":5})),
                 ("find", json!({"pattern":"*.txt"})),
             ]),
             tool_call("call_2", "bash", json!({"command":"touch x.txt"})),
@@ -1801,7 +1787,6 @@ get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scra
             &Default::default(),
         );
         std::fs::write(agent.root().join("a.txt"), "a\n").unwrap();
-        std::fs::write(agent.root().join("b.txt"), "X.y\nXay\n").unwrap();
         let mut ui = Recorder::default();
         agent
             .turn("look", &mut ui, &AtomicBool::new(false))
@@ -1824,12 +1809,6 @@ sed.\n- Be concise";
             [
                 "a\n",
                 "Tool subagent not found. Available tools: read, grep",
-                "a.txt:1: a",
-                "b.txt:1: X.y",
-                "Tool search not found. Available tools: read, grep",
-                "Xay\n",
-                "X.y\n\n[Showing lines 1-1 of 2. Use offset=2 to continue.]",
-                "b.txt:2: Xay",
                 "Tool find not found. Available tools: read, grep",
                 "Tool bash not found. Available tools: read, grep",
                 "Tool get_scramjet_user_input not found. Available tools: read, grep"
@@ -1841,27 +1820,7 @@ sed.\n- Be concise";
             .collect();
         assert_eq!(
             called,
-            [
-                "read",
-                subagent::NAME,
-                "grep",
-                "grep",
-                "search",
-                "read",
-                "read",
-                "grep",
-                "find",
-                "bash",
-                question::NAME
-            ]
-        );
-        let mapped = (agent.conversation().iter())
-            .find(|item| item["arguments"].as_str().is_some_and(|a| a.contains("x.")))
-            .unwrap();
-        let mapped: Value = serde_json::from_str(mapped["arguments"].as_str().unwrap()).unwrap();
-        assert_eq!(
-            mapped,
-            json!({"pattern":"x.","literal":true,"path":"b.txt","ignoreCase":true,"limit":5})
+            ["read", subagent::NAME, "find", "bash", question::NAME]
         );
         assert!(!agent.root().join("x.txt").exists());
         assert!(!ui.shown.iter().any(|shown| shown.contains("Go?")));

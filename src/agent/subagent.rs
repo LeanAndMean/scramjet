@@ -1314,8 +1314,7 @@ fn run_child(
         }
         report(Event::Usage(run.shown_usage()));
         let mut calls = Vec::new();
-        for mut item in reply.items {
-            tools::rename_habit(&mut item, tools);
+        for item in reply.items {
             match item["type"].as_str() {
                 Some("message") => {
                     let text = super::message_text(&item);

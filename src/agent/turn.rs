@@ -423,9 +423,7 @@ to a larger-context model)"
             let last = reply.items.len().saturating_sub(1);
             let saved = saved_usage(&reply);
             let timing = reply.timing.as_ref().map(saved_timing);
-            let offered = self.offered();
             for (index, mut item) in reply.items.into_iter().enumerate() {
-                super::tools::rename_habit(&mut item, &offered);
                 if let Some(object) = item.as_object_mut() {
                     object.insert(PRODUCER.into(), json!(model));
                     if let Some(tokens) = self.usage.context_tokens.filter(|_| index == last) {

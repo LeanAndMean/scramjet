@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.193.0 — No renaming of gpt-oss's tool calls
+
+### Changed
+
+- Calls to tools by names Scramjet does not offer (gpt-oss's `search`, `open`, and `find` with a `query`) are no longer rewritten into grep, read and find: as for any other model, they are refused with the names of the tools that are offered. Scramjet carries no code for one model's habits.
+
 ## 2.192.0 — MCP servers outside the sandbox
 
 ### Changed

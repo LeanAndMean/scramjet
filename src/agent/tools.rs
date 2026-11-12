@@ -151,8 +151,7 @@ pub const HARNESS_TOOLS: [&str; 13] = [
     super::mcp::CALL,
 ];
 
-/// A call to a tool not offered; names those offered, as a model trained on other tools' names
-/// (gpt-oss's `search`) otherwise keeps calling them.
+/// A call to a tool not offered; names those offered.
 pub(super) fn not_found(name: &str, offered: &[impl AsRef<str>]) -> String {
     let offered: Vec<&str> = offered.iter().map(AsRef::as_ref).collect();
     match offered.is_empty() {
@@ -162,74 +161,6 @@ pub(super) fn not_found(name: &str, offered: &[impl AsRef<str>]) -> String {
             offered.join(", ")
         ),
     }
-}
-
-/// Turns a reply's call into the tool it means when a model calls one by a name of its
-/// training. gpt-oss calls grep `search` and read `open` (its built-in browser's tools), with our
-/// arguments or its browser's (`query`, `ignore_case`, `max_results`; `line_start`, `line_end`,
-/// also given to read), and keeps calling them however often it is told no such tool exists.
-/// It also gives `find` a `query` for text in files, as its browser's find-in-page.
-/// The call is rewritten, name and arguments, so its history shows ours.
-pub(super) fn rename_habit(item: &mut Value, offered: &[impl AsRef<str>]) {
-    let offers = |tool: &str| offered.iter().any(|name| name.as_ref() == tool);
-    if item["type"] != "function_call" {
-        return;
-    }
-    let Ok(Value::Object(mut arguments)) =
-        serde_json::from_str::<Value>(item["arguments"].as_str().unwrap_or(""))
-    else {
-        return;
-    };
-    let queried = arguments.get("query").is_some_and(Value::is_string)
-        && !arguments.get("pattern").is_some_and(Value::is_string);
-    let ours = match item["name"].as_str() {
-        Some("search") if !offers("search") => "grep",
-        Some("find") if queried => "grep",
-        Some("find") if arguments.contains_key("max_results") => "find",
-        Some("open") if !offers("open") => "read",
-        Some("read") => "read",
-        _ => return,
-    };
-    if !offers(ours) {
-        return;
-    }
-    let rename = |arguments: &mut serde_json::Map<String, Value>, theirs: &str, ours: &str| {
-        if let Some(value) = arguments.remove(theirs) {
-            arguments.entry(ours).or_insert(value);
-        }
-    };
-    if ours == "grep" {
-        if !arguments.get("pattern").is_some_and(Value::is_string) {
-            let Some(query) = arguments.remove("query").filter(Value::is_string) else {
-                return;
-            };
-            arguments.insert("pattern".into(), query);
-            arguments.insert("literal".into(), json!(true));
-        }
-        rename(&mut arguments, "ignore_case", "ignoreCase");
-        rename(&mut arguments, "max_results", "limit");
-    } else if ours == "find" {
-        rename(&mut arguments, "max_results", "limit");
-    } else {
-        let given = |key| arguments.contains_key(key);
-        let path = arguments.get("path").is_some_and(Value::is_string);
-        if !path || (item["name"] == "read" && !given("line_start") && !given("line_end")) {
-            return;
-        }
-        let start = arguments.remove("line_start").and_then(|n| n.as_u64());
-        let end = arguments.remove("line_end").and_then(|n| n.as_u64());
-        if !arguments.contains_key("offset") && !arguments.contains_key("limit") {
-            let first = start.unwrap_or(1).max(1);
-            if start.is_some() {
-                arguments.insert("offset".into(), json!(first));
-            }
-            if let Some(end) = end.filter(|&end| end >= first) {
-                arguments.insert("limit".into(), json!(end - first + 1));
-            }
-        }
-    }
-    item["name"] = json!(ours);
-    item["arguments"] = json!(Value::Object(arguments).to_string());
 }
 
 /// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
@@ -2624,33 +2555,6 @@ mod tests {
 
     fn call(name: &str, arguments: Value) -> Call<'_> {
         Call { name, arguments }
-    }
-
-    #[test]
-    fn gpt_oss_find_keeps_its_glob_and_takes_max_results_as_limit() {
-        let habit = |arguments: Value| {
-            let mut item =
-                json!({"type":"function_call","name":"find","arguments":arguments.to_string()});
-            rename_habit(&mut item, &["find", "grep"]);
-            let arguments: Value =
-                serde_json::from_str(item["arguments"].as_str().unwrap()).unwrap();
-            (item["name"].as_str().unwrap().to_owned(), arguments)
-        };
-        assert_eq!(
-            habit(json!({"pattern":"*.rs","max_results":3})),
-            ("find".into(), json!({"pattern":"*.rs","limit":3}))
-        );
-        assert_eq!(
-            habit(json!({"query":"a b","path":""})),
-            (
-                "grep".into(),
-                json!({"pattern":"a b","literal":true,"path":""})
-            )
-        );
-        assert_eq!(
-            habit(json!({"pattern":"x","query":"y"})),
-            ("find".into(), json!({"pattern":"x","query":"y"}))
-        );
     }
 
     #[test]
