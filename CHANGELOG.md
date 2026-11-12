@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.177.1 — An Ollama model's window known before its first request
+
+### Fixed
+
+- A prompt to an Ollama model that is not loaded (after Ollama restarts, or once its keep-alive ends) loads it first and reads the window it is served with, so compaction and the over-window warning use it from the first request. Before, that request went with the window read earlier, which Ollama could cut silently.
+
 ## 2.177.0 — Local models follow a runtime's window reloaded mid-session
 
 ### Changed

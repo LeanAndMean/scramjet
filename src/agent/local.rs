@@ -9,13 +9,14 @@ use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{Serialize, SerializeMap, SerializeSeq, Serializer};
 use serde_json::{Value, json};
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 /// How long a default port may take to answer when looking around.
 const LOOK_WAIT: Duration = Duration::from_millis(1500);
 /// How long a runtime may take to describe itself and its models.
 const PROBE_WAIT: Duration = Duration::from_secs(10);
-/// How long the tool check may take: the runtime may load the model first.
+/// How long the tool check, or loading a model, may take.
 const CHECK_WAIT: Duration = Duration::from_secs(300);
 const ANSWER_BYTES: usize = 4 << 20;
 
@@ -286,11 +287,44 @@ pub fn probe(url: &str, key: Option<&str>) -> Result<Server, Problem> {
 }
 
 /// The window the runtime at `url` (as `address` gives it) serves model `id` with now; `None`
-/// when it cannot be read, or the runtime does not say yet (Ollama, until it loads the model).
-pub fn window_now(url: &str, key: Option<&str>, id: &str) -> Option<u64> {
+/// when it cannot be read. Ollama says it only for a loaded model, so one not loaded is loaded
+/// first, as the request would (until `cancel`): its window may have changed since it was last.
+pub fn window_now(url: &str, key: Option<&str>, id: &str, cancel: &AtomicBool) -> Option<u64> {
     let server = super::login::blocking(probe_within(url, key, LOOK_WAIT)).ok()?;
     let model = server.models.into_iter().find(|model| model.id == id)?;
-    model.window
+    if model.window.is_some() || server.runtime != Runtime::Ollama {
+        return model.window;
+    }
+    let loaded = super::login::blocking(async {
+        tokio::select! {
+            biased;
+            () = super::client::cancelled(cancel) => None,
+            loaded = ollama_load(url, key, id) => loaded,
+        }
+        .ok_or_else(String::new)
+    });
+    ollama_window(&loaded.ok()?, id)
+}
+
+/// Ollama's `/api/ps` after loading model `id` (an empty `/api/generate`) with the window a
+/// request without options gets.
+async fn ollama_load(url: &str, key: Option<&str>, id: &str) -> Option<Value> {
+    let bearer = key.map(|key| format!("Bearer {key}"));
+    let mut headers = vec![("accept", "application/json")];
+    if let Some(bearer) = &bearer {
+        headers.push(("authorization", bearer));
+    }
+    let body = json!({"model": id, "stream": false})
+        .to_string()
+        .into_bytes();
+    let generate = format!("{url}/api/generate");
+    let body = Some(("application/json", body));
+    let fetched =
+        client::fetch_within("local", "POST", &generate, &headers, body, 4096, CHECK_WAIT);
+    if !(200..300).contains(&fetched.await.ok()?.status) {
+        return None;
+    }
+    Some(optional(format!("{url}/api/ps"), key, LOOK_WAIT).await)
 }
 
 impl From<String> for Problem {

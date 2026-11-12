@@ -93,6 +93,52 @@ fn ollama(_: &str, path: &str, _: &Value) -> (u16, Value) {
 }
 
 #[test]
+fn ollama_loads_a_model_to_say_its_window() {
+    let generated = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = generated.clone();
+    let url = serve(move |method, path, body| match (method, path) {
+        ("POST", "/api/generate") => {
+            seen.lock().unwrap().push(body.clone());
+            (
+                200,
+                json!({"model": body["model"], "done": true, "done_reason": "load"}),
+            )
+        }
+        ("GET", "/api/ps") if !seen.lock().unwrap().is_empty() => (
+            200,
+            json!({"models": [{"name": "gemma:2b", "model": "gemma:2b", "context_length": 4096}]}),
+        ),
+        _ => ollama(method, path, body),
+    });
+    let go = AtomicBool::new(false);
+    assert_eq!(window_now(&url, None, "qwen3:1.7b", &go), Some(32768));
+    assert!(
+        generated.lock().unwrap().is_empty(),
+        "a loaded model is not loaded again"
+    );
+    assert_eq!(window_now(&url, None, "gemma:2b", &go), Some(4096));
+    let sent = generated.lock().unwrap().clone();
+    assert_eq!(sent, [json!({"model": "gemma:2b", "stream": false})]);
+
+    let slow = serve(|method, path, body| match path {
+        "/api/generate" => {
+            std::thread::sleep(Duration::from_secs(5));
+            (200, json!({"done": true}))
+        }
+        _ => ollama(method, path, body),
+    });
+    let started = std::time::Instant::now();
+    assert_eq!(
+        window_now(&slow, None, "gemma:2b", &AtomicBool::new(true)),
+        None
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "a cancelled load is not waited for"
+    );
+}
+
+#[test]
 fn an_address_is_taken_as_typed_without_v1() {
     assert_eq!(
         address("localhost:11434").unwrap(),
@@ -244,7 +290,10 @@ fn lm_studio_is_told_apart_and_its_window_read_once_loaded() {
     assert_eq!(embedder, Some("LM Studio says it does not chat"));
 
     let loaded = serve(lm_studio(true));
-    assert_eq!(window_now(&loaded, None, "qwen3-1.7b"), Some(8192));
+    assert_eq!(
+        window_now(&loaded, None, "qwen3-1.7b", &AtomicBool::new(false)),
+        Some(8192)
+    );
     let server = probe(&loaded, None).unwrap();
     let checked = check_tools(&server, "qwen3-1.7b", None).unwrap();
     assert_eq!(checked.window, Some(8192));
