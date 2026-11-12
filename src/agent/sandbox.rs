@@ -1234,7 +1234,13 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
             writable: Vec::new(),
         };
         sandbox.grant(&root, "../other").unwrap();
-        assert_eq!(run(&sandbox), ["a", "build/a", "../other/src/a"]);
+        // macOS's temporary directory, which holds `..`, stays writable, as Codex's.
+        let parent = cfg!(target_os = "macos").then_some("../a");
+        let expected: Vec<_> = ["a", "build/a", "../other/src/a"]
+            .into_iter()
+            .chain(parent)
+            .collect();
+        assert_eq!(run(&sandbox), expected);
         // Read-only: the project too inside a granted directory, but what is granted in it. A
         // repository nested in a granted directory is not its own, so it stays writable.
         let mut sandbox = Sandbox {
@@ -1395,7 +1401,9 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
         let refused = write.grant(&root, ".git/hooks").unwrap_err();
         let kept = home.join("project/.git");
         assert!(refused.ends_with(&format!("grant {} itself", kept.display())));
-        for own in ["/", "/run", "/tmp", "/proc/self"] {
+        // The others are bubblewrap's own mounts, which macOS has not (`/run`) or links (`/tmp`).
+        let linux = cfg!(target_os = "linux").then_some(["/run", "/tmp", "/proc/self"]);
+        for own in std::iter::once("/").chain(linux.into_iter().flatten()) {
             assert!(
                 write
                     .grant(&root, own)
