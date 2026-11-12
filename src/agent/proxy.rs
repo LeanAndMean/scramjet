@@ -172,13 +172,12 @@ pub(super) async fn tunnel(
 ) -> Result<TcpStream, (String, bool)> {
     let shown = &proxy.shown;
     let broke = |e: std::io::Error| (format!("the proxy {shown} for {whom} failed: {e}"), true);
-    let mut socket =
-        (TcpStream::connect((proxy.host.as_str(), proxy.port)).await).map_err(|e| {
-            (
-                format!("cannot connect to the proxy {shown} for {whom}: {e}"),
-                true,
-            )
-        })?;
+    let mut socket = (super::client::tcp_connect(&proxy.host, proxy.port).await).map_err(|e| {
+        (
+            format!("cannot connect to the proxy {shown} for {whom}: {e}"),
+            true,
+        )
+    })?;
     let target = match host.contains(':') {
         true => format!("[{host}]:{port}"),
         false => format!("{host}:{port}"),

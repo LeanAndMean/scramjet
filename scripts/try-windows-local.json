@@ -1,0 +1,105 @@
+{
+ "files": {
+  "README.md": "Project\n"
+ },
+ "steps": [
+  {
+   "shot": "started",
+   "wait": 5
+  },
+  {
+   "text": "/login"
+  },
+  {
+   "keys": [
+    "Enter"
+   ]
+  },
+  {
+   "shot": "/login",
+   "wait": 2
+  },
+  {
+   "keys": [
+    "Down",
+    "Down",
+    "Down"
+   ]
+  },
+  {
+   "keys": [
+    "Enter"
+   ]
+  },
+  {
+   "shot": "runtimes",
+   "wait": 4
+  },
+  {
+   "keys": [
+    "Enter"
+   ]
+  },
+  {
+   "shot": "models",
+   "wait": 4
+  },
+  {
+   "keys": [
+    "Down",
+    "Down"
+   ]
+  },
+  {
+   "keys": [
+    "Enter"
+   ]
+  },
+  {
+   "shot": "checked",
+   "wait": 20
+  },
+  {
+   "keys": [
+    "Escape"
+   ]
+  },
+  {
+   "shot": "closed",
+   "wait": 2
+  },
+  {
+   "text": "/model ollama/qwen3:1.7b"
+  },
+  {
+   "keys": [
+    "Enter"
+   ]
+  },
+  {
+   "shot": "model",
+   "wait": 3
+  },
+  {
+   "text": "Reply with the single word: hello"
+  },
+  {
+   "keys": [
+    "Enter"
+   ]
+  },
+  {
+   "shot": "replied",
+   "wait": 40
+  },
+  {
+   "keys": [
+    "C-d"
+   ]
+  },
+  {
+   "shot": "after Ctrl+D",
+   "wait": 3
+  }
+ ]
+}

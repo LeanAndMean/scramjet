@@ -658,12 +658,10 @@ pub(super) async fn connect_for(route: &Route, who: &str) -> Result<Connection, 
     let proxy = super::proxy::for_host(route.tls, &route.host, route.port)
         .map_err(|problem| Failure::new(problem, false))?;
     let socket = match &proxy {
-        None => {
-            (TcpStream::connect((route.host.as_str(), route.port)).await).map_err(|e| Failure {
-                refused: e.kind() == std::io::ErrorKind::ConnectionRefused,
-                ..Failure::new(format!("cannot connect to {authority}{who}: {e}"), true)
-            })?
-        }
+        None => (tcp_connect(&route.host, route.port).await).map_err(|e| Failure {
+            refused: e.kind() == std::io::ErrorKind::ConnectionRefused,
+            ..Failure::new(format!("cannot connect to {authority}{who}: {e}"), true)
+        })?,
         Some(proxy) => {
             let whom = format!("{authority}{who}");
             (super::proxy::tunnel(proxy, &route.host, route.port, &whom).await)
@@ -685,6 +683,60 @@ pub(super) async fn connect_for(route: &Route, who: &str) -> Result<Connection, 
         .await)
         .map_err(|e| tls_failure(route, who, &e))?;
     handshake(stream).await
+}
+
+/// A connection to the first of `host`'s addresses to answer, the families alternating and each
+/// attempt started `STAGGER` after the last unless it failed sooner (RFC 8305, as Node's
+/// `autoSelectFamily`): Windows resolves `localhost` to `::1` first, where a runtime listening on
+/// `127.0.0.1` leaves the attempt hanging under WSL's mirrored networking.
+pub(super) async fn tcp_connect(host: &str, port: u16) -> std::io::Result<TcpStream> {
+    const STAGGER: Duration = Duration::from_millis(250);
+    let resolved: Vec<std::net::SocketAddr> =
+        tokio::net::lookup_host((host, port)).await?.collect();
+    connect_first(&resolved, STAGGER).await.map_err(|error| {
+        error.unwrap_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{host} has no address"),
+            )
+        })
+    })
+}
+
+/// The first of `resolved` to accept, as `tcp_connect` races them; `None` when it is empty.
+async fn connect_first(
+    resolved: &[std::net::SocketAddr],
+    stagger: Duration,
+) -> Result<TcpStream, Option<std::io::Error>> {
+    let (first, second): (Vec<_>, Vec<_>) = (resolved.iter())
+        .partition(|address| Some(address.is_ipv6()) == resolved.first().map(|a| a.is_ipv6()));
+    let mut first = first.into_iter();
+    let mut second = second.into_iter();
+    let mut pending = std::iter::from_fn(|| {
+        let next = first.next().or_else(|| second.next());
+        std::mem::swap(&mut first, &mut second);
+        next
+    })
+    .copied()
+    .peekable();
+    let mut attempts = tokio::task::JoinSet::new();
+    let mut last = None;
+    loop {
+        match pending.next() {
+            Some(address) => drop(attempts.spawn(TcpStream::connect(address))),
+            None if attempts.is_empty() => return Err(last),
+            None => {}
+        }
+        let more = pending.peek().is_some();
+        tokio::select! {
+            Some(joined) = attempts.join_next() => match joined {
+                Ok(Ok(stream)) => return Ok(stream),
+                Ok(Err(error)) => last = Some(error),
+                Err(error) => last = Some(std::io::Error::other(error)),
+            },
+            () = tokio::time::sleep(stagger), if more => {}
+        }
+    }
 }
 
 async fn handshake(
@@ -937,5 +989,29 @@ mod tests {
             get("/loop").unwrap_err(),
             "the file redirected more than 5 times"
         );
+    }
+
+    #[test]
+    fn a_connection_races_past_an_address_that_does_not_answer() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let open = listener.local_addr().unwrap();
+            // TEST-NET-1: never answers, or fails at once where there is no route.
+            let silent: std::net::SocketAddr = "192.0.2.1:9".parse().unwrap();
+            let started = Instant::now();
+            let stream = connect_first(&[silent, open], Duration::from_millis(250)).await;
+            assert_eq!(stream.unwrap().peer_addr().unwrap(), open);
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(
+                connect_first(&[], Duration::ZERO)
+                    .await
+                    .unwrap_err()
+                    .is_none()
+            );
+        });
     }
 }

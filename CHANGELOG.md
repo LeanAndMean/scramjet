@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.181.1 — `localhost` answers at once on Windows
+
+### Fixed
+
+- Connections try a host's IPv6 and IPv4 addresses together, the next one 250 ms after the last unless it failed sooner, as Node does. On Windows, `localhost` is `::1` first: `/login` → Local models missed a runtime listening on `127.0.0.1` (WSL's Ollama, reached through mirrored networking), and each request to a `localhost` address could wait seconds before reaching it.
+
 ## 2.181.0 — gpt-oss's thinking levels on LM Studio
 
 ### Changed
