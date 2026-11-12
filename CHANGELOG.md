@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.179.0 — Local models' token count kept across restarts
+
+### Changed
+
+- On a model a local runtime serves, the runtime's last count of a request is saved in the session, so a session continued or resumed in a new process estimates its size from it rather than from chars/4.
+
 ## 2.178.0 — Local models keep their token count past a compaction
 
 ### Changed

@@ -3,7 +3,8 @@
 //! fills.
 use super::client::Protocol;
 use super::{
-    Agent, AgentError, AgentUi, Compacting, PRODUCER, Purpose, USAGE, message_text, tools,
+    Agent, AgentError, AgentUi, CALIBRATION, Compacting, PRODUCER, Purpose, USAGE, message_text,
+    tools,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
@@ -1004,10 +1005,10 @@ impl Agent {
     /// request's `input`, when that count is of the whole request: llama.cpp, vLLM and LM Studio
     /// refuse a prompt past their window, while Ollama 0.40.16 cuts it to half its window and
     /// two tokens and reports that, so its count is taken above half the window, or below it
-    /// when the request was too small by chars/4 to be cut.
-    pub(super) fn calibrate(&mut self, model: &str, estimate: u64, input: u64) {
+    /// when the request was too small by chars/4 to be cut. Whether it was taken.
+    pub(super) fn calibrate(&mut self, model: &str, estimate: u64, input: u64) -> bool {
         let (Some(runtime), Some(window)) = (self.info.runtime, self.info.window) else {
-            return;
+            return false;
         };
         let whole = match runtime {
             super::local::Runtime::LlamaCpp
@@ -1025,14 +1026,34 @@ impl Agent {
                 extends: true,
             };
             self.calibrations.insert(model.to_owned(), calibration);
+            return true;
         }
+        false
     }
 
-    /// After compaction, a move in the tree or a session switch, the next request no longer
-    /// extends the measured ones.
+    /// After compaction, a move in the tree, a session switch or a start, the next request no
+    /// longer extends the measured ones; a model measured only in an earlier process takes its
+    /// latest count saved in the conversation (`CALIBRATION`).
     pub(super) fn conversation_replaced(&mut self) {
         for calibration in self.calibrations.values_mut() {
             calibration.extends = false;
+        }
+        for item in self.conversation.iter().rev() {
+            let (Some(model), Some(estimate), Some(input)) = (
+                item[PRODUCER].as_str(),
+                item[CALIBRATION]["estimate"].as_u64(),
+                item[CALIBRATION]["input"].as_u64(),
+            ) else {
+                continue;
+            };
+            if estimate > 0 && !self.calibrations.contains_key(model) {
+                let calibration = Calibration {
+                    estimate,
+                    input,
+                    extends: false,
+                };
+                self.calibrations.insert(model.to_owned(), calibration);
+            }
         }
     }
 
@@ -2059,6 +2080,42 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         assert_eq!(agent.calibrated(20_000), 18_000);
         agent.calibrate(&model, 29_000, 26_000);
         assert_eq!(agent.calibrated(30_000), 27_000);
+    }
+
+    #[test]
+    fn a_runtime_count_saved_in_the_session_corrects_a_later_process() {
+        let usage = json!({"input_tokens": 750, "output_tokens": 10, "total_tokens": 760});
+        let [models, version] = runtime_says("m", 30_000);
+        let (endpoint, server) = serve(vec![
+            models,
+            version,
+            stream(&fixture::text_events("answer", usage)),
+        ]);
+        let (mut first, scratch) = agent(endpoint, "calibration-saved");
+        first.set_context_window(Some(30_000));
+        first.info.runtime = Some(crate::agent::local::Runtime::LlamaCpp);
+        let model = first.config.model.clone();
+        (first.runtime_windows).insert(
+            model.clone(),
+            super::super::turn::RuntimeWindow::Read(30_000),
+        );
+        first
+            .turn("go", &mut Recorder::default(), &AtomicBool::new(false))
+            .unwrap();
+        drop(server);
+        let saved = &first.conversation.last().unwrap()[CALIBRATION];
+        assert_eq!(saved["input"], 750);
+        let estimate = saved["estimate"].as_u64().unwrap();
+        assert!(estimate > 0);
+        let path = first.session_path().to_owned();
+        drop(first);
+
+        let config = crate::agent::tests::config(endpoint, &scratch.0);
+        let resumed = Agent::start(config, SessionChoice::Open(path)).unwrap();
+        assert_eq!(resumed.calibrated(estimate * 2), 1_500);
+        // A provider's count is not taken, so nothing is saved.
+        let (mut agent, _scratch) = agent(endpoint, "calibration-not-saved");
+        assert!(!agent.calibrate(&model, 1_000, 750));
     }
 
     #[test]

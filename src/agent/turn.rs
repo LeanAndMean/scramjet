@@ -3,9 +3,9 @@
 use super::calls::Calls;
 use super::request::Replying;
 use super::{
-    Agent, AgentError, AgentUi, AutoCompaction, CONTEXT, Completed, MAX_STEPS, PROBE, PRODUCER,
-    Routing, Source, Step, Suggested, TIMING, TYPED, USAGE, autonomy, message_text, status,
-    suggest,
+    Agent, AgentError, AgentUi, AutoCompaction, CALIBRATION, CONTEXT, Completed, MAX_STEPS, PROBE,
+    PRODUCER, Routing, Source, Step, Suggested, TIMING, TYPED, USAGE, autonomy, message_text,
+    status, suggest,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -400,9 +400,12 @@ to a larger-context model)"
                 Err(error) => return Err(error),
             };
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
-            if let Some(input) = reply.usage.as_ref().and_then(|usage| usage.input_tokens) {
-                self.calibrate(&model, estimate, input);
-            }
+            let calibration = reply
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.input_tokens)
+                .filter(|&input| self.calibrate(&model, estimate, input))
+                .map(|input| json!({"estimate": estimate, "input": input}));
             let mut calls = Vec::new();
             let last = reply.items.len().saturating_sub(1);
             let saved = saved_usage(&reply);
@@ -412,6 +415,9 @@ to a larger-context model)"
                     object.insert(PRODUCER.into(), json!(model));
                     if let Some(tokens) = self.usage.context_tokens.filter(|_| index == last) {
                         object.insert(CONTEXT.into(), json!(tokens));
+                    }
+                    if let Some(calibration) = calibration.as_ref().filter(|_| index == last) {
+                        object.insert(CALIBRATION.into(), calibration.clone());
                     }
                     if let Some(usage) = saved.as_ref().filter(|_| index == last) {
                         object.insert(USAGE.into(), usage.clone());

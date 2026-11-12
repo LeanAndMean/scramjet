@@ -112,6 +112,10 @@ const PRODUCER: &str = "_scramjet_model";
 /// resumed session knows how full the context is before its first reply, as Scramjet reads it
 /// from saved usage. Never sent.
 const CONTEXT: &str = "_scramjet_context_tokens";
+/// Stored with a response's last item when a local runtime's count of its request was taken to
+/// correct chars/4: the request's `estimate` and its `input` as counted, so a later process
+/// starts corrected. Never sent.
+const CALIBRATION: &str = "_scramjet_calibration";
 /// Stored with a response's last item when the response reported its usage: the tokens it counted
 /// (`input` neither read from the cache nor written to it, `output`, `cache_read`, `cache_write`)
 /// and, when its model's prices say, its `cost` in dollars, which `/session` and the footer
@@ -812,6 +816,7 @@ impl Agent {
                 ..Usage::default()
             },
         };
+        agent.conversation_replaced();
         agent.load();
         agent.start_mcp();
         agent.answer_interrupted_calls()?;
