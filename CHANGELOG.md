@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.177.0 — Local models follow a runtime's window reloaded mid-session
+
+### Changed
+
+- A session on a local model asks its runtime for the model's window again at each prompt, so a model loaded again with another window (Ollama restarted with another `OLLAMA_CONTEXT_LENGTH`, `lms load -c`, llama.cpp or vLLM started with other flags) is followed without starting again, and the change is said. Before, the first window read was kept until the process ended.
+
+### Fixed
+
+- The footer and compaction no longer go back to a local model's saved window after a model switch, a session switch or `/reload`, while its runtime serves it with another.
+
 ## 2.176.0 — LM Studio in Local models
 
 ### Added

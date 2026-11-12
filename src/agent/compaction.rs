@@ -1899,7 +1899,11 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             )
         };
         let run = |runtime: Option<crate::agent::local::Runtime>, name: &str| {
-            let mut responses = vec![call()];
+            let mut responses = Vec::new();
+            if runtime.is_some() {
+                responses.extend(runtime_says("m", 30_000));
+            }
+            responses.push(call());
             if runtime.is_some() {
                 responses.push(stream(&fixture::text_events(
                     "summary",
@@ -1924,7 +1928,14 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             }
             let mut ui = Recorder::default();
             agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
-            (ui, server.join().unwrap())
+            let requests = server.join().unwrap();
+            (
+                ui,
+                requests
+                    .into_iter()
+                    .filter(|body| !body.is_null())
+                    .collect::<Vec<_>>(),
+            )
         };
         // Ollama answers a prompt past its window, cut: compaction comes before the request.
         let (ui, requests) = run(
@@ -1964,7 +1975,10 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             let events = fixture::call_events(&arguments.to_string(), usage);
             let text = serde_json::to_string(&events).unwrap();
             let call = serde_json::from_str::<Vec<Value>>(&text.replace("\"inert\"", "\"bash\""));
+            let [models, version] = runtime_says("m", 30_000);
             let (endpoint, server) = serve(vec![
+                models,
+                version,
                 stream(&call.unwrap()),
                 stream(&fixture::text_events("summary", fixture::known_usage())),
                 stream(&fixture::text_events("done", fixture::known_usage())),
@@ -2035,7 +2049,10 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
                     .unwrap(),
             )
         };
+        let [models, version] = runtime_says("m", window);
         let (endpoint, server) = serve(vec![
+            models,
+            version,
             call(4_000, 1_000),
             call(60_000, 3_000),
             stream(&fixture::text_events("prefix", fixture::known_usage())),
@@ -2048,7 +2065,12 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         (agent.runtime_windows).insert(model, super::super::turn::RuntimeWindow::Read(window));
         let mut ui = Recorder::default();
         agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
-        (agent, scratch, ui, server.join().unwrap())
+        let requests = server.join().unwrap();
+        let requests = requests
+            .into_iter()
+            .filter(|body| !body.is_null())
+            .collect();
+        (agent, scratch, ui, requests)
     }
 
     #[test]

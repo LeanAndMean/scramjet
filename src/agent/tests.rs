@@ -366,6 +366,22 @@ pub(super) fn messages_stream(events: &[Value]) -> Vec<u8> {
 }
 
 /// Answers each connection with the next scripted response; returns the request bodies.
+/// vLLM's answers to the probe of a turn's start (`follow_runtime`): `id` served with `window`.
+pub(super) fn runtime_says(id: &str, window: u64) -> [Vec<u8>; 2] {
+    let reply = |value: Value| {
+        let body = value.to_string();
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    };
+    [
+        reply(json!({"data": [{"id": id, "owned_by": "vllm", "max_model_len": window}]})),
+        reply(json!({"version": "0.11.0"})),
+    ]
+}
+
 pub(super) fn serve(responses: Vec<Vec<u8>>) -> (SocketAddr, std::thread::JoinHandle<Vec<Value>>) {
     let (address, server) = serve_requests(responses);
     let bodies = std::thread::spawn(move || {

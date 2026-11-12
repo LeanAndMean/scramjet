@@ -136,6 +136,7 @@ impl Agent {
             self.config.providers.reload();
             if let Some(model) = self.config.providers.find(&self.config.model) {
                 self.info = model.info.clone();
+                self.keep_runtime_window();
             }
         }
         match self.info.route {

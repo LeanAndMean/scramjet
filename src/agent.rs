@@ -1440,6 +1440,7 @@ impl Agent {
         if let Some(model) = model {
             self.info = self.config.providers.info(&model);
             self.config.model = self.config.providers.reference(&model);
+            self.keep_runtime_window();
         }
         if let Some(level) = effort {
             self.config.effort = Some(level);
@@ -1605,6 +1606,7 @@ impl Agent {
         self.info = self.config.providers.info(&model);
         self.provider = None;
         self.config.model = model;
+        self.keep_runtime_window();
         Ok(())
     }
 
@@ -1970,6 +1972,7 @@ impl Agent {
             self.provider = None;
             self.info.route = None;
         }
+        self.keep_runtime_window();
         self.info.window
     }
 

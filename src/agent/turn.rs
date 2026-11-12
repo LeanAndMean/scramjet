@@ -12,14 +12,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
-/// How often a local runtime is asked for a model's window before it is left as saved.
+/// How often in a turn a local runtime is asked for a model's window before it is left as is.
 const RUNTIME_WINDOW_TRIES: u8 = 3;
 
 /// What a local runtime said of a model's window.
 pub(super) enum RuntimeWindow {
     Read(u64),
-    /// Not said yet (Ollama, until the model loads), after this many tries.
-    Unread(u8),
+    /// Not said this turn (Ollama, until the model loads) after `tries`; `last` is what it said
+    /// before.
+    Unread {
+        tries: u8,
+        last: Option<u64>,
+    },
 }
 
 /// What a paused turn left running, shown in a thread of its own (`Agent::show_paused`).
@@ -41,7 +45,7 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        self.follow_runtime(ui);
+        self.follow_runtime(ui, true);
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
         self.suggestion = suggest::Pending::Nothing;
@@ -260,22 +264,43 @@ finish and is not checked on. Reply to continue.",
         Ok(record)
     }
 
+    /// Puts back the window the current model's runtime said last, over the saved one that
+    /// reading the providers again takes.
+    pub(super) fn keep_runtime_window(&mut self) {
+        if self.info.runtime.is_none() {
+            return;
+        }
+        let window = match self.runtime_windows.get(&self.config.model) {
+            Some(RuntimeWindow::Read(window)) => Some(*window),
+            Some(RuntimeWindow::Unread { last, .. }) => *last,
+            None => None,
+        };
+        if let Some(window) = window {
+            self.info.window = Some(window);
+        }
+    }
+
     /// Takes the window the current model's local runtime serves it with now, in place of the
     /// one saved when it was checked: Ollama picks one when it loads the model (by the GPU's
     /// memory, or `OLLAMA_CONTEXT_LENGTH`) and cuts a longer prompt silently, and llama.cpp and
-    /// vLLM take theirs from their flags. Said when it differs from the saved one.
-    fn follow_runtime(&mut self, ui: &mut dyn AgentUi) {
+    /// vLLM take theirs from their flags. Read `again` at each turn's start, as the model may
+    /// have been loaded again with another window since. Said when it changes.
+    fn follow_runtime(&mut self, ui: &mut dyn AgentUi, again: bool) {
+        self.keep_runtime_window();
         let (Some(runtime), Some(route)) = (self.info.runtime, &self.info.route) else {
             return;
         };
-        let tries = match self.runtime_windows.get(&self.config.model) {
-            Some(RuntimeWindow::Read(window)) => {
-                self.info.window = Some(*window);
+        let model = self.config.model.clone();
+        let (last, tries) = match self.runtime_windows.get(&model) {
+            Some(RuntimeWindow::Read(_)) if !again => return,
+            Some(RuntimeWindow::Read(window)) => (Some(*window), 0),
+            Some(RuntimeWindow::Unread { tries, .. })
+                if !again && *tries >= RUNTIME_WINDOW_TRIES =>
+            {
                 return;
             }
-            Some(RuntimeWindow::Unread(tries)) if *tries >= RUNTIME_WINDOW_TRIES => return,
-            Some(RuntimeWindow::Unread(tries)) => *tries,
-            None => 0,
+            Some(RuntimeWindow::Unread { tries, last }) => (*last, if again { 0 } else { *tries }),
+            None => (None, 0),
         };
         let scheme = if route.tls { "https" } else { "http" };
         let base = format!("{scheme}://{}{}", route.authority, route.path);
@@ -283,9 +308,9 @@ finish and is not checked on. Reply to continue.",
         let key = (route.headers.iter())
             .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
             .and_then(|(_, value)| value.strip_prefix("Bearer "));
-        let model = self.config.model.clone();
         let Some(window) = super::local::window_now(url, key, &self.info.id) else {
-            (self.runtime_windows).insert(model, RuntimeWindow::Unread(tries + 1));
+            let tries = tries + 1;
+            (self.runtime_windows).insert(model, RuntimeWindow::Unread { tries, last });
             return;
         };
         self.runtime_windows
@@ -293,16 +318,17 @@ finish and is not checked on. Reply to continue.",
         if self.info.window == Some(window) {
             return;
         }
-        let saved = match self.info.window {
-            Some(saved) => format!("not the {saved} saved for it"),
-            None => "which was not saved for it".to_owned(),
+        let before = match (last, self.info.window) {
+            (Some(last), _) => format!("not the {last} it had"),
+            (None, Some(saved)) => format!("not the {saved} saved for it"),
+            (None, None) => "which was not saved for it".to_owned(),
         };
         let cut = match runtime {
             super::local::Runtime::Ollama => "; Ollama cuts a longer prompt without saying so",
             _ => "",
         };
         ui.notice(&format!(
-            "{} serves {} with a {window}-token window, {saved}: compaction follows the \
+            "{} serves {} with a {window}-token window, {before}: compaction follows the \
              runtime{cut} (/login → Local models checks it again and saves it)",
             runtime.name(),
             self.info.id
@@ -339,7 +365,7 @@ finish and is not checked on. Reply to continue.",
                         return Err(AgentError::Paused);
                     }
                     self.settle_mcp(ui, cancel)?;
-                    self.follow_runtime(ui);
+                    self.follow_runtime(ui, false);
                     self.compact_for_runtime(ui, cancel)?;
                     let mut request = self.request();
                     self.fit_for_runtime(&mut request, &mut past_window_said, ui);
@@ -409,7 +435,7 @@ to a larger-context model)"
             if let Some(message) = reply.incomplete {
                 return Err(AgentError::Provider(message));
             }
-            self.follow_runtime(ui);
+            self.follow_runtime(ui, false);
             if calls.is_empty() {
                 self.compact_when_full(ui, cancel)?;
                 if self.continue_queued(ui)? {
@@ -577,12 +603,19 @@ mod tests {
             .into_bytes()
         };
         // Before the prompt's compaction check and its request it is not loaded; after the
-        // reply it is, and then it is not asked again.
+        // reply it is, and then it is not asked again in that turn. The next turn asks again
+        // at its start: the model was loaded again with 4096. In the third it is unloaded at
+        // first, and loaded with 4096 after the reply.
         let mut responses = probe(None);
         responses.extend(probe(None));
         responses.push(chat("one"));
         responses.extend(probe(Some(2048)));
+        responses.extend(probe(Some(4096)));
         responses.push(chat("two"));
+        responses.extend(probe(None));
+        responses.extend(probe(None));
+        responses.push(chat("three"));
+        responses.extend(probe(Some(4096)));
         let (endpoint, server) = serve(responses);
         let (mut agent, _scratch) = agent(endpoint, "runtime-window");
         agent.set_providers(crate::agent::providers::Providers::given(
@@ -608,14 +641,35 @@ mod tests {
               saves it)"
             ]
         );
-        // A switch away and back takes the saved entry again, and the window read stays.
+        // A switch away and back, or the providers read again, keep the window read, and the
+        // next turn reads it again.
         agent.set_model("m").unwrap();
         agent.set_model("ollama/qwen3:1.7b").unwrap();
+        assert_eq!(agent.load_model_info(), Some(2048));
+        ui.shown.clear();
         agent.turn("again", &mut ui, &cancel).unwrap();
-        assert_eq!(agent.context_window(), Some(2048));
+        assert_eq!(agent.context_window(), Some(4096));
+        let notices: Vec<&String> = (ui.shown.iter())
+            .filter(|s| s.starts_with("notice"))
+            .collect();
+        assert_eq!(
+            notices,
+            [
+                "notice Ollama serves qwen3:1.7b with a 4096-token window, not the 2048 it had: \
+              compaction follows the runtime; Ollama cuts a longer prompt without saying so \
+              (/login → Local models checks it again and saves it)"
+            ]
+        );
+        // Unloaded, it keeps the window read last, and says nothing when it comes back the same.
+        ui.shown.clear();
+        agent.set_model("m").unwrap();
+        agent.set_model("ollama/qwen3:1.7b").unwrap();
+        agent.turn("third", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.context_window(), Some(4096));
+        assert!(!ui.shown.iter().any(|s| s.starts_with("notice")));
         let requests = server.join().unwrap();
         let posted = requests.iter().filter(|body| !body.is_null()).count();
-        assert_eq!((requests.len(), posted), (14, 2));
+        assert_eq!((requests.len(), posted), (31, 3));
     }
 
     #[test]
