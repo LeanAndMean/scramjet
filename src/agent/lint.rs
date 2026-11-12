@@ -34,8 +34,11 @@ pub struct Diagnostic {
     pub message: String,
 }
 
-/// The lint of `set`, and the command and skill files it read.
-pub fn lint(set: &Set) -> (Vec<Diagnostic>, Vec<PathBuf>) {
+mod checks;
+
+/// The lint of `set`, and the command, agent and skill files it read. `mcp_servers` are the
+/// names of the MCP servers the user's settings list, whose tools a set may name.
+pub fn lint(set: &Set, mcp_servers: &[String]) -> (Vec<Diagnostic>, Vec<PathBuf>) {
     let sets = Sets::only(set.clone());
     let commands = Commands::discover(&sets);
     let mut problems = commands.warnings().to_vec();
@@ -46,13 +49,11 @@ pub fn lint(set: &Set) -> (Vec<Diagnostic>, Vec<PathBuf>) {
         .into_iter()
         .map(|problem| loaded(problem, set))
         .collect();
-    let directory = set.directory.join("commands");
-    let mut files: Vec<PathBuf> = (std::fs::read_dir(&directory).into_iter().flatten())
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().is_some_and(|e| e == "md"))
-        .collect();
-    files.sort();
+    diagnostics.extend(checks::manifest(set));
+    let mut files = markdown_files(&set.directory.join("commands"));
+    let agents = markdown_files(&set.directory.join("agents"));
+    diagnostics.extend(checks::file_names(&files));
+    diagnostics.extend(checks::file_names(&agents));
     for path in &files {
         let Ok(content) = std::fs::read_to_string(path) else {
             continue;
@@ -74,17 +75,68 @@ pub fn lint(set: &Set) -> (Vec<Diagnostic>, Vec<PathBuf>) {
             line,
             message,
         }));
+        let tools = checks::tool_names(path, &content, &["allowed-tools"], mcp_servers);
+        diagnostics.extend(tools);
+        diagnostics.extend(checks::statuses(path, &lines));
+        diagnostics.extend(checks::references(set, &commands, path, &content, &lines));
     }
+    for path in &agents {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let keys = ["tools", "disallowedTools"];
+        diagnostics.extend(checks::tool_names(path, &content, &keys, mcp_servers));
+    }
+    diagnostics.extend(checks::edges(set, &commands));
+    files.extend(agents);
     files.extend(skills.list().iter().map(|skill| skill.path.clone()));
     (diagnostics, files)
 }
 
-/// A loading problem: an error when the harness skips what it names, else a warning.
+/// The `.md` files in `directory`, by name.
+fn markdown_files(directory: &std::path::Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = (std::fs::read_dir(directory).into_iter().flatten())
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && path.extension().is_some_and(|e| e == "md"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// A loading problem: an error when the harness skips what it names, else a warning. The
+/// message loses the file's path and name the diagnostic already shows; one about
+/// `autonomy-defaults.yaml` points at the line of the edge or command it names.
 fn loaded(problem: Problem, set: &Set) -> Diagnostic {
     let skipped = problem.text.starts_with("skipping ") || problem.text.starts_with("could not ");
     let path = match problem.file {
         Some(ProblemFile::Path(path)) => path,
         _ => set.directory.clone(),
+    };
+    let (shown, file) = (
+        path.display().to_string(),
+        path.file_name().unwrap_or_default().to_string_lossy(),
+    );
+    let mut message = problem.text;
+    for repeated in [
+        format!(" {shown}: {shown}: "),
+        format!(" {shown}: {file}: "),
+    ] {
+        message = message.replacen(&repeated, ": ", 1);
+    }
+    for prefix in [
+        format!("skill {shown}: "),
+        format!("{shown}: "),
+        format!("{file}: "),
+    ] {
+        if let Some(rest) = message.strip_prefix(&prefix) {
+            message = rest.to_owned();
+        }
+    }
+    let line = match file == "autonomy-defaults.yaml" {
+        true => (std::fs::read_to_string(&path).ok())
+            .and_then(|text| checks::notice_line(&text, &message)),
+        false => None,
     };
     Diagnostic {
         code: if skipped {
@@ -98,8 +150,8 @@ fn loaded(problem: Problem, set: &Set) -> Diagnostic {
             Severity::Warning
         },
         path,
-        line: None,
-        message: problem.text,
+        line,
+        message,
     }
 }
 
@@ -277,15 +329,32 @@ mod tests {
         name: &str,
         files: &[(&str, &str)],
     ) -> Vec<(String, &'static str, Option<usize>)> {
+        lint_with(name, files, &[])
+            .into_iter()
+            .map(|(file, code, line, _)| (file, code, line))
+            .collect()
+    }
+
+    /// The lint of a set of `files`, with the MCP servers `servers`: each diagnostic's file
+    /// within the set, code, line and message.
+    fn lint_with(
+        name: &str,
+        files: &[(&str, &str)],
+        servers: &[String],
+    ) -> Vec<(String, &'static str, Option<usize>, String)> {
         let root = scratch(name);
         let directory = root.0.join("set");
-        for (name, content) in files {
+        let declared = [("set.yaml", "name: set\n")];
+        let declared = declared
+            .iter()
+            .filter(|_| files.iter().all(|(n, _)| *n != "set.yaml"));
+        for (name, content) in files.iter().chain(declared) {
             let path = directory.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, content).unwrap();
         }
         let set = Set::at(&directory, Origin::Installed).unwrap();
-        let (diagnostics, _) = lint(&set);
+        let (diagnostics, _) = lint(&set, servers);
         (diagnostics.into_iter())
             .map(|d| {
                 let relative = d.path.strip_prefix(&directory).unwrap();
@@ -293,7 +362,7 @@ mod tests {
                     .map(|part| part.to_string_lossy())
                     .collect();
                 let file = parts.join("/");
-                (file, d.code, d.line)
+                (file, d.code, d.line, d.message)
             })
             .collect()
     }
@@ -303,7 +372,7 @@ mod tests {
         let manifest = std::env::var_os("CARGO_MANIFEST_DIR").unwrap();
         let directory = crate::os::join(std::path::Path::new(&manifest), "sets/scramjet");
         let set = Set::at(&directory, Origin::Installed).unwrap();
-        let (diagnostics, files) = lint(&set);
+        let (diagnostics, files) = lint(&set, &[]);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let names: Vec<_> = (files.iter())
             .map(|file| file.strip_prefix(&directory).unwrap().to_owned())
@@ -312,6 +381,12 @@ mod tests {
             names,
             [
                 "commands/troubleshoot.md",
+                "agents/command-architect.md",
+                "agents/command-failure-analyst.md",
+                "agents/command-reviewer.md",
+                "agents/command-set-explorer.md",
+                "agents/independent-command-assessor.md",
+                "agents/instruction-semantics-analyzer.md",
                 "skills/writing-scramjet-commands/SKILL.md"
             ]
             .map(std::path::PathBuf::from)
@@ -402,6 +477,7 @@ mod tests {
         let directory = root.0.join("set");
         fs::create_dir_all(directory.join("commands")).unwrap();
         fs::create_dir_all(directory.join("agents")).unwrap();
+        fs::write(directory.join("set.yaml"), "name: set\n").unwrap();
         let broken = directory.join("commands/broken.md");
         fs::write(&broken, "---\nnext: [\n---\n## Goals\n\n- A\n").unwrap();
         let ignored = "---\ndelegate-only: yes\n---\n## Goals\n\n- A\n";
@@ -409,8 +485,8 @@ mod tests {
         let agent = directory.join("agents/nameless.md");
         fs::write(&agent, "---\ndescription: D\n---\nBody\n").unwrap();
         let set = Set::at(&directory, Origin::Installed).unwrap();
-        let (diagnostics, files) = lint(&set);
-        assert_eq!(files.len(), 2);
+        let (diagnostics, files) = lint(&set, &[]);
+        assert_eq!(files.len(), 3);
         let shown: Vec<_> = (diagnostics.iter())
             .map(|d| (d.path.clone(), d.severity, d.code))
             .collect();
@@ -424,6 +500,216 @@ mod tests {
                     "runtime-notice"
                 ),
                 (agent, Severity::Error, "runtime-unrecognized"),
+            ]
+        );
+    }
+
+    fn owned(
+        expected: &[(&str, &'static str, Option<usize>)],
+    ) -> Vec<(String, &'static str, Option<usize>)> {
+        (expected.iter())
+            .map(|(file, code, line)| (file.to_string(), *code, *line))
+            .collect()
+    }
+
+    #[test]
+    fn names_windows_cannot_check_out_a_missing_set_yaml_and_another_plugin_name_are_warned_about()
+    {
+        let plugin = "{\n  \"name\": \"other\",\n  \"version\": \"0.1.0\"\n}\n";
+        let found = lint_files(
+            "names",
+            &[
+                ("set.yaml", "name: set\n"),
+                ("commands/set:do.md", GOOD),
+                (
+                    "agents/set:helper.md",
+                    "---\nname: helper\ndescription: D\n---\nBody\n",
+                ),
+                (".claude-plugin/plugin.json", plugin),
+            ],
+        );
+        let expected = [
+            (".claude-plugin/plugin.json", "plugin-name", Some(2)),
+            ("commands/set:do.md", "file-name-colon", None),
+            ("agents/set:helper.md", "file-name-colon", None),
+        ];
+        assert_eq!(found, owned(&expected));
+        let root = scratch("undeclared");
+        let directory = root.0.join("loose");
+        fs::create_dir_all(directory.join("commands")).unwrap();
+        fs::write(directory.join("commands/do.md"), GOOD).unwrap();
+        fs::create_dir_all(directory.join(".claude-plugin")).unwrap();
+        fs::write(
+            directory.join(".claude-plugin/plugin.json"),
+            "{\"name\": \"x\"}",
+        )
+        .unwrap();
+        let set = Set::at(&directory, Origin::Installed).unwrap();
+        let codes: Vec<_> = lint(&set, &[])
+            .0
+            .into_iter()
+            .map(|d| (d.path, d.code))
+            .collect();
+        assert_eq!(codes, [(directory, "set-yaml-missing")]);
+    }
+
+    #[test]
+    fn tool_names_claude_code_denies_or_no_harness_has_are_warned_about_with_the_right_one() {
+        let command = "---\nallowed-tools:\n  - Read\n  - bash\n  - Bash(git log *)\n  - Reed\n  \
+- mcp__tavily__search\n  - mcp__nowhere__x\n  - delegate\n  - report_scramjet_command_status\n---\n\
+## Goals\n\n- A\n";
+        let agent = "---\nname: helper\ndescription: D\ntools: Read, find, WebFetch, Agent\n\
+disallowedTools: Wrote\n---\nBody\n";
+        let found = lint_with(
+            "tools",
+            &[("commands/do.md", command), ("agents/helper.md", agent)],
+            &["tavily".to_owned()],
+        );
+        let shown: Vec<_> = (found.iter())
+            .map(|(file, code, line, message)| (file.as_str(), *code, *line, message.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                (
+                    "commands/do.md",
+                    "tool-case",
+                    Some(4),
+                    "Claude Code matches tool names by case and denies \"bash\": write \"Bash\", \
+which Scramjet reads as its bash"
+                ),
+                (
+                    "commands/do.md",
+                    "tool-unknown",
+                    Some(6),
+                    "\"Reed\" is not a tool of Scramjet, Claude Code or an MCP server \
+(mcp__<server>__<tool>); did you mean \"Read\"?"
+                ),
+                (
+                    "commands/do.md",
+                    "tool-unchecked",
+                    Some(8),
+                    "\"mcp__nowhere__x\" is a tool of MCP server \"nowhere\", which your settings \
+do not list, so it cannot be checked"
+                ),
+                (
+                    "agents/helper.md",
+                    "tool-case",
+                    Some(4),
+                    "Claude Code matches tool names by case and denies \"find\": write \"Glob\", \
+which Scramjet reads as its find"
+                ),
+                (
+                    "agents/helper.md",
+                    "tool-unknown",
+                    Some(5),
+                    "\"Wrote\" is not a tool of Scramjet, Claude Code or an MCP server \
+(mcp__<server>__<tool>); did you mean \"Write\"?"
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn statuses_the_harness_refuses_are_warned_about_where_a_report_names_them() {
+        let body = "## Goals\n\n- A\n\n## Report\n\n\
+Call `report_scramjet_command_status` with `status: \"completed\"`.\n\
+If it stopped, report the matching `status` (`blocked` / `incomplete`) instead.\n\
+Report `completed`, `continuing` or `abandoned`.\n\
+Set status: dormant when idle.\n\
+This command has a `forced` next step; report `completed`.\n\
+A `function_call` line named `report_scramjet_command_status` whose `arguments` holds its `status`.\n\
+\n```\nreport status: parked\n```\n";
+        let found = lint_with("statuses", &[("commands/do.md", body)], &[]);
+        let shown: Vec<_> = (found.iter())
+            .map(|(_, code, line, message)| (*code, *line, message.split('`').nth(5).unwrap()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("status-unknown", Some(8), "blocked"),
+                ("status-unknown", Some(8), "incomplete"),
+                ("status-unknown", Some(9), "continuing"),
+                ("status-unknown", Some(10), "dormant"),
+            ]
+        );
+    }
+
+    #[test]
+    fn next_steps_mentions_and_edges_that_lead_nowhere_are_warned_about_at_their_line() {
+        let first = "---\nnext:\n  mode: closed\n  candidates:\n    - name: set:second\n    \
+- name: second\n    - name: set:gone\n    - name: other:thing\n    - name: set:helper\n---\n\
+## Goals\n\n- A\n\nThen /set:second, (/set:gone) or /other:thing; see `/set:second`.\n";
+        let second = "---\nnext:\n  mode: open\n  candidates: []\n  blacklist: [set:first]\n---\n\
+## Goals\n\n- B\n";
+        let helper = "---\ndelegate-only: true\n---\n## Goals\n\n- C\n";
+        let edges = "edges:\n  set:first:\n    set:second: chain\n    set:third: pause\n  \
+set:second:\n    set:first: pause\n    set:third: chain\n  set:helper:\n    \"*\": pause\n";
+        let found = lint_files(
+            "references",
+            &[
+                ("commands/first.md", first),
+                ("commands/second.md", second),
+                ("commands/third.md", "## Goals\n\n- D\n"),
+                ("commands/helper.md", helper),
+                ("autonomy-defaults.yaml", edges),
+            ],
+        );
+        let expected = [
+            ("commands/first.md", "next-unknown", Some(6)),
+            ("commands/first.md", "next-unknown", Some(7)),
+            ("commands/first.md", "next-unknown", Some(9)),
+            ("commands/first.md", "command-unknown", Some(15)),
+            ("autonomy-defaults.yaml", "edge-unreachable", Some(4)),
+            ("autonomy-defaults.yaml", "edge-unreachable", Some(6)),
+        ];
+        assert_eq!(found, owned(&expected));
+    }
+
+    #[test]
+    fn notices_lose_the_path_they_repeat_and_point_at_the_edge_they_name() {
+        let edges = "edges:\n  set:do:\n    set:gone: chain\n    set:do: sometimes\n";
+        let found = lint_with(
+            "notices",
+            &[
+                ("commands/do.md", GOOD),
+                (
+                    "commands/odd.md",
+                    "---\ndelegate-only: yes\n---\n## Goals\n\n- A\n",
+                ),
+                ("commands/broken.md", "---\nnext: [\n---\n## Goals\n\n- A\n"),
+                ("autonomy-defaults.yaml", edges),
+            ],
+            &[],
+        );
+        let shown: Vec<_> = (found.iter())
+            .map(|(file, _, line, message)| (file.as_str(), *line, message.as_str()))
+            .collect();
+        assert_eq!(shown[0].0, "commands/broken.md");
+        assert!(
+            shown[0].2.starts_with("skipping: malformed frontmatter"),
+            "{shown:?}"
+        );
+        assert_eq!(
+            &shown[1..],
+            [
+                (
+                    "commands/odd.md",
+                    None,
+                    "\"delegate-only\" must be exactly true when present (got \"yes\"; treated as \
+absent)"
+                ),
+                (
+                    "autonomy-defaults.yaml",
+                    Some(4),
+                    "unknown autonomy recommendation value \"sometimes\" for edge set:do → set:do \
+(expected: chain, pause, default)"
+                ),
+                (
+                    "autonomy-defaults.yaml",
+                    Some(3),
+                    "unknown target command \"set:gone\" (in set:do)"
+                ),
             ]
         );
     }

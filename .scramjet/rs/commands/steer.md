@@ -2,10 +2,10 @@
 description: Review scramjet-rs's direction with the user and record what they decide
 argument-hint: "[feedback or topic]"
 allowed-tools:
-  - read
-  - bash
-  - edit
-  - write
+  - Read
+  - Bash
+  - Edit
+  - Write
   - subagent
   - get_scramjet_user_input
   - report_scramjet_command_status

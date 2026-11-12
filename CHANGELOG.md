@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.161.0 — The linter catches what breaks a set elsewhere
+
+### Added
+
+- `scramjet lint` warns about `:` in command and agent file names (Windows cannot check them out), a set without `set.yaml`, tool names Claude Code denies for their case (`bash` for `Bash`, `find` for `Glob`) or that neither harness nor a configured MCP server has (with the closest name), statuses the harness refuses (`blocked`, `incomplete`…), `next:` candidates and `/set:command` mentions that name no command, `autonomy-defaults.yaml` edges their command's `next:` block never offers, and a `.claude-plugin/plugin.json` naming the set otherwise.
+
+### Fixed
+
+- `scramjet lint` points `autonomy-defaults.yaml` warnings at the line of the edge they name, counts agent files in its summary, and no longer repeats a file's path inside its messages.
+
 ## 2.160.0 — No command sets from ~/.local/share/scramjet
 
 ### Changed

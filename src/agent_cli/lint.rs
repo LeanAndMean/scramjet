@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 pub(super) const USAGE: &str = "Usage: scramjet lint [--strict] [--json] DIR...
 DIR: a command set, or a package holding sets. Errors are files the harness would skip, warnings
 what it would ignore and commands without an early ## Goals list or with their arguments outside
-one <user-context> (delegate-only: <caller-context>) block. --strict fails on warnings too.";
+one <user-context> (delegate-only: <caller-context>) block; also ':' in file names, no set.yaml,
+tool names Claude Code denies or no harness has, statuses the harness refuses, next steps, edges
+and /set:command mentions that lead nowhere, and a plugin.json naming the set otherwise.
+--strict fails on warnings too.";
 
 pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), String>> {
     (command == "lint").then(|| lint_command(arguments))
@@ -41,9 +44,12 @@ fn lint_command(arguments: &[String]) -> Result<(), String> {
             sets.push(Set::at(&directory, Origin::Installed)?);
         }
     }
+    let servers: Vec<String> = (super::settings::Settings::load().mcp_servers.into_iter())
+        .map(|server| server.name)
+        .collect();
     let (mut diagnostics, mut files) = (Vec::new(), Vec::new());
     for set in &sets {
-        let (found, read) = lint(set);
+        let (found, read) = lint(set, &servers);
         diagnostics.extend(found);
         files.extend(read);
     }

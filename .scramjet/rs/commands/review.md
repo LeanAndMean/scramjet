@@ -2,10 +2,10 @@
 description: Independently review recent scramjet-rs changes for material defects
 argument-hint: "[commits or area]"
 allowed-tools:
-  - read
-  - bash
-  - edit
-  - write
+  - Read
+  - Bash
+  - Edit
+  - Write
   - subagent
   - get_scramjet_user_input
   - report_scramjet_command_status

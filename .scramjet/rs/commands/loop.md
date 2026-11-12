@@ -2,10 +2,10 @@
 description: Build out scramjet-rs one verified increment at a time, then continue
 argument-hint: "[focus]"
 allowed-tools:
-  - read
-  - bash
-  - edit
-  - write
+  - Read
+  - Bash
+  - Edit
+  - Write
   - subagent
   - get_scramjet_user_input
   - report_scramjet_command_status
