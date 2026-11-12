@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.163.0 — Reading other harnesses' sessions
+
+### Added
+
+- The built-in `scramjet` set has a `reading-past-sessions` skill: where Scramjet, Scramjet 1, Pi, dreb, Claude Code, Codex, OpenCode, Cline and Posit Assistant keep a project's sessions, and which fields hold the prompts, tool calls, summaries and command reports. The agent's instructions point to it when earlier work on the project may hold a missing detail.
+
 ## 2.162.0 — Setting up a command set's repository
 
 ### Added

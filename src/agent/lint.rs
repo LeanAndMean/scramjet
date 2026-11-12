@@ -387,6 +387,7 @@ mod tests {
                 "agents/command-set-explorer.md",
                 "agents/independent-command-assessor.md",
                 "agents/instruction-semantics-analyzer.md",
+                "skills/reading-past-sessions/SKILL.md",
                 "skills/setting-up-command-sets/SKILL.md",
                 "skills/writing-scramjet-commands/SKILL.md"
             ]
