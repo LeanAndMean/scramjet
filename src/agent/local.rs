@@ -151,6 +151,9 @@ pub enum Switch {
     EffortNoOff,
     /// `chat_template_kwargs.enable_thinking`: Qwen3's chat templates, on vLLM and llama.cpp.
     ChatTemplate,
+    /// `reasoning_effort` `low`, `medium` or `high` only, no off: gpt-oss on vLLM 0.11.0, which
+    /// refuses other levels with HTTP 400.
+    EffortLowToHigh,
 }
 
 /// A runtime found, with its models.
@@ -174,7 +177,8 @@ pub struct LocalModel {
     pub reasoning: bool,
     /// How its thinking is turned off; `None` when it does not think or cannot be asked not to.
     pub switch: Option<Switch>,
-    /// Its chat template takes `reasoning_effort`, as llama.cpp says (`/props`).
+    /// It takes `reasoning_effort`: in its chat template, as llama.cpp says (`/props`), or as
+    /// vLLM gives it to gpt-oss alone.
     pub effort_in_template: bool,
     pub images: bool,
     /// Why it cannot serve the agent, as the runtime says: it only embeds, or takes no tools.
@@ -535,6 +539,13 @@ fn vllm(data: &[Value]) -> Vec<LocalModel> {
     let models = data.iter().filter_map(|listed| {
         let mut model = LocalModel::named(listed["id"].as_str()?);
         model.window = positive(&listed["max_model_len"]);
+        // vLLM 0.11.0 reads `reasoning_effort` for models of type `gpt_oss` only, a type its list
+        // does not show; `root` is the weights' repository or folder.
+        let names = |field: &str| {
+            let name = listed[field].as_str().unwrap_or_default().to_lowercase();
+            name.contains("gpt-oss") || name.contains("gpt_oss")
+        };
+        model.effort_in_template = names("root") || names("id");
         Some(model)
     });
     models.collect()
@@ -715,7 +726,10 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
             // llama.cpp passes `reasoning_effort` to a template that takes it; gpt-oss's has no off
             // and reads `none` as its default.
             let listed = server.models.iter().find(|listed| listed.id == model);
-            if listed.is_some_and(|listed| listed.effort_in_template) {
+            let takes_effort = listed.is_some_and(|listed| listed.effort_in_template);
+            if takes_effort && server.runtime == Runtime::Vllm {
+                checked.switch = Some(Switch::EffortLowToHigh);
+            } else if takes_effort {
                 let off = json!({"reasoning_effort": "none"});
                 checked.switch = Some(match stops(server, model, key, off).await {
                     true => Switch::Effort,
@@ -906,6 +920,10 @@ fn model_entry(model: &LocalModel) -> Json {
         ),
         Some(Switch::EffortNoOff) => (
             vec![("off", Value::Null)],
+            json!({"supportsReasoningEffort": true}),
+        ),
+        Some(Switch::EffortLowToHigh) => (
+            vec![("off", Value::Null), ("minimal", Value::Null)],
             json!({"supportsReasoningEffort": true}),
         ),
         // The template knows thinking or none.

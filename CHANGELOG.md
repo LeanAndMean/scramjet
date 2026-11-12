@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.182.0 — gpt-oss's thinking levels on vLLM
+
+### Changed
+
+- `/login` → Local models offers thinking levels for gpt-oss on vLLM, told by the weights' path vLLM lists: low, medium and high reach it as `reasoning_effort`; off and minimal are not offered, as vLLM refuses them. Such models were saved with no levels before.
+
 ## 2.181.1 — `localhost` answers at once on Windows
 
 ### Fixed
