@@ -1290,6 +1290,19 @@ fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
     })
 }
 
+/// "on lines 3, 17 and 40", for a refused edit: Scramjet's message gives only the count, and
+/// local models then search the file again before adding context.
+fn on_lines(mut lines: Vec<usize>) -> String {
+    const SHOWN: usize = 10;
+    lines.dedup();
+    let shown: Vec<String> = lines.iter().take(SHOWN).map(usize::to_string).collect();
+    match (&shown[..], lines.len().saturating_sub(SHOWN)) {
+        ([line], _) => format!("all on line {line}"),
+        ([first @ .., last], 0) => format!("on lines {} and {last}", first.join(", ")),
+        (_, more) => format!("on lines {} and {more} more", shown.join(", ")),
+    }
+}
+
 fn edit(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
     let original = String::from_utf8(contents(&path, hidden)?)
@@ -1348,15 +1361,17 @@ including all whitespace and newlines."
                     ),
                 });
             }
-            Err(matching::Miss::Many(occurrences)) => {
+            Err(matching::Miss::Many(lines)) => {
+                let occurrences = lines.len();
+                let at = on_lines(lines);
                 return Err(match single {
                     true => format!(
-                        "Found {occurrences} occurrences of the text in {shown}. The text must be \
-unique. Please provide more context to make it unique."
+                        "Found {occurrences} occurrences of the text in {shown}, {at}. The text \
+must be unique. Please provide more context to make it unique."
                     ),
                     false => format!(
-                        "Found {occurrences} occurrences of edits[{index}] in {shown}. Each oldText \
-must be unique. Please provide more context to make it unique."
+                        "Found {occurrences} occurrences of edits[{index}] in {shown}, {at}. Each \
+oldText must be unique. Please provide more context to make it unique."
                     ),
                 });
             }
@@ -2383,6 +2398,17 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_edit_names_the_lines_of_its_occurrences() {
+        assert_eq!(on_lines(vec![4, 4, 4]), "all on line 4");
+        assert_eq!(on_lines(vec![2, 9]), "on lines 2 and 9");
+        assert_eq!(on_lines(vec![1, 1, 5, 7]), "on lines 1, 5 and 7");
+        assert_eq!(
+            on_lines((1..=12).collect()),
+            "on lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 and 2 more"
+        );
+    }
+
+    #[test]
     fn edit_requires_unique_non_overlapping_matches() {
         let root = std::env::temp_dir().join(format!("scramjet-agent-edit-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
@@ -2400,8 +2426,8 @@ mod tests {
         assert_eq!(
             run(json!([{"oldText":"beta","newText":"x"}])).unwrap_err(),
             format!(
-                "Found 2 occurrences of the text in {path}. The text must be unique. Please \
-provide more context to make it unique."
+                "Found 2 occurrences of the text in {path}, all on line 1. The text must be \
+unique. Please provide more context to make it unique."
             )
         );
         assert_eq!(
@@ -3585,8 +3611,8 @@ to see full lines]",
             run(json!({"path":"f.txt","edits":[{"oldText":"say(\"hi\")","newText":"x"}]}))
                 .unwrap_err(),
             format!(
-                "Found 2 occurrences of the text in {path}. The text must be unique. Please \
-provide more context to make it unique."
+                "Found 2 occurrences of the text in {path}, on lines 1 and 3. The text must be \
+unique. Please provide more context to make it unique."
             )
         );
         run(json!({"path":"f.txt","edits":[{"oldText":"say(\"hi\") - 1\nend","newText":"say('hi')\nend"}]}))

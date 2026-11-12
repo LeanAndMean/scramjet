@@ -68,18 +68,29 @@ impl View {
         original + (at - text)
     }
 
-    /// The original range of the one place `old` is in the text.
-    fn find(&self, old: &str) -> Result<(usize, usize), Miss> {
+    /// The original range of the one place `old` is in the text, else the lines of `original`
+    /// where each place starts.
+    fn find(&self, old: &str, original: &str) -> Result<(usize, usize), Miss> {
         if old.is_empty() {
             return Err(Miss::Absent);
         }
-        let mut found = self.text.match_indices(old);
-        let Some((start, _)) = found.next() else {
-            return Err(Miss::Absent);
-        };
-        match found.count() {
-            0 => Ok((self.origin(start), self.origin(start + old.len()))),
-            more => Err(Miss::Many(more + 1)),
+        let starts: Vec<usize> = self.text.match_indices(old).map(|(at, _)| at).collect();
+        match starts[..] {
+            [] => Err(Miss::Absent),
+            [start] => Ok((self.origin(start), self.origin(start + old.len()))),
+            _ => {
+                let (mut line, mut counted) = (1, 0);
+                let lines = starts.iter().map(|&at| {
+                    let at = self.origin(at);
+                    line += original.as_bytes()[counted..at]
+                        .iter()
+                        .filter(|&&b| b == b'\n')
+                        .count();
+                    counted = at;
+                    line
+                });
+                Err(Miss::Many(lines.collect()))
+            }
         }
     }
 }
@@ -97,7 +108,8 @@ fn plain(c: char) -> Option<&'static str> {
 
 pub enum Miss {
     Absent,
-    Many(usize),
+    /// The 1-based line where each occurrence starts.
+    Many(Vec<usize>),
 }
 
 /// Finds edits' old texts in one file.
@@ -134,7 +146,7 @@ impl<'a> Finder<'a> {
 
     /// The one place `old` is, line endings aside, else the one place it is loosely.
     fn locate(&self, old: &str) -> Result<(usize, usize), Miss> {
-        match self.exact.find(&View::new(old, false).text) {
+        match self.exact.find(&View::new(old, false).text, self.original) {
             Err(Miss::Absent) => {}
             found => return found,
         }
@@ -147,12 +159,12 @@ impl<'a> Finder<'a> {
         if !tail.is_empty() {
             let mut kept = trimmed.clone();
             kept.extend(tail.chars().map(|c| plain(c).map_or(c, |_| ' ')));
-            match loose.find(&kept) {
+            match loose.find(&kept, self.original) {
                 Err(Miss::Absent) => {}
                 found => return found,
             }
         }
-        loose.find(&trimmed)
+        loose.find(&trimmed, self.original)
     }
 
     /// `new` with the line ending of the file's first line, as Scramjet writes it.
@@ -206,8 +218,8 @@ mod tests {
             Some("now  \n\tthen\u{a0}go\t\n")
         );
         assert!(matches!(
-            Finder::new("“a”\n”a“\n").find("\"a\"", ""),
-            Err(Miss::Many(2))
+            Finder::new("“a”\r\n\r\n”a“\n").find("\"a\"", "").err(),
+            Some(Miss::Many(lines)) if lines == [1, 3]
         ));
         assert!(matches!(
             Finder::new("a \n").find("\t", ""),

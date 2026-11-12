@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.183.0 — Where a refused edit's text is
+
+### Changed
+
+- An edit refused because its text occurs more than once says the lines where each occurrence starts ("Found 3 occurrences … on lines 12, 40 and 88"; the first ten, then how many more), so the model can add the right context without searching the file again.
+
 ## 2.182.4 — gpt-oss's find-in-page
 
 ### Fixed
