@@ -9,7 +9,7 @@ use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, delegate,
-    forge, mcp, publish, question, sandbox, status, subagent, suggest, switch,
+    forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest, switch,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -421,6 +421,11 @@ impl Agent {
                 failed,
                 image: None,
             };
+            return Called::Done(output, false);
+        }
+        if call.name == permissions::NAME {
+            let output = self.request_permissions(&call.arguments, ui);
+            ui.tool_result(call.name, &output.text, None, output.failed);
             return Called::Done(output, false);
         }
         if call.name == delegate::NAME {
@@ -1129,6 +1134,72 @@ here\n\nkept.txt says original";
             std::fs::read_to_string(root.join(".git/config")).unwrap(),
             "a\n"
         );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
+    fn the_agent_asks_the_user_to_write_outside_the_sandbox() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let other = std::env::temp_dir().join(format!(
+            "scramjet-agent-permissions-other-{}",
+            std::process::id()
+        ));
+        let _other = ScratchDir::new(other.clone());
+        std::fs::create_dir_all(&other).unwrap();
+        let other = std::fs::canonicalize(other).unwrap();
+        let ask = |id: &str| {
+            let arguments = json!({"write":[other.display().to_string()],"reason":"Both change."});
+            tool_call(id, permissions::NAME, arguments)
+        };
+        let written = other.join("made.txt").display().to_string();
+        let (endpoint, server) = serve(vec![
+            ask("call_1"),
+            ask("call_2"),
+            tool_call("call_3", "write", json!({"path":written,"content":"w\n"})),
+            ask("call_4"),
+            reply("done"),
+            ask("call_5"),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "permissions");
+        agent.set_sandbox(Some(Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        }));
+        let cancel = AtomicBool::new(false);
+        let mut ui = Recorder {
+            choices: vec![Some(1), Some(0)],
+            ..Recorder::default()
+        };
+        agent.turn("write", &mut ui, &cancel).unwrap();
+        agent.set_unattended(true);
+        let granted = agent.sandbox().unwrap().writable.clone();
+        agent.set_sandbox(Some(Sandbox {
+            writable: Vec::new(),
+            ..agent.sandbox().unwrap().clone()
+        }));
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 7);
+        let offered = bodies[0]["tools"].to_string();
+        assert!(offered.contains(permissions::NAME), "{offered}");
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        assert!(instructions.contains("\n\n# Sandbox\n"), "{instructions}");
+        assert!(last_output(&bodies[1]).contains("The user declined"));
+        assert!(last_output(&bodies[2]).contains("The user allowed writing"));
+        assert_eq!(granted, std::slice::from_ref(&other));
+        assert_eq!(std::fs::read_to_string(&written).unwrap(), "w\n");
+        let again = last_output(&bodies[4]);
+        assert!(again.contains("already writable"), "{again}");
+        let unattended = last_output(&bodies[6]);
+        assert!(
+            unattended.contains("Not asked: this turn runs unattended"),
+            "{unattended}"
+        );
+        assert!(agent.sandbox().unwrap().writable.is_empty());
+        let asked = (ui.shown.iter()).filter(|shown| shown.starts_with("choose Allow writing"));
+        assert_eq!(asked.count(), 2);
     }
 
     #[test]

@@ -365,6 +365,7 @@ impl Interactive {
     fn run_turn(&mut self, prompt: Option<&str>, start: Start) -> Option<(String, Start)> {
         let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
         self.agent.set_hide_credentials(hide);
+        self.agent.set_unattended(start == Start::Unattended);
         let model = self.agent.model().to_owned();
         let result = match self.screen.is_some() {
             true => self.turn_on_screen(prompt),

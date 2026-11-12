@@ -131,7 +131,7 @@ pub fn missing_shells(tools: &[String]) -> Vec<String> {
 }
 
 /// The harness's own tools, which the model sees after the coding tools, in this order.
-pub const HARNESS_TOOLS: [&str; 12] = [
+pub const HARNESS_TOOLS: [&str; 13] = [
     super::status::NAME,
     super::publish::TOOLS[0],
     super::publish::TOOLS[1],
@@ -142,6 +142,7 @@ pub const HARNESS_TOOLS: [&str; 12] = [
     super::subagent::NAME,
     super::switch::NAME,
     super::suggest::NAME,
+    super::permissions::NAME,
     super::mcp::SEARCH,
     super::mcp::CALL,
 ];
@@ -149,14 +150,20 @@ pub const HARNESS_TOOLS: [&str; 12] = [
 /// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
 /// harness's own, those for MCP servers' tools only with `mcp` (servers are configured); with
 /// `only` (`--tools`), those it names alone, as Scramjet's allowlist.
-pub(super) fn offered(coding: &[String], only: Option<&[String]>, mcp: bool) -> Vec<&'static str> {
+pub(super) fn offered(
+    coding: &[String],
+    only: Option<&[String]>,
+    mcp: bool,
+    sandbox: bool,
+) -> Vec<&'static str> {
     let named = |names: &[String], tool: &str| names.iter().any(|name| name == tool);
     let coding = (CODING_TOOLS.into_iter())
         .filter(|tool| named(only.unwrap_or(coding), tool))
         .filter(|tool| !cfg!(windows) || found(tool));
     let harness = (HARNESS_TOOLS.into_iter())
         .filter(|tool| only.is_none_or(|only| named(only, tool)))
-        .filter(|tool| mcp || !super::mcp::TOOLS.contains(tool));
+        .filter(|tool| mcp || !super::mcp::TOOLS.contains(tool))
+        .filter(|tool| sandbox || *tool != super::permissions::NAME);
     coding.chain(harness).collect()
 }
 
@@ -172,6 +179,7 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     tools.push(super::subagent::definition());
     tools.push(super::switch::definition());
     tools.push(super::suggest::definition());
+    tools.push(super::permissions::definition());
     tools.extend(super::mcp::definitions());
     tools.retain(|tool| (tool["name"].as_str()).is_some_and(|name| offered.contains(&name)));
     Value::Array(tools)
@@ -333,6 +341,7 @@ impl<'a> Call<'a> {
             super::delegate::NAME => super::delegate::summary(&self.arguments),
             super::suggest::NAME => super::suggest::summary(&self.arguments),
             super::switch::NAME => super::switch::summary(&self.arguments),
+            super::permissions::NAME => super::permissions::summary(&self.arguments),
             name if super::publish::TOOLS.contains(&name) => {
                 super::publish::summary(name, &self.arguments)
             }

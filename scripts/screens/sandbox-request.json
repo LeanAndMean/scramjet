@@ -1,0 +1,88 @@
+{
+  "size": "100x48",
+  "settings": {
+    "sandbox": "read-only"
+  },
+  "files": {
+    "README.md": "Project\n",
+    "docs/index.md": "Docs\n"
+  },
+  "replies": [
+    [
+      {
+        "call": "request_permissions",
+        "arguments": {
+          "write": ["docs"],
+          "reason": "The task adds a page to the documentation."
+        }
+      }
+    ],
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "docs/usage.md",
+          "content": "Usage\n"
+        }
+      }
+    ],
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "README.md",
+          "content": "changed\n"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The page is written; README.md stayed read-only."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "Add a usage page\r"
+    },
+    {
+      "until": "Allow writing there?"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "asked"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "stayed read-only"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "turn"
+    },
+    {
+      "type": "/sandbox\r"
+    },
+    {
+      "until": "Mode: read-only"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "after"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}

@@ -764,6 +764,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             &super::super::tools::DEFAULT_TOOLS.map(String::from),
             None,
             false,
+            false,
         );
         let text = agent(
             &scratch,

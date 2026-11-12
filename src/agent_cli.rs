@@ -225,6 +225,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         ui.notice(warning);
     }
     agent.set_hide_credentials(settings.hide_credentials.hides(true));
+    agent.set_unattended(true);
     if let Some(files) = files {
         agent.attach(files);
     }

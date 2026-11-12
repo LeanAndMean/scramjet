@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.165.0 — The agent asks for write access
+
+### Added
+
+- With a sandbox on, the agent is told which directories it can write, and asks for more with a new `request_permissions` tool, giving the directories and why; you allow them for the rest of the session or deny them. In `-p` and steps that autopilot runs, no one is there to answer, so the request is refused with a note the agent can pass on.
+
 ## 2.164.1 — Sandbox grants that hold
 
 ### Fixed

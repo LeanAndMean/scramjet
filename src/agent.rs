@@ -24,6 +24,7 @@ mod listed;
 pub mod login;
 mod mcp;
 mod messages;
+mod permissions;
 mod pricing;
 mod problem;
 mod providers;
@@ -626,6 +627,8 @@ pub struct Agent {
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
+    /// Whether the turn runs with no one to answer a question (`set_unattended`).
+    unattended: bool,
     /// Whether a completed command's recommended next step runs without the user choosing it.
     autopilot: bool,
     /// The MCP servers, while the model is offered their tools.
@@ -781,6 +784,7 @@ impl Agent {
             identities: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
+            unattended: false,
             autopilot,
             mcp: None,
             calls: None,
@@ -993,7 +997,7 @@ impl Agent {
         let mcp = !self.enabled_mcp().is_empty();
         self.instructions = instructions::agent(
             &config.root,
-            &tools::offered(&config.tools, config.only_tools.as_deref(), mcp),
+            &tools::offered(&config.tools, config.only_tools.as_deref(), mcp, false),
             &self.commands,
             &agents,
             &self.skills,
@@ -1363,8 +1367,12 @@ impl Agent {
         let model = &self.config.model;
         let window = self.info.window;
         let servers = (self.mcp.as_deref()).map(|servers| servers.section(window));
+        let sandbox = (self.config.sandbox.as_ref())
+            .filter(|_| self.offers(permissions::NAME))
+            .map(|sandbox| permissions::section(sandbox, &self.config.root));
         self.instructions.clone()
             + &servers.unwrap_or_default()
+            + &sandbox.unwrap_or_default()
             + &instructions::identity(model, &contributors, &self.identities)
             + &instructions::environment(
                 &self.config.root,
@@ -1388,7 +1396,8 @@ impl Agent {
     fn offered(&self) -> Vec<&'static str> {
         let config = &self.config;
         let mcp = !self.enabled_mcp().is_empty();
-        tools::offered(&config.tools, config.only_tools.as_deref(), mcp)
+        let sandbox = config.sandbox.is_some();
+        tools::offered(&config.tools, config.only_tools.as_deref(), mcp, sandbox)
     }
 
     fn offers(&self, tool: &str) -> bool {
@@ -1713,6 +1722,12 @@ impl Agent {
     /// always do. A `!` command, which the user runs, never does.
     pub fn set_hide_credentials(&mut self, hide: bool) {
         self.hide_credentials = hide;
+    }
+
+    /// Whether the turns that follow run with no one to answer (`-p`, a step autopilot runs):
+    /// a request for write access is then refused rather than asked.
+    pub fn set_unattended(&mut self, unattended: bool) {
+        self.unattended = unattended;
     }
 
     /// Confines the coding tools as `sandbox` says, the credential stores hidden too, or, with
