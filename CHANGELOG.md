@@ -4,6 +4,14 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.164.1 — Sandbox grants that hold
+
+### Fixed
+
+- In `read-only`, granting a directory that holds a repository and then a parent of the project no longer lets commands write the project; nor can they move it out from under its read-only mount by renaming a directory above it.
+- Granting a directory inside a `.git`, `.scramjet` or `.agents` that stays read-only is refused (grant that directory itself) instead of making all of it writable; granting `/`, or `/dev`, `/proc`, `/run`, `/tmp` or what holds them, is refused, as it would bring back sockets that lead out of the sandbox.
+- `/add-dir .` in `read-only` makes the project writable to writes and edits too, not only to commands; `/sandbox remove` restarts the MCP servers so that they lose the grant too.
+
 ## 2.164.0 — Changing the sandbox while working
 
 ### Added

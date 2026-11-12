@@ -1720,12 +1720,18 @@ impl Agent {
     /// commands fail (`Sandbox::check` says so first). A `!` command stays outside. The MCP
     /// servers start again in it.
     /// The directories granted (`Sandbox::writable`) reach the MCP servers only when they start
-    /// again for another reason, so that a grant does not cut their sessions.
+    /// again for another reason, so that a grant does not cut their sessions; one taken back
+    /// starts them again, as it must leave them too.
     pub fn set_sandbox(&mut self, sandbox: Option<Sandbox>) {
         let confinement = |sandbox: &Option<Sandbox>| {
             (sandbox.as_ref()).map(|sandbox| (sandbox.mode, sandbox.network))
         };
-        let restart = confinement(&self.config.sandbox) != confinement(&sandbox);
+        let revoked = |old: &Sandbox, new: &Sandbox| {
+            (old.writable.iter()).any(|granted| !new.writable.contains(granted))
+        };
+        let restart = confinement(&self.config.sandbox) != confinement(&sandbox)
+            || (self.config.sandbox.as_ref().zip(sandbox.as_ref()))
+                .is_some_and(|(old, new)| revoked(old, new));
         self.config.sandbox = sandbox;
         if restart {
             self.mcp = None;

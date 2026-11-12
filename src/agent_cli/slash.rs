@@ -747,7 +747,7 @@ the hideCredentials setting says.\n";
         info += &row("Granted, gone:", listed(&missing));
     }
     let mut kept = sandbox.protected_paths(root);
-    if sandbox.mode == SandboxMode::ReadOnly
+    if sandbox.read_only_project(root).is_some()
         && (writable.iter()).any(|path| project.starts_with(path) && *path != project)
     {
         kept.insert(0, project.clone());
