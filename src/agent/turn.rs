@@ -12,6 +12,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
+/// How often a local runtime is asked for a model's window before it is left as saved.
+const RUNTIME_WINDOW_TRIES: u8 = 3;
+
+/// What a local runtime said of a model's window.
+pub(super) enum RuntimeWindow {
+    Read(u64),
+    /// Not said yet (Ollama, until the model loads), after this many tries.
+    Unread(u8),
+}
+
 /// What a paused turn left running, shown in a thread of its own (`Agent::show_paused`).
 pub struct ShownPaused {
     stop: Arc<AtomicBool>,
@@ -31,6 +41,7 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
+        self.follow_runtime(ui);
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
         self.suggestion = suggest::Pending::Nothing;
@@ -249,6 +260,56 @@ finish and is not checked on. Reply to continue.",
         Ok(record)
     }
 
+    /// Takes the window the current model's local runtime serves it with now, in place of the
+    /// one saved when it was checked: Ollama picks one when it loads the model (by the GPU's
+    /// memory, or `OLLAMA_CONTEXT_LENGTH`) and cuts a longer prompt silently, and llama.cpp and
+    /// vLLM take theirs from their flags. Said when it differs from the saved one.
+    fn follow_runtime(&mut self, ui: &mut dyn AgentUi) {
+        let (Some(runtime), Some(route)) = (self.info.runtime, &self.info.route) else {
+            return;
+        };
+        let tries = match self.runtime_windows.get(&self.config.model) {
+            Some(RuntimeWindow::Read(window)) => {
+                self.info.window = Some(*window);
+                return;
+            }
+            Some(RuntimeWindow::Unread(tries)) if *tries >= RUNTIME_WINDOW_TRIES => return,
+            Some(RuntimeWindow::Unread(tries)) => *tries,
+            None => 0,
+        };
+        let scheme = if route.tls { "https" } else { "http" };
+        let base = format!("{scheme}://{}{}", route.authority, route.path);
+        let url = base.strip_suffix("/v1").unwrap_or(&base);
+        let key = (route.headers.iter())
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .and_then(|(_, value)| value.strip_prefix("Bearer "));
+        let model = self.config.model.clone();
+        let Some(window) = super::local::window_now(url, key, &self.info.id) else {
+            (self.runtime_windows).insert(model, RuntimeWindow::Unread(tries + 1));
+            return;
+        };
+        self.runtime_windows
+            .insert(model, RuntimeWindow::Read(window));
+        if self.info.window == Some(window) {
+            return;
+        }
+        let saved = match self.info.window {
+            Some(saved) => format!("not the {saved} saved for it"),
+            None => "which was not saved for it".to_owned(),
+        };
+        let cut = match runtime {
+            super::local::Runtime::Ollama => "; Ollama cuts a longer prompt without saying so",
+            _ => "",
+        };
+        ui.notice(&format!(
+            "{} serves {} with a {window}-token window, {saved}: compaction follows the \
+             runtime{cut} (/login → Local models checks it again and saves it)",
+            runtime.name(),
+            self.info.id
+        ));
+        self.info.window = Some(window);
+    }
+
     /// Model requests and tool calls until a final answer. As in Pi, messages the user sends
     /// meanwhile go to the model before its next request, and those queued for the end keep
     /// the turn going when it would end.
@@ -277,6 +338,7 @@ finish and is not checked on. Reply to continue.",
                         return Err(AgentError::Paused);
                     }
                     self.settle_mcp(ui, cancel)?;
+                    self.follow_runtime(ui);
                     let request = self.request();
                     self.start_reply(request)?
                 }
@@ -341,6 +403,7 @@ to a larger-context model)"
             if let Some(message) = reply.incomplete {
                 return Err(AgentError::Provider(message));
             }
+            self.follow_runtime(ui);
             if calls.is_empty() {
                 self.compact_when_full(ui, cancel)?;
                 if self.continue_queued(ui)? {
@@ -470,6 +533,84 @@ mod tests {
         question, show_items,
     };
     use crate::provider_fixture as fixture;
+
+    #[test]
+    fn a_local_model_takes_the_window_its_runtime_loaded_it_with() {
+        let reply = |value: Value| {
+            let body = value.to_string();
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
+        };
+        // Ollama 0.40.16's answers to a probe, the model loaded with `window` or not loaded.
+        let probe = |window: Option<u64>| {
+            let loaded =
+                window.map(|window| json!({"model": "qwen3:1.7b", "context_length": window}));
+            vec![
+                reply(json!({"data": [{"id": "qwen3:1.7b", "owned_by": "library"}]})),
+                reply(json!({"version": "0.40.16"})),
+                reply(json!({"models": [{"model": "qwen3:1.7b",
+                    "capabilities": ["completion", "tools"]}]})),
+                reply(json!({"models": loaded.into_iter().collect::<Vec<_>>()})),
+            ]
+        };
+        let chat = |text: &str| {
+            let chunks = [
+                json!({"choices": [{"index": 0, "delta": {"role": "assistant", "content": text}}]}),
+                json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
+                json!({"choices": [], "usage": {"prompt_tokens": 900, "completion_tokens": 3}}),
+            ];
+            let mut body: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
+            body.push_str("data: [DONE]\n\n");
+            format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
+        };
+        // Before the prompt's compaction check and its request it is not loaded; after the
+        // reply it is, and then it is not asked again.
+        let mut responses = probe(None);
+        responses.extend(probe(None));
+        responses.push(chat("one"));
+        responses.extend(probe(Some(2048)));
+        responses.push(chat("two"));
+        let (endpoint, server) = serve(responses);
+        let (mut agent, _scratch) = agent(endpoint, "runtime-window");
+        agent.set_providers(crate::agent::providers::Providers::given(
+            json!({"providers": {"ollama": {
+            "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-completions",
+            "runtime": "ollama", "models": [{"id": "qwen3:1.7b", "contextWindow": 40960}]}}}),
+        ));
+        agent.set_model("ollama/qwen3:1.7b").unwrap();
+        assert_eq!(agent.context_window(), Some(40960));
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("go", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.context_window(), Some(2048));
+        let notices: Vec<&String> = (ui.shown.iter())
+            .filter(|s| s.starts_with("notice"))
+            .collect();
+        assert_eq!(
+            notices,
+            [
+                "notice Ollama serves qwen3:1.7b with a 2048-token window, not the 40960 saved for \
+              it: compaction follows the runtime; Ollama cuts a longer prompt without saying \
+              so (/login → Local models checks it again and \
+              saves it)"
+            ]
+        );
+        // A switch away and back takes the saved entry again, and the window read stays.
+        agent.set_model("m").unwrap();
+        agent.set_model("ollama/qwen3:1.7b").unwrap();
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        assert_eq!(agent.context_window(), Some(2048));
+        let requests = server.join().unwrap();
+        let posted = requests.iter().filter(|body| !body.is_null()).count();
+        assert_eq!((requests.len(), posted), (14, 2));
+    }
 
     #[test]
     fn an_effort_chosen_during_a_turn_goes_with_its_next_request() {

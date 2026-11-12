@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.170.0 — Local models follow their runtime's window
+
+### Changed
+
+- A session on a model saved from `/login` → Local models takes the window its runtime serves it with now (Ollama's once it has loaded the model, llama.cpp's and vLLM's from their lists) in place of the one saved, and says so when they differ, so compaction runs before the conversation outgrows it. Ollama cuts a prompt longer than its window without saying so, losing the instructions; `/login`'s warning for a small window now says that instead of claiming the runtime refuses it.
+
 ## 2.169.1 — A first login picks a model
 
 ### Fixed

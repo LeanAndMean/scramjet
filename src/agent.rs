@@ -624,6 +624,8 @@ pub struct Agent {
     /// The names and providers of the providers' models, for the Model Identity; kept when they
     /// cannot be listed again.
     identities: HashMap<String, instructions::Identity>,
+    /// What local runtimes said of their models' windows, by model reference (`follow_runtime`).
+    runtime_windows: HashMap<String, turn::RuntimeWindow>,
     /// The models of the user's scope (`set_model_scope`); empty: all.
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
@@ -783,6 +785,7 @@ impl Agent {
             info: config.providers.info(&config.model),
             provider: None,
             identities: HashMap::new(),
+            runtime_windows: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
             unattended: false,

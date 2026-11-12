@@ -391,10 +391,17 @@ impl Interactive {
             file.display()
         ));
         if model.window.is_some_and(|window| window < SMALL_WINDOW) {
-            self.say(
+            let over = match server.runtime {
+                Runtime::Ollama => {
+                    "Ollama cuts a longer prompt from its start without saying so \
+                     (OLLAMA_CONTEXT_LENGTH sets its window)"
+                }
+                _ => "a runtime refuses a request over its window",
+            };
+            self.say(&format!(
                 "Warning: that window is small for an agent: the instructions and tools alone \
-                 take about 10k tokens here, and a runtime refuses a request over its window",
-            );
+                 take about 10k tokens here, and {over}"
+            ));
         }
         self.providers_changed();
         self.take_offered_model(Some(&format!("{name}/{}", model.id)));

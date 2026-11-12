@@ -266,6 +266,14 @@ pub fn probe(url: &str, key: Option<&str>) -> Result<Server, Problem> {
     super::login::blocking(probe_within(url, key, PROBE_WAIT))
 }
 
+/// The window the runtime at `url` (as `address` gives it) serves model `id` with now; `None`
+/// when it cannot be read, or the runtime does not say yet (Ollama, until it loads the model).
+pub fn window_now(url: &str, key: Option<&str>, id: &str) -> Option<u64> {
+    let server = super::login::blocking(probe_within(url, key, LOOK_WAIT)).ok()?;
+    let model = server.models.into_iter().find(|model| model.id == id)?;
+    model.window
+}
+
 impl From<String> for Problem {
     fn from(detail: String) -> Self {
         problem(Step::NotReachable, detail)

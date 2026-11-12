@@ -121,6 +121,8 @@ pub(super) struct ModelInfo {
     pub compat: Compat,
     /// `None` when no provider offers it.
     pub route: Option<Route>,
+    /// The local runtime serving it, as `/login` → Local models saved its provider.
+    pub runtime: Option<super::local::Runtime>,
 }
 
 impl ModelInfo {
@@ -142,6 +144,7 @@ impl ModelInfo {
             prices: Prices::default(),
             compat: Compat::default(),
             route: None,
+            runtime: None,
         }
     }
 
@@ -992,6 +995,8 @@ impl Reading {
             prices: Prices::of(&entry["cost"]),
             compat,
             route: Some(route),
+            runtime: (provider.get("runtime").and_then(Value::as_str))
+                .and_then(super::local::Runtime::of),
         };
         Ok(Model {
             id,
