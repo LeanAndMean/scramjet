@@ -149,7 +149,7 @@ impl Interactive {
     pub(super) fn settings(&mut self) {
         self.save_hide_thinking();
         if self.screen.is_none() {
-            let path = self.settings.shown_path();
+            let path = self.session.settings.shown_path();
             let path = path.unwrap_or_else(|| "not saved: HOME is not set".into());
             eprintln!("Settings ({path})");
             for row in self.setting_rows() {
@@ -166,10 +166,10 @@ impl Interactive {
             };
             let listed = rows();
             let shown = self.setting_rows();
-            let levels = !self.agent.effort_levels().is_empty();
-            let problems = self.agent.next_steps().problems;
-            let publishing = self.agent.approvals().problem;
-            let command_line_tools = self.agent.command_line_tools();
+            let levels = !self.session.agent.effort_levels().is_empty();
+            let problems = self.session.agent.next_steps().problems;
+            let publishing = self.session.agent.approvals().problem;
+            let command_line_tools = self.session.agent.command_line_tools();
             let notes = (listed.iter())
                 .map(|row| match row {
                     Row::ThinkingLevel if !levels => NO_LEVELS.to_owned(),
@@ -214,30 +214,39 @@ impl Interactive {
                 Row::Publishing => self.choose_approvals(),
                 Row::Installed => self.show_installed(),
                 Row::Autopilot => {
-                    if let Err(error) = self.agent.set_autopilot(!self.agent.autopilot()) {
+                    if let Err(error) = self
+                        .session
+                        .agent
+                        .set_autopilot(!self.session.agent.autopilot())
+                    {
                         self.say(&format!("Error: {error}"));
                     }
                 }
                 Row::Sandbox
-                    if self.settings.next_sandbox().is_some()
+                    if self.session.settings.next_sandbox().is_some()
                         && let Err(error) = Sandbox::check() =>
                 {
                     self.say(&format!("Error: {error}"));
                 }
                 row => {
-                    if let Err(error) = self.settings.cycle(row) {
+                    if let Err(error) = self.session.settings.cycle(row) {
                         self.say(&format!("Error: settings not saved: {error}"));
                     }
                 }
             }
             self.hide_thinking
-                .store(self.settings.hide_thinking_block, Ordering::Relaxed);
-            self.agent.set_compacting(self.settings.compacting);
-            scramjet::agent::set_images(self.settings.resize_images, self.settings.block_images);
-            scramjet::agent::set_user_shell(self.settings.default_shell);
-            self.ui.markdown_reads = self.settings.markdown_reads;
+                .store(self.session.settings.hide_thinking_block, Ordering::Relaxed);
+            self.session
+                .agent
+                .set_compacting(self.session.settings.compacting);
+            scramjet::agent::set_images(
+                self.session.settings.resize_images,
+                self.session.settings.block_images,
+            );
+            scramjet::agent::set_user_shell(self.session.settings.default_shell);
+            self.ui.markdown_reads = self.session.settings.markdown_reads;
             if let Some(screen) = &mut self.screen {
-                (screen.link).reloaded(completions(&self.agent), &self.settings);
+                (screen.link).reloaded(completions(&self.session.agent), &self.session.settings);
             }
         }
         if let Some(screen) = &self.screen {
@@ -254,19 +263,19 @@ impl Interactive {
             .max()
             .unwrap_or(0);
         let value = |row| match row {
-            Row::ThinkingLevel => (self.agent.effort().map(scramjet_level))
+            Row::ThinkingLevel => (self.session.agent.effort().map(scramjet_level))
                 .unwrap_or("model default")
                 .to_owned(),
-            Row::Autopilot if self.agent.autopilot() => "on".into(),
+            Row::Autopilot if self.session.agent.autopilot() => "on".into(),
             Row::Autopilot => "off".into(),
-            Row::NextSteps => steps_summary(&self.agent.next_steps()),
-            Row::Publishing => approvals_summary(&self.agent.approvals()),
+            Row::NextSteps => steps_summary(&self.session.agent.next_steps()),
+            Row::Publishing => approvals_summary(&self.session.agent.approvals()),
             Row::Installed => {
-                let found = self.agent.installed();
+                let found = self.session.agent.installed();
                 let problems = self.problems(&found);
                 installed::summary(&self.loaded(&found, &problems))
             }
-            row => self.settings.shown(row),
+            row => self.session.settings.shown(row),
         };
         (listed.iter())
             .map(|&row| format!("{:width$}  {}", row.label(), value(row)))
@@ -276,12 +285,12 @@ impl Interactive {
     /// The model's levels to choose from; the one chosen is the session's and the
     /// settings' default, as Shift+Tab sets them.
     fn choose_thinking_level(&mut self) {
-        let levels = self.agent.effort_levels().to_vec();
+        let levels = self.session.agent.effort_levels().to_vec();
         let Some(screen) = self.screen.as_ref().filter(|_| !levels.is_empty()) else {
             return;
         };
-        let current =
-            (self.agent.effort()).and_then(|effort| levels.iter().position(|l| l == effort));
+        let current = (self.session.agent.effort())
+            .and_then(|effort| levels.iter().position(|l| l == effort));
         let picker = select::Picker::select(
             "Thinking level",
             select::VISIBLE,
@@ -294,10 +303,10 @@ impl Interactive {
             return;
         };
         let level = &levels[index];
-        if let Err(error) = self.agent.set_effort(level.clone()) {
+        if let Err(error) = self.session.agent.set_effort(level.clone()) {
             return self.say(&format!("Error: {error}"));
         }
-        if let Err(error) = self.settings.set_default_thinking_level(level) {
+        if let Err(error) = self.session.settings.set_default_thinking_level(level) {
             self.say(&format!("Error: settings not saved: {error}"));
         }
     }
@@ -323,7 +332,7 @@ impl Interactive {
             };
             let listed = &self.themes.listed;
             let current =
-                (listed.iter()).position(|known| known.name == self.settings.theme_name());
+                (listed.iter()).position(|known| known.name == self.session.settings.theme_name());
             let editable = current.and_then(|current| editable(&listed[current]));
             let notes = (listed.iter().map(theme_note))
                 .chain([NEW_THEME_NOTE.to_owned()])
@@ -356,7 +365,7 @@ impl Interactive {
                 continue;
             }
             let name = listed[index].name.clone();
-            let saved = self.settings.set_theme(&name);
+            let saved = self.session.settings.set_theme(&name);
             self.use_theme();
             if let Err(error) = saved {
                 self.say(&format!("Error: settings not saved: {error}"));
@@ -399,7 +408,7 @@ impl Interactive {
                 continue;
             }
             self.discover_themes();
-            let set = self.settings.set_theme(&name);
+            let set = self.session.settings.set_theme(&name);
             self.use_theme();
             self.say_styled(style::MUTED, &format!("{saved} theme {name} in {shown}"));
             if let Err(error) = set {
@@ -414,13 +423,15 @@ impl Interactive {
     fn new_theme_editor(&self) -> ThemeEditor {
         let terminal = background::terminal();
         let start = match (
-            self.themes.theme(self.settings.theme_name()).background(),
+            self.themes
+                .theme(self.session.settings.theme_name())
+                .background(),
             terminal,
         ) {
             (Color::Rgb(r, g, b), _) if palette::is_dark((r, g, b)) => Background::Dark,
             (Color::Rgb(..), _) => Background::Light,
             (_, Some(rgb)) => Background::Terminal(rgb),
-            _ if self.settings.theme_name() == "pi-light" => Background::Light,
+            _ if self.session.settings.theme_name() == "pi-light" => Background::Light,
             _ => Background::Dark,
         };
         ThemeEditor::new(seed(), start, terminal)
@@ -476,7 +487,13 @@ impl Interactive {
             let Some(screen) = &self.screen else {
                 return;
             };
-            let on = |tool: &str| self.settings.tools.iter().any(|known| known == tool);
+            let on = |tool: &str| {
+                self.session
+                    .settings
+                    .tools
+                    .iter()
+                    .any(|known| known == tool)
+            };
             let rows: Vec<String> = (CODING_TOOLS.iter())
                 .map(|tool| format!("[{}] {tool}", if on(tool) { "x" } else { " " }))
                 .collect();
@@ -503,13 +520,15 @@ impl Interactive {
             };
             at = index;
             let tool = CODING_TOOLS[index];
-            let mut tools = self.settings.tools.clone();
+            let mut tools = self.session.settings.tools.clone();
             match on(tool) {
                 true => tools.retain(|known| known != tool),
                 false => tools.push(tool.to_owned()),
             }
-            let saved = self.settings.set_tools(tools);
-            self.agent.set_tools(self.settings.tools.clone());
+            let saved = self.session.settings.set_tools(tools);
+            self.session
+                .agent
+                .set_tools(self.session.settings.tools.clone());
             if let Err(error) = saved {
                 self.say(&format!("Error: settings not saved: {error}"));
             }
@@ -531,7 +550,7 @@ impl Interactive {
             let Some(screen) = &self.screen else {
                 return;
             };
-            let steps = self.agent.next_steps();
+            let steps = self.session.agent.next_steps();
             if steps.steps.is_empty() {
                 return;
             }
@@ -567,7 +586,7 @@ impl Interactive {
                 let pad = " ".repeat(width - target.width());
                 rows.push(format!("  → {target}{pad}  {}", step_value(step)));
                 lines.push(Line::Step(index));
-                notes.push(step_note(step, &steps, self.agent.autopilot()));
+                notes.push(step_note(step, &steps, self.session.agent.autopilot()));
             }
             let headings = (lines.iter())
                 .map(|line| matches!(line, Line::Heading))
@@ -660,7 +679,7 @@ impl Interactive {
         let Some(index) = screen.pick(picker.noting(back_keys("select"), notes).held()) else {
             return;
         };
-        if let Err(error) = self.agent.apply_suggestions(choices[index].1) {
+        if let Err(error) = self.session.agent.apply_suggestions(choices[index].1) {
             self.say(&format!("Error: suggested settings not saved: {error}"));
         }
     }
@@ -747,7 +766,11 @@ impl Interactive {
         };
         let target = step.target.as_deref();
         let chosen = STEP_CHOICES[index].1;
-        if let Err(error) = self.agent.set_next_step(&step.source, target, chosen) {
+        if let Err(error) = self
+            .session
+            .agent
+            .set_next_step(&step.source, target, chosen)
+        {
             self.say(&format!("Error: next step not saved: {error}"));
         }
     }
@@ -761,7 +784,7 @@ impl Interactive {
             let Some(screen) = &self.screen else {
                 return;
             };
-            let approvals = self.agent.approvals();
+            let approvals = self.session.agent.approvals();
             if approvals.list.is_empty() {
                 return;
             }
@@ -873,9 +896,10 @@ impl Interactive {
             return;
         };
         let chosen = choices[index].1;
-        if let Err(error) = self
-            .agent
-            .set_approval(&approval.command, approval.tool, chosen)
+        if let Err(error) =
+            self.session
+                .agent
+                .set_approval(&approval.command, approval.tool, chosen)
         {
             self.say(&format!("Error: publishing not saved: {error}"));
         }
@@ -892,7 +916,7 @@ impl Interactive {
             let Some(screen) = &self.screen else {
                 return;
             };
-            let found = self.agent.installed();
+            let found = self.session.agent.installed();
             let problems = self.problems(&found);
             let listing = installed::listing(&self.loaded(&found, &problems));
             if let Some(file) = edited.take() {
@@ -974,7 +998,7 @@ impl Interactive {
         match screen.pick(question.held()) {
             Some(0) => false,
             Some(_) => {
-                match self.agent.forget_project_agents() {
+                match self.session.agent.forget_project_agents() {
                     Ok(0) => self.say("No approval of this project's agents to forget"),
                     Ok(_) => self
                         .say_styled(style::MUTED, "Forgot the approval of this project's agents"),
@@ -1032,9 +1056,9 @@ impl Interactive {
     ) -> installed::Loaded<'a> {
         installed::Loaded {
             installed: found,
-            commands: self.agent.commands().list(),
-            skills: self.agent.skills().list(),
-            settings: self.settings.path(),
+            commands: self.session.agent.commands().list(),
+            skills: self.session.agent.skills().list(),
+            settings: self.session.settings.path(),
             problems,
         }
     }

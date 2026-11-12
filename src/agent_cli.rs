@@ -22,6 +22,7 @@ mod completion;
 mod console;
 mod design;
 mod diff;
+mod drive;
 mod editor;
 mod exit;
 mod export;
@@ -210,7 +211,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         let themes = (themes, theme_options);
         let mut interactive =
             interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings, themes)?;
-        interactive.scope = patterns;
+        interactive.session.scope = patterns;
         return interactive.run(resume, messages, files, scope_warnings);
     }
     let settings_warnings = std::mem::take(&mut settings.warnings);

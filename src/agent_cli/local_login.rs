@@ -415,7 +415,7 @@ impl Interactive {
 
     /// The user's own `models.json`, beside the settings.
     pub(super) fn models_file(&self) -> Option<PathBuf> {
-        let settings = self.settings.path().map(PathBuf::from);
+        let settings = self.session.settings.path().map(PathBuf::from);
         let directory = settings.and_then(|path| path.parent().map(PathBuf::from));
         let directory = directory.or_else(login::config_directory)?;
         Some(directory.join("models.json"))
@@ -424,12 +424,14 @@ impl Interactive {
     /// Reads the providers again, as `/reload` does.
     fn providers_changed(&mut self) {
         let logins = login::Logins::user();
-        self.agent
-            .set_providers(Providers::read(self.settings.models_files(), logins));
+        self.session.agent.set_providers(Providers::read(
+            self.session.settings.models_files(),
+            logins,
+        ));
         if let Some(screen) = &self.screen {
-            screen.models(self.agent.models().unwrap_or_default());
+            screen.models(self.session.agent.models().unwrap_or_default());
         }
-        for problem in self.agent.providers().problems().to_vec() {
+        for problem in self.session.agent.providers().problems().to_vec() {
             self.say(&format!("Warning: {problem}"));
         }
     }

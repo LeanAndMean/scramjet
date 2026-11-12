@@ -139,7 +139,7 @@ impl Interactive {
                 }
             }
             Some(Builtin::Rename(name)) => self.name(name),
-            Some(Builtin::Status) => self.say(session_info(&self.agent).trim_end()),
+            Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::ReleaseNotes) => self.release_notes(),
             Some(Builtin::Hotkeys) => self.hotkeys(),
@@ -168,9 +168,9 @@ impl Interactive {
 
     /// `/clear`, also before a next step that wants a fresh session. Returns whether it started.
     pub(super) fn new_session(&mut self) -> bool {
-        match self.agent.new_session() {
+        match self.session.agent.new_session() {
             Ok(()) => {
-                let session = saved_line(&self.agent);
+                let session = saved_line(&self.session.agent);
                 self.replaced(&format!("✓ New session started\n{session}"));
                 true
             }
@@ -183,12 +183,12 @@ impl Interactive {
 
     pub(super) fn name(&mut self, name: &str) {
         if name.is_empty() {
-            match self.agent.session_name() {
+            match self.session.agent.session_name() {
                 Some(current) => self.say_styled(style::MUTED, &format!("Session name: {current}")),
                 None => self.say("Usage: /rename <name>"),
             }
         } else {
-            match self.agent.set_session_name(name) {
+            match self.session.agent.set_session_name(name) {
                 Ok(()) => self.say_styled(style::MUTED, &format!("Session name set: {name}")),
                 Err(error) => self.say(&format!("Error: {error}")),
             }
@@ -200,7 +200,9 @@ impl Interactive {
     /// whole.
     fn release_notes(&mut self) {
         match &self.screen {
-            Some(screen) => screen.show_report(changelog::whole(self.settings.collapse_changelog)),
+            Some(screen) => {
+                screen.show_report(changelog::whole(self.session.settings.collapse_changelog))
+            }
             None => self.ui.release_notes(changelog::released()),
         }
     }
@@ -210,10 +212,10 @@ impl Interactive {
     fn export(&mut self, argument: &str) {
         let path = path_argument(argument);
         let written = match path {
-            _ if self.agent.conversation().is_empty() => Ok(None),
+            _ if self.session.agent.conversation().is_empty() => Ok(None),
             Some(path) if path.ends_with(".jsonl") => std::path::absolute(path)
                 .map_err(AgentError::from)
-                .and_then(|path| Ok(self.agent.export_session(&path)?.then_some(path))),
+                .and_then(|path| Ok(self.session.agent.export_session(&path)?.then_some(path))),
             path => self.export_page(path).map(Some),
         };
         match written {
@@ -230,18 +232,18 @@ impl Interactive {
     /// Writes the current branch's page to `path`, by default named for the session in the
     /// current directory, as Scramjet names it.
     fn export_page(&self, path: Option<&str>) -> Result<PathBuf, AgentError> {
-        let id = self.agent.session_id();
+        let id = self.session.agent.session_id();
         let path = match path {
             Some(path) => PathBuf::from(path),
             None => PathBuf::from(format!("scramjet-session-{id}.html")),
         };
         let path = std::path::absolute(path)?;
-        let tools = self.agent.tool_definitions();
+        let tools = self.session.agent.tool_definitions();
         let setup = export::Setup {
-            instructions: &self.agent.instructions(),
+            instructions: &self.session.agent.instructions(),
             tools: &tools,
         };
-        let page = export::page(&self.agent.branch()?, &id, Some(setup));
+        let page = export::page(&self.session.agent.branch()?, &id, Some(setup));
         std::fs::write(&path, page)?;
         Ok(path)
     }
@@ -260,14 +262,14 @@ impl Interactive {
                 return self.say("Import cancelled");
             }
         }
-        match self.agent.import_session(Path::new(path)) {
+        match self.session.agent.import_session(Path::new(path)) {
             Ok(()) => {
-                self.agent.load_model_info();
+                self.session.agent.load_model_info();
                 self.remember_prompts();
                 self.replaced(&format!(
                     "✓ Imported session from {path} · {}\n{}",
-                    model_line(&self.agent),
-                    saved_line(&self.agent),
+                    model_line(&self.session.agent),
+                    saved_line(&self.session.agent),
                 ));
             }
             Err(error) => self.say(&format!("Error: failed to import the session: {error}")),
@@ -276,7 +278,7 @@ impl Interactive {
 
     /// `/copy`, as Scramjet's: the last reply's text, as the model wrote it, to the clipboard.
     fn copy_reply(&mut self) {
-        let Some(text) = self.agent.last_reply() else {
+        let Some(text) = self.session.agent.last_reply() else {
             return self.say("No agent messages to copy yet.");
         };
         let terminal = self.screen.is_some() || std::io::stderr().is_terminal();
@@ -304,11 +306,15 @@ impl Interactive {
             _ => return self.say("Usage: /autopilot on|off|status"),
         };
         if let Some(on) = set
-            && let Err(error) = self.agent.set_autopilot(on)
+            && let Err(error) = self.session.agent.set_autopilot(on)
         {
             return self.say(&format!("Error: {error}"));
         }
-        let state = if self.agent.autopilot() { "on" } else { "off" };
+        let state = if self.session.agent.autopilot() {
+            "on"
+        } else {
+            "off"
+        };
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
     }
 
@@ -318,9 +324,9 @@ impl Interactive {
     pub(super) fn sandbox(&mut self, argument: &str) {
         let (word, rest) = argument.split_once(' ').unwrap_or((argument, ""));
         let rest = rest.trim();
-        let current = self.agent.sandbox().cloned();
+        let current = self.session.agent.sandbox().cloned();
         let changed = match (word, rest) {
-            ("", "") => return self.say(&sandbox_info(&self.agent)),
+            ("", "") => return self.say(&sandbox_info(&self.session.agent)),
             ("add", directory) => return self.add_dir(directory),
             ("network", "on" | "off") => match current {
                 Some(sandbox) => Sandbox {
@@ -340,7 +346,7 @@ impl Interactive {
                     return self.say(&format!("Error: {error}"));
                 }
                 let Some(mode) = mode else {
-                    self.agent.set_sandbox(None);
+                    self.session.agent.set_sandbox(None);
                     let said = "No sandbox: the agent's tools run with your access";
                     return self.say_styled(style::MUTED, said);
                 };
@@ -349,16 +355,16 @@ impl Interactive {
                     None => {
                         let mut sandbox = Sandbox {
                             mode,
-                            network: self.settings.sandbox_network,
+                            network: self.session.settings.sandbox_network,
                             writable: Vec::new(),
                         };
-                        for warning in sandbox.grant_remembered(self.agent.root()) {
+                        for warning in sandbox.grant_remembered(self.session.agent.root()) {
                             self.say(&format!("Warning: {warning}"));
                         }
                         sandbox
                     }
                 };
-                self.agent.set_sandbox(Some(sandbox));
+                self.session.agent.set_sandbox(Some(sandbox));
                 let said = format!("Sandbox: {}", mode.name());
                 self.say_styled(style::MUTED, &said);
                 return;
@@ -369,15 +375,15 @@ impl Interactive {
             true => "Sandbox: commands reach the network",
             false => "Sandbox: no network",
         };
-        self.agent.set_sandbox(Some(changed));
+        self.session.agent.set_sandbox(Some(changed));
         self.say_styled(style::MUTED, said);
     }
 
     /// `/sandbox remove DIR`: takes back the grant of `DIR`, and forgets it if it was granted
     /// always in this project.
     pub(super) fn remove_dir(&mut self, directory: &str) {
-        let root = self.agent.root().to_owned();
-        let mut sandbox = self.agent.sandbox().cloned();
+        let root = self.session.agent.root().to_owned();
+        let mut sandbox = self.session.agent.sandbox().cloned();
         let revoked = (sandbox.as_mut()).and_then(|sandbox| sandbox.revoke(&root, directory));
         let path = (revoked.clone()).unwrap_or_else(|| Sandbox::resolve(&root, directory));
         let forgotten = match Remembered::user().map(|kept| kept.remove(&root, &path)) {
@@ -386,7 +392,7 @@ impl Interactive {
             None => false,
         };
         if revoked.is_some() {
-            self.agent.set_sandbox(sandbox);
+            self.session.agent.set_sandbox(sandbox);
         }
         let said = match (revoked.is_some(), forgotten) {
             (_, true) => format!(
@@ -409,13 +415,13 @@ impl Interactive {
         if directory.is_empty() {
             return self.say("Usage: /add-dir DIR");
         }
-        let root = self.agent.root().to_owned();
-        let Some(mut sandbox) = self.agent.sandbox().cloned() else {
+        let root = self.session.agent.root().to_owned();
+        let Some(mut sandbox) = self.session.agent.sandbox().cloned() else {
             return self.say("No sandbox: the agent can change every file you can already");
         };
         match sandbox.grant(&root, directory) {
             Ok(path) => {
-                self.agent.set_sandbox(Some(sandbox));
+                self.session.agent.set_sandbox(Some(sandbox));
                 let said = format!("{} is writable for this session", path.display());
                 self.say_styled(style::MUTED, &said);
             }
@@ -431,11 +437,11 @@ impl Interactive {
             Ok(state) => state.join("sessions"),
             Err(error) => return self.say(&format!("Error: {error}")),
         };
-        let current = self.agent.session_path();
+        let current = self.session.agent.session_path();
         let history = scramjet::agent::usage::History::read(&sessions, current);
         let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
             .map_or(0, |since| since.as_millis() as u64);
-        let model = self.agent.model();
+        let model = self.session.agent.model();
         if let Some(screen) = &self.screen {
             let view = super::usage::view(&history, &sessions, current, model, now, details);
             return screen.show_report(view);
@@ -457,14 +463,14 @@ impl Interactive {
             Some(McpCommand::Disable(name)) => return self.enable_mcp(name, false),
             Some(McpCommand::List) => {}
         }
-        let servers = self.agent.mcp_servers();
-        let disabled = self.agent.disabled_mcp();
-        let enabled = self.agent.mcp_names().len() - disabled.len();
+        let servers = self.session.agent.mcp_servers();
+        let disabled = self.session.agent.disabled_mcp();
+        let enabled = self.session.agent.mcp_names().len() - disabled.len();
         if servers.is_empty() && (disabled.is_empty() || enabled > 0) {
-            let settings = (self.settings.path()).map_or("the settings".into(), |path| {
+            let settings = (self.session.settings.path()).map_or("the settings".into(), |path| {
                 scramjet::agent::shortened(&path.to_string_lossy())
             });
-            return match self.settings.mcp_servers.is_empty() {
+            return match self.session.settings.mcp_servers.is_empty() {
                 true => self.say_styled(
                     style::MUTED,
                     &format!(
@@ -543,7 +549,7 @@ impl Interactive {
     /// `/mcp enable` and `disable`: starts or stops the server named `name`, or all with `None`,
     /// and saves which are disabled in the settings, as Claude Code keeps them.
     fn enable_mcp(&mut self, name: Option<&str>, enable: bool) {
-        let names = self.agent.mcp_names();
+        let names = self.session.agent.mcp_names();
         if names.is_empty() {
             return self.say_styled(style::MUTED, "No MCP servers: see /mcp");
         }
@@ -552,7 +558,7 @@ impl Interactive {
         {
             return self.say(&format!("Error: no MCP server named {}", visible(name)));
         }
-        let mut disabled = self.agent.mcp_disabled().to_vec();
+        let mut disabled = self.session.agent.mcp_disabled().to_vec();
         let changed: Vec<String> = (names.into_iter())
             .filter(|listed| name.is_none_or(|name| listed == name))
             .filter(|listed| disabled.contains(listed) == enable)
@@ -572,10 +578,14 @@ impl Interactive {
             true => disabled.retain(|listed| !changed.contains(listed)),
             false => disabled.extend(changed.iter().cloned()),
         }
-        if let Err(error) = self.settings.set_disabled_mcp_servers(disabled.clone()) {
+        if let Err(error) = self
+            .session
+            .settings
+            .set_disabled_mcp_servers(disabled.clone())
+        {
             self.say(&format!("Error: settings not saved: {error}"));
         }
-        self.agent.set_mcp_disabled(disabled);
+        self.session.agent.set_mcp_disabled(disabled);
         let servers = match changed.len() {
             1 => "MCP server",
             _ => "MCP servers",
@@ -588,6 +598,7 @@ impl Interactive {
     fn reconnect(&mut self, name: Option<&str>) {
         if let Some(name) = name
             && self
+                .session
                 .agent
                 .mcp_disabled()
                 .iter()
@@ -629,40 +640,43 @@ impl Interactive {
     /// start.
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
-        self.settings.reload();
+        self.session.settings.reload();
         scramjet::agent::set_shell(
-            self.settings.shell_path.clone(),
-            self.settings.shell_command_prefix.clone(),
+            self.session.settings.shell_path.clone(),
+            self.session.settings.shell_command_prefix.clone(),
         );
-        scramjet::agent::set_user_shell(self.settings.default_shell);
-        scramjet::agent::set_images(self.settings.resize_images, self.settings.block_images);
+        scramjet::agent::set_user_shell(self.session.settings.default_shell);
+        scramjet::agent::set_images(
+            self.session.settings.resize_images,
+            self.session.settings.block_images,
+        );
         self.discover_themes();
         self.use_theme();
-        self.keybindings = keymap::load(self.settings.path());
-        let settings = &self.settings;
+        self.keybindings = keymap::load(self.session.settings.path());
+        let settings = &self.session.settings;
         (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);
         self.ui.markdown_reads = settings.markdown_reads;
-        self.agent.reload(
+        self.session.agent.reload(
             settings.tools.clone(),
             settings.command_sets.clone(),
             settings.skills.clone(),
             settings.mcp_servers.clone(),
             settings.disabled_mcp_servers.clone(),
         );
-        self.agent.set_retries(settings.retries());
-        self.agent.set_compacting(settings.compacting);
-        self.agent.set_providers(Providers::read(
+        self.session.agent.set_retries(settings.retries());
+        self.session.agent.set_compacting(settings.compacting);
+        self.session.agent.set_providers(Providers::read(
             settings.models_files(),
             scramjet::agent::login::Logins::user(),
         ));
         if let Some(screen) = &mut self.screen {
-            (screen.link).reloaded(completions(&self.agent), &self.settings);
-            (screen.link).models(self.agent.models().unwrap_or_default());
+            (screen.link).reloaded(completions(&self.session.agent), &self.session.settings);
+            (screen.link).models(self.session.agent.models().unwrap_or_default());
         }
         for notice in self.problem_notices() {
             self.ui().notice(&notice);
         }
-        for problem in self.agent.providers().problems().to_vec() {
+        for problem in self.session.agent.providers().problems().to_vec() {
             self.ui().notice(&problem);
         }
         let done = "Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files";

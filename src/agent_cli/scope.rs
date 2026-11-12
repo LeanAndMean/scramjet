@@ -481,7 +481,7 @@ impl Interactive {
     /// and nothing wanted, it lists the providers' models. The model set is remembered for
     /// sessions started later.
     pub(super) fn model(&mut self, wanted: &str) {
-        let Some(models) = self.agent.listed_models() else {
+        let Some(models) = self.session.agent.listed_models() else {
             return self.say("No provider offers any model");
         };
         let chosen = match exact(wanted, &models) {
@@ -490,7 +490,7 @@ impl Interactive {
             None if wanted.is_empty() => {
                 for model in &models {
                     let reference = model.reference();
-                    let mark = if reference == self.agent.model() {
+                    let mark = if reference == self.session.agent.model() {
                         "*"
                     } else {
                         " "
@@ -505,10 +505,13 @@ impl Interactive {
             }
         };
         if let Some(model) = chosen {
-            match self.agent.set_model(&model) {
+            match self.session.agent.set_model(&model) {
                 Ok(()) => {
-                    self.agent.load_model_info();
-                    self.say(&format!("✓ Model set to {}", model_line(&self.agent)));
+                    self.session.agent.load_model_info();
+                    self.say(&format!(
+                        "✓ Model set to {}",
+                        model_line(&self.session.agent)
+                    ));
                     self.remember_model();
                 }
                 Err(error) => self.say(&format!("Error: {error}")),
@@ -523,12 +526,12 @@ impl Interactive {
     /// back, keeping the query and the model selected.
     fn pick_model(&self, models: &[ModelOption], query: &str) -> Option<String> {
         let screen = self.screen.as_ref()?;
-        let (scoped, _) = resolve(&self.scope, models);
+        let (scoped, _) = resolve(&self.session.scope, models);
         let scoped: Vec<Row> = (scoped.iter())
             .filter_map(|scoped| (models.iter()).find(|model| model.reference() == scoped.model))
             .map(Row::Model)
             .collect();
-        let current = self.agent.model();
+        let current = self.session.agent.model();
         let all = grouped(models, current);
         let mut in_scope = !scoped.is_empty();
         let mut query = query.to_owned();
@@ -643,8 +646,8 @@ impl Interactive {
     /// Alt+Down. Changes apply to the session at once; Ctrl+S saves them as `enabledModels`.
     /// With piped input it says which they are.
     pub(super) fn scoped_models(&mut self) {
-        let models = self.agent.model_options();
-        let (scoped, _) = resolve(&self.scope, &models);
+        let models = self.session.agent.model_options();
+        let (scoped, _) = resolve(&self.session.scope, &models);
         let mut chosen = Chosen {
             all: models.iter().map(ModelOption::reference).collect(),
             on: (!scoped.is_empty()).then(|| scoped.into_iter().map(|s| s.model).collect()),
@@ -760,18 +763,20 @@ impl Interactive {
                 Act::Save | Act::Rename | Act::Delete | Act::Fold => false,
             };
             if changed {
-                self.scope = chosen.scope();
-                self.agent.set_model_scope(chosen.scope());
+                self.session.scope = chosen.scope();
+                self.session.agent.set_model_scope(chosen.scope());
                 unsaved = true;
             }
             if act == Act::Save {
-                status = Some(match self.settings.set_enabled_models(chosen.scope()) {
-                    Ok(()) => {
-                        unsaved = false;
-                        ("Model selection saved to settings".to_owned(), false)
-                    }
-                    Err(error) => (format!("Not saved: {error}"), true),
-                });
+                status = Some(
+                    match self.session.settings.set_enabled_models(chosen.scope()) {
+                        Ok(()) => {
+                            unsaved = false;
+                            ("Model selection saved to settings".to_owned(), false)
+                        }
+                        Err(error) => (format!("Not saved: {error}"), true),
+                    },
+                );
             }
             place = Some((spot, id));
         }

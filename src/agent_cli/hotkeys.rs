@@ -94,9 +94,9 @@ impl Interactive {
     /// action's keys, the list then showing again with its query and the row; else, or without a
     /// settings file to save them beside, the list printed.
     pub(super) fn hotkeys(&mut self) {
-        let settings = self.settings.path().map(Path::to_path_buf);
+        let settings = self.session.settings.path().map(Path::to_path_buf);
         let (Some(_), Some(settings)) = (&self.screen, settings) else {
-            let text = printed(self.settings.path());
+            let text = printed(self.session.settings.path());
             return self.say(text.trim_end());
         };
         let mut place: Option<(Spot, usize)> = None;
@@ -260,7 +260,7 @@ impl Interactive {
     /// as `{}` first when there is none (and removed again when left so), and reads it again
     /// once the editor exits. Without the full screen, it says where the file is.
     pub(super) fn keybindings(&mut self) {
-        let Some(path) = self.settings.path().map(keymap::path) else {
+        let Some(path) = self.session.settings.path().map(keymap::path) else {
             return self.say("Error: no keybindings file: HOME is not set");
         };
         let shown = shortened(&path.display().to_string());
@@ -286,7 +286,7 @@ impl Interactive {
 
     /// Reads the keybindings file at `path` again, saying what is wrong in it.
     fn read_keybindings(&mut self, path: &Path) {
-        self.keybindings = keymap::load(self.settings.path());
+        self.keybindings = keymap::load(self.session.settings.path());
         if self.keybindings.is_empty() {
             let shown = shortened(&path.display().to_string());
             return self.say_styled(style::MUTED, &format!("Keys read from {shown}"));

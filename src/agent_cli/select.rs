@@ -3,6 +3,7 @@
 //! `/model` and `/tree` search as you type, `/resume`'s renames and deletes sessions, and
 //! `/tree`'s filters its entries, folds their branches and labels them.
 
+pub(super) use super::drive::Routed;
 use super::editor::terminal_size;
 use super::fuzzy::{self, Haystack};
 use super::keymap::{self, Binding};
@@ -154,15 +155,6 @@ pub(super) struct Route {
     cycled: bool,
     /// Each row's fresh session (`fresh_sessions`); `None`: a text step, which has none.
     fresh: Vec<Option<bool>>,
-}
-
-/// What a next step's list chose besides the step: `None` keeps the session's.
-#[derive(Debug, Default, PartialEq)]
-pub(super) struct Routed {
-    pub(super) model: Option<String>,
-    pub(super) effort: Option<String>,
-    /// Whether the chosen step starts a fresh session, when the list knows it.
-    pub(super) fresh: Option<bool>,
 }
 
 impl Route {

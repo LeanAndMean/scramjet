@@ -41,8 +41,8 @@ impl Interactive {
         }
         let mut at = 0;
         loop {
-            let root = self.agent.root().to_owned();
-            let sandbox = self.agent.sandbox().cloned();
+            let root = self.session.agent.root().to_owned();
+            let sandbox = self.session.agent.sandbox().cloned();
             let always =
                 (Remembered::user().and_then(|kept| kept.of(&root).ok())).unwrap_or_default();
             let mut entries = vec![Entry::Mode];
@@ -61,7 +61,7 @@ impl Interactive {
             let mode = sandbox
                 .as_ref()
                 .map_or("off", |sandbox| sandbox.mode.name());
-            let summary = super::slash::sandbox_summary(&self.agent);
+            let summary = super::slash::sandbox_summary(&self.session.agent);
             let rows: Vec<String> = (entries.iter())
                 .map(|entry| match entry {
                     Entry::Mode => format!("Mode      {mode}"),
@@ -98,7 +98,7 @@ impl Interactive {
             let Some(screen) = &self.screen else {
                 return;
             };
-            screen.footer(footer::Shown::of(&self.agent));
+            screen.footer(footer::Shown::of(&self.session.agent));
             let picker = select::Picker::select(
                 "Sandbox",
                 select::VISIBLE,

@@ -33,14 +33,15 @@ impl Interactive {
     /// `/resume`: chooses a session to continue in, by its number with piped input. Returns
     /// whether it switched to one.
     pub(super) fn resume(&mut self, wanted: &str) -> bool {
-        let mut sessions = match self.agent.sessions() {
+        let mut sessions = match self.session.agent.sessions() {
             Ok(sessions) => listed(sessions, Sort::Threaded, Chains::Flat, &[]),
             Err(error) => {
                 self.say(&format!("Error: {error}"));
                 return false;
             }
         };
-        let current = (sessions.iter()).position(|row| self.agent.is_session(&row.session.path));
+        let current =
+            (sessions.iter()).position(|row| self.session.agent.is_session(&row.session.path));
         let chosen = match wanted {
             "" if sessions.is_empty() => {
                 self.say("No sessions to resume");
@@ -87,15 +88,15 @@ impl Interactive {
         // As in Scramjet, a session continues in its own folder; one whose folder is gone is
         // forked into this project.
         let root = (session.root.as_deref()).filter(|root| root.is_dir());
-        let here = self.agent.session_here(path);
-        let moved = root.filter(|root| *root != self.agent.root() || !here);
+        let here = self.session.agent.session_here(path);
+        let moved = root.filter(|root| *root != self.session.agent.root() || !here);
         let done = match (moved, here) {
-            (Some(root), _) => (self.agent.resume_session_in(path, root))
+            (Some(root), _) => (self.session.agent.resume_session_in(path, root))
                 .map(|()| format!("Resumed session in {}", folder(&session))),
             (None, true) => {
-                (self.agent.resume_session(path)).map(|()| "Resumed session".to_owned())
+                (self.session.agent.resume_session(path)).map(|()| "Resumed session".to_owned())
             }
-            (None, false) => (self.agent.fork_session_file(path)).map(|()| {
+            (None, false) => (self.session.agent.fork_session_file(path)).map(|()| {
                 let gone = if session.root.is_some() {
                     ", as that folder is gone"
                 } else {
@@ -109,12 +110,12 @@ impl Interactive {
         };
         match done {
             Ok(done) => {
-                self.agent.load_model_info();
+                self.session.agent.load_model_info();
                 self.remember_prompts();
                 self.replaced(&format!(
                     "✓ {done} · {}\n{}",
-                    model_line(&self.agent),
-                    saved_line(&self.agent),
+                    model_line(&self.session.agent),
+                    saved_line(&self.session.agent),
                 ));
                 if moved.is_some() {
                     self.moved();
@@ -138,15 +139,15 @@ impl Interactive {
         let mut spot = None;
         let (mut sort, mut named_only, mut paths) = (Sort::Threaded, false, false);
         let mut all = false;
-        let mut chains = self.settings.resume_chains;
+        let mut chains = self.session.settings.resume_chains;
         // The first steps of the chains opened.
         let mut open: Vec<std::path::PathBuf> = Vec::new();
         // The row selected when a key changed how the list shows, to select again.
         let mut kept: Option<(std::path::PathBuf, bool)> = None;
         loop {
             let listed_sessions = match all {
-                true => self.agent.all_sessions(),
-                false => self.agent.sessions(),
+                true => self.session.agent.all_sessions(),
+                false => self.session.agent.sessions(),
             };
             let mut sessions = match listed_sessions {
                 Ok(sessions) => {
@@ -164,15 +165,15 @@ impl Interactive {
             let screen = self.screen.as_ref()?;
             let none_anywhere = || match all {
                 true => true,
-                false => (self.agent.all_sessions()).map_or(true, |all| all.is_empty()),
+                false => (self.session.agent.all_sessions()).map_or(true, |all| all.is_empty()),
             };
             if sessions.is_empty() && !named_only && none_anywhere() {
                 screen.dismiss();
                 self.say("No sessions to resume");
                 return None;
             }
-            let current =
-                (sessions.iter()).position(|row| row.holds(|path| self.agent.is_session(path)));
+            let current = (sessions.iter())
+                .position(|row| row.holds(|path| self.session.agent.is_session(path)));
             // Newest first, so the first other than the current one is the likely choice.
             let initial = usize::from(current == Some(0));
             let texts = searched(&sessions);
@@ -259,7 +260,7 @@ impl Interactive {
                         select::Toggle::Paths => paths = !paths,
                         select::Toggle::Chains => {
                             chains = chains.next();
-                            if let Err(error) = self.settings.set_resume_chains(chains) {
+                            if let Err(error) = self.session.settings.set_resume_chains(chains) {
                                 status = Some((format!("Settings not saved: {error}"), true));
                             }
                         }
@@ -303,7 +304,7 @@ impl Interactive {
                     match screen.ask(dialog, None) {
                         Some(screen::Answer::Text(Some(name))) => {
                             let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
-                            match self.agent.rename_session(&session.path, &name) {
+                            match self.session.agent.rename_session(&session.path, &name) {
                                 Ok(()) => None,
                                 Err(error) => Some((format!("Failed to rename: {error}"), true)),
                             }
@@ -311,11 +312,13 @@ impl Interactive {
                         _ => None,
                     }
                 }
-                select::Act::Delete => Some(match self.agent.delete_session(&row.session.path) {
-                    Ok(Removal::Trashed) => ("Session moved to trash".to_owned(), false),
-                    Ok(Removal::Deleted) => ("Session deleted".to_owned(), false),
-                    Err(error) => (format!("Failed to delete: {error}"), true),
-                }),
+                select::Act::Delete => {
+                    Some(match self.session.agent.delete_session(&row.session.path) {
+                        Ok(Removal::Trashed) => ("Session moved to trash".to_owned(), false),
+                        Ok(Removal::Deleted) => ("Session deleted".to_owned(), false),
+                        Err(error) => (format!("Failed to delete: {error}"), true),
+                    })
+                }
                 // Not keys of this list (`Picker::scoping`).
                 _ => None,
             };
@@ -324,7 +327,7 @@ impl Interactive {
     }
 
     pub(super) fn fork(&mut self, wanted: &str) {
-        let prompts = match self.agent.fork_prompts() {
+        let prompts = match self.session.agent.fork_prompts() {
             Ok(prompts) => prompts,
             Err(error) => {
                 self.say(&format!("Error: {error}"));
@@ -370,13 +373,13 @@ impl Interactive {
         let Some(index) = chosen else {
             return;
         };
-        match self.agent.fork(index) {
+        match self.session.agent.fork(index) {
             Ok(Some((prompt, offer))) => {
-                self.agent.load_model_info();
+                self.session.agent.load_model_info();
                 self.replaced(&format!(
                     "✓ Forked to new session · {}\n{}",
-                    model_line(&self.agent),
-                    saved_line(&self.agent),
+                    model_line(&self.session.agent),
+                    saved_line(&self.session.agent),
                 ));
                 match offer {
                     Some(offer) => self.reopen(offer, Some(prompt)),
@@ -393,13 +396,13 @@ impl Interactive {
 
     /// `/branch`, with the session's name, or `name` when given.
     pub(super) fn clone_session(&mut self, name: &str) {
-        match self.agent.clone_session() {
+        match self.session.agent.clone_session() {
             Ok(true) => {
-                self.agent.load_model_info();
+                self.session.agent.load_model_info();
                 self.replaced(&format!(
                     "✓ Cloned to new session · {}\n{}",
-                    model_line(&self.agent),
-                    saved_line(&self.agent),
+                    model_line(&self.session.agent),
+                    saved_line(&self.session.agent),
                 ));
                 if !name.is_empty() {
                     self.name(name);
@@ -414,7 +417,7 @@ impl Interactive {
         // The entry the tree shows again at after its summary question or summary is cancelled.
         let mut reopen = None;
         loop {
-            let session_tree = match self.agent.tree() {
+            let session_tree = match self.session.agent.tree() {
                 Ok(tree) => tree,
                 Err(error) => {
                     self.say(&format!("Error: {error}"));
@@ -422,7 +425,7 @@ impl Interactive {
                 }
             };
             let lines: Vec<usize> = session_tree.entries.iter().map(|e| e.line).collect();
-            let filter = self.settings.tree_filter;
+            let filter = self.session.settings.tree_filter;
             let view = tree::View::new(session_tree, self.interactive(), filter);
             let rows = view.rows();
             let chosen = match wanted {
@@ -465,8 +468,8 @@ impl Interactive {
             let line = lines[index];
             // As Scramjet asks on the full screen, unless the settings skip the question; piped
             // input moves without one.
-            let ask = self.interactive() && !self.settings.skip_branch_summary_prompt;
-            let summary = match ask.then(|| self.agent.leaves_branch(line)) {
+            let ask = self.interactive() && !self.session.settings.skip_branch_summary_prompt;
+            let summary = match ask.then(|| self.session.agent.leaves_branch(line)) {
                 Some(Ok(true)) => match self.ask_branch_summary() {
                     Some(summary) => summary,
                     None => {
@@ -484,10 +487,15 @@ impl Interactive {
                 Some(focus) => self
                     .during_turn(|agent, ui, cancel| agent.navigate(line, Some(focus), ui, cancel)),
                 None => match &mut self.screen {
-                    Some(screen) => self
+                    Some(screen) => {
+                        self.session
+                            .agent
+                            .navigate(line, None, &mut screen.link, &self.cancel)
+                    }
+                    None => self
+                        .session
                         .agent
-                        .navigate(line, None, &mut screen.link, &self.cancel),
-                    None => self.agent.navigate(line, None, &mut self.ui, &self.cancel),
+                        .navigate(line, None, &mut self.ui, &self.cancel),
                 },
             };
             match result {
@@ -542,7 +550,7 @@ impl Interactive {
                 continue;
             };
             let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-            match self.agent.set_label(lines[entry], Some(&text)) {
+            match self.session.agent.set_label(lines[entry], Some(&text)) {
                 Ok(label) => picker.relabel(entry, Some(label), None),
                 Err(error) => {
                     let status = (format!("Failed to save the label: {error}"), true);

@@ -74,9 +74,9 @@ impl Interactive {
         let local = (self.models_file())
             .and_then(|file| scramjet::agent::local::saved(&file).ok())
             .unwrap_or_default();
-        let mut keyed = self.agent.providers().keyed().to_vec();
+        let mut keyed = self.session.agent.providers().keyed().to_vec();
         keyed.retain(|(name, _)| !local.iter().any(|(saved, _)| saved == name));
-        let programs = self.agent.providers().login_programs().to_vec();
+        let programs = self.session.agent.providers().login_programs().to_vec();
         let rows = rows(&programs, &keyed);
         let notes = (rows.iter())
             .map(|row| match row {
@@ -225,13 +225,13 @@ impl Interactive {
             _ => return,
         };
         let shown = visible(provider);
-        let origins = self.agent.providers().origins(provider).to_vec();
+        let origins = self.session.agent.providers().origins(provider).to_vec();
         match login::save_key(&logins.auth, provider, &typed, &origins) {
             Ok(()) => {
-                self.agent.forget_list(provider);
+                self.session.agent.forget_list(provider);
                 self.logins_changed();
                 let saved = logins.auth.display();
-                let listing = (self.agent.providers().listings().iter())
+                let listing = (self.session.agent.providers().listings().iter())
                     .find(|listing| listing.provider() == provider);
                 let said = match listing.map(Listing::offered) {
                     None => format!("✓ Saved the API key for {shown} in {saved}"),
@@ -410,7 +410,7 @@ impl Interactive {
         }
         let keys = login::saved_keys(&logins.auth).unwrap_or_default();
         let is_key = |provider: &str| keys.iter().any(|keyed| keyed == provider);
-        let programs = self.agent.providers().login_programs().to_vec();
+        let programs = self.session.agent.providers().login_programs().to_vec();
         let shown = |provider: &str| match is_key(provider) {
             true => format!("{} API key", visible(provider)),
             false => match programs.iter().find(|program| program.provider == provider) {
@@ -453,34 +453,39 @@ impl Interactive {
 
     /// The providers' models change with the logins.
     fn logins_changed(&mut self) {
-        self.agent.load_model_info();
+        self.session.agent.load_model_info();
         if let Some(screen) = &self.screen {
-            screen.models(self.agent.models().unwrap_or_default());
+            screen.models(self.session.agent.models().unwrap_or_default());
         }
     }
 
     /// When no provider offers the session's model (a first start with none leaves a
     /// placeholder), takes `preferred` if offered, else the model a new session would start with.
     pub(super) fn take_offered_model(&mut self, preferred: Option<&str>) {
-        if self.agent.offered_model(self.agent.model()).is_some() {
+        if self
+            .session
+            .agent
+            .offered_model(self.session.agent.model())
+            .is_some()
+        {
             return;
         }
-        let default = super::default_model(self.agent.providers());
+        let default = super::default_model(self.session.agent.providers());
         let Some(reference) = (preferred.into_iter().chain([default.as_str()]))
-            .find_map(|model| self.agent.offered_model(model))
+            .find_map(|model| self.session.agent.offered_model(model))
         else {
             return;
         };
-        match self.agent.set_model(&reference) {
+        match self.session.agent.set_model(&reference) {
             Ok(()) => {
-                self.agent.load_model_info();
-                let line = interactive::model_line(&self.agent);
+                self.session.agent.load_model_info();
+                let line = interactive::model_line(&self.session.agent);
                 self.say_styled(style::MUTED, &format!("This session now uses {line}"));
             }
             Err(error) => self.say(&format!("Error: model not set to {reference}: {error}")),
         }
         if let Some(screen) = &self.screen {
-            screen.footer(super::footer::Shown::of(&self.agent));
+            screen.footer(super::footer::Shown::of(&self.session.agent));
         }
     }
 }

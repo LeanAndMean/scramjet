@@ -3,10 +3,10 @@
 use super::banner::{self, Opening};
 use super::changelog;
 use super::completion::Completions;
+use super::drive::{self, Front, Offer, Picked, Session, Start};
 use super::editor::Note;
 use super::record::{self, Event};
 use super::screen::{self, Handle};
-use super::select::Routed;
 use super::settings::{DoubleEscape, Settings};
 use super::slash::Builtin;
 use super::terminal::{Terminal, usage_line};
@@ -15,8 +15,8 @@ use super::{
     editor, footer, installed, keymap, scope, select, settings, style, terminal, tree, update,
 };
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Attached, Choice, Command, Completed, EarlierSession, Installed,
-    Next, Problem, Reopened, Source, Step, Suggested,
+    Agent, AgentError, AgentUi, Attached, Choice, Command, EarlierSession, Installed, Problem,
+    Reopened,
 };
 use std::{
     io::{BufRead, IsTerminal},
@@ -28,14 +28,12 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-/// How long `/autopilot on` waits before it chooses the recommended next step, as Scramjet.
-const AUTOSELECT: Duration = Duration::from_secs(3);
 /// How often the full screen, waiting for a prompt, tries again to write the lines a full disk
 /// kept the session from writing.
 const RETRY_HELD: Duration = Duration::from_secs(5);
 
 pub(super) struct Interactive {
-    pub(super) agent: Agent,
+    pub(super) session: Session,
     /// Prints what the session shows without the full screen.
     pub(super) ui: Terminal,
     /// The full screen, when stdin and stderr are terminals: it then shows everything and edits
@@ -46,14 +44,11 @@ pub(super) struct Interactive {
     /// Set by Ctrl-C: cancels what runs.
     pub(super) cancel: Arc<AtomicBool>,
     pub(super) hide_thinking: Arc<AtomicBool>,
-    pub(super) settings: Settings,
     /// The themes `/settings` offers, found at start, by `/reload` and as its list opens.
     pub(super) themes: Themes,
     pub(super) theme_options: ThemeOptions,
     /// What is wrong in the keybindings file, read at start and by `/reload` (`keymap::load`).
     pub(super) keybindings: Vec<Problem>,
-    /// The patterns of the models Ctrl+P cycles through (`scope::resolve`); empty: all.
-    pub(super) scope: Vec<String>,
     /// A turn waits for the built-in commands typed during it (`typed_during_turn`).
     pub(super) in_turn: bool,
     /// The packages' logins and the providers that list their models themselves, as the
@@ -61,17 +56,6 @@ pub(super) struct Interactive {
     pub(super) kept: Arc<Mutex<super::login::Kept>>,
     /// A next step chosen from a list offered again (`reopen`), to run as if typed.
     chosen: Option<(String, Start)>,
-}
-
-/// How a prompt came to run.
-#[derive(Clone, Copy, PartialEq)]
-enum Start {
-    Typed,
-    /// A next step the user chose from those offered.
-    Chosen,
-    /// A next step run at once (forced, an edge chains it, or `/autopilot on` without a list),
-    /// or one `/autopilot on` chose when the user did not.
-    Unattended,
 }
 
 /// How the session ended.
@@ -131,17 +115,19 @@ impl Interactive {
             false => None,
         };
         let interactive = Self {
-            agent,
+            session: Session {
+                agent,
+                settings,
+                scope: Vec::new(),
+            },
             ui,
             screen,
             spaced: false,
             cancel,
             hide_thinking,
-            settings,
             themes,
             theme_options,
             keybindings,
-            scope: Vec::new(),
             in_turn: false,
             kept,
             chosen: None,
@@ -152,7 +138,7 @@ impl Interactive {
 
     /// The themes found now, with the settings' and the command line's.
     pub(super) fn discover_themes(&mut self) {
-        let (root, listed) = (self.agent.root(), &self.settings.themes);
+        let (root, listed) = (self.session.agent.root(), &self.session.settings.themes);
         self.themes = Themes::discover(root, listed, &self.theme_options);
     }
 
@@ -160,11 +146,11 @@ impl Interactive {
     /// when it changes; without one, in the theme that follows the terminal's background, which
     /// the screen changes as the terminal answers.
     pub(super) fn use_theme(&self) {
-        let name = self.settings.theme_name();
+        let name = self.session.settings.theme_name();
         style::set(&self.themes.theme(name));
         if let Some(screen) = &self.screen {
             let watched = self.themes.get(name).and_then(Watched::new);
-            (screen.link).watch_theme(watched, self.settings.theme.is_none());
+            (screen.link).watch_theme(watched, self.session.settings.theme.is_none());
         }
     }
 
@@ -186,7 +172,7 @@ impl Interactive {
         if let Ok(Ended::NothingResumed) = result {
             eprintln!("{}", self.ui.dim("No session selected"));
         }
-        super::write_held_at_exit(&mut self.agent);
+        super::write_held_at_exit(&mut self.session.agent);
         result.map(drop)
     }
 
@@ -226,7 +212,7 @@ impl Interactive {
             }
             self.spaced = true;
         }
-        if !resume && messages.is_empty() && self.agent.conversation().is_empty() {
+        if !resume && messages.is_empty() && self.session.agent.conversation().is_empty() {
             self.whats_new();
         }
         if resume && !resumed {
@@ -234,7 +220,7 @@ impl Interactive {
         }
         let mut messages = messages.into_iter();
         if let Some(files) = files {
-            self.agent.attach(files);
+            self.session.agent.attach(files);
         }
         // A completed command's next step, run as if typed.
         let mut queued: Option<(String, Start)> = None;
@@ -245,7 +231,7 @@ impl Interactive {
             let (dispatched, start) = queued.take().or_else(message).unzip();
             let prompt = match self.read(dispatched)? {
                 Read::Prompt(prompt) => prompt,
-                Read::DoubleEscape => match self.settings.double_escape {
+                Read::DoubleEscape => match self.session.settings.double_escape {
                     DoubleEscape::Fork => "/fork".to_owned(),
                     DoubleEscape::Tree | DoubleEscape::Nothing => "/tree".to_owned(),
                 },
@@ -253,7 +239,7 @@ impl Interactive {
                 Read::End => return Ok(Ended::Quit),
             };
             // Sent as it is, and never a command, as the files' text comes first.
-            if self.agent.attached(&prompt).is_some() {
+            if self.session.agent.attached(&prompt).is_some() {
                 queued = self.send(&prompt, Start::Typed);
                 continue;
             }
@@ -277,17 +263,17 @@ impl Interactive {
         if let Some(screen) = &mut self.screen {
             // Those that ended during the turn go before the next prompt, as Scramjet adds them
             // when the turn ends.
-            add_shells(&mut self.agent, screen);
+            add_shells(&mut self.session.agent, screen);
             if let Some(prompt) = dispatched {
                 return Ok(Read::Prompt(prompt));
             }
             loop {
-                screen.footer(footer::Shown::of(&self.agent));
-                let kept = super::login::Kept::of(self.agent.providers());
+                screen.footer(footer::Shown::of(&self.session.agent));
+                let kept = super::login::Kept::of(self.session.agent.providers());
                 *self.kept.lock().unwrap_or_else(PoisonError::into_inner) = kept;
-                let holding = self.agent.session_holding().then_some(RETRY_HELD);
+                let holding = self.session.agent.session_holding().then_some(RETRY_HELD);
                 let Some(input) = screen.input_within(holding) else {
-                    if let Some(notice) = self.agent.write_held() {
+                    if let Some(notice) = self.session.agent.write_held() {
                         screen.say(&notice);
                     }
                     continue;
@@ -296,22 +282,27 @@ impl Interactive {
                     screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
                     screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),
                     screen::Input::CycleEffort => {
-                        if let Some(note) = cycle_effort(&mut self.agent, &mut self.settings) {
+                        if let Some(note) =
+                            cycle_effort(&mut self.session.agent, &mut self.session.settings)
+                        {
                             screen.note(note);
                         }
                     }
                     screen::Input::CycleModel(steps) => {
-                        let (agent, settings) = (&mut self.agent, &mut self.settings);
-                        if let Some(note) = scope::cycle(agent, settings, &self.scope, steps) {
+                        let (agent, settings) =
+                            (&mut self.session.agent, &mut self.session.settings);
+                        if let Some(note) =
+                            scope::cycle(agent, settings, &self.session.scope, steps)
+                        {
                             screen.note(note);
                         }
                     }
-                    screen::Input::Shells => add_shells(&mut self.agent, screen),
+                    screen::Input::Shells => add_shells(&mut self.session.agent, screen),
                     screen::Input::Commands => return Ok(Read::Again),
                     screen::Input::Relisted => {
                         let notes = screen.take_relisted().unwrap_or_default();
-                        self.agent.load_model_info();
-                        screen.models(self.agent.models().unwrap_or_default());
+                        self.session.agent.load_model_info();
+                        screen.models(self.session.agent.models().unwrap_or_default());
                         if !notes.is_empty() {
                             screen.say(&notes.join("\n"));
                         }
@@ -325,7 +316,7 @@ impl Interactive {
                 if !std::mem::take(&mut self.spaced) {
                     eprintln!();
                 }
-                match self.agent.attached(&prompt) {
+                match self.session.agent.attached(&prompt) {
                     Some((typed, sent)) => self.ui.command_prompt(&typed, &sent),
                     None => self.ui.user_prompt(&prompt),
                 }
@@ -344,7 +335,10 @@ impl Interactive {
     fn send(&mut self, prompt: &str, start: Start) -> Option<(String, Start)> {
         if let Some(screen) = &self.screen {
             screen.event(
-                match (self.agent.attached(prompt), self.agent.expand(prompt)) {
+                match (
+                    self.session.agent.attached(prompt),
+                    self.session.agent.expand(prompt),
+                ) {
                     (Some((typed, sent)), _) => Event::CommandPrompt(typed, sent),
                     (None, Some(sent)) => Event::CommandPrompt(prompt.to_owned(), sent),
                     (None, None) => Event::UserPrompt(prompt.to_owned()),
@@ -363,10 +357,12 @@ impl Interactive {
     /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was
     /// left in (`Agent::resume_turn`), as `send` says.
     fn run_turn(&mut self, prompt: Option<&str>, start: Start) -> Option<(String, Start)> {
-        let hide = (self.settings.hide_credentials).hides(start == Start::Unattended);
-        self.agent.set_hide_credentials(hide);
-        self.agent.set_unattended(start == Start::Unattended);
-        let model = self.agent.model().to_owned();
+        let hide = (self.session.settings.hide_credentials).hides(start == Start::Unattended);
+        self.session.agent.set_hide_credentials(hide);
+        self.session
+            .agent
+            .set_unattended(start == Start::Unattended);
+        let model = self.session.agent.model().to_owned();
         let result = match self.screen.is_some() {
             true => self.turn_on_screen(prompt),
             false => self.during_turn(|agent, ui, cancel| match prompt {
@@ -375,7 +371,7 @@ impl Interactive {
             }),
         };
         // The agent's `switch_scramjet_model`, remembered as the user's choices are.
-        if self.agent.model() != model {
+        if self.session.agent.model() != model {
             self.remember_model();
         }
         if let Err(error) = result {
@@ -388,7 +384,7 @@ impl Interactive {
                 Some(screen) => screen.event(Event::Stopped(error)),
                 None => self.ui.stopped(error.as_deref()),
             }
-            if let Some(notice) = self.agent.take_interrupted() {
+            if let Some(notice) = self.session.agent.take_interrupted() {
                 match &self.screen {
                     Some(screen) => screen.event(Event::Notice(notice)),
                     None => self.ui.notice(&notice),
@@ -397,11 +393,14 @@ impl Interactive {
         }
         // The full screen's footer shows the same.
         if self.screen.is_none() {
-            self.say_styled(style::MUTED, &usage_line(&self.agent));
+            self.say_styled(style::MUTED, &usage_line(&self.session.agent));
         }
-        match (self.agent.take_completed(), self.agent.take_suggestion()) {
-            (Some(completed), _) => self.next_step(&completed),
-            (None, Some(suggested)) => self.suggested(suggested),
+        match (
+            self.session.agent.take_completed(),
+            self.session.agent.take_suggestion(),
+        ) {
+            (Some(completed), _) => drive::next_step(self, &completed),
+            (None, Some(suggested)) => drive::suggested(self, suggested),
             (None, None) => None,
         }
     }
@@ -411,7 +410,7 @@ impl Interactive {
     /// Escape or Ctrl-C meanwhile stop it.
     fn turn_on_screen(&mut self, prompt: Option<&str>) -> Result<(), AgentError> {
         self.cancel.store(false, Ordering::Relaxed);
-        let effort = self.agent.effort().map(str::to_owned);
+        let effort = self.session.agent.effort().map(str::to_owned);
         let mut result = self.on_screen(|agent, ui, cancel| match prompt {
             Some(prompt) => agent.turn(prompt, ui, cancel),
             None => agent.resume_turn(ui, cancel),
@@ -432,11 +431,11 @@ impl Interactive {
     ) -> T {
         match &mut self.screen {
             Some(screen) => {
-                screen.footer(footer::Shown::of(&self.agent));
-                screen.turn(Some(self.agent.effort_cycle()));
-                run(&mut self.agent, &mut screen.link, &self.cancel)
+                screen.footer(footer::Shown::of(&self.session.agent));
+                screen.turn(Some(self.session.agent.effort_cycle()));
+                run(&mut self.session.agent, &mut screen.link, &self.cancel)
             }
-            None => run(&mut self.agent, &mut self.ui, &self.cancel),
+            None => run(&mut self.session.agent, &mut self.ui, &self.cancel),
         }
     }
 
@@ -449,10 +448,16 @@ impl Interactive {
         };
         screen.turn(None);
         self.cancel.store(false, Ordering::Relaxed);
-        let unset = (screen.take_effort()).and_then(|level| self.agent.set_effort(level).err());
-        let changed = (self.agent.effort()).filter(|level| effort.as_deref() != Some(level));
-        let unsaved =
-            changed.and_then(|level| self.settings.set_default_thinking_level(level).err());
+        let unset =
+            (screen.take_effort()).and_then(|level| self.session.agent.set_effort(level).err());
+        let changed =
+            (self.session.agent.effort()).filter(|level| effort.as_deref() != Some(level));
+        let unsaved = changed.and_then(|level| {
+            self.session
+                .settings
+                .set_default_thinking_level(level)
+                .err()
+        });
         if let Some(error) = unset {
             self.say(&format!("Error: {error}"));
         }
@@ -471,7 +476,7 @@ impl Interactive {
         let (commands, steps) = (screen.take_commands(paused), screen.take_model_steps());
         // What the turn left running goes on showing while a command's list is open.
         let shown = match (paused, screen.link.try_clone()) {
-            (true, Ok(link)) => self.agent.show_paused(Box::new(link)),
+            (true, Ok(link)) => self.session.agent.show_paused(Box::new(link)),
             _ => None,
         };
         self.in_turn = paused;
@@ -480,16 +485,21 @@ impl Interactive {
         }
         self.in_turn = false;
         if steps != 0 {
-            let note = scope::cycle(&mut self.agent, &mut self.settings, &self.scope, steps);
+            let note = scope::cycle(
+                &mut self.session.agent,
+                &mut self.session.settings,
+                &self.session.scope,
+                steps,
+            );
             if let (Some(screen), Some(note)) = (&self.screen, note) {
                 screen.note(note);
             }
         }
         if let Some(shown) = shown {
-            self.agent.take_paused(shown);
+            self.session.agent.take_paused(shown);
         }
         if let Some(screen) = &self.screen {
-            screen.footer(footer::Shown::of(&self.agent));
+            screen.footer(footer::Shown::of(&self.session.agent));
         }
     }
 
@@ -502,60 +512,15 @@ impl Interactive {
     ) -> T {
         self.cancel.store(false, Ordering::Relaxed);
         if self.screen.is_some() {
-            let effort = self.agent.effort().map(str::to_owned);
+            let effort = self.session.agent.effort().map(str::to_owned);
             let result = self.on_screen(run);
             self.ended_on_screen(effort);
             return result;
         }
-        let result = run(&mut self.agent, &mut self.ui, &self.cancel);
+        let result = run(&mut self.session.agent, &mut self.ui, &self.cancel);
         self.ui.clear();
         self.cancel.store(false, Ordering::Relaxed);
         result
-    }
-
-    /// The next step of a completed command, as Scramjet routes it: an edge set to `chain` or a
-    /// forced step runs at once; otherwise the user chooses from the steps the model offered,
-    /// and with `/autopilot on` the recommended command is chosen unless the user acts within
-    /// `AUTOSELECT`. Without a list, `/autopilot on` runs the recommended command at once.
-    /// Returns the prompt to run; a text step goes into the editor instead.
-    fn next_step(&mut self, completed: &Completed) -> Option<(String, Start)> {
-        let autopilot = self.agent.autopilot();
-        let routing = self.agent.route(completed, self.interactive(), autopilot);
-        if routing.notices.is_empty() && routing.next == Next::Nothing {
-            return None;
-        }
-        // Under the usage line, as a prompt would be.
-        self.blank();
-        for notice in &routing.notices {
-            self.ui().notice(notice);
-        }
-        let source = Source::Completion(&routing.source);
-        let (step, start, routed) = match routing.next {
-            Next::Nothing => {
-                self.spaced = true;
-                return None;
-            }
-            Next::Run { steps, chosen } => {
-                self.record(source, &steps, Some(chosen), Some(chosen));
-                (steps[chosen].clone(), Start::Unattended, Routed::default())
-            }
-            Next::Offer {
-                steps,
-                recommended,
-                autoselect,
-            } => self.offer("Select next step", source, &steps, recommended, autoselect)?,
-        };
-        self.take_step(step, start, routed)
-    }
-
-    /// The step the agent suggested that the user chooses, under Scramjet's title for them, from
-    /// a list that `/autopilot on` never chooses from by itself, as in Scramjet.
-    fn suggested(&mut self, suggested: Suggested) -> Option<(String, Start)> {
-        let (steps, recommended) = (&suggested.steps, suggested.recommended);
-        let title = "Agent suggests a next step";
-        let (step, start, routed) =
-            self.offer(title, Source::Suggestion, steps, recommended, false)?;
-        self.take_step(step, start, routed)
     }
 
     /// Offers again on the full screen the next-step list going back in the session reached, and
@@ -581,9 +546,9 @@ impl Interactive {
             };
             let (source, steps) = (offer.source(), &offer.steps);
             if let Some((step, start, routed)) =
-                self.offer(title, source, steps, offer.recommended, false)
+                drive::offer(self, title, source, steps, offer.recommended, None)
             {
-                self.chosen = self.take_step(step, start, routed);
+                self.chosen = drive::take_step(self, step, start, routed);
                 return;
             }
         }
@@ -592,124 +557,16 @@ impl Interactive {
         }
     }
 
-    /// Lets the user choose one of `steps` from `source` under `title`, `recommended` selected
-    /// at first, and the model and effort it runs with; with `autoselect`, the recommended one
-    /// is chosen unless the user acts within `AUTOSELECT`. Records the choice, or that the list
-    /// was dismissed.
-    fn offer(
-        &mut self,
-        title: &str,
-        source: Source,
-        steps: &[Step],
-        recommended: Option<usize>,
-        autoselect: bool,
-    ) -> Option<(Step, Start, Routed)> {
-        let choices: Vec<_> = steps
-            .iter()
-            .map(|step| Choice {
-                label: step.label(),
-                description: Some(step.description()).filter(|text| !text.is_empty()),
-                value: String::new(),
-            })
-            .collect();
-        let mut picker = select::Picker::question(title, &choices, recommended);
-        if self.screen.is_some() {
-            let models = self.agent.model_options();
-            let current = (models.iter()).position(|m| m.reference() == self.agent.model());
-            let effort = self.agent.effort().map(str::to_owned);
-            let fresh = (steps.iter())
-                .map(|step| step.command.is_some().then_some(step.fresh_session))
-                .collect();
-            let route = select::Route::new(models, current.unwrap_or(0), effort);
-            picker = picker.routing(route.fresh_sessions(fresh));
-        }
-        // After the models were read, which the countdown does not wait for.
-        if autoselect {
-            picker = picker.counting_down(AUTOSELECT);
-        }
-        let chosen = (self.screen.as_ref()).and_then(|screen| screen.pick_timed(picker));
-        let mut steps = steps.to_vec();
-        if let Some((at, _, routed)) = &chosen
-            && let Some(fresh) = routed.fresh
-        {
-            steps[*at].fresh_session = fresh;
-        }
-        self.record(
-            source,
-            &steps,
-            recommended,
-            chosen.as_ref().map(|(at, ..)| *at),
-        );
-        let (at, timed, mut routed) = chosen?;
-        routed.fresh = None;
-        let start = if timed {
-            Start::Unattended
-        } else {
-            Start::Chosen
-        };
-        Some((steps[at].clone(), start, routed))
-    }
-
-    /// Takes a next step with the model and effort `routed` chose: returns its command to run,
-    /// after starting a new session when it asks for one; a text step goes into the editor.
-    fn take_step(&mut self, step: Step, start: Start, routed: Routed) -> Option<(String, Start)> {
-        let Some(command) = step.command else {
-            self.take_route(routed);
-            self.set_text(step.message);
-            return None;
-        };
-        if step.fresh_session && !self.new_session() {
-            return None;
-        }
-        self.take_route(routed);
-        Some((command, start))
-    }
-
-    /// Sets the model and effort chosen for a next step, in the session that runs it; the model
-    /// is remembered as `/model` remembers one, and the effort saved as the settings' default, as
-    /// Shift+Tab saves it. A model that cannot be set leaves the step to run with the current
-    /// one, as in Scramjet.
-    fn take_route(&mut self, routed: Routed) {
-        if routed == Routed::default() {
-            return;
-        }
-        if let Some(model) = &routed.model {
-            match self.agent.set_model(model) {
-                Ok(()) => {
-                    self.agent.load_model_info();
-                    self.remember_model();
-                }
-                Err(error) => self.say(&format!("Error: model not set to {model}: {error}")),
-            }
-        }
-        if let Some(level) = &routed.effort {
-            if let Err(error) = self.agent.set_effort(level) {
-                self.say(&format!("Error: {error}"));
-            } else if let Err(error) = self.settings.set_default_thinking_level(level) {
-                self.say(&format!("Error: settings not saved: {error}"));
-            }
-        }
-        let line = format!("Next step runs with {}", model_line(&self.agent));
-        self.say_styled(style::MUTED, &line);
-    }
-
-    /// Remembers the session's model as the one chosen last, here and anywhere, which sessions
-    /// started later begin with (`Settings::remember_model`).
+    /// Remembers the session's model as the one chosen last (`drive::remember_model`).
     pub(super) fn remember_model(&mut self) {
-        let (provider, id) = (self.agent.model_provider(), self.agent.model_id());
-        if let Err(error) = self
-            .settings
-            .remember_model(self.agent.root(), provider, id)
-        {
-            self.say(&format!("Error: settings not saved: {error}"));
-        }
+        drive::remember_model(self);
     }
 
     /// What is wrong in the settings, then in what the session `found` (`Agent::installed`).
     pub(super) fn problems(&self, found: &Installed) -> Vec<Problem> {
-        (self.settings.warnings.iter())
+        (self.session.settings.warnings.iter())
             .map(|warning| Problem::in_settings(format!("settings: {warning}")))
-            .chain(self.themes.problems(self.settings.theme_name()))
+            .chain(self.themes.problems(self.session.settings.theme_name()))
             .chain(self.keybindings.iter().cloned())
             .chain(found.problems.iter().cloned())
             .collect()
@@ -721,8 +578,8 @@ impl Interactive {
         self.discover_themes();
         self.use_theme();
         if let Some(screen) = &mut self.screen {
-            (screen.link).moved(self.agent.root().to_path_buf());
-            (screen.link).reloaded(completions(&self.agent), &self.settings);
+            (screen.link).moved(self.session.agent.root().to_path_buf());
+            (screen.link).reloaded(completions(&self.session.agent), &self.session.settings);
         }
         for notice in self.problem_notices() {
             self.ui().notice(&notice);
@@ -732,7 +589,7 @@ impl Interactive {
     /// What to say about the problems at start and after `/reload`: on the full screen one line
     /// at most (`installed::attention`), else each problem.
     pub(super) fn problem_notices(&self) -> Vec<String> {
-        let problems = self.problems(&self.agent.installed());
+        let problems = self.problems(&self.session.agent.installed());
         match self.screen {
             Some(_) => installed::attention(&problems).into_iter().collect(),
             None => problems.into_iter().map(|problem| problem.text).collect(),
@@ -746,8 +603,8 @@ impl Interactive {
         if self.screen.is_none() {
             return;
         }
-        let collapse = self.settings.collapse_changelog;
-        let view = match self.settings.last_changelog_version.as_deref() {
+        let collapse = self.session.settings.collapse_changelog;
+        let view = match self.session.settings.last_changelog_version.as_deref() {
             None => None,
             Some(last) => match changelog::whats_new(last, collapse) {
                 None => return,
@@ -755,6 +612,7 @@ impl Interactive {
             },
         };
         if let Err(error) = self
+            .session
             .settings
             .set_last_changelog_version(env!("CARGO_PKG_VERSION"))
         {
@@ -767,39 +625,20 @@ impl Interactive {
 
     pub(super) fn save_hide_thinking(&mut self) {
         let hide = self.hide_thinking.load(Ordering::Relaxed);
-        if let Err(error) = self.settings.set_hide_thinking_block(hide) {
+        if let Err(error) = self.session.settings.set_hide_thinking_block(hide) {
             self.say(&format!("Error: settings not saved: {error}"));
-        }
-    }
-
-    /// Records and shows the next step chosen, or that the list was dismissed.
-    fn record(
-        &mut self,
-        source: Source,
-        steps: &[Step],
-        recommended: Option<usize>,
-        chosen: Option<usize>,
-    ) {
-        match self
-            .agent
-            .record_next_step(source, steps, recommended, chosen)
-        {
-            Ok(record) => {
-                self.ui().next_step(&record);
-                self.spaced = true;
-            }
-            Err(error) => self.say(&format!("Error: next step not recorded: {error}")),
         }
     }
 
     /// What the banner tells of the session starting.
     fn opening(&self) -> Opening {
-        let installed = self.agent.installed();
+        let installed = self.session.agent.installed();
         let named = |name: &str, path: &Path| (name.to_owned(), path.to_path_buf());
         Opening {
-            model: model_line(&self.agent),
-            root: self.agent.root().to_path_buf(),
-            session: (self.agent.session_saved()).then(|| self.agent.session_path().to_path_buf()),
+            model: model_line(&self.session.agent),
+            root: self.session.agent.root().to_path_buf(),
+            session: (self.session.agent.session_saved())
+                .then(|| self.session.agent.session_path().to_path_buf()),
             context: installed.context_files,
             sets: (installed.sets.iter())
                 .filter(|set| !set.providers_only())
@@ -809,10 +648,10 @@ impl Interactive {
                 .filter(|set| set.providers_only())
                 .map(|set| named(&set.name, &set.directory))
                 .collect(),
-            skills: (self.agent.skills().list().iter())
+            skills: (self.session.agent.skills().list().iter())
                 .map(|skill| named(&skill.name, &skill.path))
                 .collect(),
-            commands: self.agent.commands().list().len(),
+            commands: self.session.agent.commands().list().len(),
             agents: installed.agents.len(),
         }
     }
@@ -863,7 +702,7 @@ impl Interactive {
     /// Makes the session's prompts those that Up recalls.
     pub(super) fn remember_prompts(&mut self) {
         if let Some(screen) = &self.screen {
-            for prompt in self.agent.prompts() {
+            for prompt in self.session.agent.prompts() {
                 screen.remember(prompt);
             }
         }
@@ -895,7 +734,7 @@ impl Interactive {
         if self.screen.is_some() {
             self.say(message);
         }
-        if let Some(notice) = self.agent.saving_notice() {
+        if let Some(notice) = self.session.agent.saving_notice() {
             self.say(&notice);
         }
     }
@@ -904,7 +743,7 @@ impl Interactive {
     /// a blank line.
     pub(super) fn show_resumed(&mut self) {
         if let Some(screen) = &mut self.screen {
-            let (earlier, problem) = self.agent.earlier_sessions();
+            let (earlier, problem) = self.session.agent.earlier_sessions();
             if let Some(problem) = problem {
                 screen.say(&format!(
                     "Error: an earlier session of this chain not read: {problem}"
@@ -913,7 +752,7 @@ impl Interactive {
             for session in &earlier {
                 let shown = screen
                     .link
-                    .record(|link| self.agent.show_earlier(session, link));
+                    .record(|link| self.session.agent.show_earlier(session, link));
                 let events = match shown {
                     Ok(events) => events,
                     Err(error) => {
@@ -927,14 +766,14 @@ impl Interactive {
                     events,
                 })));
             }
-            self.agent.show_conversation(&mut screen.link);
+            self.session.agent.show_conversation(&mut screen.link);
             return;
         }
         // A fresh step's new session is empty, and printed output has its earlier ones above it.
-        self.spaced = !self.agent.conversation().is_empty();
+        self.spaced = !self.session.agent.conversation().is_empty();
         if self.spaced {
             eprintln!();
-            let (earlier, problem) = self.agent.earlier_sessions();
+            let (earlier, problem) = self.session.agent.earlier_sessions();
             if let Some(problem) = problem {
                 eprintln!("Error: an earlier session of this chain not read: {problem}\n");
             }
@@ -945,9 +784,80 @@ impl Interactive {
                     events: Vec::new(),
                 });
             }
-            self.agent.show_conversation(&mut self.ui);
+            self.session.agent.show_conversation(&mut self.ui);
             self.ui.clear();
         }
+    }
+}
+
+impl Front for Interactive {
+    fn session(&mut self) -> &mut Session {
+        &mut self.session
+    }
+
+    fn chooses(&self) -> bool {
+        self.interactive()
+    }
+
+    /// On the full screen, a list that also chooses the model and effort the step runs with,
+    /// and whether it starts a fresh session; line mode has no list to choose from.
+    fn offer(&mut self, offer: Offer) -> Option<Picked> {
+        let choices: Vec<_> = (offer.steps.iter())
+            .map(|step| Choice {
+                label: step.label(),
+                description: Some(step.description()).filter(|text| !text.is_empty()),
+                value: String::new(),
+            })
+            .collect();
+        let mut picker = select::Picker::question(offer.title, &choices, offer.recommended);
+        self.screen.as_ref()?;
+        let agent = &mut self.session.agent;
+        let models = agent.model_options();
+        let current = (models.iter()).position(|m| m.reference() == agent.model());
+        let effort = agent.effort().map(str::to_owned);
+        let fresh = (offer.steps.iter())
+            .map(|step| step.command.is_some().then_some(step.fresh_session))
+            .collect();
+        let route = select::Route::new(models, current.unwrap_or(0), effort);
+        picker = picker.routing(route.fresh_sessions(fresh));
+        // After the models were read, which the countdown does not wait for.
+        if let Some(wait) = offer.autoselect {
+            picker = picker.counting_down(wait);
+        }
+        let (at, timed, routed) = self.screen.as_ref()?.pick_timed(picker)?;
+        Some(Picked { at, timed, routed })
+    }
+
+    fn edit(&mut self, text: String) {
+        self.set_text(text);
+    }
+
+    fn say(&mut self, text: &str) {
+        Interactive::say(self, text);
+    }
+
+    fn note(&mut self, text: &str) {
+        self.say_styled(style::MUTED, text);
+    }
+
+    /// Under the usage line, as a prompt would be.
+    fn notices(&mut self, notices: &[String]) {
+        self.blank();
+        for notice in notices {
+            self.ui().notice(notice);
+        }
+        if !notices.is_empty() {
+            self.spaced = true;
+        }
+    }
+
+    fn recorded(&mut self, record: &str) {
+        self.ui().next_step(record);
+        self.spaced = true;
+    }
+
+    fn new_session(&mut self) -> bool {
+        Interactive::new_session(self)
     }
 }
 
