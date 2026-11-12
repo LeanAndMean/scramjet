@@ -1,13 +1,14 @@
 //! Files given on the command line as `@path`, sent with the first prompt as Scramjet sends them:
 //! each in a `<file name="…">` element before the prompt's text, a text file with its contents,
-//! an image with its note and the image itself, fitted as `read` fits it.
+//! an image with its note and the image itself, fitted as `read` fits it. Images an ACP client
+//! sends with a prompt go the same way, without a file.
 use super::{TYPED, image, tools};
 use serde_json::{Value, json};
 use std::path::Path;
 
 pub struct Attached {
-    /// The paths as given, for the prompt as shown.
-    given: Vec<String>,
+    /// The words shown before the prompt: `@path` for each file, `[Image #N]` for each image.
+    shown: Vec<String>,
     /// The `<file>` elements.
     text: String,
     /// Responses `input_image` parts.
@@ -19,7 +20,12 @@ impl Attached {
     /// files are left out, as Scramjet leaves them.
     pub fn read(paths: &[String], cwd: &Path) -> Result<Self, String> {
         let mut attached = Self {
-            given: paths.to_vec(),
+            shown: (paths.iter())
+                .map(|path| match path.contains(char::is_whitespace) {
+                    true => format!("@\"{path}\""),
+                    false => format!("@{path}"),
+                })
+                .collect(),
             text: String::new(),
             images: Vec::new(),
         };
@@ -61,14 +67,39 @@ inline image size limit.]</file>\n"
         Ok(attached)
     }
 
-    /// `prompt` as shown and recalled: the paths as given, then the prompt.
+    /// `images`, each the bytes of a PNG, JPEG, GIF or WebP image, fitted as `read` fits them.
+    pub fn images(images: &[Vec<u8>]) -> Result<Self, String> {
+        let mut attached = Self {
+            shown: Vec::new(),
+            text: String::new(),
+            images: Vec::new(),
+        };
+        for (at, bytes) in images.iter().enumerate() {
+            let number = at + 1;
+            let mime = image::mime(bytes)
+                .ok_or_else(|| format!("image {number} is not a PNG, JPEG, GIF or WebP image"))?;
+            attached.shown.push(format!("[Image #{number}]"));
+            match image::fit(bytes, mime) {
+                Some(fitted) => {
+                    if let Some(note) = fitted.note() {
+                        attached
+                            .text
+                            .push_str(&format!("Image #{number}: {note}\n"));
+                    }
+                    attached.images.push(fitted.image.part());
+                }
+                None => attached.text.push_str(&format!(
+                    "Image #{number}: [Image omitted: could not be resized below the inline \
+image size limit.]\n"
+                )),
+            }
+        }
+        Ok(attached)
+    }
+
+    /// `prompt` as shown and recalled: the files and images, then the prompt.
     pub(super) fn typed(&self, prompt: &str) -> String {
-        let mut words: Vec<String> = (self.given.iter())
-            .map(|path| match path.contains(char::is_whitespace) {
-                true => format!("@\"{path}\""),
-                false => format!("@{path}"),
-            })
-            .collect();
+        let mut words = self.shown.clone();
         if !prompt.is_empty() {
             words.push(prompt.to_owned());
         }
@@ -141,6 +172,25 @@ this?",
             notes_only.message(""),
             json!({"role":"user","content":format!("<file name=\"{}\">\nline one\nline two\n\
 </file>\n", notes.display()),TYPED:"@notes.md"})
+        );
+    }
+
+    #[test]
+    fn images_go_after_the_text_and_show_as_numbered() {
+        let png = image::tests::png(3, 2);
+        let attached = Attached::images(std::slice::from_ref(&png)).unwrap();
+        assert_eq!(
+            attached.message("What is this?"),
+            json!({"role":"user","content":[
+                {"type":"input_text","text":"What is this?"},
+                {"type":"input_image","detail":"auto",
+                 "image_url":format!("data:image/png;base64,{}", image::base64(&png))},
+            ],TYPED:"[Image #1] What is this?"})
+        );
+        let refused = Attached::images(&[png, b"GIF8".to_vec(), b"text".to_vec()]);
+        assert_eq!(
+            refused.err().unwrap(),
+            "image 3 is not a PNG, JPEG, GIF or WebP image"
         );
     }
 

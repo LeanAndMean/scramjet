@@ -7,7 +7,7 @@ use super::drive::{self, Change, Front, Messages, Offer, Picked, Session, Start}
 use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
-    AgentError, AgentUi, Answer, Choice, CompactRead, Compaction, Purpose, SessionChoice,
+    AgentError, AgentUi, Answer, Attached, Choice, CompactRead, Compaction, Purpose, SessionChoice,
     StreamProgress, Tokens, ToolDetail, UserCommand,
 };
 use serde_json::{Value, json};
@@ -139,7 +139,7 @@ struct Connection {
 
 /// What this thread holds of a session that runs on its own.
 struct Handle {
-    prompts: mpsc::Sender<(Value, String)>,
+    prompts: mpsc::Sender<(Value, Prompt)>,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
     thread: JoinHandle<()>,
@@ -206,7 +206,7 @@ impl Connection {
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
                 "loadSession": false,
-                "promptCapabilities": {"image": false, "audio": false, "embeddedContext": true},
+                "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
                 "mcpCapabilities": {"http": false, "sse": false},
             },
             "agentInfo": {
@@ -251,8 +251,17 @@ impl Connection {
             let mut front = worker.front(session);
             let _ = started.send(Ok(front.ui.session.clone()));
             front.commands();
-            for (id, prompt) in prompted {
-                front.run(id, prompt);
+            for (id, Prompt { text, images }) in prompted {
+                if !images.is_empty() {
+                    match Attached::images(&images) {
+                        Ok(attached) => front.session.agent.attach(attached),
+                        Err(error) => {
+                            front.end_turn(&id, Some((INVALID_PARAMS, &error)));
+                            continue;
+                        }
+                    }
+                }
+                front.run(id, text);
             }
         });
         match starts.recv() {
@@ -278,19 +287,25 @@ impl Connection {
         else {
             return self.out.error(&id, INVALID_PARAMS, "no such session");
         };
-        let prompt = match prompt_text(&params["prompt"]) {
+        let prompt = match prompt_content(&params["prompt"]) {
             Ok(prompt) => prompt,
             Err(error) => return self.out.error(&id, INVALID_PARAMS, &error),
         };
-        if Builtin::parse(&prompt).is_some() {
-            let name = prompt.split_whitespace().next().unwrap_or_default();
+        // With images the text goes after them, so it is never a command, as with `@` files.
+        if prompt.images.is_empty() && Builtin::parse(&prompt.text).is_some() {
+            let name = prompt.text.split_whitespace().next().unwrap_or_default();
             let message = format!("{name} is a built-in command, which ACP mode does not run");
             return self.out.error(&id, INVALID_PARAMS, &message);
         }
         let follow_up = params["_meta"]["io.github.leanandmean.scramjet"]["queue"] == "followUp";
         let mut turn = lock(&handle.turn);
         if turn.running {
-            turn.messages.push(prompt, follow_up);
+            if !prompt.images.is_empty() {
+                drop(turn);
+                let message = "images cannot be sent while a turn runs yet";
+                return self.out.error(&id, INVALID_PARAMS, message);
+            }
+            turn.messages.push(prompt.text, follow_up);
             turn.waiting.push(id);
             return;
         }
@@ -317,13 +332,20 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The text of a prompt's content blocks: text as given, an embedded resource's text under its
-/// URI, a link's URI.
-fn prompt_text(blocks: &Value) -> Result<String, String> {
+/// A prompt as the client sent it.
+struct Prompt {
+    text: String,
+    /// The images' bytes, decoded from base64.
+    images: Vec<Vec<u8>>,
+}
+
+/// The text of a prompt's content blocks (text as given, an embedded resource's text under its
+/// URI, a link's URI), and its images.
+fn prompt_content(blocks: &Value) -> Result<Prompt, String> {
     let blocks = blocks
         .as_array()
         .ok_or("prompt must be an array of content blocks")?;
-    let mut parts = Vec::new();
+    let (mut parts, mut images) = (Vec::new(), Vec::new());
     for block in blocks {
         match block["type"].as_str() {
             Some("text") => parts.push(block["text"].as_str().unwrap_or_default().to_owned()),
@@ -340,11 +362,18 @@ fn prompt_text(blocks: &Value) -> Result<String, String> {
             Some("resource_link") => {
                 parts.push(block["uri"].as_str().unwrap_or_default().to_owned());
             }
+            Some("image") => {
+                let data = block["data"].as_str().ok_or("an image without data")?;
+                let bytes =
+                    scramjet::agent::decode_base64(data).ok_or("an image's data is not base64")?;
+                images.push(bytes);
+            }
             Some(other) => return Err(format!("{other} content is not taken")),
             None => return Err("a content block without a type".to_owned()),
         }
     }
-    Ok(parts.join("\n\n"))
+    let text = parts.join("\n\n");
+    Ok(Prompt { text, images })
 }
 
 /// Starts a session in `cwd` with the options `arguments` give, as the full screen starts one.
@@ -473,20 +502,26 @@ impl Acp {
             drop(turn);
             (prompt, start) = (queued.join("\n\n"), Start::Typed);
         };
+        self.end_turn(&id, stopped.as_deref().map(|error| (INTERNAL_ERROR, error)));
+    }
+
+    /// Answers request `id` and those of the prompts sent during its turn, the turn having
+    /// failed with the error `stopped` gives or ended.
+    fn end_turn(&mut self, id: &Value, stopped: Option<(i64, &str)>) {
         let mut turn = lock(&self.turn);
         turn.running = false;
         let waiting = std::mem::take(&mut turn.waiting);
         drop(turn);
         let cancelled = self.cancel.load(Ordering::Relaxed);
-        for id in Some(id).into_iter().chain(waiting) {
-            match &stopped {
-                Some(error) if !cancelled => self.ui.out.error(&id, INTERNAL_ERROR, error),
+        for id in Some(id).into_iter().chain(&waiting) {
+            match stopped {
+                Some((code, error)) if !cancelled => self.ui.out.error(id, code, error),
                 _ => {
                     let reason = match cancelled {
                         true => "cancelled",
                         false => "end_turn",
                     };
-                    self.ui.out.respond(&id, json!({"stopReason": reason}));
+                    self.ui.out.respond(id, json!({"stopReason": reason}));
                 }
             }
         }

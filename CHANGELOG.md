@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.201.0 — Images in ACP prompts
+
+### Added
+
+- `scramjet acp` takes images in prompts (`promptCapabilities.image`): each goes to the model with the prompt's text, fitted to size as an `@` image is, and shows in the session as `[Image #N]`. A prompt with an image is never a command, and one sent while a turn runs is refused for now.
+
 ## 2.200.0 — ACP tool calls with their arguments and diffs
 
 ### Added

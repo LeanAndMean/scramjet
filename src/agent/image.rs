@@ -221,7 +221,7 @@ pub(super) fn base64(bytes: &[u8]) -> String {
 const BASE64URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /// What base64 or base64url text, padded or not, holds; `None` for anything else.
-pub(super) fn decode_base64(text: &str) -> Option<Vec<u8>> {
+pub fn decode_base64(text: &str) -> Option<Vec<u8>> {
     let value = |c: u8| match c {
         b'+' => Some(62),
         b'/' => Some(63),

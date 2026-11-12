@@ -1907,7 +1907,7 @@ fn acp(
     std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let models = serde_json::json!({"providers": {"test": {
         "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
-        "models": [{"id": "claude-test", "contextWindow": 1000}],
+        "models": [{"id": "claude-test", "contextWindow": 1000, "input": ["text", "image"]}],
     }}});
     std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
     let settings = serde_json::json!({"hideCredentials": "never"});
@@ -2117,6 +2117,73 @@ fn acp_call(
         update(&|update| update["sessionUpdate"] == "tool_call"),
         update(&|update| update["status"] == "completed"),
     )
+}
+
+#[test]
+fn acp_prompts_carry_images() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-image-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (port, bodies) = serve_bash_call("echo seen");
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let initialized = next(&messages);
+    let capabilities = &initialized["result"]["agentCapabilities"]["promptCapabilities"];
+    assert_eq!(capabilities["image"], true, "{initialized}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    next(&messages);
+    let mut png = Vec::new();
+    image::RgbImage::new(2, 2)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let encoded = |bytes: &[u8]| {
+        const ALPHABET: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut text = String::new();
+        for chunk in bytes.chunks(3) {
+            let word = (chunk.iter().enumerate()).fold(0u32, |word, (at, byte)| {
+                word | u32::from(*byte) << (16 - 8 * at)
+            });
+            for at in 0..4 {
+                text.push(match at <= chunk.len() {
+                    true => ALPHABET[(word >> (18 - 6 * at) & 63) as usize] as char,
+                    false => '=',
+                });
+            }
+        }
+        text
+    };
+    let prompt = |id: u64, data: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+        "params": {"sessionId": session, "prompt": [
+            {"type": "text", "text": "/model what is this?"},
+            {"type": "image", "mimeType": "image/png", "data": data},
+        ]}})
+    };
+    // Not an image: refused before the turn, which sends nothing.
+    send(&mut stdin, prompt(3, &encoded(b"plain text")));
+    let refused = next(&messages);
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    // With an image, a `/` starts no command: the text and the image go to the model.
+    send(&mut stdin, prompt(4, &encoded(&png)));
+    let (answer, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    let body = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert!(body.contains("/model what is this?"), "{body}");
+    assert!(body.contains(&encoded(&png)), "{body}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }
 
 #[test]
