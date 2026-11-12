@@ -57,6 +57,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         arguments: arguments.to_vec(),
         initialized: false,
         notices: false,
+        compaction: false,
         sessions: HashMap::new(),
     };
     let (sent, inputs) = mpsc::channel();
@@ -192,6 +193,8 @@ struct Connection {
     initialized: bool,
     /// The client offered `session.notices`.
     notices: bool,
+    /// The client offered `session.compaction`.
+    compaction: bool,
     sessions: HashMap<String, Handle>,
 }
 
@@ -260,6 +263,7 @@ impl Connection {
         self.initialized = true;
         let capabilities = &params["clientCapabilities"];
         self.notices = capabilities["session"]["notices"].is_object();
+        self.compaction = capabilities["session"]["compaction"].is_object();
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
@@ -295,6 +299,7 @@ impl Connection {
         let worker = Worker {
             out: self.out.clone(),
             notices: self.notices,
+            compaction: self.compaction,
             cancel: cancel.clone(),
             turn: turn.clone(),
         };
@@ -553,6 +558,7 @@ fn start_session(
 struct Worker {
     out: Out,
     notices: bool,
+    compaction: bool,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
 }
@@ -563,6 +569,9 @@ impl Worker {
             out: self.out,
             session: session.agent.session_id(),
             notices: self.notices,
+            compaction: self.compaction,
+            compactions: 0,
+            compacting: false,
             turn: self.turn.clone(),
             steering: session.settings.steering_mode,
             follow_up: session.settings.follow_up_mode,
@@ -750,6 +759,11 @@ struct Updates {
     out: Out,
     session: String,
     notices: bool,
+    /// The client offered `session.compaction`.
+    compaction: bool,
+    /// The compactions so far, which number them, and whether the last one has not ended.
+    compactions: usize,
+    compacting: bool,
     turn: Arc<Mutex<Turn>>,
     /// `steeringMode` and `followUpMode`.
     steering: super::settings::Delivery,
@@ -779,9 +793,12 @@ impl Updates {
         self.out.update(&self.session, update);
     }
     fn chunk(&self, kind: &str, text: &str) {
+        self.update(self.chunked(kind, text));
+    }
+    fn chunked(&self, kind: &str, text: &str) -> Value {
         let id = format!("response-{}", self.responses);
         let content = json!({"type": "text", "text": text});
-        self.update(json!({"sessionUpdate": kind, "messageId": id, "content": content}));
+        json!({"sessionUpdate": kind, "messageId": id, "content": content})
     }
     fn agent_message(&self, text: &str) {
         self.chunk("agent_message_chunk", text);
@@ -789,6 +806,37 @@ impl Updates {
     fn user_message(&mut self, text: &str) {
         self.responses += 1;
         self.chunk("user_message_chunk", text);
+    }
+    /// What the command or skill `typed` sent in its place, as a message of its own.
+    fn expansion(&mut self, typed: &str, sent: &str) {
+        self.responses += 1;
+        let mut update = self.chunked("user_message_chunk", sent);
+        update["_meta"] = json!({"io.github.leanandmean.scramjet": {"expands": typed}});
+        self.update(update);
+    }
+    /// The compaction under way, or a new one, has `status`, with `fields` beside it; without
+    /// `session.compaction` an ended one is said in `said`, as an agent message of its own.
+    fn compaction_update(&mut self, status: &str, fields: Value, said: Option<&str>) {
+        if !self.compacting {
+            self.compactions += 1;
+        }
+        self.compacting = status == "in_progress";
+        let id = format!("compaction-{}", self.compactions);
+        if !self.compaction {
+            if let Some(said) = said {
+                let content = json!({"type": "text", "text": said});
+                let update = json!({"sessionUpdate": "agent_message_chunk", "messageId": id,
+                    "content": content});
+                self.update(update);
+            }
+            return;
+        }
+        let mut update =
+            json!({"sessionUpdate": "compaction_update", "compactionId": id, "status": status});
+        if let (Some(update), Some(fields)) = (update.as_object_mut(), fields.as_object()) {
+            update.extend(fields.clone());
+        }
+        self.update(update);
     }
     fn call_id(&self) -> String {
         format!("call-{}", self.calls)
@@ -888,9 +936,16 @@ fn kind(name: &str) -> &'static str {
 
 impl AgentUi for Updates {
     fn waiting(&mut self, purpose: Purpose) {
-        if purpose == Purpose::Reply {
-            self.responses += 1;
-            self.streamed = false;
+        match purpose {
+            Purpose::Reply => {
+                self.responses += 1;
+                self.streamed = false;
+            }
+            // A compaction may ask for two summaries.
+            Purpose::Compaction(_) if !self.compacting => {
+                self.compaction_update("in_progress", json!({}), None);
+            }
+            _ => {}
         }
     }
     fn progress(&mut self, update: &StreamProgress) {
@@ -976,17 +1031,43 @@ impl AgentUi for Updates {
     fn command_started(&mut self, _command: &str, _include: bool) {}
     fn command_result(&mut self, _ran: &UserCommand) {}
     fn stopped(&mut self, error: Option<&str>) {
+        if self.compacting {
+            match error {
+                Some(error) => {
+                    let said = format!("Compaction failed: {error}");
+                    self.compaction_update("failed", json!({"error": error}), Some(&said));
+                }
+                None => self.compaction_update("cancelled", json!({}), None),
+            }
+        }
         self.stopped = Some(error.map(str::to_owned));
     }
     fn compacted(
         &mut self,
-        _compaction: &Compaction,
-        _automatic: Option<scramjet::agent::AutoCompaction>,
+        compaction: &Compaction,
+        automatic: Option<scramjet::agent::AutoCompaction>,
     ) {
-        self.say("info", "Context compacted");
+        let said = match automatic {
+            Some(automatic) => format!("Context compacted. {}", automatic.reason()),
+            None => "Context compacted.".to_owned(),
+        };
+        let summary = json!([{"type": "text", "text": compaction.summary}]);
+        let tokens =
+            json!({"io.github.leanandmean.scramjet": {"tokensBefore": compaction.tokens_before}});
+        let fields = json!({"summary": summary, "_meta": tokens});
+        self.compaction_update("completed", fields, Some(&said));
     }
     fn compaction_failed(&mut self, error: &AgentError) {
-        self.say("warning", &format!("Compaction failed: {error}"));
+        let said = format!("Compaction failed: {error}");
+        let fields = json!({"error": error.to_string()});
+        self.compaction_update("failed", fields, Some(&said));
+    }
+    fn command_sent(&mut self, typed: &str, sent: &str) {
+        self.expansion(typed, sent);
+    }
+    /// A command queued during the turn: the client sent it as typed.
+    fn command_prompt(&mut self, typed: &str, sent: &str) {
+        self.expansion(typed, sent);
     }
     fn user_prompt(&mut self, _prompt: &str) {}
     fn compaction_summary(&mut self, _summary: &str) {}

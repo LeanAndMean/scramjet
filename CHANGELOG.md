@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.204.0 — ACP shows compactions and what commands sent
+
+### Added
+
+- `scramjet acp` reports a compaction as ACP's `compaction_update` (in progress, then completed with its summary, failed or cancelled) to a client offering `session.compaction`, and as an agent message to others; before, it was only a notice.
+- A prompt that runs a skill or a command set's command is followed by a `user_message_chunk` with the text it sent in its place, marked with what was typed.
+
 ## 2.203.3 — `scramjet acp` stops cleanly on SIGTERM
 
 ### Fixed

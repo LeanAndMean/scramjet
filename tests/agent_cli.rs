@@ -1911,6 +1911,24 @@ fn acp(
     std::process::ChildStdin,
     std::sync::mpsc::Receiver<serde_json::Value>,
 ) {
+    acp_with(
+        scratch,
+        port,
+        serde_json::json!({"hideCredentials": "never"}),
+    )
+}
+
+/// `acp` with `settings` for `settings.json`.
+#[cfg(unix)]
+fn acp_with(
+    scratch: &std::path::Path,
+    port: u16,
+    settings: serde_json::Value,
+) -> (
+    Child,
+    std::process::ChildStdin,
+    std::sync::mpsc::Receiver<serde_json::Value>,
+) {
     let config = scratch.join("config");
     std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let models = serde_json::json!({"providers": {"test": {
@@ -1918,7 +1936,6 @@ fn acp(
         "models": [{"id": "claude-test", "contextWindow": 1000, "input": ["text", "image"]}],
     }}});
     std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
-    let settings = serde_json::json!({"hideCredentials": "never"});
     std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
     let mut child = program(&binary())
         .args(["acp", "--retries", "0", "--no-session"])
@@ -2424,4 +2441,125 @@ fn acp_sessions_start_the_clients_mcp_servers() {
             .unwrap()
             .contains("tools/call")
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_shows_compactions_and_what_commands_sent() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-compact-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    let skill = project.join(".scramjet/kit/skills/greet");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::create_dir_all(project.join(".scramjet/kit/commands")).unwrap();
+    let file = "---\nname: greet\ndescription: Greets.\n---\n\nSay hello.\n";
+    std::fs::write(skill.join("SKILL.md"), file).unwrap();
+    let reply = |text: &str, input: u64| {
+        [
+            serde_json::json!({"type": "message_start", "message": {"id": "msg_1",
+                "usage": {"input_tokens": input, "output_tokens": 1}}})
+            .to_string(),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}})
+            .to_string(),
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]
+        .to_vec()
+    };
+    let settings = serde_json::json!({"hideCredentials": "never",
+        "compaction": {"reserveTokens": 100, "keepRecentTokens": 1}});
+    // The second turn fills the window (1000 tokens, less the reserve), so it compacts after.
+    for offered in [true, false] {
+        let replies = vec![
+            reply("Hello.", 3),
+            reply("Again.", 950),
+            reply("The summary.", 3),
+        ];
+        let (port, _bodies) = serve_events(replies);
+        let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings.clone());
+        let capabilities = match offered {
+            true => serde_json::json!({"session": {"compaction": {}}}),
+            false => serde_json::json!({}),
+        };
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
+        );
+        next(&messages);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+                "params": {"cwd": project, "mcpServers": []}}),
+        );
+        let session = next(&messages)["result"]["sessionId"].clone();
+        let mut turn = |id: u64, text: &str| {
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+                    "params": {"sessionId": session,
+                        "prompt": [{"type": "text", "text": text}]}}),
+            );
+            let (answer, updates) = until(&messages, |message| message.get("id").is_some());
+            assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+            (updates.into_iter())
+                .map(|message| message["params"]["update"].clone())
+                .collect::<Vec<_>>()
+        };
+        let first = turn(3, "/skill:greet world");
+        let sent = (first.iter())
+            .find(|update| update["sessionUpdate"] == "user_message_chunk")
+            .unwrap_or_else(|| panic!("no expansion in {first:?}"));
+        assert!(
+            sent["content"]["text"]
+                .as_str()
+                .unwrap()
+                .ends_with("Say hello.\n</skill>\n\nworld"),
+            "{sent}"
+        );
+        assert_eq!(
+            sent["_meta"]["io.github.leanandmean.scramjet"]["expands"],
+            "/skill:greet world"
+        );
+        let second = turn(4, "more");
+        let compactions: Vec<_> = (second.iter())
+            .filter(|update| update["sessionUpdate"] == "compaction_update")
+            .collect();
+        match offered {
+            true => {
+                assert_eq!(compactions.len(), 2, "{second:?}");
+                assert_eq!(compactions[0]["status"], "in_progress");
+                assert_eq!(compactions[1]["status"], "completed");
+                assert_eq!(
+                    compactions[0]["compactionId"],
+                    compactions[1]["compactionId"]
+                );
+                let summary = compactions[1]["summary"][0]["text"].as_str().unwrap();
+                assert!(summary.contains("The summary."), "{summary}");
+            }
+            false => {
+                assert!(compactions.is_empty(), "{second:?}");
+                let said = (second.iter())
+                    .find(|update| {
+                        update["sessionUpdate"] == "agent_message_chunk"
+                            && update["content"]["text"]
+                                .as_str()
+                                .is_some_and(|text| text.starts_with("Context compacted."))
+                    })
+                    .unwrap_or_else(|| panic!("no compaction message in {second:?}"));
+                assert!(
+                    said["messageId"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("compaction-")
+                );
+            }
+        }
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+    }
 }

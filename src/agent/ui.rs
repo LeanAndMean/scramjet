@@ -91,6 +91,8 @@ pub trait AgentUi {
     fn command_prompt(&mut self, typed: &str, _sent: &str) {
         self.user_prompt(typed);
     }
+    /// A turn's prompt `typed` started a command or skill, which sent `sent` in its place.
+    fn command_sent(&mut self, _typed: &str, _sent: &str) {}
     /// The summary of a compaction in a resumed conversation.
     fn compaction_summary(&mut self, summary: &str);
     /// The summary of a branch the conversation came back from, in a resumed conversation.

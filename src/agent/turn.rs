@@ -58,6 +58,9 @@ impl Agent {
             }
             None => (self.user_message(prompt, ui), prompt.to_owned()),
         };
+        if message.get(TYPED).is_some() {
+            ui.command_sent(prompt, message["content"].as_str().unwrap_or_default());
+        }
         self.add(message)?;
         self.save_command()?;
         self.say_saving(ui);
