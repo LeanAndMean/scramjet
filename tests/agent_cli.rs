@@ -1915,15 +1915,17 @@ fn acp(
         scratch,
         port,
         serde_json::json!({"hideCredentials": "never"}),
+        &[],
     )
 }
 
-/// `acp` with `settings` for `settings.json`.
+/// `acp` with `settings` for `settings.json` and the options `given`.
 #[cfg(unix)]
 fn acp_with(
     scratch: &std::path::Path,
     port: u16,
     settings: serde_json::Value,
+    given: &[&str],
 ) -> (
     Child,
     std::process::ChildStdin,
@@ -1939,6 +1941,7 @@ fn acp_with(
     std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
     let mut child = program(&binary())
         .args(["acp", "--retries", "0", "--no-session"])
+        .args(given)
         .env("XDG_CONFIG_HOME", &config)
         .env("XDG_STATE_HOME", scratch.join("state"))
         .env("SCRAMJET_CACHE", scratch.join("cache"))
@@ -2098,6 +2101,115 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
     drop(stdin);
     let status = child.wait().unwrap();
     assert!(status.success());
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_asks_the_client_before_calls_under_ask() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-ask-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (port, _bodies) = serve_bash_call("echo ran-it");
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings, &["--ask"]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let asked = |message: &serde_json::Value| message["method"] == "session/request_permission";
+    let answered = |message: &serde_json::Value| {
+        message.get("id").is_some() && message.get("method").is_none()
+    };
+    // Each turn's reply calls `echo ran-it`, then the next request gets `Done.`; the
+    // provider's replies alternate so, so a turn cancelled after its call shifts them.
+    let mut turn = |id: u64, answer: Option<serde_json::Value>| {
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+                "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+        );
+        let (request, before) = until(&messages, |message| asked(message) || answered(message));
+        let call = (before.iter())
+            .find(|message| message["params"]["update"]["sessionUpdate"] == "tool_call");
+        let call_id = call.map(|call| call["params"]["update"]["toolCallId"].clone());
+        if asked(&request) {
+            let params = &request["params"];
+            assert_eq!(params["sessionId"], session);
+            assert_eq!(params["toolCall"]["toolCallId"], call_id.clone().unwrap());
+            assert!(request.to_string().contains("Run in"), "{request}");
+            let kinds: Vec<_> = (params["options"].as_array().unwrap().iter())
+                .map(|option| option["kind"].as_str().unwrap())
+                .collect();
+            assert_eq!(kinds, ["allow_once", "allow_always", "reject_once"]);
+            match &answer {
+                Some(outcome) => send(
+                    &mut stdin,
+                    serde_json::json!({"jsonrpc": "2.0", "id": request["id"],
+                        "result": {"outcome": outcome}}),
+                ),
+                None => send(
+                    &mut stdin,
+                    serde_json::json!({"jsonrpc": "2.0", "method": "session/cancel",
+                        "params": {"sessionId": session}}),
+                ),
+            }
+            let (ended, after) = until(&messages, answered);
+            return (Some(request), ended, after);
+        }
+        (None, request, before)
+    };
+    let selected =
+        |option: &str| Some(serde_json::json!({"outcome": "selected", "optionId": option}));
+    let output = |updates: &[serde_json::Value]| {
+        (updates.iter())
+            .find(|message| {
+                ["completed", "failed"].contains(
+                    &message["params"]["update"]["status"]
+                        .as_str()
+                        .unwrap_or_default(),
+                )
+            })
+            .map(|message| message["params"]["update"]["content"].to_string())
+    };
+    let (asked_once, ended, after) = turn(3, selected("allow_once"));
+    assert!(asked_once.is_some());
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert!(output(&after).unwrap().contains("ran-it"));
+    let (_, ended, after) = turn(4, selected("reject_once"));
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert!(output(&after).unwrap().contains("denied"), "{after:?}");
+    // An option not offered is a denial.
+    let (_, _, after) = turn(5, selected("whatever"));
+    assert!(output(&after).unwrap().contains("denied"), "{after:?}");
+    // Cancelled while asking: the request is withdrawn and the turn ends cancelled.
+    let (_, ended, after) = turn(6, None);
+    assert_eq!(ended["result"]["stopReason"], "cancelled", "{ended}");
+    assert!(
+        after
+            .iter()
+            .any(|message| message["method"] == "$/cancel_request")
+    );
+    // The cancelled turn left the provider's `Done.` for the next one.
+    let (asked_none, ended, _) = turn(7, None);
+    assert!(asked_none.is_none());
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let (_, _, after) = turn(8, selected("allow_always"));
+    assert!(output(&after).unwrap().contains("ran-it"));
+    let (asked_again, ended, after) = turn(9, None);
+    assert!(asked_again.is_none(), "{asked_again:?}");
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert!(output(&after).unwrap().contains("ran-it"));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }
 
 #[test]
@@ -2609,7 +2721,7 @@ fn acp_shows_compactions_and_what_commands_sent() {
             reply("The summary.", 3),
         ];
         let (port, _bodies) = serve_events(replies);
-        let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings.clone());
+        let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings.clone(), &[]);
         let capabilities = match offered {
             true => serde_json::json!({"session": {"compaction": {}}}),
             false => serde_json::json!({}),

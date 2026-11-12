@@ -18,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread::JoinHandle,
@@ -141,7 +141,6 @@ opens starts with them in the folder it names.";
 fn refuse_unfit(options: &Options) -> Result<(), String> {
     let unfit = [
         (options.print, "-p"),
-        (options.ask, "--ask (permission requests are not built yet)"),
         (!options.messages.is_empty(), "prompts"),
         (!options.files.is_empty(), "@FILE"),
         (options.export.is_some(), "--export"),
@@ -159,9 +158,14 @@ fn refuse_unfit(options: &Options) -> Result<(), String> {
     }
 }
 
-/// The client's stdout: each message written whole, as one line.
+/// The client's stdout: each message written whole, as one line; and the requests sent to the
+/// client that wait for its response, by id.
 #[derive(Clone, Default)]
-struct Out(Arc<Mutex<()>>);
+struct Out {
+    written: Arc<Mutex<()>>,
+    pending: Arc<Mutex<HashMap<String, mpsc::Sender<Value>>>>,
+    ids: Arc<AtomicU64>,
+}
 
 impl Out {
     fn send(&self, message: &Value) {
@@ -170,7 +174,7 @@ impl Out {
         let line = (message.to_string())
             .replace('\u{2028}', "\\u2028")
             .replace('\u{2029}', "\\u2029");
-        let _held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let _held = lock(&self.written);
         let mut stdout = std::io::stdout().lock();
         let _ = writeln!(stdout, "{line}").and_then(|()| stdout.flush());
     }
@@ -180,6 +184,24 @@ impl Out {
     fn error(&self, id: &Value, code: i64, message: &str) {
         let error = json!({"code": code, "message": message});
         self.send(&json!({"jsonrpc": "2.0", "id": id, "error": error}));
+    }
+    /// Sends request `method`; its response comes through the receiver, unless `forget` drops
+    /// it first.
+    fn request(&self, method: &str, params: Value) -> (Value, mpsc::Receiver<Value>) {
+        let id = json!(self.ids.fetch_add(1, Ordering::Relaxed) + 1);
+        let (sent, answered) = mpsc::channel();
+        lock(&self.pending).insert(id.to_string(), sent);
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        (id, answered)
+    }
+    /// Hands a response to the request it answers; one nothing waits for any more is dropped.
+    fn answered(&self, message: Value) {
+        if let Some(waiting) = lock(&self.pending).remove(&message["id"].to_string()) {
+            let _ = waiting.send(message);
+        }
+    }
+    fn forget(&self, id: &Value) {
+        lock(&self.pending).remove(&id.to_string());
     }
     fn update(&self, session: &str, update: Value) {
         let params = json!({"sessionId": session, "update": update});
@@ -233,9 +255,8 @@ impl Connection {
         };
         let id = message.get("id").cloned();
         let Some(method) = message.get("method").and_then(Value::as_str) else {
-            // A response to a request of ours: none is sent yet.
             if message.get("result").is_some() || message.get("error").is_some() {
-                return;
+                return self.out.answered(message);
             }
             let id = id.unwrap_or(Value::Null);
             return self.out.error(&id, INVALID_REQUEST, "Invalid request");
@@ -633,6 +654,8 @@ impl Worker {
             window: None,
             used: None,
             stopped: None,
+            asked: None,
+            cancel: self.cancel.clone(),
         };
         Acp {
             session,
@@ -850,6 +873,10 @@ struct Updates {
     used: Option<(u64, u64, f64)>,
     /// How the last turn stopped before its end: cancelled (`None`), or failed with an error.
     stopped: Option<Option<String>>,
+    /// What `question` showed since the last tool call, which a permission request repeats.
+    asked: Option<String>,
+    /// The session's cancellation, for what is asked without the turn's.
+    cancel: Arc<AtomicBool>,
 }
 
 impl Updates {
@@ -985,6 +1012,67 @@ impl Updates {
         self.responses += 1;
         self.agent_message(text);
     }
+    /// The client's result for request `method`; `None` once `cancel` is set, or when the
+    /// client answered with an error, which a notice says.
+    fn ask(&self, method: &str, params: Value, cancel: &AtomicBool) -> Option<Value> {
+        let (id, answered) = self.out.request(method, params);
+        loop {
+            match answered.recv_timeout(Duration::from_millis(50)) {
+                Ok(mut message) => match message.get_mut("result") {
+                    Some(result) => return Some(result.take()),
+                    None => {
+                        let error = message["error"]["message"].as_str().unwrap_or("no reason");
+                        self.say("warning", &format!("The client failed {method}: {error}"));
+                        return None;
+                    }
+                },
+                Err(mpsc::RecvTimeoutError::Timeout) if !cancel.load(Ordering::Relaxed) => {}
+                Err(_) => {
+                    self.out.forget(&id);
+                    let params = json!({"requestId": id});
+                    let cancelled =
+                        json!({"jsonrpc": "2.0", "method": "$/cancel_request", "params": params});
+                    self.out.send(&cancelled);
+                    return None;
+                }
+            }
+        }
+    }
+    /// Asks the client's permission for the tool call announced last, `text` shown with it;
+    /// the id of the option of `options` (id, name, kind) chosen, `None` when cancelled or
+    /// answered with one not offered.
+    fn permission(
+        &mut self,
+        text: &str,
+        options: &[(&'static str, &str, &str)],
+        cancel: &AtomicBool,
+    ) -> Option<&'static str> {
+        let content = json!([{"type": "content", "content": {"type": "text", "text": text}}]);
+        let offered: Vec<Value> = (options.iter())
+            .map(|(id, name, kind)| json!({"optionId": id, "name": name, "kind": kind}))
+            .collect();
+        let params = json!({
+            "sessionId": self.session,
+            "toolCall": {"toolCallId": self.call_id(), "content": content},
+            "options": offered,
+        });
+        let outcome = self.ask("session/request_permission", params, cancel)?;
+        let outcome = &outcome["outcome"];
+        if outcome["outcome"] != "selected" {
+            return None;
+        }
+        let chosen = (options.iter()).find(|(id, ..)| outcome["optionId"] == *id);
+        if chosen.is_none() {
+            self.say(
+                "warning",
+                &format!(
+                    "Denied: the client chose {}, which was not offered",
+                    outcome["optionId"]
+                ),
+            );
+        }
+        chosen.map(|(id, ..)| *id)
+    }
     fn say(&self, severity: &str, text: &str) {
         match self.notices {
             true => {
@@ -1043,6 +1131,7 @@ impl AgentUi for Updates {
     }
     fn tool_call(&mut self, name: &str, summary: &str, _compact: Option<&CompactRead>) {
         self.calls += 1;
+        self.asked = None;
         self.call = (name.to_owned(), std::mem::take(&mut self.input));
         let title = match summary.trim() {
             "" => name,
@@ -1155,17 +1244,41 @@ impl AgentUi for Updates {
     fn user_prompt(&mut self, _prompt: &str) {}
     fn compaction_summary(&mut self, _summary: &str) {}
     fn branch_summary(&mut self, _summary: &str) {}
-    /// Permission requests are not built: `--ask` is refused at start, and project agents'
-    /// consent is denied.
-    fn approve(&mut self, question: &str, _cancel: &AtomicBool) -> Answer {
-        self.say(
-            "warning",
-            &format!("Denied, as ACP mode cannot ask yet: {question}"),
-        );
-        Answer::Deny
+    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
+        let text = match self.asked.take() {
+            Some(shown) => format!("{question}\n\n{shown}"),
+            None => question.to_owned(),
+        };
+        let options = [
+            ("allow_once", "Allow", "allow_once"),
+            (
+                "allow_always",
+                "Allow all calls this session",
+                "allow_always",
+            ),
+            ("reject_once", "Deny", "reject_once"),
+        ];
+        match self.permission(&text, &options, cancel) {
+            Some("allow_once") => Answer::Allow,
+            Some("allow_always") => Answer::AllowAll,
+            _ => Answer::Deny,
+        }
+    }
+    /// The preview `question` showed, under `title`.
+    fn approve_publication(&mut self, title: &str) -> bool {
+        let text = match self.asked.take() {
+            Some(preview) => format!("{title}\n\n{preview}"),
+            None => title.to_owned(),
+        };
+        let options = [
+            ("approve", "Approve publication", "allow_once"),
+            ("cancel", "Cancel", "reject_once"),
+        ];
+        self.permission(&text, &options, &self.cancel.clone()) == Some("approve")
     }
     /// What a question asks, which the next prompt answers.
     fn question(&mut self, message: &str) {
+        self.asked = Some(message.to_owned());
         self.agent_message(message);
     }
     fn notice(&mut self, text: &str) {

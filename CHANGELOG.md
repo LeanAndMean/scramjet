@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.208.0 — ACP asks the client's permission
+
+### Added
+
+- `scramjet acp --ask` runs, where it was refused: each call `--ask` would ask about, and each publication waiting for approval, is a `session/request_permission` to the client (Allow, Allow all calls this session, Deny; Approve publication, Cancel). A turn cancelled meanwhile withdraws the request, and an answer that was not offered denies.
+
 ## 2.207.0 — ACP takes images while a turn runs
 
 ### Added
