@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.207.0 — ACP takes images while a turn runs
+
+### Added
+
+- In `scramjet acp`, a prompt with images sent while a turn runs is queued like any other: its images are saved to temporary files whose paths go before its text, as the full screen pastes an image, where it was refused before.
+
 ## 2.206.0 — ACP follows a next step's fresh session
 
 ### Added

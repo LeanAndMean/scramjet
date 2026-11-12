@@ -60,7 +60,7 @@ pub use client::{StreamProgress, download};
 pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
-pub use image::{decode_base64, set_images};
+pub use image::{decode_base64, mime as image_type, set_images};
 pub use lint::{Diagnostic, Severity, lint};
 pub use listed::Listing;
 pub use login::config_directory;

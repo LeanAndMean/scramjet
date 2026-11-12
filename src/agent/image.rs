@@ -72,7 +72,7 @@ Multiply coordinates by {:.2} to map to original image.]",
 
 /// The type of a supported image from its first bytes, as Scramjet tells it: JPEG but not
 /// JPEG-LS, PNG but not animated PNG, GIF and WebP.
-pub(super) fn mime(bytes: &[u8]) -> Option<&'static str> {
+pub fn mime(bytes: &[u8]) -> Option<&'static str> {
     const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
     if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
         return (bytes.get(3) != Some(&0xf7)).then_some("image/jpeg");

@@ -2258,7 +2258,7 @@ fn acp_prompts_carry_images() {
     );
     let project = scratch.0.join("project");
     std::fs::create_dir_all(&project).unwrap();
-    let (port, bodies) = serve_bash_call("echo seen");
+    let (port, bodies) = serve_bash_call("sleep 2; echo seen");
     let (mut child, mut stdin, messages) = acp(&scratch.0, port);
     send(
         &mut stdin,
@@ -2296,24 +2296,50 @@ fn acp_prompts_carry_images() {
         }
         text
     };
-    let prompt = |id: u64, data: &str| {
+    let prompt_with = |id: u64, text: &str, data: &str| {
         serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
         "params": {"sessionId": session, "prompt": [
-            {"type": "text", "text": "/model what is this?"},
+            {"type": "text", "text": text},
             {"type": "image", "mimeType": "image/png", "data": data},
         ]}})
     };
+    let prompt = |id: u64, data: &str| prompt_with(id, "/model what is this?", data);
     // Not an image: refused before the turn, which sends nothing.
     send(&mut stdin, prompt(3, &encoded(b"plain text")));
     let refused = next(&messages);
     assert_eq!(refused["error"]["code"], -32602, "{refused}");
     // With an image, a `/` starts no command: the text and the image go to the model.
     send(&mut stdin, prompt(4, &encoded(&png)));
-    let (answer, _) = until(&messages, |message| message.get("id").is_some());
-    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    until(&messages, |message| {
+        message["params"]["update"]["status"] == "in_progress"
+    });
+    // During the turn, one that is not an image is refused; one that is goes as a file's path
+    // before the text, as the full screen pastes it.
+    send(&mut stdin, prompt_with(5, "and this", &encoded(b"plain")));
+    let (refused, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(refused["id"], 5);
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    send(
+        &mut stdin,
+        prompt_with(6, "/model and this?", &encoded(&png)),
+    );
+    for _ in 0..2 {
+        let (answer, _) = until(&messages, |message| message.get("id").is_some());
+        assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    }
     let body = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
     assert!(body.contains("/model what is this?"), "{body}");
     assert!(body.contains(&encoded(&png)), "{body}");
+    let steered: serde_json::Value =
+        serde_json::from_str(&bodies.recv_timeout(Duration::from_secs(20)).unwrap()).unwrap();
+    let last = steered["messages"].as_array().unwrap().last().unwrap();
+    let text = (last["content"].as_array().unwrap().last().unwrap())["text"]
+        .as_str()
+        .unwrap();
+    let (path, rest) = text.split_once(' ').unwrap();
+    assert_eq!(rest, "/model and this?", "{text}");
+    assert_eq!(std::fs::read(path).unwrap(), png);
+    std::fs::remove_file(path).unwrap();
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }

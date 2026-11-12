@@ -384,12 +384,14 @@ impl Connection {
         let follow_up = params["_meta"]["io.github.leanandmean.scramjet"]["queue"] == "followUp";
         let mut turn = lock(&handle.turn);
         if turn.running {
-            if !prompt.images.is_empty() {
-                drop(turn);
-                let message = "images cannot be sent while a turn runs yet";
-                return self.out.error(&id, INVALID_PARAMS, message);
-            }
-            turn.messages.push(prompt.text, follow_up);
+            let text = match queued_text(prompt) {
+                Ok(text) => text,
+                Err(error) => {
+                    drop(turn);
+                    return self.out.error(&id, INVALID_PARAMS, &error);
+                }
+            };
+            turn.messages.push(text, follow_up);
             turn.waiting.push(id);
             return;
         }
@@ -458,6 +460,30 @@ fn prompt_content(blocks: &Value) -> Result<Prompt, String> {
     }
     let text = parts.join("\n\n");
     Ok(Prompt { text, images })
+}
+
+/// A prompt queued during a turn, which takes text only: its images saved to temporary files
+/// whose paths go before the text, as the full screen pastes an image.
+fn queued_text(prompt: Prompt) -> Result<String, String> {
+    let mut extensions = Vec::new();
+    for (at, bytes) in prompt.images.iter().enumerate() {
+        let mime = scramjet::agent::image_type(bytes)
+            .ok_or_else(|| format!("image {} is not a PNG, JPEG, GIF or WebP image", at + 1))?;
+        extensions.push(mime.trim_start_matches("image/"));
+    }
+    let directory = std::env::temp_dir().to_string_lossy().into_owned();
+    let mut words = Vec::new();
+    for (bytes, extension) in prompt.images.iter().zip(extensions) {
+        let path = super::clipboard::save(bytes, extension, &directory)?;
+        words.push(match path.contains(char::is_whitespace) {
+            true => format!("\"{path}\""),
+            false => path,
+        });
+    }
+    if !prompt.text.is_empty() {
+        words.push(prompt.text);
+    }
+    Ok(words.join(" "))
 }
 
 /// The MCP servers `session/new` gives: stdio ones `{name, command, args, env}`, HTTP ones

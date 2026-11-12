@@ -263,7 +263,7 @@ fn preferred(listed: &str) -> Option<(&'static str, &'static str)> {
 
 /// Writes `bytes` to a new `scramjet-clipboard-…` file in `directory`; never to one that
 /// exists, which in a shared `/tmp` may be another user's.
-fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String> {
+pub(super) fn save(bytes: &[u8], extension: &str, directory: &str) -> Result<String, String> {
     let stamp = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
