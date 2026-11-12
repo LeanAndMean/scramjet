@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.175.1 — Ollama's count taken on a first turn
+
+### Fixed
+
+- On an Ollama model, its count of a request below half its window now corrects compaction's estimate too, when the request was too small to have been cut (clear of the half window Ollama cuts to, and under the window by characters over four). A first turn reading a file on a small window no longer compacts early on the raw estimate.
+
 ## 2.175.0 — Local models count tokens as their runtime does
 
 ### Changed

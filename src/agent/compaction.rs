@@ -995,14 +995,17 @@ impl Agent {
     /// Learns from a reply of `model` how far chars/4 was from the runtime's count of the
     /// request's `input`, when that count is of the whole request: llama.cpp and vLLM refuse a
     /// prompt past their window, while Ollama 0.40.16 cuts it to half its window and two tokens
-    /// and reports that, so its count is taken only above half the window.
+    /// and reports that, so its count is taken above half the window, or below it when the
+    /// request was too small by chars/4 to be cut.
     pub(super) fn calibrate(&mut self, model: &str, estimate: u64, input: u64) {
         let (Some(runtime), Some(window)) = (self.info.runtime, self.info.window) else {
             return;
         };
         let whole = match runtime {
             super::local::Runtime::LlamaCpp | super::local::Runtime::Vllm => true,
-            super::local::Runtime::Ollama => input > window / 2 + 64,
+            super::local::Runtime::Ollama => {
+                input > window / 2 + 64 || (input + 64 < window / 2 && estimate < window)
+            }
             super::local::Runtime::Other => false,
         };
         if whole && model == self.config.model {
@@ -1992,11 +1995,30 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         // A count of half its window may be of a prompt it cut, so chars/4 stands.
         let waits = run(crate::agent::local::Runtime::Ollama, 15_002, "cut-count");
         assert_eq!(waits, compacted);
+        // A count clear below half, of a request under the window by chars/4, was not cut.
+        let waits = run(crate::agent::local::Runtime::Ollama, 14_000, "under-half");
+        assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
         // llama.cpp refuses a prompt past its window, so its count is always whole.
         let waits = run(crate::agent::local::Runtime::LlamaCpp, 12_000, "llama-cpp");
         assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
         let waits = run(crate::agent::local::Runtime::Other, 12_000, "other");
         assert_eq!(waits, compacted);
+    }
+
+    #[test]
+    fn an_ollama_count_below_half_its_window_is_taken_only_for_a_request_it_cannot_have_cut() {
+        let endpoint: std::net::SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let (mut agent, _scratch) = agent(endpoint, "ollama-cut");
+        agent.set_context_window(Some(30_000));
+        agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);
+        let model = agent.config.model.clone();
+        // Past the window by chars/4, so a count under half may be of a prompt it cut.
+        agent.calibrate(&model, 31_000, 10_000);
+        assert_eq!(agent.overcount, None);
+        agent.calibrate(&model, 12_000, 10_000);
+        assert_eq!(agent.overcount, Some((model.clone(), 2_000)));
+        agent.calibrate(&model, 29_000, 26_000);
+        assert_eq!(agent.overcount, Some((model, 3_000)));
     }
 
     /// A turn on an Ollama model with a `window`: a 4,000-character output, then a 60,000 one,
