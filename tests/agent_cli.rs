@@ -2085,6 +2085,47 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
 
 #[test]
 #[cfg(unix)]
+fn acp_on_sigterm_cancels_turns_and_their_commands_then_exits() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-term-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let marker = scratch.0.join("marker");
+    let (port, _bodies) = serve_bash_call(&format!("sleep 3; touch '{}'", marker.display()));
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    until(&messages, |message| {
+        message["params"]["update"]["status"] == "in_progress"
+    });
+    unsafe { libc::kill(child.id() as i32, libc::SIGTERM) };
+    let (answer, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "cancelled", "{answer}");
+    let started = std::time::Instant::now();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(143), "{status}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    std::thread::sleep(Duration::from_secs(4));
+    assert!(!marker.exists(), "the command ran on after the exit");
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_turns_stopped_at_the_output_limit_or_by_a_refusal_say_so() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-stop-{}", std::process::id())));
@@ -2193,6 +2234,7 @@ fn acp_call(
 }
 
 #[test]
+#[cfg(unix)]
 fn acp_prompts_carry_images() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-image-{}", std::process::id())),

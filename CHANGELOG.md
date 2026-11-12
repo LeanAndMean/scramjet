@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.203.3 — `scramjet acp` stops cleanly on SIGTERM
+
+### Fixed
+
+- `scramjet acp` on SIGTERM cancels its running turns, killing their commands, answers their prompts `cancelled` and exits with status 143, as when its client closes stdin; before, it died at once and left a running command behind.
+
 ## 2.203.2 — Login tokens kept out of their endpoints' errors
 
 ### Fixed

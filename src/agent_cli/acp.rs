@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     ffi::OsString,
-    io::{BufRead, Write},
+    io::{BufRead, Read, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, PoisonError,
@@ -32,7 +32,8 @@ const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
 
-/// Runs `scramjet acp` with the options in `arguments` until the client closes stdin.
+/// Runs `scramjet acp` with the options in `arguments` until the client closes stdin or SIGTERM
+/// comes.
 pub(super) fn run(arguments: &[String]) -> Result<(), String> {
     let parse = || Options::parse(arguments.iter().map(OsString::from));
     let Some(options) = parse()? else {
@@ -58,14 +59,71 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         notices: false,
         sessions: HashMap::new(),
     };
-    for line in std::io::stdin().lock().lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        let line = line.strip_suffix('\r').unwrap_or(&line);
-        if !line.trim().is_empty() {
-            connection.receive(line);
+    let (sent, inputs) = mpsc::channel();
+    on_sigterm(sent.clone()).map_err(|e| format!("acp: SIGTERM: {e}"))?;
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines() {
+            let ended = line.is_err();
+            if sent.send(Input::Line(line)).is_err() || ended {
+                return;
+            }
+        }
+        let _ = sent.send(Input::Ended);
+    });
+    let mut failed = None;
+    for input in inputs {
+        match input {
+            Input::Line(Ok(line)) => {
+                let line = line.strip_suffix('\r').unwrap_or(&line);
+                if !line.trim().is_empty() {
+                    connection.receive(line);
+                }
+            }
+            Input::Line(Err(error)) => {
+                failed = Some(error.to_string());
+                break;
+            }
+            Input::Ended => break,
+            Input::Terminated => {
+                // A turn that does not stop when cancelled does not hold the exit up.
+                std::thread::spawn(|| {
+                    std::thread::sleep(Duration::from_secs(5));
+                    scramjet::agent::end();
+                    std::process::exit(TERMINATED);
+                });
+                connection.end();
+                std::process::exit(TERMINATED);
+            }
         }
     }
     connection.end();
+    failed.map_or(Ok(()), Err)
+}
+
+/// The status a shell gives a process killed by SIGTERM.
+const TERMINATED: i32 = 128 + signal_hook::consts::SIGTERM;
+
+/// What the main thread waits for.
+enum Input {
+    Line(std::io::Result<String>),
+    /// The client closed stdin.
+    Ended,
+    Terminated,
+}
+
+/// Has SIGTERM send `Input::Terminated`, which the handler cannot do itself.
+fn on_sigterm(sent: mpsc::Sender<Input>) -> std::io::Result<()> {
+    let (mut reader, writer) = std::io::pipe()?;
+    std::thread::spawn(move || {
+        if reader.read_exact(&mut [0]).is_ok() {
+            let _ = sent.send(Input::Terminated);
+        }
+    });
+    let wake = move || {
+        let _ = (&writer).write(&[0]);
+    };
+    // SAFETY: a write(2) to a pipe is async-signal-safe.
+    unsafe { signal_hook::low_level::register(signal_hook::consts::SIGTERM, wake) }?;
     Ok(())
 }
 
@@ -317,7 +375,7 @@ impl Connection {
         let _ = handle.prompts.send((id, prompt));
     }
 
-    /// At the end of input: every turn cancelled, and each session's thread waited for, which
+    /// At the end of input or SIGTERM: every turn cancelled, and each session's thread waited for, which
     /// writes its session file as it goes.
     fn end(self) {
         for handle in self.sessions.values() {
