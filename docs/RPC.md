@@ -12,7 +12,7 @@ Today the agent library (`src/agent`) runs a turn and reports it through `AgentU
 
 | Part | Where it is today | Proposed |
 |---|---|---|
-| A turn, its pauses for commands typed meanwhile (`AgentError::Paused`, `resume_turn`) | Core, with the loop in `turn_on_screen` (`interactive.rs:412`) | Core loop |
+| A turn, its pauses for commands typed meanwhile (`AgentError::Paused`, `resume_turn`) | Core, with the loop in `drive::run_turn` (stage 1); `Front::paused` runs what was typed | Core loop |
 | Routing a completed command's next step (forced, closed, open, ask; chains; autopilot) | Core: `Agent::route`, `status::route`, `record_next_step` | Stays |
 | Offering the steps, the autopilot countdown, the model and effort chosen for a step, a fresh session, running the chosen step, a text step into the editor | Front end: `next_step`, `offer`, `take_step`, `take_route` (`interactive.rs:521-690`), the countdown in the picker | Core loop; the front end only shows the list and returns the pick |
 | Suggested steps (`suggest_scramjet_next_steps`), lists reopened by going back, a question asked again | Front end: `suggested`, `reopen`, `ask_again` | Core loop |

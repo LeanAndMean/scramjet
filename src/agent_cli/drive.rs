@@ -62,9 +62,16 @@ pub(super) trait Front {
     fn session(&mut self) -> &mut Session;
     /// Where the agent shows what it does.
     fn ui(&mut self) -> &mut dyn AgentUi;
+    /// Shows that a turn starts.
+    fn turn_starts(&mut self);
     /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was
-    /// left in (`Agent::resume_turn`), through any pauses for what the user typed meanwhile.
+    /// left in (`Agent::resume_turn`), until it ends or pauses (`AgentError::Paused`) for what
+    /// the user did meanwhile.
     fn turn(&mut self, prompt: Option<&str>) -> Result<(), AgentError>;
+    /// Does what the user asked for while the turn ran, which paused it to go on after.
+    fn paused(&mut self);
+    /// Shows that the turn stopped, before what it stopped with.
+    fn turn_stops(&mut self);
     /// Shows what a turn ended with, once its stop is shown.
     fn turn_ended(&mut self);
     /// Whether the user can choose from lists and answer questions as they show.
@@ -112,7 +119,13 @@ pub(super) fn run_turn(
     agent.set_hide_credentials(settings.hide_credentials.hides(start == Start::Unattended));
     agent.set_unattended(start == Start::Unattended);
     let model = agent.model().to_owned();
-    let result = front.turn(prompt);
+    front.turn_starts();
+    let mut result = front.turn(prompt);
+    while let Err(AgentError::Paused) = result {
+        front.paused();
+        result = front.turn(None);
+    }
+    front.turn_stops();
     // The agent's `switch_scramjet_model`, remembered as the user's choices are.
     if front.session().agent.model() != model {
         remember_model(front);

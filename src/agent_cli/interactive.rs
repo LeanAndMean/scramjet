@@ -50,6 +50,8 @@ pub(super) struct Interactive {
     pub(super) keybindings: Vec<Problem>,
     /// A turn waits for the built-in commands typed during it (`typed_during_turn`).
     pub(super) in_turn: bool,
+    /// The effort when what runs as a turn started, for `ended_on_screen`.
+    effort_at_start: Option<String>,
     /// The packages' logins and the providers that list their models themselves, as the
     /// session last read them, for those lists to be kept current (`login::keep_lists_current`).
     pub(super) kept: Arc<Mutex<super::login::Kept>>,
@@ -127,6 +129,7 @@ impl Interactive {
             theme_options,
             keybindings,
             in_turn: false,
+            effort_at_start: None,
             kept,
         };
         interactive.use_theme();
@@ -349,24 +352,6 @@ impl Interactive {
         drive::run_turn(self, prompt, start)
     }
 
-    /// Runs `prompt` as a model turn on the full screen, as `on_screen` does (`run_turn`). Where the turn
-    /// pauses, the built-in commands typed meanwhile that do not stop it run, and it goes on;
-    /// Escape or Ctrl-C meanwhile stop it.
-    fn turn_on_screen(&mut self, prompt: Option<&str>) -> Result<(), AgentError> {
-        self.cancel.store(false, Ordering::Relaxed);
-        let effort = self.session.agent.effort().map(str::to_owned);
-        let mut result = self.on_screen(|agent, ui, cancel| match prompt {
-            Some(prompt) => agent.turn(prompt, ui, cancel),
-            None => agent.resume_turn(ui, cancel),
-        });
-        while let Err(AgentError::Paused) = result {
-            self.typed_during_turn(true);
-            result = self.on_screen(Agent::resume_turn);
-        }
-        self.ended_on_screen(effort);
-        result
-    }
-
     /// Runs `run` with the full screen showing that a turn runs, Shift+Tab cycling the current
     /// model's levels; without it, printed.
     fn on_screen<T>(
@@ -385,8 +370,9 @@ impl Interactive {
 
     /// Shows on the full screen that what `on_screen` ran has ended. Sets an effort Shift+Tab
     /// chose meanwhile that no request took, and saves the effort as the settings' default if
-    /// it changed from `effort`.
-    fn ended_on_screen(&mut self, effort: Option<String>) {
+    /// it changed from the one it started with.
+    fn ended_on_screen(&mut self) {
+        let effort = self.effort_at_start.take();
         let Some(screen) = &self.screen else {
             return;
         };
@@ -454,16 +440,12 @@ impl Interactive {
         &mut self,
         run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
     ) -> T {
-        self.cancel.store(false, Ordering::Relaxed);
-        if self.screen.is_some() {
-            let effort = self.session.agent.effort().map(str::to_owned);
-            let result = self.on_screen(run);
-            self.ended_on_screen(effort);
-            return result;
-        }
-        let result = run(&mut self.session.agent, &mut self.ui, &self.cancel);
-        self.ui.clear();
-        self.cancel.store(false, Ordering::Relaxed);
+        // Run from a turn's pause, it leaves the turn's to the turn.
+        let outer = self.effort_at_start.take();
+        self.turn_starts();
+        let result = self.on_screen(run);
+        self.turn_stops();
+        self.effort_at_start = outer;
         result
     }
 
@@ -709,13 +691,32 @@ impl Front for Interactive {
         Interactive::ui(self)
     }
 
+    /// A Ctrl-C from before the turn does not cancel it.
+    fn turn_starts(&mut self) {
+        self.cancel.store(false, Ordering::Relaxed);
+        if self.screen.is_some() {
+            self.effort_at_start = self.session.agent.effort().map(str::to_owned);
+        }
+    }
+
     fn turn(&mut self, prompt: Option<&str>) -> Result<(), AgentError> {
+        self.on_screen(|agent, ui, cancel| match prompt {
+            Some(prompt) => agent.turn(prompt, ui, cancel),
+            None => agent.resume_turn(ui, cancel),
+        })
+    }
+
+    fn paused(&mut self) {
+        self.typed_during_turn(true);
+    }
+
+    fn turn_stops(&mut self) {
         match self.screen.is_some() {
-            true => self.turn_on_screen(prompt),
-            false => self.during_turn(|agent, ui, cancel| match prompt {
-                Some(prompt) => agent.turn(prompt, ui, cancel),
-                None => agent.resume_turn(ui, cancel),
-            }),
+            true => self.ended_on_screen(),
+            false => {
+                self.ui.clear();
+                self.cancel.store(false, Ordering::Relaxed);
+            }
         }
     }
 
