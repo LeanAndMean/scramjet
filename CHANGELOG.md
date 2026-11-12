@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.202.0 — ACP's `max_tokens` and `refusal` stop reasons
+
+### Added
+
+- In `scramjet acp`, a turn whose reply stopped at the model's output token limit ends with `stopReason: max_tokens`, and one the model or the provider's content filter declined (Claude's `refusal`, a `content_filter` finish) with `refusal`, instead of an error; the text it gave stays, and a warning notice says why it went no further.
+
 ## 2.201.0 — Images in ACP prompts
 
 ### Added

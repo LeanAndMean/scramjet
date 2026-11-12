@@ -553,7 +553,7 @@ impl Stream {
             Some("max_tokens") => true,
             Some(reason) => {
                 return Err(Failure::provider(
-                    None,
+                    Some(reason),
                     format!("response stopped: {reason}"),
                 ));
             }
@@ -914,8 +914,9 @@ mod tests {
         let cut = fail(text.to_vec());
         assert!(cut.transient && cut.message.contains("ended before"));
         let refusal = fail([&text[..], &end("refusal")].concat());
-        assert!(!refusal.transient && !refusal.overflow);
-        assert!(fail([&text[..], &end("model_context_window_exceeded")].concat()).overflow);
+        assert!(!refusal.transient && !refusal.overflow && refusal.refusal);
+        let overflow = fail([&text[..], &end("model_context_window_exceeded")].concat());
+        assert!(overflow.overflow && !overflow.refusal);
         let unfinished = [&text[..2], &end("end_turn")].concat();
         assert!(
             fail(unfinished)

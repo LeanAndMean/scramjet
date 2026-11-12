@@ -404,6 +404,10 @@ pub enum AgentError {
     /// The turn stopped before a request for the session to use the agent (`AgentUi::pause`).
     Paused,
     Provider(String),
+    /// The model's response stopped at its output token limit; what it finished is kept.
+    OutputLimit(String),
+    /// The model or the provider's content filter declined to answer.
+    Refusal(String),
     /// A request failed because its input exceeded the model's context window.
     ContextOverflow(String),
     /// A compaction the agent started by itself failed.
@@ -416,7 +420,9 @@ impl std::fmt::Display for AgentError {
         match self {
             Self::Cancelled => f.write_str("cancelled"),
             Self::Paused => f.write_str("paused"),
-            Self::Provider(message) => write!(f, "provider: {message}"),
+            Self::Provider(message) | Self::OutputLimit(message) | Self::Refusal(message) => {
+                write!(f, "provider: {message}")
+            }
             Self::ContextOverflow(message) => write!(f, "context overflow: {message}"),
             Self::CompactionFailed(error) => write!(f, "automatic compaction failed: {error}"),
             Self::Session(error) => write!(f, "session: {error}"),

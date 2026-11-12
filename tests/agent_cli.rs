@@ -1831,9 +1831,6 @@ fn serve_bash_call(command: &str) -> (u16, std::sync::mpsc::Receiver<String>) {
 
 /// As `serve_bash_call`, with a call of the tool `name` with `input`.
 fn serve_call(name: &str, input: serde_json::Value) -> (u16, std::sync::mpsc::Receiver<String>) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let (sent, received) = std::sync::mpsc::channel();
     let input = input.to_string();
     let call = vec![
         r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
@@ -1855,6 +1852,15 @@ fn serve_call(name: &str, input: serde_json::Value) -> (u16, std::sync::mpsc::Re
     ]
     .map(str::to_owned)
     .to_vec();
+    serve_events(vec![call, text])
+}
+
+/// A scripted Claude provider answering its requests with `replies`' events in turn, cycling:
+/// its port, and each request's body.
+fn serve_events(replies: Vec<Vec<String>>) -> (u16, std::sync::mpsc::Receiver<String>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sent, received) = std::sync::mpsc::channel();
     let reply = |events: &[String]| {
         let body: String = (events.iter())
             .map(|event| {
@@ -1869,7 +1875,7 @@ connection: close\r\n\r\n{body}",
             body.len()
         )
     };
-    let replies = [reply(&call), reply(&text)];
+    let replies: Vec<String> = replies.iter().map(|events| reply(events)).collect();
     std::thread::spawn(move || {
         for (n, socket) in listener.incoming().enumerate() {
             let mut stream = socket.unwrap();
@@ -1886,7 +1892,9 @@ connection: close\r\n\r\n{body}",
             }
             let mut body = vec![0; length];
             std::io::Read::read_exact(&mut reader, &mut body).unwrap();
-            stream.write_all(replies[n % 2].as_bytes()).unwrap();
+            stream
+                .write_all(replies[n % replies.len()].as_bytes())
+                .unwrap();
             let _ = sent.send(String::from_utf8(body).unwrap());
         }
     });
@@ -2073,6 +2081,71 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
     drop(stdin);
     let status = child.wait().unwrap();
     assert!(status.success());
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_turns_stopped_at_the_output_limit_or_by_a_refusal_say_so() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-stop-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let stopped = |reason: &str| {
+        [
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Part"}}"#.to_owned(),
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            serde_json::json!({"type": "message_delta", "delta": {"stop_reason": reason},
+                "usage": {"output_tokens": 4}}).to_string(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]
+        .to_vec()
+    };
+    let (port, _bodies) = serve_events(vec![stopped("max_tokens"), stopped("refusal")]);
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1,
+                "clientCapabilities": {"session": {"notices": {}}}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    for (id, reason) in [(3, "max_tokens"), (4, "refusal")] {
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+                "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+        );
+        let (answer, updates) = until(&messages, |message| message.get("id").is_some());
+        assert_eq!(answer["id"], id);
+        assert_eq!(answer["result"]["stopReason"], reason, "{answer}");
+        let update = |kind: &str| {
+            (updates.iter())
+                .map(|message| &message["params"]["update"])
+                .find(|update| update["sessionUpdate"] == kind)
+                .unwrap_or_else(|| panic!("no {kind} in {updates:?}"))
+                .clone()
+        };
+        assert_eq!(update("agent_message_chunk")["content"]["text"], "Part");
+        let notice = update("notice");
+        assert_eq!(notice["severity"], "warning", "{notice}");
+        assert!(
+            notice["title"].as_str().unwrap().contains(match reason {
+                "max_tokens" => "output token limit",
+                _ => "refusal",
+            }),
+            "{notice}"
+        );
+    }
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }
 
 /// The `tool_call` update and the completed one of a prompt turn in `project` whose reply

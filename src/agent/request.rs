@@ -567,9 +567,10 @@ pub(super) fn send(
                 0 => failure.message,
                 n => format!("{} (after {n} retries)", failure.message),
             };
-            return Err(match failure.overflow {
-                true => AgentError::ContextOverflow(message),
-                false => AgentError::Provider(message),
+            return Err(match (failure.overflow, failure.refusal) {
+                (true, _) => AgentError::ContextOverflow(message),
+                (false, true) => AgentError::Refusal(message),
+                (false, false) => AgentError::Provider(message),
             });
         }
         attempt += 1;
@@ -2015,7 +2016,7 @@ response is incomplete; retry the request."});
         let cancel = AtomicBool::new(false);
         let error = agent.turn("Write notes", &mut ui, &cancel).unwrap_err();
         assert!(
-            matches!(&error, AgentError::Provider(message) if message == "response incomplete: it \
+            matches!(&error, AgentError::OutputLimit(message) if message == "response incomplete: it \
 reached the output token limit (max_tokens); the tool call it was making did not run"),
             "{error}"
         );
@@ -2034,6 +2035,23 @@ reached the output token limit (max_tokens); the tool call it was making did not
                     "cache_control":{"type":"ephemeral","ttl":"1h"}}]},
             ])
         );
+    }
+
+    #[test]
+    fn a_reply_the_content_filter_stopped_is_a_refusal_not_retried() {
+        let mut filtered = fixture::cut_events("Part", fixture::known_usage());
+        filtered[8]["response"]["incomplete_details"] = json!({"reason":"content_filter"});
+        let (endpoint, server) = serve_requests(vec![stream(&filtered)]);
+        let (mut agent, _scratch) = agent(endpoint, "gpt-filtered");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let error = agent.turn("Say it", &mut ui, &cancel).unwrap_err();
+        assert!(
+            matches!(&error, AgentError::Refusal(message)
+                if message == "response incomplete: content_filter"),
+            "{error:?}"
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[test]
@@ -2064,7 +2082,7 @@ reached the output token limit (max_tokens); the tool call it was making did not
         let cancel = AtomicBool::new(false);
         let error = agent.turn("Write a story", &mut ui, &cancel).unwrap_err();
         assert!(
-            matches!(&error, AgentError::Provider(message) if message == "response incomplete: it \
+            matches!(&error, AgentError::OutputLimit(message) if message == "response incomplete: it \
 reached the output token limit (max_output_tokens)"),
             "{error}"
         );

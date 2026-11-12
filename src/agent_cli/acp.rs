@@ -256,7 +256,7 @@ impl Connection {
                     match Attached::images(&images) {
                         Ok(attached) => front.session.agent.attach(attached),
                         Err(error) => {
-                            front.end_turn(&id, Some((INVALID_PARAMS, &error)));
+                            front.end_turn(&id, Err((INVALID_PARAMS, &error)));
                             continue;
                         }
                     }
@@ -445,6 +445,7 @@ impl Worker {
             ui,
             cancel: self.cancel,
             turn: self.turn,
+            reason: None,
         }
     }
 }
@@ -455,6 +456,16 @@ struct Acp {
     ui: Updates,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
+    /// The stop reason of a model turn that ended without failing though it went no further:
+    /// `max_tokens`, `refusal`.
+    reason: Option<&'static str>,
+}
+
+/// How a prompt's turns ended.
+enum Ended {
+    /// ACP's stop reason, `cancelled` aside.
+    Reason(&'static str),
+    Failed(String),
 }
 
 impl Acp {
@@ -486,8 +497,17 @@ impl Acp {
         let stopped = loop {
             let next = drive::run_turn(self, Some(&prompt), start);
             let stopped = self.ui.stopped.take();
+            if let Some(reason) = self.reason.take() {
+                // What the model finished stays shown; the reason says why it went no further.
+                if let Some(Some(error)) = &stopped {
+                    self.ui.say("warning", error);
+                }
+                break Ended::Reason(reason);
+            }
             if stopped.is_some() || self.cancel.load(Ordering::Relaxed) {
-                break stopped.unwrap_or(None);
+                break stopped
+                    .flatten()
+                    .map_or(Ended::Reason("end_turn"), Ended::Failed);
             }
             if let Some((step, how)) = next {
                 self.ui.user_message(&step);
@@ -497,32 +517,32 @@ impl Acp {
             let mut turn = lock(&self.turn);
             let queued = turn.messages.take();
             if queued.is_empty() {
-                break None;
+                break Ended::Reason("end_turn");
             }
             drop(turn);
             (prompt, start) = (queued.join("\n\n"), Start::Typed);
         };
-        self.end_turn(&id, stopped.as_deref().map(|error| (INTERNAL_ERROR, error)));
+        match stopped {
+            Ended::Reason(reason) => self.end_turn(&id, Ok(reason)),
+            Ended::Failed(error) => self.end_turn(&id, Err((INTERNAL_ERROR, &error))),
+        }
     }
 
     /// Answers request `id` and those of the prompts sent during its turn, the turn having
-    /// failed with the error `stopped` gives or ended.
-    fn end_turn(&mut self, id: &Value, stopped: Option<(i64, &str)>) {
+    /// ended for `ended`'s stop reason or failed with its error; cancelled, it says so.
+    fn end_turn(&mut self, id: &Value, ended: Result<&str, (i64, &str)>) {
         let mut turn = lock(&self.turn);
         turn.running = false;
         let waiting = std::mem::take(&mut turn.waiting);
         drop(turn);
-        let cancelled = self.cancel.load(Ordering::Relaxed);
+        let ended = match self.cancel.load(Ordering::Relaxed) {
+            true => Ok("cancelled"),
+            false => ended,
+        };
         for id in Some(id).into_iter().chain(&waiting) {
-            match stopped {
-                Some((code, error)) if !cancelled => self.ui.out.error(id, code, error),
-                _ => {
-                    let reason = match cancelled {
-                        true => "cancelled",
-                        false => "end_turn",
-                    };
-                    self.ui.out.respond(id, json!({"stopReason": reason}));
-                }
+            match ended {
+                Err((code, error)) => self.ui.out.error(id, code, error),
+                Ok(reason) => self.ui.out.respond(id, json!({"stopReason": reason})),
             }
         }
     }
@@ -540,10 +560,16 @@ impl Front for Acp {
     }
     fn turn(&mut self, prompt: Option<&str>) -> Result<(), AgentError> {
         let agent = &mut self.session.agent;
-        match prompt {
+        let result = match prompt {
             Some(prompt) => agent.turn(prompt, &mut self.ui, &self.cancel),
             None => agent.resume_turn(&mut self.ui, &self.cancel),
-        }
+        };
+        self.reason = match &result {
+            Err(AgentError::OutputLimit(_)) => Some("max_tokens"),
+            Err(AgentError::Refusal(_)) => Some("refusal"),
+            _ => None,
+        };
+        result
     }
     fn paused(&mut self) {}
     fn turn_stops(&mut self) {}

@@ -431,7 +431,7 @@ to a larger-context model)"
                 self.output_rate(),
             );
             if let Some(message) = reply.incomplete {
-                return Err(AgentError::Provider(message));
+                return Err(AgentError::OutputLimit(message));
             }
             self.follow_runtime(ui, false, cancel);
             if calls.is_empty() {

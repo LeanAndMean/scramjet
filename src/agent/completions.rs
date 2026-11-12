@@ -1322,7 +1322,7 @@ mod tests {
             cut.message
         );
         let filtered = fail(&[text.clone(), finish("content_filter")]);
-        assert!(!filtered.transient);
+        assert!(!filtered.transient && filtered.refusal);
         assert_eq!(filtered.message, "response stopped: content_filter");
         assert!(fail(&[text.clone(), finish("network_error")]).transient);
         // The first reason that stops a reply is kept.

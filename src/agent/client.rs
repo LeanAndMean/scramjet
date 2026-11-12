@@ -152,6 +152,8 @@ pub(super) struct Failure {
     pub quota: Option<super::quota::Quota>,
     /// Nothing listened at the provider's address.
     pub refused: bool,
+    /// The model or the provider's filter declined to answer.
+    pub refusal: bool,
 }
 
 /// A failure nothing says another attempt may cure, such as a file's.
@@ -176,6 +178,7 @@ impl Failure {
             wait: None,
             quota: None,
             refused: false,
+            refusal: false,
         }
     }
     /// A failure the provider explained, classified by its error code, then by its message.
@@ -200,12 +203,17 @@ impl Failure {
                 | "not_found"
                 | "not_found_error"
                 | "content_filter"
-                | "content_policy_violation",
+                | "content_policy_violation"
+                | "refusal",
             ) => false,
             _ => !mentions(&message, PERMANENT_WORDS) && mentions(&message, TRANSIENT_WORDS),
         };
         Self {
             overflow: code == Some("context_length_exceeded") || overflows(&message),
+            refusal: matches!(
+                code,
+                Some("content_filter" | "content_policy_violation" | "refusal")
+            ),
             ..Self::new(message, transient)
         }
     }
@@ -421,6 +429,7 @@ async fn exchange(
                 wait,
                 quota: None,
                 refused: false,
+                refusal: false,
             }),
         }
     } else {
@@ -885,11 +894,18 @@ async fn responses_reply(
                 let message = format!(
                     "response {}{}",
                     parsed.status,
-                    parsed.error.map(|e| format!(": {e}")).unwrap_or_default()
+                    parsed
+                        .error
+                        .as_deref()
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default()
                 );
                 // An incomplete response (output limit, content filter) would end the same way again.
                 Err(match parsed.status.as_str() {
                     "failed" => Failure::provider(parsed.error_code.as_deref(), message),
+                    "incomplete" if parsed.error.as_deref() == Some("content_filter") => {
+                        Failure::provider(Some("content_filter"), message)
+                    }
                     _ => Failure::new(message, false),
                 })
             }
