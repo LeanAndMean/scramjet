@@ -296,16 +296,6 @@ fn llama_cpp_and_vllm_say_their_windows() {
     assert_eq!(server.runtime, Runtime::Vllm);
     assert_eq!(server.models[0].window, Some(40960));
     assert!(!server.models[0].effort_in_template);
-    // Served under another name, gpt-oss is told by its weights' path.
-    let gpt_oss = serve(|_, path, _| match path {
-        "/v1/models" => (
-            200,
-            json!({"data": [{"id": "gpt", "owned_by": "vllm", "max_model_len": 32768,
-            "root": "/models/OpenAI/GPT-OSS-20B"}]}),
-        ),
-        _ => not_found(),
-    });
-    assert!(probe(&gpt_oss, None).unwrap().models[0].effort_in_template);
 
     let other = serve(|_, path, _| match path {
         "/v1/models" => (200, json!({"data": [{"id": "m"}]})),
@@ -638,37 +628,6 @@ fn the_check_asks_a_llama_cpp_template_that_takes_effort_whether_none_stops_it()
 }
 
 #[test]
-fn the_check_gives_gpt_oss_on_vllm_three_levels_without_asking_for_none() {
-    // vLLM 0.11.0 ignores `enable_thinking` for gpt-oss and refuses `none` with HTTP 400.
-    let url = serve(|_, _, body| {
-        if body["reasoning_effort"] == "none" {
-            return (
-                400,
-                json!({"error": {"message": "Input should be 'low', 'medium' or 'high'"}}),
-            );
-        }
-        let call = json!([{"function": {"name": CHECK_TOOL, "arguments": "{}"}}]);
-        let message = match body["chat_template_kwargs"].is_null() {
-            true => json!({"content": "", "reasoning_content": "Call it.", "tool_calls": call}),
-            false => json!({"content": "3", "reasoning_content": "Count them."}),
-        };
-        (200, json!({"choices": [{"message": message}]}))
-    });
-    let vllm = Server {
-        models: vec![LocalModel {
-            effort_in_template: true,
-            ..LocalModel::named("gpt")
-        }],
-        ..server(&url, Runtime::Vllm)
-    };
-    let checked = check_tools(&vllm, "gpt", None).unwrap();
-    assert_eq!(
-        (checked.thinks, checked.switch),
-        (true, Some(Switch::EffortLowToHigh))
-    );
-}
-
-#[test]
 fn the_check_asks_an_ollama_model_that_thinks_whether_none_stops_it() {
     let url = serve(|_, path, body| {
         if path == "/api/ps" {
@@ -729,8 +688,6 @@ fn a_saved_switch_sends_the_thinking_level() {
     save(&file, "ollama", &ollama, &stubborn).unwrap();
     // One that thinks whatever it is asked is offered no levels.
     save(&file, "vllm", &vllm, &thinking("R1", None)).unwrap();
-    let three = thinking("gpt-oss-20b", Some(Switch::EffortLowToHigh));
-    save(&file, "vllm", &vllm, &three).unwrap();
     let providers = super::super::Providers::read(vec![file.clone()], None);
     assert!(
         providers.problems().is_empty(),
@@ -769,10 +726,6 @@ fn a_saved_switch_sends_the_thinking_level() {
     assert_eq!(sent("vllm/Qwen3", "medium").1["enable_thinking"], true);
     assert_eq!(sent("vllm/R1", "high"), (Value::Null, Value::Null));
     assert!(!providers.find("vllm/R1").unwrap().info.reasoning);
-    let three = &providers.find("vllm/gpt-oss-20b").unwrap().info;
-    assert_eq!(three.levels, ["low", "medium", "high"]);
-    assert_eq!(three.fit("none"), "low");
-    assert_eq!(sent("vllm/gpt-oss-20b", "low"), (json!("low"), Value::Null));
 }
 
 struct Scratch(std::path::PathBuf);

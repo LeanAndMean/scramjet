@@ -321,10 +321,6 @@ impl Interactive {
                 "Note: {id} thinks, and asking it not to (reasoning_effort none) did not stop it: \
                  its thinking level is sent as reasoning_effort, and off is not offered"
             )),
-            (_, Some(Switch::EffortLowToHigh)) => self.say(&format!(
-                "Note: {id} thinks, and vLLM takes no off for it: its thinking level is sent as \
-                 reasoning_effort low, medium or high"
-            )),
             (_, Some(Switch::ChatTemplate)) => self.say(&format!(
                 "{id} thinks, and stopped when asked not to (chat_template_kwargs \
                  enable_thinking): its thinking level turns it on and off"

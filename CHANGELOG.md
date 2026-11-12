@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.195.0 — vLLM's models are not told apart by name
+
+### Changed
+
+- `/login` → Local models no longer recognizes gpt-oss on vLLM by its name to offer it low, medium and high: a vLLM model's thinking levels come only from how it answers the check, so one that thinks whatever it is asked is saved without levels, as any other.
+
 ## 2.194.0 — A reply of reasoning only ends the turn again
 
 ### Changed
