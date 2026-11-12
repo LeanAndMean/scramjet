@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.216.0 — ACP exports sessions and gives the usage
+
+### Added
+
+- `scramjet acp` exports a session on request (`_io.github.leanandmean.scramjet/export_html`), as `/export` does: a web page, or a session file for a `.jsonl` path, relative paths within the project; the answer names the file.
+- `scramjet acp` gives `/usage`'s summary as data (`_io.github.leanandmean.scramjet/usage`): each provider's quota, then the requests, tokens and cost of today, this week, the last 30 days and by model.
+
 ## 2.215.0 — ACP compacts and renames sessions
 
 ### Added

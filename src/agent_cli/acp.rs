@@ -37,8 +37,10 @@ const NEXT_STEP: &str = "_io.github.leanandmean.scramjet/next_step";
 const HOLD: &str = "_io.github.leanandmean.scramjet/hold";
 const COMPACT: &str = "_io.github.leanandmean.scramjet/compact";
 const RENAME: &str = "_io.github.leanandmean.scramjet/rename";
+const EXPORT: &str = "_io.github.leanandmean.scramjet/export_html";
+const SPENT: &str = "_io.github.leanandmean.scramjet/usage";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 3] = [HOLD, COMPACT, RENAME];
+const EXTENSIONS: [&str; 5] = [HOLD, COMPACT, RENAME, EXPORT, SPENT];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
 /// How often a wait looks again at what may end it.
@@ -330,8 +332,13 @@ struct Configure {
 }
 
 enum Setting {
-    Option { option: String, value: Value },
+    Option {
+        option: String,
+        value: Value,
+    },
     Rename(String),
+    /// `export_html`'s path, if given.
+    Export(Option<String>),
 }
 
 impl Connection {
@@ -370,6 +377,8 @@ impl Connection {
             },
             COMPACT => self.compact(id, &params),
             RENAME => self.rename(&id, &params),
+            EXPORT => self.export(&id, &params),
+            SPENT => self.usage(id),
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
     }
@@ -425,6 +434,32 @@ impl Connection {
             return self.out.error(id, INVALID_PARAMS, "name is required");
         }
         Self::settle(handle, id, Setting::Rename(name.to_owned()));
+    }
+
+    /// Writes the session's current branch as `/export` does, at once between turns, else at the
+    /// turn's next pause.
+    fn export(&self, id: &Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
+        let path = params["path"].as_str().filter(|path| !path.is_empty());
+        Self::settle(handle, id, Setting::Export(path.map(str::to_owned)));
+    }
+
+    /// Answers with `/usage`'s summary as data, from a thread of its own, as it reads every saved
+    /// session.
+    fn usage(&self, id: Value) {
+        let out = self.out.clone();
+        std::thread::spawn(move || {
+            let sessions = match scramjet::agent::state_directory() {
+                Ok(state) => state.join("sessions"),
+                Err(error) => return out.error(&id, INTERNAL_ERROR, &error.to_string()),
+            };
+            let history = scramjet::agent::usage::History::read(&sessions, Path::new(""));
+            let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
+                .map_or(0, |since| since.as_millis() as u64);
+            out.respond(&id, super::usage::data(&history, now));
+        });
     }
 
     /// Hands `setting` to the session, which takes it at once between turns, else at the turn's
@@ -779,6 +814,8 @@ impl Connection {
                 }
                 Builtin::Compact(_) => format!("; {COMPACT} compacts"),
                 Builtin::Rename(_) => format!("; {RENAME} renames"),
+                Builtin::Export(_) => format!("; {EXPORT} exports"),
+                Builtin::Usage(_) => format!("; {SPENT} gives the usage"),
                 _ => String::new(),
             };
             let message =
@@ -1373,12 +1410,26 @@ impl Acp {
         );
     }
 
+    /// Writes the current branch for request `id` as `/export` does, a relative path within the
+    /// project; answered with the file written, null before any conversation.
+    fn export(&mut self, id: &Value, path: Option<&str>) {
+        let agent = &self.session.agent;
+        match super::slash::export_branch(agent, path, agent.root()) {
+            Ok(path) => {
+                let path = path.map(|path| path.display().to_string());
+                self.ui.out.respond(id, json!({"path": path}));
+            }
+            Err(error) => self.ui.out.error(id, INTERNAL_ERROR, &error.to_string()),
+        }
+    }
+
     /// Sets what `configure` names and answers its request, or says why it was not set.
     fn configure_with(&mut self, configure: Configure) {
         let Configure { id, setting } = configure;
         let (option, value) = match setting {
             Setting::Option { option, value } => (option, value),
             Setting::Rename(name) => return self.rename(&id, &name),
+            Setting::Export(path) => return self.export(&id, path.as_deref()),
         };
         match self.set_option(&option, &value) {
             Ok(()) => {

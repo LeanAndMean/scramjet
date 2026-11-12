@@ -8,7 +8,11 @@ use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
 use super::{drive, terminal};
 use scramjet::agent::{Agent, AgentError, McpState, Providers, Remembered, Sandbox, SandboxMode};
-use std::{io::IsTerminal, path::PathBuf, sync::atomic::Ordering};
+use std::{
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    sync::atomic::Ordering,
+};
 
 /// A built-in command as typed, with its argument.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -192,41 +196,14 @@ impl Interactive {
     /// `.jsonl`, as a session file of its own.
     fn export(&mut self, argument: &str) {
         let path = path_argument(argument);
-        let written = match path {
-            _ if self.session.agent.conversation().is_empty() => Ok(None),
-            Some(path) if path.ends_with(".jsonl") => std::path::absolute(path)
-                .map_err(AgentError::from)
-                .and_then(|path| Ok(self.session.agent.export_session(&path)?.then_some(path))),
-            path => self.export_page(path).map(Some),
-        };
-        match written {
+        match export_branch(&self.session.agent, path, Path::new("")) {
             Ok(Some(path)) => {
-                let path = scramjet::os::canonicalize(&path).unwrap_or(path);
                 let said = format!("Session exported to: {}", path.display());
                 self.say_styled(style::MUTED, &said)
             }
             Ok(None) => self.say("Nothing to export yet"),
             Err(error) => self.say(&format!("Error: failed to export the session: {error}")),
         }
-    }
-
-    /// Writes the current branch's page to `path`, by default named for the session in the
-    /// current directory, as Scramjet names it.
-    fn export_page(&self, path: Option<&str>) -> Result<PathBuf, AgentError> {
-        let id = self.session.agent.session_id();
-        let path = match path {
-            Some(path) => PathBuf::from(path),
-            None => PathBuf::from(format!("scramjet-session-{id}.html")),
-        };
-        let path = std::path::absolute(path)?;
-        let tools = self.session.agent.tool_definitions();
-        let setup = export::Setup {
-            instructions: &self.session.agent.instructions(),
-            tools: &tools,
-        };
-        let page = export::page(&self.session.agent.branch()?, &id, Some(setup));
-        std::fs::write(&path, page)?;
-        Ok(path)
     }
 
     /// `/import <path.jsonl>`, as Scramjet's: continues in a copy of a session file, once the user
@@ -859,6 +836,37 @@ fn path_argument(argument: &str) -> Option<&str> {
         None => argument.split_whitespace().next()?,
     };
     Some(path).filter(|path| !path.is_empty())
+}
+
+/// Writes `agent`'s current branch to `path`, relative to `directory`: to a path ending in
+/// `.jsonl` as a session file of its own, else as a web page, by default named for the session,
+/// as Scramjet names it. Returns where, or none before any conversation.
+pub(super) fn export_branch(
+    agent: &Agent,
+    path: Option<&str>,
+    directory: &Path,
+) -> Result<Option<PathBuf>, AgentError> {
+    if agent.conversation().is_empty() {
+        return Ok(None);
+    }
+    let id = agent.session_id();
+    let path = match path {
+        Some(path) => directory.join(path),
+        None => directory.join(format!("scramjet-session-{id}.html")),
+    };
+    let path = std::path::absolute(path)?;
+    if path.to_string_lossy().ends_with(".jsonl") {
+        agent.export_session(&path)?;
+    } else {
+        let tools = agent.tool_definitions();
+        let setup = export::Setup {
+            instructions: &agent.instructions(),
+            tools: &tools,
+        };
+        let page = export::page(&agent.branch()?, &id, Some(setup));
+        std::fs::write(&path, page)?;
+    }
+    Ok(Some(scramjet::os::canonicalize(&path).unwrap_or(path)))
 }
 
 /// A count with thousands separators, as Scramjet's `toLocaleString` writes it.

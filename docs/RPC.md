@@ -140,8 +140,8 @@ Methods named `_io.github.leanandmean.scramjet/<name>`, following ACP's reverse-
 | `bash` `{command, exclude?}`, `abort_bash` | `!` and `!!`: the output goes into the conversation with the next prompt. |
 | `rename` `{name}` | `/rename`, then `session_info_update` with the title. During a turn it waits for the turn's next pause, as a config option does. |
 | `reload` | `/reload`. No `sessionId`. |
-| `usage` | `/usage`'s summary as data. No `sessionId`. |
-| `export_html` `{path?}` | `/export`. |
+| `usage` | `/usage`'s summary as data: `quotas` (each provider's latest, as saved), then `today`, `thisWeek`, `last30Days` and the last 30 days' `models`, each with `requests`, `inputTokens` (the cache's included), `outputTokens`, `cacheReadTokens`, `cost` in USD and `unpriced` (some responses had no price). Read from every saved session, answered at once, also during a turn. No `sessionId`. |
+| `export_html` `{path?}` | `/export`: the current branch as a web page, or a session file for a path ending in `.jsonl`; a relative path is within the project, the default `scramjet-session-<id>.html`. The result `{path}` is the file written, null before any conversation. During a turn it waits for the turn's next pause, as `rename` does. |
 | `state`, `events` | Section 9. |
 
 `entryId` is an entry's line in the session file. Lines are append-only, so the id stays valid for the session; the replayed messages carry theirs in `_meta`.

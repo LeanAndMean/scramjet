@@ -753,6 +753,50 @@ pub(super) fn summary(
     text
 }
 
+/// The summary as data, for clients (ACP's `usage`): each provider's latest quota, then the
+/// requests, tokens and cost of today, this week and the last 30 days, and the last 30 days'
+/// by model, the costliest first.
+pub(super) fn data(history: &History, now: u64) -> serde_json::Value {
+    let totals = |totals: &Totals| {
+        serde_json::json!({
+            "requests": totals.requests,
+            "inputTokens": totals.input,
+            "outputTokens": totals.output,
+            "cacheReadTokens": totals.cache_read,
+            "cost": totals.cost,
+            "unpriced": totals.unpriced,
+        })
+    };
+    let responses = &history.responses;
+    let today = local_day(now).unwrap_or(0);
+    let month_from = now.saturating_sub(30 * DAY);
+    let month = || responses.iter().filter(|r| r.at >= month_from);
+    let models: Vec<serde_json::Value> = grouped_by(month(), |r| r.model.clone())
+        .iter()
+        .map(|(model, sum)| {
+            let mut row = totals(sum);
+            row["model"] = model.as_str().into();
+            row
+        })
+        .collect();
+    let quotas: Vec<serde_json::Value> = (history.quotas.iter())
+        .map(|(provider, quota)| {
+            let mut row = serde_json::to_value(quota).unwrap_or_default();
+            row["provider"] = provider.as_str().into();
+            row
+        })
+        .collect();
+    serde_json::json!({
+        "quotas": quotas,
+        "today": totals(&Totals::of(responses.iter().filter(|r| same_day(r.at, now)))),
+        "thisWeek": totals(&Totals::of(
+            (responses.iter()).filter(|r| local_day(r.at).is_some_and(|d| d >= monday(today))),
+        )),
+        "last30Days": totals(&Totals::of(month())),
+        "models": models,
+    })
+}
+
 /// The details behind the summary, `current` being this session's file and `model` its model,
 /// at `now` (milliseconds since 1970): of `only`'s responses, or of every provider's.
 pub(super) fn details(

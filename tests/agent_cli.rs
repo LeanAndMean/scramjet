@@ -3181,6 +3181,110 @@ fn acp_compacts_and_renames_sessions_through_the_extensions() {
 
 #[test]
 #[cfg(unix)]
+fn acp_exports_sessions_and_gives_the_usage_through_the_extensions() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-export-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let (port, _bodies) = serve_events_after(vec![reply], |_| Duration::ZERO);
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let offered = &next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    let methods = offered["methods"].as_array().unwrap();
+    for method in ["export_html", "usage"] {
+        let method = format!("_io.github.leanandmean.scramjet/{method}");
+        assert!(methods.iter().any(|m| *m == method), "{offered}");
+    }
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let export = |id: u64, path: Option<&str>| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": "_io.github.leanandmean.scramjet/export_html",
+            "params": {"sessionId": session, "path": path}})
+    };
+    let answer = |messages: &std::sync::mpsc::Receiver<serde_json::Value>| {
+        until(messages, |message| message.get("id").is_some()).0
+    };
+    send(&mut stdin, export(3, None));
+    let nothing = answer(&messages);
+    assert_eq!(
+        nothing["result"],
+        serde_json::json!({"path": null}),
+        "{nothing}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]}}),
+    );
+    assert_eq!(answer(&messages)["result"]["stopReason"], "end_turn");
+    send(&mut stdin, export(5, None));
+    let page = answer(&messages);
+    let page = std::path::PathBuf::from(page["result"]["path"].as_str().unwrap());
+    let id = session.as_str().unwrap();
+    assert_eq!(page.parent().unwrap(), project.canonicalize().unwrap());
+    assert_eq!(
+        page.file_name().unwrap().to_str().unwrap(),
+        format!("scramjet-session-{id}.html")
+    );
+    assert!(std::fs::read_to_string(&page).unwrap().contains("Hello."));
+    send(&mut stdin, export(6, Some("copy.jsonl")));
+    let copy = answer(&messages);
+    let copy = std::path::PathBuf::from(copy["result"]["path"].as_str().unwrap());
+    assert_eq!(copy, project.canonicalize().unwrap().join("copy.jsonl"));
+    assert!(std::fs::read_to_string(&copy).unwrap().contains("Hello."));
+    send(&mut stdin, export(7, Some("missing/x.html")));
+    assert_eq!(answer(&messages)["error"]["code"], -32603);
+
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 8,
+            "method": "_io.github.leanandmean.scramjet/usage", "params": {}}),
+    );
+    let usage = &answer(&messages)["result"];
+    assert_eq!(usage["today"]["requests"], 1, "{usage}");
+    assert_eq!(usage["today"]["outputTokens"], 4, "{usage}");
+    assert_eq!(usage["last30Days"]["requests"], 1, "{usage}");
+    assert_eq!(usage["models"][0]["model"], "test/claude-test", "{usage}");
+    assert!(usage["quotas"].as_array().unwrap().is_empty(), "{usage}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 9, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "/usage"}]}}),
+    );
+    let refused = answer(&messages);
+    let said = refused["error"]["message"].as_str().unwrap();
+    assert!(
+        said.contains("_io.github.leanandmean.scramjet/usage"),
+        "{refused}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-fresh-{}", std::process::id())),
