@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.186.0 — Edits that spell escapes otherwise
+
+### Changed
+
+- An edit whose old text matches nowhere else is looked for with string escapes read as what they stand for: a line break for `\n`, `"` for `\"`, a line continued with `\` joined. Local models such as gpt-oss write a literal's value where the file has its source. Only the part the edit changes is written, and only when it spells no such escape; otherwise the refusal quotes the file's lines exactly.
+- An edit refused because its old text is not there says when its new text already is, with the lines: the edit may have been applied already.
+
 ## 2.185.0 — Edits with other indentation
 
 ### Changed

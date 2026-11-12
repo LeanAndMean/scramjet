@@ -1304,6 +1304,26 @@ fn on_lines(mut lines: Vec<usize>) -> String {
     }
 }
 
+/// Where an edit's `new` text already is, when its old text is not: local models re-send edits
+/// that applied and then search the file for why they fail.
+fn applied_at(finder: &matching::Finder, original: &str, new: &str) -> Option<String> {
+    if new.trim().is_empty() {
+        return None;
+    }
+    let (ranges, _) = finder.find(new, "", true).ok()?;
+    if ranges.len() > 3 {
+        return None;
+    }
+    let lines: Vec<usize> = ranges
+        .iter()
+        .map(|&(start, _)| original[..start].matches('\n').count() + 1)
+        .collect();
+    Some(match lines[..] {
+        [line] => format!("on line {line}"),
+        _ => on_lines(lines),
+    })
+}
+
 fn edit(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<Output, String> {
     let path = resolve(root, call.str("path")?);
     let original = String::from_utf8(contents(&path, hidden)?)
@@ -1352,10 +1372,25 @@ fn edit(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<
         let all = [&edit["replaceAll"], &edit["replace_all"]]
             .iter()
             .any(|flag| flag.as_bool() == Some(true));
+        // The file's lines holding the text otherwise than the old text has it, quoted exactly.
+        let quoted = |first: usize, text: &str, how: &str| {
+            let last = first + text.matches('\n').count();
+            let lines = match last == first {
+                true => format!("Line {first} has"),
+                false => format!("Lines {first}-{last} have"),
+            };
+            let what = match single {
+                true => "the exact text".to_owned(),
+                false => format!("edits[{index}]"),
+            };
+            format!(
+                "Could not find {what} in {shown}. {lines} it with {how}. They are exactly:\n{text}"
+            )
+        };
         let (ranges, new) = match finder.find(old, new, all) {
             Ok(span) => span,
             Err(matching::Miss::Absent) => {
-                return Err(match single {
+                let mut refusal = match single {
                     true => format!(
                         "Could not find the exact text in {shown}. The old text must match exactly \
 including all whitespace and newlines."
@@ -1364,21 +1399,27 @@ including all whitespace and newlines."
                         "Could not find edits[{index}] in {shown}. The oldText must match exactly \
 including all whitespace and newlines."
                     ),
-                });
+                };
+                if let Some(at) = applied_at(&finder, &original, new) {
+                    refusal.push_str(&format!(
+                        " Its newText is already there, {at}: this edit may have been applied \
+already."
+                    ));
+                }
+                return Err(refusal);
             }
             Err(matching::Miss::Uneven(first, text)) => {
-                let last = first + text.matches('\n').count();
-                let lines = match last == first {
-                    true => format!("Line {first} has"),
-                    false => format!("Lines {first}-{last} have"),
-                };
-                let what = match single {
-                    true => "the exact text".to_owned(),
-                    false => format!("edits[{index}]"),
-                };
-                return Err(format!(
-                    "Could not find {what} in {shown}. {lines} it with other indentation, not \
-shifted alike on each line. They are exactly:\n{text}"
+                return Err(quoted(
+                    first,
+                    &text,
+                    "other indentation, not shifted alike on each line",
+                ));
+            }
+            Err(matching::Miss::Spelled(first, text)) => {
+                return Err(quoted(
+                    first,
+                    &text,
+                    "escapes such as \\n and \\\" spelled otherwise, as the change does too",
                 ));
             }
             Err(matching::Miss::Many(lines)) => {
@@ -2489,6 +2530,17 @@ including all whitespace and newlines."
 indentation, not shifted alike on each line. They are exactly:\n  a\n    b\n  c"
             )
         );
+        std::fs::write(root.join("h.rs"), "say(\"a\\nb\");\n").unwrap();
+        let spelled =
+            json!({"path":"h.rs","oldText":"say(\"a\nb\");","newText":"say(\"a\nc\");\nx"});
+        let shown = root.join("h.rs").display().to_string();
+        assert_eq!(
+            (call("edit", spelled).run(&root, None, &cancel, &mut |_| {})).unwrap_err(),
+            format!(
+                "Could not find the exact text in {shown}. Line 1 has it with escapes such as \\n \
+and \\\" spelled otherwise, as the change does too. They are exactly:\nsay(\"a\\nb\");"
+            )
+        );
         assert_eq!(
             run(json!([{"oldText":"alpha","newText":"x"},{"oldText":"delta","newText":"x"}]))
                 .unwrap_err(),
@@ -2496,6 +2548,22 @@ indentation, not shifted alike on each line. They are exactly:\n  a\n    b\n  c"
                 "Could not find edits[1] in {path}. The oldText must match exactly including \
 all whitespace and newlines."
             )
+        );
+        assert_eq!(
+            run(json!([{"oldText":"alpha zeta","newText":"gamma beta"}])).unwrap_err(),
+            format!(
+                "Could not find the exact text in {path}. The old text must match exactly \
+including all whitespace and newlines. Its newText is already there, on line 1: this edit may \
+have been applied already."
+            )
+        );
+        assert_eq!(
+            run(json!([{"oldText":"zeta","newText":"a"}])).unwrap_err(),
+            format!(
+                "Could not find the exact text in {path}. The old text must match exactly \
+including all whitespace and newlines."
+            ),
+            "text in more than three places says nothing"
         );
         assert_eq!(
             run(json!([{"oldText":"gamma","newText":"x"},{"oldText":"","newText":"x"}]))
