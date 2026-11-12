@@ -355,12 +355,13 @@ pub(super) fn renewal(fetched: Result<Fetched, Failure>, what: &str) -> Result<V
 
 /// A login's JSON answer from `what`, or what failed.
 pub(super) fn answer(fetched: Fetched, what: &str) -> Result<Value, String> {
-    let text = String::from_utf8_lossy(&fetched.body);
     if !(200..300).contains(&fetched.status) {
-        let said = text.trim().chars().take(400).collect::<String>();
+        let said = fetched.said();
+        let said = said.trim().chars().take(400).collect::<String>();
         return Err(format!("{what} answered HTTP {}: {said}", fetched.status));
     }
-    serde_json::from_str(&text).map_err(|error| format!("{what}'s answer is not JSON: {error}"))
+    serde_json::from_slice(&fetched.body)
+        .map_err(|error| format!("{what}'s answer is not JSON: {error}"))
 }
 
 /// Runs `future` to its end on a runtime of its own: logins run apart from any turn.
@@ -657,6 +658,7 @@ mod tests {
                 status,
                 body,
                 location: None,
+                secrets: Vec::new(),
             })
         };
         for (status, transient) in [(408, true), (429, true), (500, true), (503, true)]

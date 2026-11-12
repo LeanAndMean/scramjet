@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.203.1 — Credentials kept out of servers' errors
+
+### Fixed
+
+- A server's error that echoes a credential the request carried (an API key, an `Authorization` or other header from `models.json` or `auth.json`, an MCP server's headers) shows `[redacted]` in its place, in the full screen, `-p` and `scramjet acp` alike: model requests, model lists, logins, downloads and MCP's HTTP transport.
+
 ## 2.203.0 — The ACP client's MCP servers
 
 ### Added

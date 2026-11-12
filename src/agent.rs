@@ -34,6 +34,7 @@ mod publish;
 mod question;
 pub mod quota;
 mod rates;
+mod redact;
 mod request;
 mod sandbox;
 mod session;

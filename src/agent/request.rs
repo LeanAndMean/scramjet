@@ -921,6 +921,36 @@ response is incomplete; retry the request."});
     }
 
     #[test]
+    fn a_provider_error_echoing_the_credentials_sent_shows_them_redacted() {
+        let said = "bad auth: Bearer sk-echoed-0123456789 (key sk-echoed-0123456789), \
+                    x-team: team-secret-4242, anthropic-version 2023-06-01";
+        let (endpoint, server) = crate::agent::tests::serve_requests(vec![
+            format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-length: {}\r\n\r\n{said}",
+                said.len()
+            )
+            .into_bytes(),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "redacted");
+        let mut models = served(endpoint);
+        models["providers"]["test"]["apiKey"] = json!("sk-echoed-0123456789");
+        models["providers"]["test"]["headers"] = json!({"x-team": "team-secret-4242"});
+        agent.config.providers = crate::agent::Providers::given(models);
+        agent.load_model_info();
+        let cancel = AtomicBool::new(false);
+        match agent.turn("hi", &mut Recorder::default(), &cancel) {
+            Err(AgentError::Provider(message)) => assert_eq!(
+                message,
+                "HTTP 400 Bad Request: bad auth: [redacted] (key [redacted]), x-team: [redacted], \
+                 anthropic-version 2023-06-01"
+            ),
+            other => panic!("{:?}", other.err()),
+        }
+        let (head, _) = &server.join().unwrap()[0];
+        assert!(head.contains("sk-echoed-0123456789") && head.contains("team-secret-4242"));
+    }
+
+    #[test]
     fn a_local_runtime_not_listening_fails_at_once_saying_how_to_start_it() {
         let closed = "127.0.0.1:1".parse().unwrap();
         let (mut agent, _scratch) = agent(closed, "runtime-not-running");

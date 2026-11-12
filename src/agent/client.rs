@@ -414,6 +414,11 @@ async fn exchange(
         }
         text.truncate(ERROR_BODY_BYTES);
         let text = String::from_utf8_lossy(&text);
+        let sent = (given
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str())))
+        .chain(headers.iter().map(|(name, value)| (*name, value.as_str())));
+        let text = super::redact::redact(&text, &super::redact::secrets(sent));
         let limit = (protocol == Protocol::Codex)
             .then(|| super::codex::usage_limit(&text))
             .flatten();
@@ -470,6 +475,15 @@ pub(super) struct Fetched {
     pub status: u16,
     pub body: Vec<u8>,
     pub location: Option<String>,
+    /// What of the request's headers may be credentials, for `said`.
+    pub secrets: Vec<String>,
+}
+
+impl Fetched {
+    /// The body as text, without the request's credentials, for a failure to show.
+    pub fn said(&self) -> String {
+        super::redact::redact(&String::from_utf8_lossy(&self.body), &self.secrets)
+    }
 }
 
 const FETCHED_BYTES: usize = 4 << 20;
@@ -570,6 +584,7 @@ pub(super) async fn fetch_within(
             status,
             body: bytes,
             location,
+            secrets: super::redact::secrets(headers.iter().copied()),
         })
     };
     match tokio::time::timeout(timeout, exchange).await {
@@ -610,7 +625,7 @@ pub fn download(
             200..=299 => return Ok(fetched.body),
             301 | 302 | 303 | 307 | 308 => url = redirected(what, &url, fetched.location)?,
             status => {
-                let said = String::from_utf8_lossy(&fetched.body);
+                let said = fetched.said();
                 let said: String = match said.trim() {
                     page if page.is_empty() || page.starts_with('<') => String::new(),
                     said => format!(": {}", said.chars().take(400).collect::<String>()),

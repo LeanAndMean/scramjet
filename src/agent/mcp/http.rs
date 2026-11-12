@@ -366,6 +366,14 @@ impl StreamableHttpClient for Https {
                 (header::ACCEPT, "application/json, text/event-stream"),
             ],
         );
+        let secrets = crate::agent::redact::secrets(
+            (headers.iter())
+                .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
+                .chain(
+                    own.iter()
+                        .map(|(name, value)| (name.as_str(), value.as_str())),
+                ),
+        );
         let response = send(Method::POST, &uri, headers, own, body).await?;
         let status = response.status();
         if matches!(status, StatusCode::ACCEPTED | StatusCode::NO_CONTENT) {
@@ -381,6 +389,8 @@ impl StreamableHttpClient for Https {
             let json = has_type(&response, JSON);
             let to = redirected_to(&response);
             let body = read(response, FAILURE_BYTES).await.unwrap_or_default();
+            let body = crate::agent::redact::redact(&String::from_utf8_lossy(&body), &secrets);
+            let body = body.into_bytes();
             if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
                 return Err(unauthorized(status, &body));
             }
@@ -421,7 +431,10 @@ impl StreamableHttpClient for Https {
             // A notification or reply needs no answer: what came is not one.
             Err(_) if expects_no_answer(&message) => Ok(StreamableHttpPostResponse::Accepted),
             Err(error) => Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
-                format!("its answer is not JSON-RPC ({error}): {}", shown(&body)),
+                format!(
+                    "its answer is not JSON-RPC ({error}): {}",
+                    crate::agent::redact::redact(&shown(&body), &secrets)
+                ),
             ))),
         }
     }

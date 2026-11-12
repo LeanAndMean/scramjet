@@ -588,7 +588,7 @@ async fn complete(server: &Server, key: Option<&str>, body: Value) -> Result<Val
             .or(answer["detail"].as_str())
             .map(str::to_owned)
             .unwrap_or_else(|| String::from_utf8_lossy(&fetched.body).into_owned());
-        clipped(text.trim(), 300)
+        clipped(super::redact::redact(&text, &fetched.secrets).trim(), 300)
     };
     match fetched.status {
         200..300 => Ok(answer),

@@ -71,7 +71,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         token = os.environ.get("MCP_TEST_TOKEN")
         if not token or self.headers.get("Authorization") == "Bearer " + token:
             return True
-        self.reply(401, {"error": "unauthorized"},
+        refused = {"error": "unauthorized"}
+        if self.headers.get("Authorization"):
+            refused["given"] = self.headers.get("Authorization")
+        self.reply(401, refused,
                    [("WWW-Authenticate", 'Bearer resource_metadata="http://127.0.0.1/meta"')])
         return False
 

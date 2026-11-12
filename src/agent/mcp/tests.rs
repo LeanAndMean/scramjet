@@ -1103,10 +1103,19 @@ fn http_servers_that_cannot_be_reached_or_refuse_say_why() {
             Vec::new(),
         )
         .unwrap(),
+        Server::http(
+            "wrong",
+            &format!("http://127.0.0.1:{}/mcp", remote.1),
+            vec![(
+                "Authorization".to_owned(),
+                "Bearer wrong-token-1234".to_owned(),
+            )],
+        )
+        .unwrap(),
     ];
     let servers = started(&configs, &scratch.0);
     let failures = servers.unreported_failures();
-    let [(refused, why_refused), (closed, why_closed)] = &failures[..] else {
+    let [(refused, why_refused), (closed, why_closed), (_, why_wrong)] = &failures[..] else {
         panic!("{failures:?}");
     };
     assert_eq!((refused.as_str(), closed.as_str()), ("refused", "closed"));
@@ -1119,6 +1128,13 @@ supported yet)"
     assert_eq!(
         why_closed,
         &format!("cannot connect to 127.0.0.1:{port}: {connection_refused}")
+    );
+    // The server echoes the header it was given.
+    assert!(
+        why_wrong.starts_with(
+            "HTTP 401 Unauthorized ({\"error\": \"unauthorized\", \"given\": \"[redacted]\"})"
+        ),
+        "{why_wrong}"
     );
 }
 
