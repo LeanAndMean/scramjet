@@ -26,6 +26,7 @@ const SET: &[(&str, &str)] = set_files![
     "agents/command-set-explorer.md",
     "agents/independent-command-assessor.md",
     "agents/instruction-semantics-analyzer.md",
+    "skills/setting-up-command-sets/SKILL.md",
     "skills/writing-scramjet-commands/SKILL.md",
 ];
 

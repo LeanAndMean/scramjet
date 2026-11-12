@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.162.0 — Setting up a command set's repository
+
+### Added
+
+- The built-in `scramjet` set has a `setting-up-command-sets` skill: a new set's repository layout, and the decisions its author owns (SemVer releases or plain commits, Claude Code compatibility, license), recorded in its `CLAUDE.md` with what each means for an agent working there.
+- `scramjet lint` warns when `plugin.json` gives a `version` but the repository's `CLAUDE.md` (or `AGENTS.md`) has no `## Versioning` section, and when the repository has `vX.Y.Z` tags but `plugin.json` gives no version.
+
 ## 2.161.0 — The linter catches what breaks a set elsewhere
 
 ### Added

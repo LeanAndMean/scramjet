@@ -52,8 +52,11 @@ pub(super) fn manifest(set: &Set) -> Vec<Diagnostic> {
     let Ok(text) = std::fs::read_to_string(&plugin) else {
         return found;
     };
-    let name = match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(value) => value["name"].as_str().map(str::to_owned),
+    let (name, version) = match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(value) => (
+            value["name"].as_str().map(str::to_owned),
+            value["version"].as_str().map(str::to_owned),
+        ),
         Err(error) => {
             let text = format!("Claude Code cannot read this plugin.json: {error}");
             found.push(warning("plugin-json", &plugin, Some(error.line()), text));
@@ -69,7 +72,87 @@ pub(super) fn manifest(set: &Set) -> Vec<Diagnostic> {
         );
         found.push(warning("plugin-name", &plugin, line.map(|at| at + 1), text));
     }
+    found.extend(versioning(
+        &set.directory,
+        &plugin,
+        &text,
+        version.as_deref(),
+    ));
     found
+}
+
+/// A `plugin.json` version the repository's `CLAUDE.md` or `AGENTS.md` says nothing about how
+/// to keep, and release tags `plugin.json` gives no version for. Claude Code keeps a
+/// marketplace install at `version` until it changes, and without one takes each commit
+/// (`code.claude.com/docs/en/plugins/loading.md`, read 2026-11-11).
+fn versioning(
+    directory: &Path,
+    plugin: &Path,
+    text: &str,
+    version: Option<&str>,
+) -> Option<Diagnostic> {
+    let root = git(directory, &["rev-parse", "--show-toplevel"])
+        .map(|top| PathBuf::from(top.trim()))
+        .unwrap_or_else(|| directory.to_path_buf());
+    match version {
+        Some(version) => {
+            let recorded = [root.as_path(), directory].iter().any(|at| {
+                ["CLAUDE.md", "AGENTS.md"].iter().any(|name| {
+                    let text = std::fs::read_to_string(at.join(name)).unwrap_or_default();
+                    text.lines().any(|line| VERSIONING.is_match(line))
+                })
+            });
+            if recorded {
+                return None;
+            }
+            let line = text.lines().position(|line| line.contains("\"version\""));
+            let message = format!(
+                "plugin.json gives the version \"{version}\", at which Claude Code keeps a \
+                 marketplace install until it changes, but the repository's CLAUDE.md has no \
+                 `## Versioning` section saying when to bump it, tag and add to the changelog; \
+                 add one, or remove `version` for Claude Code to take each commit"
+            );
+            Some(warning(
+                "plugin-version-unrecorded",
+                plugin,
+                line.map(|at| at + 1),
+                message,
+            ))
+        }
+        None => {
+            let tags = git(
+                directory,
+                &["tag", "--list", "--sort=-v:refname", "v[0-9]*"],
+            )?;
+            let newest = tags.lines().find(|tag| RELEASE_TAG.is_match(tag))?;
+            let message = format!(
+                "The repository has release tags ({newest}) but plugin.json gives no version, so \
+                 Claude Code takes each commit instead; give the newest tag's version and bump \
+                 it with each release"
+            );
+            Some(warning("plugin-version-missing", plugin, None, message))
+        }
+    }
+}
+
+static VERSIONING: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^#{1,6}\s+versioning\b").unwrap());
+static RELEASE_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^v\d+\.\d+\.\d+$").unwrap());
+
+/// What `git args` printed in `directory`, when it ran and succeeded.
+fn git(directory: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(directory)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Claude Code's tools (`code.claude.com/docs/en/tools-reference.md`, read 2026-11-11), with

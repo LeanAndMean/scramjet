@@ -387,6 +387,7 @@ mod tests {
                 "agents/command-set-explorer.md",
                 "agents/independent-command-assessor.md",
                 "agents/instruction-semantics-analyzer.md",
+                "skills/setting-up-command-sets/SKILL.md",
                 "skills/writing-scramjet-commands/SKILL.md"
             ]
             .map(std::path::PathBuf::from)
@@ -515,7 +516,7 @@ mod tests {
     #[test]
     fn names_windows_cannot_check_out_a_missing_set_yaml_and_another_plugin_name_are_warned_about()
     {
-        let plugin = "{\n  \"name\": \"other\",\n  \"version\": \"0.1.0\"\n}\n";
+        let plugin = "{\n  \"name\": \"other\",\n  \"license\": \"MIT\"\n}\n";
         let found = lint_files(
             "names",
             &[
@@ -551,6 +552,62 @@ mod tests {
             .map(|d| (d.path, d.code))
             .collect();
         assert_eq!(codes, [(directory, "set-yaml-missing")]);
+    }
+
+    #[test]
+    fn a_plugin_version_without_a_versioning_section_and_tags_without_a_version_are_warned_about() {
+        let versioned = "{\n  \"name\": \"set\",\n  \"version\": \"0.1.0\"\n}\n";
+        let plugin = [
+            (".claude-plugin/plugin.json", versioned),
+            ("commands/do.md", GOOD),
+        ];
+        let expected = [(
+            ".claude-plugin/plugin.json",
+            "plugin-version-unrecorded",
+            Some(3),
+        )];
+        assert_eq!(lint_files("unrecorded", &plugin), owned(&expected));
+        let claude = "# Set\n\n## Versioning\n\nSemVer, tagged vX.Y.Z.\n";
+        let recorded = [plugin[0], plugin[1], ("CLAUDE.md", claude)];
+        assert_eq!(lint_files("recorded", &recorded), []);
+
+        let root = scratch("tagged");
+        let directory = root.0.join("set");
+        fs::create_dir_all(directory.join(".claude-plugin")).unwrap();
+        fs::create_dir_all(directory.join("commands")).unwrap();
+        fs::write(directory.join("commands/do.md"), GOOD).unwrap();
+        fs::write(directory.join("set.yaml"), "name: set\n").unwrap();
+        fs::write(
+            directory.join(".claude-plugin/plugin.json"),
+            "{\"name\": \"set\"}",
+        )
+        .unwrap();
+        let codes = || -> Vec<_> {
+            let set = Set::at(&directory, Origin::Installed).unwrap();
+            (lint(&set, &[]).0.into_iter())
+                .map(|d| (d.code, d.message))
+                .collect()
+        };
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+                .arg(&root.0)
+                .args(args)
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "x"]);
+        git(&["tag", "v0.9.0-rc1"]);
+        assert_eq!(codes(), []);
+        git(&["tag", "v0.2.0"]);
+        git(&["tag", "v0.10.0"]);
+        let found = codes();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "plugin-version-missing");
+        assert!(found[0].1.contains("(v0.10.0)"), "{}", found[0].1);
     }
 
     #[test]

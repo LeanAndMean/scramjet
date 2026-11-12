@@ -1820,7 +1820,7 @@ def completes_paths_and_commands(read, until, send, output):
     # Commands are listed as soon as `/` starts the prompt, the built-in scramjet set's among
     # them; Escape closes the list.
     send(b'/')
-    on_screen('(1/26)')
+    on_screen('(1/27)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -3263,7 +3263,8 @@ def skills(read, until, send, output):
     on_screen('\u2500' * 20)
     # Skills are listed after the commands, as `skill:<name>` with their description.
     send(b'/skill:p')
-    on_screen('\u2192 /skill:pdf  Fills PDF forms.')
+    rows = on_screen('Fills PDF forms.')
+    assert re.search(r'\u2192 /skill:pdf +Fills PDF forms\.', '\n'.join(rows)), rows
     send(b'\t')
     ending(read, output, ['> /skill:pdf'])
     send(b'form.pdf\r')
@@ -3320,7 +3321,7 @@ def installed_view(read, until, send, output):
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     send(b'\x1b[A')
-    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 3 commands, 6 agents, 1 skill'))
+    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 3 commands, 6 agents, 2 skills'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
