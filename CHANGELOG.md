@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.184.2 — A line break in a grep pattern
+
+### Fixed
+
+- grep given a pattern with a line break says it matches within single lines, instead of suggesting `literal: true`, which does not help there.
+
 ## 2.184.1 — Hints after a missed search
 
 ### Fixed

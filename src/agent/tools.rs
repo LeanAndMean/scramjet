@@ -3010,6 +3010,12 @@ to see full lines]",
                 .unwrap_err()
                 .ends_with("\nTo search for the pattern as plain text, set literal: true")
         );
+        for literal in [false, true] {
+            let call = json!({"pattern":"a\nb","literal":literal});
+            assert!(run("grep", call).unwrap_err().starts_with(
+                "The pattern holds a line break, and grep matches within single lines."
+            ));
+        }
         assert_eq!(
             run("grep", json!({"pattern":"x","path":"missing"})).unwrap_err(),
             format!("Path not found: {}", root.join("missing").display())
