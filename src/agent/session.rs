@@ -815,40 +815,36 @@ impl Session {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
-        let mut sessions = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(entries) = read(&path) else {
-                continue;
-            };
-            let Ok(context) = entries.context(&path, entries.tail) else {
-                continue;
-            };
-            let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
-                continue;
-            };
-            sessions.push(SessionInfo {
-                path,
-                first_prompt: entries
-                    .fork_points()
-                    .next()
-                    .map(|entry| prompt_text(&entry.value).to_owned()),
-                text: entries.text(),
-                name: entries.name.clone(),
-                item_count: context.items.len(),
-                summary: super::status::completed_summary(&context.items),
-                modified,
-                parent: entries.parent.clone().filter(|_| !entries.continues()),
-                continues: entries.parent.clone().filter(|_| entries.continues()),
-                root: entries.header["root"].as_str().map(PathBuf::from),
-            });
-        }
+        let mut sessions: Vec<SessionInfo> = (entries.flatten())
+            .filter_map(|entry| Self::info(&entry.path()).ok())
+            .collect();
         sessions.sort_by(|a, b| {
             b.modified
                 .cmp(&a.modified)
                 .then_with(|| b.path.cmp(&a.path))
         });
         Ok(sessions)
+    }
+
+    /// What `list` shows of the session file `path`.
+    pub fn info(path: &Path) -> io::Result<SessionInfo> {
+        let entries = read(path)?;
+        let context = entries.context(path, entries.tail)?;
+        Ok(SessionInfo {
+            path: path.to_owned(),
+            first_prompt: entries
+                .fork_points()
+                .next()
+                .map(|entry| prompt_text(&entry.value).to_owned()),
+            text: entries.text(),
+            name: entries.name.clone(),
+            item_count: context.items.len(),
+            summary: super::status::completed_summary(&context.items),
+            modified: std::fs::metadata(path)?.modified()?,
+            parent: entries.parent.clone().filter(|_| !entries.continues()),
+            continues: entries.parent.clone().filter(|_| entries.continues()),
+            root: entries.header["root"].as_str().map(PathBuf::from),
+        })
     }
 
     /// The saved session whose id starts with `prefix`, as Scramjet's `--session` and `--fork`

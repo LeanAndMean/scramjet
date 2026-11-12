@@ -1933,10 +1933,12 @@ fn acp_with(
 ) {
     let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000,
         "input": ["text", "image"]}]);
-    acp_models(scratch, port, models, settings, given)
+    let given = [&["--no-session"], given].concat();
+    acp_models(scratch, port, models, settings, &given)
 }
 
-/// `acp_with`, the provider at `port` offering `models`.
+/// `acp_with`, the provider at `port` offering `models`, saving sessions unless `given` has
+/// `--no-session`.
 #[cfg(unix)]
 fn acp_models(
     scratch: &std::path::Path,
@@ -1958,7 +1960,7 @@ fn acp_models(
     std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
     std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
     let mut child = program(&binary())
-        .args(["acp", "--retries", "0", "--no-session"])
+        .args(["acp", "--retries", "0"])
         .args(given)
         .env("XDG_CONFIG_HOME", &config)
         .env("XDG_STATE_HOME", scratch.join("state"))
@@ -3411,7 +3413,13 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
             port,
             models.clone(),
             serde_json::json!({"hideCredentials": "never"}),
-            &["--model", "test/claude-test", "--thinking", "low"],
+            &[
+                "--no-session",
+                "--model",
+                "test/claude-test",
+                "--thinking",
+                "low",
+            ],
         );
         send(
             &mut stdin,
@@ -3558,6 +3566,157 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
         option(options, "model")["currentValue"],
         "test/claude-other",
         "{update}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_lists_resumes_and_closes_saved_sessions() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-sessions-{}", std::process::id())),
+    );
+    let (project, other) = (scratch.0.join("project"), scratch.0.join("other"));
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let (project, other) = (
+        std::fs::canonicalize(&project).unwrap(),
+        std::fs::canonicalize(&other).unwrap(),
+    );
+    let text = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let (port, bodies) = serve_events(vec![text]);
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    let mut ids = 0;
+    let mut request = |stdin: &mut std::process::ChildStdin, method: &str, params| {
+        ids += 1;
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": ids, "method": method, "params": params}),
+        );
+        until(&messages, |message| message["id"] == ids)
+    };
+    let initialized = request(
+        &mut stdin,
+        "initialize",
+        serde_json::json!({"protocolVersion": 1}),
+    );
+    let capabilities = &initialized.0["result"]["agentCapabilities"]["sessionCapabilities"];
+    assert_eq!(
+        *capabilities,
+        serde_json::json!({"list": {}, "resume": {}, "close": {}})
+    );
+    // Three sessions with a turn each, two in `project`, the newest last.
+    let mut started = Vec::new();
+    for (cwd, prompt) in [
+        (&project, "first prompt\nmore of it"),
+        (&other, "elsewhere"),
+        (&project, "second"),
+    ] {
+        let params = serde_json::json!({"cwd": cwd, "mcpServers": []});
+        let session = request(&mut stdin, "session/new", params).0["result"]["sessionId"].clone();
+        let prompt = serde_json::json!([{"type": "text", "text": prompt}]);
+        let params = serde_json::json!({"sessionId": session, "prompt": prompt});
+        let (ended, _) = request(&mut stdin, "session/prompt", params);
+        assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+        bodies.recv_timeout(Duration::from_secs(5)).unwrap();
+        started.push(session);
+        // Their files' times differ.
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let answer = request(
+        &mut stdin,
+        "session/list",
+        serde_json::json!({"cwd": project}),
+    )
+    .0;
+    let sessions = answer["result"]["sessions"].as_array().unwrap().clone();
+    assert_eq!(answer["result"].get("nextCursor"), None, "{answer}");
+    let shown: Vec<_> = (sessions.iter())
+        .map(|session| (session["sessionId"].clone(), session["title"].clone()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            (started[2].clone(), "second".into()),
+            (started[0].clone(), "first prompt".into())
+        ]
+    );
+    assert_eq!(sessions[0]["cwd"], project.to_str().unwrap());
+    let updated = sessions[0]["updatedAt"].as_str().unwrap();
+    assert!(
+        updated.len() == 20 && updated.starts_with("20") && updated.ends_with('Z'),
+        "{updated}"
+    );
+    let path = &sessions[0]["_meta"]["io.github.leanandmean.scramjet"]["path"];
+    assert!(
+        std::path::Path::new(path.as_str().unwrap()).is_file(),
+        "{path}"
+    );
+    let answer = request(&mut stdin, "session/list", serde_json::json!({})).0;
+    assert_eq!(answer["result"]["sessions"].as_array().unwrap().len(), 3);
+    let answer = request(
+        &mut stdin,
+        "session/list",
+        serde_json::json!({"cursor": "2"}),
+    )
+    .0;
+    let sessions = answer["result"]["sessions"].as_array().unwrap().clone();
+    assert_eq!(sessions.len(), 1, "{answer}");
+    assert_eq!(sessions[0]["sessionId"], started[0]);
+    let answer = request(
+        &mut stdin,
+        "session/list",
+        serde_json::json!({"cursor": "page two"}),
+    )
+    .0;
+    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+
+    // Closing twice answers both times; the closed session takes no prompts.
+    for _ in 0..2 {
+        let params = serde_json::json!({"sessionId": started[0]});
+        let (answer, _) = request(&mut stdin, "session/close", params);
+        assert_eq!(answer["result"], serde_json::json!({}), "{answer}");
+    }
+    let prompt = serde_json::json!([{"type": "text", "text": "again"}]);
+    let params = serde_json::json!({"sessionId": started[0], "prompt": prompt});
+    let (answer, _) = request(&mut stdin, "session/prompt", params);
+    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+
+    // Resumed in another folder, unknown, not an id, or open already: refused.
+    let resume = |session: &serde_json::Value, cwd: &std::path::Path| serde_json::json!({"sessionId": session, "cwd": cwd, "mcpServers": []});
+    for (params, code) in [
+        (resume(&started[0], &other), -32602),
+        (resume(&"1-2".into(), &project), -32002),
+        (resume(&"../other".into(), &project), -32602),
+        (resume(&started[2], &project), -32602),
+    ] {
+        let (answer, _) = request(&mut stdin, "session/resume", params.clone());
+        assert_eq!(answer["error"]["code"], code, "{params}: {answer}");
+    }
+    // Resumed, it replays nothing and goes on from its conversation.
+    let (answer, before) = request(&mut stdin, "session/resume", resume(&started[0], &project));
+    assert!(answer["result"]["configOptions"].is_array(), "{answer}");
+    assert!(before.is_empty(), "{before:?}");
+    let prompt = serde_json::json!([{"type": "text", "text": "and then"}]);
+    let params = serde_json::json!({"sessionId": started[0], "prompt": prompt});
+    let (ended, _) = request(&mut stdin, "session/prompt", params);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let body = bodies.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        body.contains("more of it") && body.contains("and then"),
+        "{body}"
     );
     drop(stdin);
     assert!(child.wait().unwrap().success());

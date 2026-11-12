@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.212.0 — ACP lists, resumes and closes sessions
+
+### Added
+
+- `scramjet acp` lists the saved sessions (`session/list`: a folder's or every project's, newest first, 50 a page, titled by their name or first prompt), resumes one in the folder it belongs to without replaying it (`session/resume`), and closes an open one, cancelling its turn (`session/close`).
+
 ## 2.211.0 — ACP sets the model and thinking level
 
 ### Added

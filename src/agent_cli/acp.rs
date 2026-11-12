@@ -56,10 +56,19 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
     for warning in &settings.warnings {
         eprintln!("scramjet: settings: {warning}");
     }
+    let saved = match options.start {
+        Launch::Unsaved => Saved::Nowhere,
+        _ => match options.session_dir.or_else(|| settings.session_dir.clone()) {
+            Some(directory) => Saved::In(directory),
+            None => Saved::ByProject,
+        },
+    };
     drop(settings);
     let mut connection = Connection {
         out: Out::default(),
         arguments: arguments.to_vec(),
+        saved,
+        closed: Vec::new(),
         initialized: false,
         notices: false,
         compaction: false,
@@ -227,6 +236,9 @@ struct Connection {
     out: Out,
     /// The options each session starts with.
     arguments: Vec<String>,
+    saved: Saved,
+    /// The threads of closed sessions, which may still be ending their turns.
+    closed: Vec<JoinHandle<()>>,
     initialized: bool,
     /// The client offered `session.notices`.
     notices: bool,
@@ -245,6 +257,22 @@ struct Connection {
 }
 
 type Renamed = Arc<Mutex<HashMap<String, String>>>;
+
+/// Where the sessions are saved.
+enum Saved {
+    /// `--no-session`.
+    Nowhere,
+    /// `--session-dir` or `sessionDir`, as given: relative to the session's folder.
+    In(String),
+    /// In each project's directory under the state directory.
+    ByProject,
+}
+
+/// How many sessions a page of `session/list` holds.
+const PAGE: usize = 50;
+
+/// ACP's error for a session the agent does not know.
+const UNKNOWN_SESSION: i64 = -32002;
 
 /// What this thread holds of a session that runs on its own.
 struct Handle {
@@ -305,7 +333,10 @@ impl Connection {
         }
         match method {
             "initialize" => self.initialize(&id, &params),
-            "session/new" => self.new_session(&id, &params),
+            "session/new" => self.open(&id, &params, false),
+            "session/resume" => self.open(&id, &params, true),
+            "session/list" => self.list(&id, &params),
+            "session/close" => self.close(&id, &params),
             "session/prompt" => self.prompt(id, &params),
             "session/set_config_option" => self.set_config_option(&id, &params),
             HOLD => match self.hold(&params) {
@@ -383,6 +414,7 @@ impl Connection {
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
                 "loadSession": false,
+                "sessionCapabilities": {"list": {}, "resume": {}, "close": {}},
                 "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
                 "mcpCapabilities": {"http": true, "sse": false},
             },
@@ -396,7 +428,9 @@ impl Connection {
         self.out.respond(id, result);
     }
 
-    fn new_session(&mut self, id: &Value, params: &Value) {
+    /// Starts a session in the folder `params` names: a new one, or with `resume` the saved one
+    /// it names, which the client already shows.
+    fn open(&mut self, id: &Value, params: &Value, resume: bool) {
         let Some(cwd) = params["cwd"].as_str().map(PathBuf::from) else {
             return self.out.error(id, INVALID_PARAMS, "cwd is required");
         };
@@ -407,6 +441,13 @@ impl Connection {
         let servers = match mcp_servers(&params["mcpServers"]) {
             Ok(servers) => servers,
             Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
+        };
+        let file = match resume {
+            false => None,
+            true => match self.resumable(params, &cwd) {
+                Ok(file) => Some(file),
+                Err((code, message)) => return self.out.error(id, code, &message),
+            },
         };
         let (started, starts) = mpsc::channel::<Result<String, String>>();
         let (jobs, given) = mpsc::channel();
@@ -424,7 +465,7 @@ impl Connection {
         };
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
         let thread = std::thread::spawn(move || {
-            let session = match start_session(&arguments, &cwd, servers) {
+            let session = match start_session(&arguments, &cwd, servers, file) {
                 Ok(session) => session,
                 Err(error) => {
                     let _ = started.send(Err(error));
@@ -473,6 +514,137 @@ impl Connection {
                 .out
                 .error(id, INTERNAL_ERROR, "the session failed to start"),
         }
+    }
+
+    /// The file of the saved session `params` names, to resume in `cwd`: one of its project's
+    /// sessions with a conversation, not open on this connection.
+    fn resumable(&self, params: &Value, cwd: &Path) -> Result<PathBuf, (i64, String)> {
+        let invalid = |message: String| (INVALID_PARAMS, message);
+        let wanted = params["sessionId"].as_str().unwrap_or_default();
+        // An id names a file, so it never holds a path.
+        let valid = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+        if wanted.is_empty() || !wanted.chars().all(valid) {
+            return Err(invalid(format!("no session {wanted:?}")));
+        }
+        if self.handle(params).is_some() {
+            return Err(invalid(format!("session {wanted} is open already")));
+        }
+        let unknown = || (UNKNOWN_SESSION, format!("no saved session {wanted}"));
+        let root = super::project_root(Some(cwd.to_owned())).map_err(invalid)?;
+        let directories = match &self.saved {
+            Saved::Nowhere => {
+                return Err(invalid("--no-session: no saved sessions to resume".into()));
+            }
+            Saved::In(directory) => vec![super::given_path(directory, cwd)],
+            Saved::ByProject => {
+                let projects =
+                    scramjet::agent::projects_directory().map_err(|e| invalid(e.to_string()))?;
+                let mut directories = vec![
+                    scramjet::agent::session_directory(&root)
+                        .map_err(|e| invalid(e.to_string()))?,
+                ];
+                let others = std::fs::read_dir(projects).into_iter().flatten().flatten();
+                directories.extend(others.map(|entry| entry.path()));
+                directories
+            }
+        };
+        let file = (directories.iter())
+            .map(|directory| directory.join(format!("{wanted}.jsonl")))
+            .find(|file| file.is_file())
+            .ok_or_else(unknown)?;
+        let info = scramjet::agent::Session::info(&file).map_err(|_| unknown())?;
+        if info.item_count == 0 {
+            return Err(unknown());
+        }
+        match info.root {
+            Some(found) if found != root => Err(invalid(format!(
+                "session {wanted} is in {}, not {}",
+                found.display(),
+                root.display()
+            ))),
+            _ => Ok(file),
+        }
+    }
+
+    /// `/resume`'s sessions, newest first, those of the folder `params` names or every
+    /// project's, a page at a time.
+    fn list(&self, id: &Value, params: &Value) {
+        let cwd = params["cwd"].as_str().map(PathBuf::from);
+        if cwd.as_ref().is_some_and(|cwd| !cwd.is_absolute()) {
+            return self
+                .out
+                .error(id, INVALID_PARAMS, "cwd is not an absolute path");
+        }
+        let start = match params["cursor"].as_str().map(str::parse::<usize>) {
+            None => 0,
+            Some(Ok(start)) => start,
+            Some(Err(_)) => return self.out.error(id, INVALID_PARAMS, "invalid cursor"),
+        };
+        let sessions = self.saved_sessions(cwd.as_deref());
+        let page: Vec<Value> = (sessions.iter().skip(start).take(PAGE))
+            .filter_map(listed_session)
+            .collect();
+        let mut result = json!({"sessions": page});
+        if sessions.len() > start + PAGE {
+            result["nextCursor"] = json!((start + PAGE).to_string());
+        }
+        self.out.respond(id, result);
+    }
+
+    /// The saved sessions with a conversation, newest first: those of the project `cwd`, else
+    /// every project's. Unreadable ones are left out, as `/resume` leaves them.
+    fn saved_sessions(&self, cwd: Option<&Path>) -> Vec<scramjet::agent::SessionInfo> {
+        let root = cwd.map(|cwd| {
+            super::project_root(Some(cwd.to_owned())).unwrap_or_else(|_| cwd.to_owned())
+        });
+        let directories = match &self.saved {
+            Saved::Nowhere => Vec::new(),
+            Saved::In(directory) => {
+                let base = match cwd {
+                    Some(cwd) => cwd.to_owned(),
+                    None => std::env::current_dir().unwrap_or_default(),
+                };
+                vec![super::given_path(directory, &base)]
+            }
+            Saved::ByProject => match &root {
+                Some(root) => scramjet::agent::session_directory(root)
+                    .into_iter()
+                    .collect(),
+                None => (scramjet::agent::projects_directory().into_iter())
+                    .flat_map(std::fs::read_dir)
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .collect(),
+            },
+        };
+        let mut sessions: Vec<_> = (directories.iter())
+            .flat_map(|directory| scramjet::agent::Session::list(directory).unwrap_or_default())
+            .filter(|session| session.item_count > 0)
+            .filter(|session| root.is_none() || session.root == root)
+            .collect();
+        sessions.sort_by(|a, b| (b.modified, &b.path).cmp(&(a.modified, &a.path)));
+        sessions
+    }
+
+    /// Cancels the session's turn, as `session/cancel`, and lets it go; its file stays. A session
+    /// not open is closed already.
+    fn close(&mut self, id: &Value, params: &Value) {
+        let wanted = params["sessionId"].as_str().unwrap_or_default();
+        let first = lock(&self.renamed).get(wanted).cloned();
+        let first = first.unwrap_or_else(|| wanted.to_owned());
+        if let Some(handle) = self.sessions.remove(&first) {
+            lock(&self.renamed).retain(|_, held| *held != first);
+            let mut turn = lock(&handle.turn);
+            if turn.running {
+                turn.messages.take();
+                handle.cancel.store(true, Ordering::Relaxed);
+            }
+            drop(turn);
+            drop(handle.jobs);
+            self.closed.push(handle.thread);
+        }
+        self.out.respond(id, json!({}));
     }
 
     fn prompt(&mut self, id: Value, params: &Value) {
@@ -528,7 +700,49 @@ impl Connection {
             drop(handle.jobs);
             let _ = handle.thread.join();
         }
+        for thread in self.closed {
+            let _ = thread.join();
+        }
     }
+}
+
+/// A saved session as `session/list` shows it: its title its name, else its first prompt's
+/// first line; `_meta` its file and the session before it in its chain. One whose header names
+/// no project is left out, as ACP's `cwd` is required.
+fn listed_session(session: &scramjet::agent::SessionInfo) -> Option<Value> {
+    let id = |path: &Path| Some(path.file_stem()?.to_str()?.to_owned());
+    let mut listed = json!({
+        "sessionId": id(&session.path)?,
+        "cwd": session.root.as_ref()?,
+        "updatedAt": utc_time(session.modified),
+        "_meta": {"io.github.leanandmean.scramjet": {"path": session.path}},
+    });
+    let title = (session.name.clone()).or_else(|| {
+        Some(
+            session
+                .first_prompt
+                .as_ref()?
+                .lines()
+                .next()?
+                .trim()
+                .to_owned(),
+        )
+    });
+    if let Some(title) = title.filter(|title| !title.is_empty()) {
+        listed["title"] = json!(title);
+    }
+    if let Some(before) = session.continues.as_deref().and_then(id) {
+        listed["_meta"]["io.github.leanandmean.scramjet"]["parentSession"] = json!(before);
+    }
+    Some(listed)
+}
+
+/// `at` in ISO 8601, in UTC to the second.
+fn utc_time(at: std::time::SystemTime) -> String {
+    let seconds = (at.duration_since(std::time::UNIX_EPOCH)).map_or(0, |since| since.as_secs());
+    let (year, month, day) = super::usage::civil_date((seconds / 86_400) as i64);
+    let (hour, minute, second) = (seconds % 86_400 / 3600, seconds % 3600 / 60, seconds % 60);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 /// A session's config options, as ACP shows them: `model`, the providers' `models` grouped by
@@ -773,18 +987,20 @@ fn mcp_servers(servers: &Value) -> Result<Vec<McpServer>, String> {
 }
 
 /// Starts a session in `cwd` with the options `arguments` give, as the full screen starts one,
-/// with the client's MCP `servers` beside the settings' (in place of those of the same name,
+/// or continues the saved session `file`, with the client's MCP `servers` beside the settings' (in place of those of the same name,
 /// and started though the settings disable that name).
 fn start_session(
     arguments: &[String],
     cwd: &Path,
     servers: Vec<McpServer>,
+    file: Option<PathBuf>,
 ) -> Result<Session, String> {
     let options = Options::parse(arguments.iter().map(OsString::from))?
         .ok_or("--help is not a session's option")?;
-    let choice = match options.start {
-        Launch::Unsaved => SessionChoice::Unsaved,
-        _ => SessionChoice::New,
+    let choice = match (file, &options.start) {
+        (Some(file), _) => SessionChoice::Open(file),
+        (None, Launch::Unsaved) => SessionChoice::Unsaved,
+        (None, _) => SessionChoice::New,
     };
     let root = super::project_root(Some(cwd.to_owned()))?;
     let mut settings = Settings::load();

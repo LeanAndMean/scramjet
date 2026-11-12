@@ -106,7 +106,7 @@ fn date(at: u64, now: u64) -> String {
 }
 
 /// The date `days` after 1970-01-01 (Howard Hinnant's `civil_from_days`).
-fn civil_date(days: i64) -> (i32, i32, i32) {
+pub(super) fn civil_date(days: i64) -> (i32, i32, i32) {
     let days = days + 719_468;
     let era = days.div_euclid(146_097);
     let of_era = days - era * 146_097;
