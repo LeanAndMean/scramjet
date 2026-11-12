@@ -31,15 +31,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The messages `delivery` gives the agent at once from `queued`.
-fn deliver(queued: &mut Vec<String>, delivery: Delivery) -> Vec<String> {
-    match delivery {
-        Delivery::All => std::mem::take(queued),
-        Delivery::OneAtATime if queued.is_empty() => Vec::new(),
-        Delivery::OneAtATime => vec![queued.remove(0)],
-    }
-}
-
 /// Tells the session, once it waits for input, that the logins' model lists changed.
 pub(in crate::agent_cli) struct Relisting {
     queue: Arc<Mutex<Queue>>,
@@ -532,10 +523,10 @@ impl AgentUi for Link {
         self.event(Event::NextStep(record.to_owned()));
     }
     fn steering(&mut self) -> Vec<String> {
-        deliver(&mut self.queue().steering, self.modes.0)
+        self.queue().messages.steer(self.modes.0)
     }
     fn follow_up(&mut self) -> Vec<String> {
-        deliver(&mut self.queue().follow_ups, self.modes.1)
+        self.queue().messages.follow_up(self.modes.1)
     }
     fn usage(&mut self, tokens: Tokens, context: Option<u64>, rate: Option<f64>) {
         self.send(ToScreen::Usage(tokens, context, rate));
@@ -565,28 +556,5 @@ impl AgentUi for Link {
     ) -> Option<usize> {
         self.pick_timed(Picker::question(title, options, recommended))
             .map(|(row, ..)| row)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn queued_messages_are_delivered_as_the_modes_say() {
-        let mut queued = vec!["one".to_owned(), "two".to_owned()];
-        assert_eq!(deliver(&mut queued, Delivery::OneAtATime), ["one"]);
-        assert_eq!(deliver(&mut queued, Delivery::OneAtATime), ["two"]);
-        assert!(deliver(&mut queued, Delivery::OneAtATime).is_empty());
-        let mut queued = vec!["one".to_owned(), "two".to_owned()];
-        assert_eq!(deliver(&mut queued, Delivery::All), ["one", "two"]);
-        assert!(queued.is_empty());
-        let mut queue = Queue {
-            steering: vec!["steer".into()],
-            follow_ups: vec!["later".into()],
-            ..Queue::default()
-        };
-        assert_eq!(queue.take(), ["steer", "later"]);
-        assert!(queue.is_empty());
     }
 }

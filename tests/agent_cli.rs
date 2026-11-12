@@ -1892,3 +1892,185 @@ connection: close\r\n\r\n{body}",
     });
     (port, received)
 }
+
+/// `scramjet acp` in `project` with the provider at `port`, its stdin, and its stdout's messages.
+#[cfg(unix)]
+fn acp(
+    scratch: &std::path::Path,
+    port: u16,
+) -> (
+    Child,
+    std::process::ChildStdin,
+    std::sync::mpsc::Receiver<serde_json::Value>,
+) {
+    let config = scratch.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test", "contextWindow": 1000}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let mut child = program(&binary())
+        .args(["acp", "--retries", "0", "--no-session"])
+        .env("XDG_CONFIG_HOME", &config)
+        .env("XDG_STATE_HOME", scratch.join("state"))
+        .env("SCRAMJET_CACHE", scratch.join("cache"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let (sent, messages) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stdout.lines() {
+            let line = line.unwrap();
+            let message = serde_json::from_str(&line).unwrap_or_else(|_| panic!("{line}"));
+            if sent.send(message).is_err() {
+                return;
+            }
+        }
+    });
+    (child, stdin, messages)
+}
+
+/// The next message, within 20 s.
+#[cfg(unix)]
+fn next(messages: &std::sync::mpsc::Receiver<serde_json::Value>) -> serde_json::Value {
+    messages.recv_timeout(Duration::from_secs(20)).unwrap()
+}
+
+/// Messages until the one `found` accepts, which is returned with those before it.
+#[cfg(unix)]
+fn until(
+    messages: &std::sync::mpsc::Receiver<serde_json::Value>,
+    found: impl Fn(&serde_json::Value) -> bool,
+) -> (serde_json::Value, Vec<serde_json::Value>) {
+    let mut before = Vec::new();
+    loop {
+        let message = next(messages);
+        if found(&message) {
+            return (message, before);
+        }
+        before.push(message);
+    }
+}
+
+#[cfg(unix)]
+fn send(stdin: &mut std::process::ChildStdin, message: serde_json::Value) {
+    writeln!(stdin, "{message}").unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (port, bodies) = serve_bash_call("sleep 2; echo from-acp");
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    // Framing: a line that is not JSON, a request before `initialize`.
+    writeln!(stdin, "not json").unwrap();
+    assert_eq!(next(&messages)["error"]["code"], -32700);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "session/new"}),
+    );
+    assert_eq!(next(&messages)["error"]["code"], -32600);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let initialized = next(&messages);
+    assert_eq!(initialized["result"]["protocolVersion"], 1, "{initialized}");
+    assert_eq!(initialized["result"]["agentInfo"]["name"], "scramjet");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "nothing"}),
+    );
+    assert_eq!(next(&messages)["error"]["code"], -32601);
+    let new = serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/new",
+        "params": {"cwd": project, "mcpServers": []}});
+    send(&mut stdin, new);
+    let created = next(&messages);
+    let session = created["result"]["sessionId"].as_str().unwrap().to_owned();
+    let commands = next(&messages);
+    assert_eq!(
+        commands["params"]["update"]["sessionUpdate"], "available_commands_update",
+        "{commands}"
+    );
+    let prompt = |id: u64, text: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}})
+    };
+    // A built-in is refused, naming it.
+    send(&mut stdin, prompt(5, "/model claude"));
+    let refused = next(&messages);
+    assert_eq!(refused["error"]["code"], -32602);
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("/model")
+    );
+    // A turn: the call, its progress and result, the reply; a prompt sent meanwhile steers
+    // its next request, and both prompts end with the turn.
+    send(&mut stdin, prompt(6, "hi"));
+    let running =
+        |message: &serde_json::Value| message["params"]["update"]["status"] == "in_progress";
+    let (_, before) = until(&messages, running);
+    let call = (before.iter())
+        .find(|message| message["params"]["update"]["sessionUpdate"] == "tool_call")
+        .unwrap();
+    assert_eq!(call["params"]["update"]["name"], "bash", "{call}");
+    assert_eq!(call["params"]["update"]["kind"], "execute", "{call}");
+    send(&mut stdin, prompt(7, "and also this"));
+    let (first, updates) = until(&messages, |message| message.get("id").is_some());
+    let second = next(&messages);
+    let mut ids = [first["id"].as_u64(), second["id"].as_u64()];
+    ids.sort();
+    assert_eq!(ids, [Some(6), Some(7)]);
+    for answer in [&first, &second] {
+        assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    }
+    let result = (updates.iter())
+        .find(|message| message["params"]["update"]["status"] == "completed")
+        .unwrap();
+    assert!(result.to_string().contains("from-acp"), "{result}");
+    let reply: String = (updates.iter())
+        .filter(|message| message["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .map(|message| {
+            message["params"]["update"]["content"]["text"]
+                .as_str()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(reply, "Done.");
+    assert!((before.iter().chain(&updates)).any(|message| {
+        message["params"]["update"]["sessionUpdate"] == "usage_update"
+            && message["params"]["update"]["size"] == 1000
+    }));
+    let _first = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+    let steered = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert!(steered.contains("and also this"), "{steered}");
+    // A cancelled turn ends `cancelled`, not with an error.
+    send(&mut stdin, prompt(8, "again"));
+    until(&messages, running);
+    let cancel = serde_json::json!({"jsonrpc": "2.0", "method": "session/cancel",
+        "params": {"sessionId": session}});
+    send(&mut stdin, cancel);
+    let (cancelled, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(cancelled["id"], 8);
+    assert_eq!(
+        cancelled["result"]["stopReason"], "cancelled",
+        "{cancelled}"
+    );
+    drop(stdin);
+    let status = child.wait().unwrap();
+    assert!(status.success());
+}

@@ -16,6 +16,7 @@ pub(super) const USAGE: &str =
        scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
        scramjet lint [--strict] [--json] DIR...
        scramjet import [--dry-run] [DIR]
+       scramjet acp [OPTIONS]
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
 settings file (by default ~/.config/scramjet/models.json) and in installed command sets, in
@@ -246,6 +247,8 @@ NAME|REPO` one of them, and `--self` only the program. `lint DIR...` checks the 
 them and as Scramjet 1's scramjet-command-lint does (`lint --help`). `import` copies Scramjet
 1's setup from ~/.scramjet/agent, converted, never over a file here, and lists what it leaves
 and why (`import --help`); the first interactive start that finds one offers it.
+`acp` runs as an Agent Client Protocol agent for editors and other clients, speaking JSON-RPC
+on stdin and stdout (`acp --help`).
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'
 compaction.enabled is false (Auto-compact in /settings).

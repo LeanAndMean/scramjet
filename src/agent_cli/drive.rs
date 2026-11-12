@@ -1,7 +1,7 @@
 //! The session every front end drives: the agent, the user's settings and the models Ctrl+P
 //! cycles through, and what happens between turns (a completed command's next step), apart
 //! from how each front end shows it (`Front`).
-use super::settings::Settings;
+use super::settings::{Delivery, Settings};
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Completed, Navigated, Next, Reopened, SessionInfo, Source, Step,
     Suggested, shortened,
@@ -19,6 +19,48 @@ pub(super) struct Session {
     pub(super) scope: Vec<String>,
     /// A next step chosen between turns (`reopen`, `ask_again`), to run next as if typed.
     pub(super) chosen: Option<(String, Start)>,
+}
+
+/// Messages given while a turn runs, until the agent takes them: steering for the model's next
+/// request, follow-ups for when the turn would end.
+#[derive(Default)]
+pub(super) struct Messages {
+    pub(super) steering: Vec<String>,
+    pub(super) follow_ups: Vec<String>,
+}
+
+impl Messages {
+    pub(super) fn push(&mut self, text: String, follow_up: bool) {
+        match follow_up {
+            true => self.follow_ups.push(text),
+            false => self.steering.push(text),
+        }
+    }
+    /// The steering messages `delivery` gives the agent at once (`AgentUi::steering`).
+    pub(super) fn steer(&mut self, delivery: Delivery) -> Vec<String> {
+        deliver(&mut self.steering, delivery)
+    }
+    /// The follow-ups `delivery` gives the agent at once (`AgentUi::follow_up`).
+    pub(super) fn follow_up(&mut self, delivery: Delivery) -> Vec<String> {
+        deliver(&mut self.follow_ups, delivery)
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.steering.is_empty() && self.follow_ups.is_empty()
+    }
+    /// All the messages, in the order they are sent, leaving none.
+    pub(super) fn take(&mut self) -> Vec<String> {
+        let mut all = std::mem::take(&mut self.steering);
+        all.append(&mut self.follow_ups);
+        all
+    }
+}
+
+fn deliver(queued: &mut Vec<String>, delivery: Delivery) -> Vec<String> {
+    match delivery {
+        Delivery::All => std::mem::take(queued),
+        Delivery::OneAtATime if queued.is_empty() => Vec::new(),
+        Delivery::OneAtATime => vec![queued.remove(0)],
+    }
 }
 
 /// How a prompt came to run.
@@ -490,5 +532,30 @@ fn record(
     match agent.record_next_step(source, steps, recommended, chosen) {
         Ok(record) => front.recorded(&record),
         Err(error) => front.say(&format!("Error: next step not recorded: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn queued_messages_are_delivered_as_the_modes_say() {
+        let mut messages = Messages::default();
+        for text in ["one", "two"] {
+            messages.push(text.into(), false);
+        }
+        assert_eq!(messages.steer(Delivery::OneAtATime), ["one"]);
+        assert_eq!(messages.steer(Delivery::OneAtATime), ["two"]);
+        assert!(messages.steer(Delivery::OneAtATime).is_empty());
+        for text in ["one", "two"] {
+            messages.push(text.into(), true);
+        }
+        assert_eq!(messages.follow_up(Delivery::All), ["one", "two"]);
+        assert!(messages.is_empty());
+        messages.push("later".into(), true);
+        messages.push("steer".into(), false);
+        assert_eq!(messages.take(), ["steer", "later"]);
+        assert!(messages.is_empty());
     }
 }

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.199.0 — `scramjet acp`, a start of RPC mode
+
+### Added
+
+- `scramjet acp [options]` runs Scramjet as an Agent Client Protocol (v1) agent over stdio: `initialize`, `session/new`, `session/prompt` and `session/cancel`, with replies, reasoning, tool calls, their output and usage streamed as `session/update`s, commands and skills listed for the client, and a prompt sent during a turn steering it (`followUp` in its `_meta` queues it for the turn's end). Permission requests, next-step lists, images, the client's MCP servers and the other session methods come later (README).
+
 ## 2.198.0 — Local models' context counted as for every model
 
 ### Changed

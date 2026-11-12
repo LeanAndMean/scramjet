@@ -12,6 +12,7 @@ macro_rules! out {
     }};
 }
 
+mod acp;
 mod args;
 mod background;
 mod banner;
@@ -98,6 +99,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     {
         let rest: Option<Vec<String>> = rest.iter().map(|a| a.to_str().map(String::from)).collect();
         let rest = rest.unwrap_or_default();
+        if command == "acp" {
+            return acp::run(&rest);
+        }
         if let Some(result) = clipboard::run(command, &rest) {
             return result;
         }

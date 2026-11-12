@@ -220,7 +220,7 @@ impl App {
             self.cancel.store(true, Ordering::Relaxed);
         }
         if key.is(Binding::Dequeue) {
-            let empty = self.queue().is_empty();
+            let empty = self.queue().messages.is_empty();
             match empty {
                 true => (self.draft).set_note(Note::Info(NOTHING_QUEUED.to_owned())),
                 false => self.restore(),

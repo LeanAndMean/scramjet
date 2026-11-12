@@ -1,6 +1,6 @@
 # RPC mode on ACP: proposal
 
-**Status: signed off at the steer of 2026-11-12 and rewritten around the Agent Client Protocol (ACP) on 2026-11-12; built from stage 1** ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). The user's decisions stand: approvals and questions asked of the client (1), the autopilot countdown in the core (2), built-ins sent as prompt text refused (3), ACP in place of Scramjet 1's protocol and message shape (4), sign-in over the protocol by `authenticate` and `logout` (5), and the build order with the full screen's refactor first (6). The choices this rewrite made within them are `Choice:` trailers in its commit, for the next steer. Written against scramjet-rs 2.198.0 and ACP v1's pages at agentclientprotocol.com (`/protocol/v1/*.md`, fetched 2026-11-12).
+**Status: signed off at the steer of 2026-11-12 and rewritten around the Agent Client Protocol (ACP) on 2026-11-12; stage 1 partly built, stage 2 begun (`src/agent_cli/acp.rs`, 2.199.0)** ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). The user's decisions stand: approvals and questions asked of the client (1), the autopilot countdown in the core (2), built-ins sent as prompt text refused (3), ACP in place of Scramjet 1's protocol and message shape (4), sign-in over the protocol by `authenticate` and `logout` (5), and the build order with the full screen's refactor first (6). The choices this rewrite made within them are `Choice:` trailers in its commit, for the next steer. Written against scramjet-rs 2.198.0 and ACP v1's pages at agentclientprotocol.com (`/protocol/v1/*.md`, fetched 2026-11-12).
 
 `scramjet acp [options]` runs headless as an ACP agent: the client starts it, writes JSON-RPC 2.0 to its stdin and reads its stdout, one message per line. ACP's clients (Zed, JetBrains IDEs, Neovim, Emacs's agent-shell, Toad, acpx) can run Scramjet, and what ACP lacks comes as extensions that other clients ignore. The options are the full screen's (`--model`, `--ask`, `--sandbox`, `--tools`, …); diagnostics go to stderr, never stdout.
 
@@ -38,7 +38,7 @@ The full screen, line mode and ACP mode drive the same `Session`. `-p` stays as 
 
 ## 2. Transport and initialization
 
-- **Framing:** ACP's stdio transport: UTF-8, one JSON-RPC message per line, no embedded newlines (`serde_json` escapes U+2028 too); a trailing `\r` on input is stripped. A line that is not JSON gets `-32700`, one that is not a request `-32600`, and any request before `initialize` `-32600`. Batches are refused.
+- **Framing:** ACP's stdio transport: UTF-8, one JSON-RPC message per line, no embedded newlines (U+2028 and U+2029 are written escaped, which `serde_json` does not do by itself); a trailing `\r` on input is stripped. A line that is not JSON gets `-32700`, one that is not a request `-32600`, and any request before `initialize` `-32600`. Batches are refused.
 - **`initialize`:** answered with `protocolVersion: 1`, `agentInfo` (`name: "scramjet"`, `title: "Scramjet"`, the version) and `authMethods` (section 6). `agentCapabilities`:
   - `loadSession: true`; `sessionCapabilities` with `list`, `resume`, `close` and `delete`.
   - `promptCapabilities`: `image` and `embeddedContext` true, `audio` false.

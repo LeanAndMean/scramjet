@@ -11,6 +11,7 @@ use super::background;
 use super::banner::Banner;
 use super::completion::Completions;
 use super::design::Design;
+use super::drive::Messages;
 use super::editor::{Draft, Editor, Note, RESIZE_CHECK};
 use super::footer::{self, Footer};
 use super::keymap::{self, Binding};
@@ -206,8 +207,7 @@ pub(super) enum Input {
 /// What the user gives while a turn runs, until the agent or the session takes it.
 #[derive(Default)]
 struct Queue {
-    steering: Vec<String>,
-    follow_ups: Vec<String>,
+    messages: Messages,
     /// The effort level Shift+Tab chose, for the next request.
     effort: Option<String>,
     /// The models Ctrl+P (positive) or Shift+Ctrl+P moved on by, for the next request.
@@ -233,19 +233,6 @@ struct Side {
     output: String,
     ended: Option<Shell>,
     cancel: Arc<AtomicBool>,
-}
-
-impl Queue {
-    /// Whether no message is queued.
-    fn is_empty(&self) -> bool {
-        self.steering.is_empty() && self.follow_ups.is_empty()
-    }
-    /// All the messages, in the order they are sent, leaving none.
-    fn take(&mut self) -> Vec<String> {
-        let mut all = std::mem::take(&mut self.steering);
-        all.append(&mut self.follow_ups);
-        all
-    }
 }
 
 /// What the screen does after a key.
@@ -936,7 +923,7 @@ impl App {
 
     /// Puts the queued messages back in the editor, before its text, as Scramjet does.
     fn restore(&mut self) {
-        let queued = self.queue().take();
+        let queued = self.queue().messages.take();
         if queued.is_empty() {
             return;
         }
@@ -963,12 +950,7 @@ impl App {
             return;
         }
         self.editor.remember(&text);
-        let mut queue = self.queue();
-        match follow_up {
-            true => queue.follow_ups.push(text),
-            false => queue.steering.push(text),
-        }
-        drop(queue);
+        self.queue().messages.push(text, follow_up);
         self.draft = self.editor.draft(String::new());
         self.top = None;
     }

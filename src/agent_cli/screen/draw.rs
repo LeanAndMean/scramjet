@@ -288,8 +288,8 @@ impl App {
         }
         rows.extend(selection::rows(&self.status(width)));
         let queued = [
-            ("Steering", &queue.steering),
-            ("Follow-up", &queue.follow_ups),
+            ("Steering", &queue.messages.steering),
+            ("Follow-up", &queue.messages.follow_ups),
         ];
         for (kind, messages) in queued {
             for message in messages {
@@ -307,7 +307,7 @@ impl App {
             );
             rows.push(muted(&line));
         }
-        if !queue.is_empty()
+        if !queue.messages.is_empty()
             && let Some(key) = keymap::key(Binding::Dequeue)
         {
             let hint = format!("↳ {key} to edit all queued messages");
