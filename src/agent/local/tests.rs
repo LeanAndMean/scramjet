@@ -362,6 +362,43 @@ fn the_check_finds_whether_thinking_turns_off() {
 }
 
 #[test]
+fn the_check_asks_an_ollama_model_that_thinks_whether_none_stops_it() {
+    let url = serve(|_, path, body| {
+        if path == "/api/ps" {
+            return (200, json!({"models": []}));
+        }
+        let off = body["reasoning_effort"] == "none";
+        let call = json!([{"function": {"name": CHECK_TOOL, "arguments": "{}"}}]);
+        let message = match (body["model"].as_str().unwrap(), off) {
+            (_, false) => json!({"content": "", "reasoning": "Call it.", "tool_calls": call}),
+            ("qwen3:1.7b", true) => json!({"content": "391"}),
+            ("gpt-oss:20b", true) => json!({"content": "391", "reasoning": "17 × 23…"}),
+            (model, true) => panic!("{model} asked whether none stops it"),
+        };
+        (200, json!({"choices": [{"message": message}]}))
+    });
+    let thinker = |id: &str| LocalModel {
+        reasoning: true,
+        ..LocalModel::named(id)
+    };
+    let ollama = Server {
+        models: vec![
+            thinker("qwen3:1.7b"),
+            thinker("gpt-oss:20b"),
+            LocalModel::named("gemma3"),
+        ],
+        ..server(&url, Runtime::Ollama)
+    };
+    let checked = |id: &str| {
+        let checked = check_tools(&ollama, id, None).unwrap();
+        (checked.thinks, checked.switch)
+    };
+    assert_eq!(checked("qwen3:1.7b"), (true, Some(Switch::Effort)));
+    assert_eq!(checked("gpt-oss:20b"), (true, Some(Switch::EffortNoOff)));
+    assert_eq!(checked("gemma3"), (false, None));
+}
+
+#[test]
 fn a_saved_switch_sends_the_thinking_level() {
     let scratch = scratch("switch");
     let file = scratch.0.join("models.json");
@@ -381,6 +418,8 @@ fn a_saved_switch_sends_the_thinking_level() {
         &thinking("Qwen3", Some(Switch::ChatTemplate)),
     )
     .unwrap();
+    let stubborn = thinking("gpt-oss:20b", Some(Switch::EffortNoOff));
+    save(&file, "ollama", &ollama, &stubborn).unwrap();
     // One that thinks whatever it is asked is offered no levels.
     save(&file, "vllm", &vllm, &thinking("R1", None)).unwrap();
     let providers = super::super::Providers::read(vec![file.clone()], None);
@@ -404,6 +443,13 @@ fn a_saved_switch_sends_the_thinking_level() {
     );
     assert_eq!(
         sent("ollama/qwen3:1.7b", "high"),
+        (json!("high"), Value::Null)
+    );
+    // Off is not offered: the agent fits it to the lowest level there is.
+    let gpt_oss = &providers.find("ollama/gpt-oss:20b").unwrap().info;
+    assert!(gpt_oss.reasoning && gpt_oss.fit("none") == "minimal");
+    assert_eq!(
+        sent("ollama/gpt-oss:20b", "high"),
         (json!("high"), Value::Null)
     );
     let off = sent("vllm/Qwen3", "none");

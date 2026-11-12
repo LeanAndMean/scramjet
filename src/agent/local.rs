@@ -113,6 +113,8 @@ impl Runtime {
 pub enum Switch {
     /// `reasoning_effort`, `none` for off: Ollama's.
     Effort,
+    /// `reasoning_effort` levels, where `none` does not stop it: gpt-oss on Ollama 0.40.16.
+    EffortNoOff,
     /// `chat_template_kwargs.enable_thinking`: Qwen3's chat templates, on vLLM and llama.cpp.
     ChatTemplate,
 }
@@ -202,7 +204,7 @@ pub struct Checked {
     pub arguments: String,
     /// The window the runtime loaded the model with, when it says so only once loaded (Ollama).
     pub window: Option<u64>,
-    /// It thought before answering. Not judged for Ollama, which says so of its models.
+    /// It thinks before answering: as seen, or as Ollama says of its models.
     pub thinks: bool,
     /// How its thinking was turned off, when asking it not to think worked.
     pub switch: Option<Switch>,
@@ -549,12 +551,22 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
             if server.runtime == Runtime::Ollama {
                 let loaded = optional(format!("{}/api/ps", server.url), key, PROBE_WAIT);
                 checked.window = ollama_window(&loaded.await, model);
+                let listed = server.models.iter().find(|listed| listed.id == model);
+                checked.thinks = listed.is_some_and(|listed| listed.reasoning);
+                if checked.thinks {
+                    let off = json!({"reasoning_effort": "none"});
+                    checked.switch = Some(match stops(server, model, key, off).await {
+                        true => Switch::Effort,
+                        false => Switch::EffortNoOff,
+                    });
+                }
                 return Ok(checked);
             }
             let (apart, as_text) = thinking(message);
             checked.thinks = apart || as_text;
             checked.thinking_as_text = as_text.then(|| server.runtime.thinking_hint());
-            if checked.thinks && switches_off(server, model, key).await {
+            let off = json!({"chat_template_kwargs": {"enable_thinking": false}});
+            if checked.thinks && stops(server, model, key, off).await {
                 checked.switch = Some(Switch::ChatTemplate);
             }
             Ok(checked)
@@ -577,15 +589,17 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
     }
 }
 
-/// Whether `model` answers without thinking when its chat template is asked not to.
-async fn switches_off(server: &Server, model: &str, key: Option<&str>) -> bool {
-    let body = json!({
+/// Whether `model` answers without thinking when asked with `off`'s fields not to.
+async fn stops(server: &Server, model: &str, key: Option<&str>, off: Value) -> bool {
+    let mut body = json!({
         "model": model,
         "messages": [{"role": "user", "content": SWITCH_PROMPT}],
-        "chat_template_kwargs": {"enable_thinking": false},
         "max_tokens": 256,
         "stream": false,
     });
+    body.as_object_mut()
+        .unwrap()
+        .extend(off.as_object().unwrap().clone());
     match complete(server, key, body).await {
         Ok(answer) => {
             let message = &answer["choices"][0]["message"];
@@ -735,6 +749,10 @@ fn model_entry(model: &LocalModel) -> Json {
         // Ollama takes every level, and `none` stops a model thinking (0.40.16).
         Some(Switch::Effort) => (
             vec![("off", json!("none"))],
+            json!({"supportsReasoningEffort": true}),
+        ),
+        Some(Switch::EffortNoOff) => (
+            vec![("off", Value::Null)],
             json!({"supportsReasoningEffort": true}),
         ),
         // The template knows thinking or none.

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.175.2 — gpt-oss on Ollama offers no off
+
+### Fixed
+
+- `/login` → Local models asks an Ollama model that thinks once more whether `reasoning_effort` none stops it. One that keeps thinking, as gpt-oss does, is saved without an `off` level: its levels go as `reasoning_effort`, and off is taken as the lowest. Before, gpt-oss was offered off and kept thinking at medium. Models saved before keep their entry until checked again.
+
 ## 2.175.1 — Ollama's count taken on a first turn
 
 ### Fixed

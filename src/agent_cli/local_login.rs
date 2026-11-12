@@ -305,10 +305,8 @@ impl Interactive {
             local::CHECK_TOOL,
             checked.arguments
         ));
-        if server.runtime != Runtime::Ollama {
-            model.reasoning = checked.thinks;
-            model.switch = checked.switch;
-        }
+        model.reasoning = checked.thinks;
+        model.switch = checked.switch;
         if let Some(hint) = checked.thinking_as_text {
             self.say(&format!(
                 "Note: {id}'s thinking came as text in its answer, where it will show and be \
@@ -318,6 +316,10 @@ impl Interactive {
         match (model.reasoning, model.switch) {
             (_, Some(Switch::Effort)) => self.say(&format!(
                 "{id} thinks; its thinking level is sent as reasoning_effort, off as none"
+            )),
+            (_, Some(Switch::EffortNoOff)) => self.say(&format!(
+                "Note: {id} thinks, and asking it not to (reasoning_effort none) did not stop it: \
+                 its thinking level is sent as reasoning_effort, and off is not offered"
             )),
             (_, Some(Switch::ChatTemplate)) => self.say(&format!(
                 "{id} thinks, and stopped when asked not to (chat_template_kwargs \
