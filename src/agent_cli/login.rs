@@ -38,21 +38,23 @@ enum Row<'a> {
     Login(&'a str, &'a str),
     /// A provider of the files, which takes an API key.
     Key(&'a str, &'a KeyFrom),
+    /// A runtime serving models on this machine or nearby (`local_login`).
+    Local,
 }
 
-/// `/login`'s rows: its own logins and the `programs`', then, under headings, the providers that
-/// take an API key.
+/// `/login`'s rows, under headings: its own logins and the `programs`', the providers that take
+/// an API key, and local models.
 fn rows<'a>(programs: &'a [LoginProgram], keyed: &'a [(String, KeyFrom)]) -> Vec<Row<'a>> {
     let own = (login::LOGINS.iter()).map(|(name, shown)| Row::Login(name, shown));
     let packaged = programs.iter().map(|p| Row::Login(&p.provider, &p.name));
-    let logins = own.chain(packaged);
-    if keyed.is_empty() {
-        return logins.collect();
-    }
     let mut rows = vec![Row::Heading("Subscriptions")];
-    rows.extend(logins);
-    rows.push(Row::Heading("API keys"));
-    rows.extend(keyed.iter().map(|(name, from)| Row::Key(name, from)));
+    rows.extend(own.chain(packaged));
+    if !keyed.is_empty() {
+        rows.push(Row::Heading("API keys"));
+        rows.extend(keyed.iter().map(|(name, from)| Row::Key(name, from)));
+    }
+    rows.push(Row::Heading("Local models"));
+    rows.push(Row::Local);
     rows
 }
 
@@ -68,7 +70,12 @@ impl Interactive {
         };
         let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
         let is_logged_in = |name: &str| logged_in.iter().any(|known| known == name);
-        let keyed = self.agent.providers().keyed().to_vec();
+        // Local models' providers have their own row, which asks for a key when one is needed.
+        let local = (self.models_file())
+            .and_then(|file| scramjet::agent::local::saved(&file).ok())
+            .unwrap_or_default();
+        let mut keyed = self.agent.providers().keyed().to_vec();
+        keyed.retain(|(name, _)| !local.iter().any(|(saved, _)| saved == name));
         let programs = self.agent.providers().login_programs().to_vec();
         let rows = rows(&programs, &keyed);
         let notes = (rows.iter())
@@ -88,12 +95,12 @@ impl Interactive {
                 Row::Key(_, KeyFrom::Nowhere) => {
                     "Its requests carry no key. One saved here is kept in auth.json, as logins are"
                 }
+                Row::Local => "Models a runtime serves here or at an address you give",
                 _ => "",
             })
             .map(str::to_owned)
             .collect();
-        let headed = matches!(rows.first(), Some(Row::Heading(_)));
-        let indent = if headed { "  " } else { "" };
+        let indent = "  ";
         let row = |index: usize, width| {
             let mark = |text: &str| format!(" {}✓ {text}{}", style::MUTED, style::RESET);
             let text = match &rows[index] {
@@ -112,6 +119,7 @@ impl Interactive {
                     };
                     format!("{indent}{}{from}", visible(name))
                 }
+                Row::Local => format!("{indent}Ollama, llama.cpp, vLLM…"),
             };
             clip(&text, width)
         };
@@ -134,6 +142,7 @@ impl Interactive {
                 }
             }
             Row::Key(provider, _) => self.key_login(&logins, provider),
+            Row::Local => self.local_login(),
             Row::Heading(_) => {}
         }
     }

@@ -1,0 +1,412 @@
+use super::*;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::sync::Arc;
+
+type Answer = dyn Fn(&str, &str, &Value) -> (u16, Value) + Send + Sync;
+
+/// A server answering each request, by method, path and JSON body, with `answer`'s status and
+/// JSON; its address.
+fn serve(answer: impl Fn(&str, &str, &Value) -> (u16, Value) + Send + Sync + 'static) -> String {
+    let answer: Arc<Answer> = Arc::new(answer);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            let mut length = 0;
+            let mut authorization = Value::Null;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap();
+                }
+                if let Some((name, value)) = line.split_once(':')
+                    && name.eq_ignore_ascii_case("authorization")
+                {
+                    authorization = value.trim().into();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let mut body = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            // A GET has no body: the scripted answer sees its authorization there.
+            if body.is_null() {
+                body = json!({"authorization": authorization});
+            }
+            let mut words = request.split(' ');
+            let (method, path) = (words.next().unwrap(), words.next().unwrap());
+            let (status, json) = answer(method, path, &body);
+            let json = json.to_string();
+            let reply = format!(
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n{json}",
+                json.len()
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+    format!("http://{address}")
+}
+
+fn not_found() -> (u16, Value) {
+    (404, json!({"error": "not found"}))
+}
+
+/// Ollama 0.40's answers, trimmed: a chat model with tools, loaded; one without tools; an
+/// embedder.
+fn ollama(_: &str, path: &str, _: &Value) -> (u16, Value) {
+    match path {
+        "/v1/models" => (
+            200,
+            json!({"object": "list", "data": [
+            {"id": "qwen3:1.7b", "owned_by": "library"},
+            {"id": "gemma:2b", "owned_by": "library"},
+            {"id": "nomic-embed-text:latest", "owned_by": "library"}]}),
+        ),
+        "/api/version" => (200, json!({"version": "0.40.16"})),
+        "/api/tags" => (
+            200,
+            json!({"models": [
+            {"name": "qwen3:1.7b", "model": "qwen3:1.7b", "details": {"context_length": 40960},
+                "capabilities": ["completion", "tools", "thinking"]},
+            {"name": "gemma:2b", "model": "gemma:2b", "details": {"context_length": 8192},
+                "capabilities": ["completion", "vision"]},
+            {"name": "nomic-embed-text:latest", "model": "nomic-embed-text:latest",
+                "details": {"context_length": 2048}, "capabilities": ["embedding"]}]}),
+        ),
+        "/api/ps" => (
+            200,
+            json!({"models": [
+            {"name": "qwen3:1.7b", "model": "qwen3:1.7b", "context_length": 32768}]}),
+        ),
+        _ => not_found(),
+    }
+}
+
+#[test]
+fn an_address_is_taken_as_typed_without_v1() {
+    assert_eq!(
+        address("localhost:11434").unwrap(),
+        "http://localhost:11434"
+    );
+    assert_eq!(
+        address(" http://10.0.0.2:8000/v1/ ").unwrap(),
+        "http://10.0.0.2:8000"
+    );
+    assert_eq!(
+        address("https://gpu.example/vllm").unwrap(),
+        "https://gpu.example/vllm"
+    );
+    assert!(address("").is_err());
+    assert!(address("ftp://x").is_err());
+}
+
+#[test]
+fn ollama_is_told_apart_and_its_models_described() {
+    let url = serve(ollama);
+    let server = probe(&url, None).unwrap();
+    assert_eq!(server.runtime, Runtime::Ollama);
+    assert_eq!(server.version.as_deref(), Some("0.40.16"));
+    let qwen = &server.models[0];
+    assert_eq!(
+        (qwen.id.as_str(), qwen.window, qwen.trained, qwen.reasoning),
+        ("qwen3:1.7b", Some(32768), Some(40960), true)
+    );
+    assert_eq!(qwen.unfit, None);
+    let gemma = &server.models[1];
+    // Not loaded: Ollama has not chosen its window yet.
+    assert_eq!((gemma.window, gemma.images), (None, true));
+    assert_eq!(
+        gemma.unfit.as_deref(),
+        Some("Ollama says its template takes no tools")
+    );
+    assert_eq!(
+        server.models[2].unfit.as_deref(),
+        Some("Ollama says it does not chat")
+    );
+}
+
+#[test]
+fn llama_cpp_and_vllm_say_their_windows() {
+    let llama = serve(|_, path, _| match path {
+        "/v1/models" => (
+            200,
+            json!({"data": [{"id": "qwen3-1.7b", "owned_by": "llamacpp",
+            "meta": {"n_ctx": 16384, "n_ctx_train": 40960}}]}),
+        ),
+        "/props" => (
+            200,
+            json!({"build_info": "b12282-aa75ff323",
+            "default_generation_settings": {"n_ctx": 16384},
+            "chat_template_caps": {"supports_tool_calls": false}, "modalities": {"vision": false}}),
+        ),
+        _ => not_found(),
+    });
+    let server = probe(&llama, None).unwrap();
+    assert_eq!(server.runtime, Runtime::LlamaCpp);
+    assert_eq!(server.version.as_deref(), Some("b12282-aa75ff323"));
+    let model = &server.models[0];
+    assert_eq!((model.window, model.trained), (Some(16384), Some(40960)));
+    assert_eq!(
+        model.unfit.as_deref(),
+        Some("its chat template takes no tools")
+    );
+
+    let vllm = serve(|_, path, _| match path {
+        "/v1/models" => (
+            200,
+            json!({"data": [{"id": "Qwen/Qwen3-0.6B", "owned_by": "vllm",
+            "max_model_len": 40960}]}),
+        ),
+        "/version" => (200, json!({"version": "0.13.0"})),
+        _ => not_found(),
+    });
+    let server = probe(&vllm, None).unwrap();
+    assert_eq!(server.runtime, Runtime::Vllm);
+    assert_eq!(server.models[0].window, Some(40960));
+
+    let other = serve(|_, path, _| match path {
+        "/v1/models" => (200, json!({"data": [{"id": "m"}]})),
+        _ => not_found(),
+    });
+    let server = probe(&other, None).unwrap();
+    assert_eq!(
+        (server.runtime, server.models[0].window),
+        (Runtime::Other, None)
+    );
+}
+
+#[test]
+fn each_failing_step_is_named() {
+    let keyed = serve(|_, _, _| (401, json!({"error": "no key"})));
+    assert_eq!(probe(&keyed, None).unwrap_err().step, Step::Key);
+    let empty = serve(|_, path, _| match path {
+        "/v1/models" => (200, json!({"data": []})),
+        _ => not_found(),
+    });
+    let failed = probe(&empty, None).unwrap_err();
+    assert_eq!(failed.step, Step::NoModels);
+    assert_eq!(
+        failed.to_string(),
+        format!("no models: OpenAI-compatible server at {empty} lists none")
+    );
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", closed.local_addr().unwrap());
+    drop(closed);
+    assert_eq!(probe(&url, None).unwrap_err().step, Step::NotReachable);
+    let web = serve(|_, _, _| not_found());
+    let failed = probe(&web, None).unwrap_err();
+    assert!(
+        failed.detail.contains("not an OpenAI-compatible server"),
+        "{failed}"
+    );
+}
+
+#[test]
+fn a_key_given_goes_as_a_bearer_token() {
+    let url = serve(|_, path, body| match path {
+        _ if body["authorization"] != "Bearer secret" => (401, json!({"error": "no key"})),
+        "/v1/models" => (200, json!({"data": [{"id": "m", "owned_by": "vllm"}]})),
+        _ => not_found(),
+    });
+    assert_eq!(probe(&url, None).unwrap_err().step, Step::Key);
+    assert!(probe(&url, Some("secret")).is_ok());
+}
+
+fn server(url: &str, runtime: Runtime) -> Server {
+    Server {
+        runtime,
+        url: url.to_owned(),
+        version: None,
+        models: vec![LocalModel::named("m")],
+    }
+}
+
+#[test]
+fn the_tool_check_passes_on_a_call_and_names_what_else_happened() {
+    let url = serve(|method, path, body| match (method, path) {
+        ("POST", "/v1/chat/completions") => {
+            assert_eq!(body["tools"][0]["function"]["name"], CHECK_TOOL);
+            assert_eq!(body["messages"][0]["content"], CHECK_PROMPT);
+            let message = match body["model"].as_str().unwrap() {
+                "caller" => json!({"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "c", "type": "function",
+                        "function": {"name": CHECK_TOOL, "arguments": "{\"word\":\"scramjet\"}"}}]}),
+                "broken" => json!({"role": "assistant", "tool_calls": [
+                    {"function": {"name": CHECK_TOOL, "arguments": "{word"}}]}),
+                "talker" => json!({"role": "assistant", "content": "I would echo scramjet."}),
+                "refused" => {
+                    return (
+                        400,
+                        json!({"error": {"message":
+                    "\"auto\" tool choice requires --enable-auto-tool-choice and \
+                     --tool-call-parser to be set"}}),
+                    );
+                }
+                _ => return (500, json!({"error": "model failed to load"})),
+            };
+            (200, json!({"choices": [{"message": message}]}))
+        }
+        ("GET", "/api/ps") => (
+            200,
+            json!({"models": [{"model": "caller", "context_length": 8192}]}),
+        ),
+        _ => not_found(),
+    });
+    let ollama = server(&url, Runtime::Ollama);
+    let checked = check_tools(&ollama, "caller", None).unwrap();
+    assert_eq!(checked.arguments, "{\"word\":\"scramjet\"}");
+    // Ollama says the window once the model is loaded.
+    assert_eq!(checked.window, Some(8192));
+    let vllm = server(&url, Runtime::Vllm);
+    assert_eq!(check_tools(&vllm, "caller", None).unwrap().window, None);
+    let broken = check_tools(&vllm, "broken", None).unwrap_err();
+    assert_eq!(broken.step, Step::NoToolCalls);
+    assert!(broken.detail.contains("not JSON"), "{broken}");
+    let llama = server(&url, Runtime::LlamaCpp);
+    let talker = check_tools(&llama, "talker", None).unwrap_err();
+    assert_eq!(talker.step, Step::NoToolCalls);
+    assert!(
+        talker.detail.contains("“I would echo scramjet.”") && talker.detail.contains("--jinja")
+    );
+    let refused = check_tools(&vllm, "refused", None).unwrap_err();
+    assert_eq!(refused.step, Step::NoToolCalls);
+    assert!(
+        refused.detail.contains("HTTP 400") && refused.detail.contains("vllm serve"),
+        "{refused}"
+    );
+    let failed = check_tools(&vllm, "missing", None).unwrap_err();
+    assert_eq!(
+        failed,
+        problem(Step::Loading, "HTTP 500: model failed to load")
+    );
+}
+
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
+    let path = std::env::temp_dir().join(format!("scramjet-local-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).unwrap();
+    Scratch(path)
+}
+
+fn model(id: &str, window: Option<u64>) -> LocalModel {
+    LocalModel {
+        window,
+        ..LocalModel::named(id)
+    }
+}
+
+#[test]
+fn saving_keeps_the_files_order_and_puts_models_in_place() {
+    let scratch = scratch("save");
+    let file = scratch.0.join("config/models.json");
+    // The user's file, in an order serde_json's maps would sort.
+    let theirs = "{\n  \"providers\": {\n    \"zeta\": {\"models\": [{\"id\": \"z\"}], \"baseUrl\": \
+                  \"http://z/v1\", \"api\": \"openai-responses\"}\n  },\n  \"credentialFiles\": []\n}";
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, theirs).unwrap();
+    let ollama = server("http://localhost:11434", Runtime::Ollama);
+    assert_eq!(name_for(&file, &ollama).unwrap(), "ollama");
+    save(&file, "ollama", &ollama, &model("qwen3:1.7b", Some(32768))).unwrap();
+    save(&file, "ollama", &ollama, &model("gemma:2b", None)).unwrap();
+    save(&file, "ollama", &ollama, &model("qwen3:1.7b", Some(40960))).unwrap();
+    let text = std::fs::read_to_string(&file).unwrap();
+    let at = |needle: &str| text.find(needle).unwrap();
+    assert!(at("\"zeta\"") < at("\"ollama\"") && at("\"ollama\"") < at("credentialFiles"));
+    assert!(
+        at("\"models\": [") < at("\"baseUrl\": \"http://z/v1\""),
+        "{text}"
+    );
+    let document: Value = serde_json::from_str(&text).unwrap();
+    let entry = &document["providers"]["ollama"];
+    assert_eq!(entry["baseUrl"], "http://localhost:11434/v1");
+    assert_eq!(
+        (entry["api"].as_str(), entry["runtime"].as_str()),
+        (Some("openai-completions"), Some("ollama"))
+    );
+    assert!(entry.get("apiKey").is_none());
+    let ids: Vec<&Value> = entry["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| &m["id"])
+        .collect();
+    assert_eq!(ids, ["qwen3:1.7b", "gemma:2b"]);
+    assert_eq!(entry["models"][0]["contextWindow"], 40960);
+    assert!(entry["models"][1].get("contextWindow").is_none());
+
+    // The same address keeps its name; another of the runtime takes its port.
+    assert_eq!(name_for(&file, &ollama).unwrap(), "ollama");
+    let other = server("http://10.0.0.2:11434", Runtime::Ollama);
+    assert_eq!(name_for(&file, &other).unwrap(), "ollama-11434");
+    let names: Vec<String> = saved(&file)
+        .unwrap()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(names, ["ollama"]);
+
+    // The providers read it as any models.json: no key, the window as saved.
+    let providers = super::super::Providers::read(vec![file.clone()], None);
+    assert!(
+        providers.problems().is_empty(),
+        "{:?}",
+        providers.problems()
+    );
+    let qwen = providers.find("ollama/qwen3:1.7b").unwrap();
+    assert_eq!(qwen.info.window, Some(40960));
+
+    remove_model(&file, "ollama", "gemma:2b").unwrap();
+    assert_eq!(
+        saved(&file).unwrap()[0].1["models"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    remove_model(&file, "ollama", "qwen3:1.7b").unwrap();
+    assert!(saved(&file).unwrap().is_empty());
+    save(&file, "ollama", &ollama, &model("m", None)).unwrap();
+    remove(&file, "ollama").unwrap();
+    let left: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(left["providers"].as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn a_file_that_is_not_json_is_left_alone() {
+    let scratch = scratch("broken");
+    let file = scratch.0.join("models.json");
+    std::fs::write(&file, "{ not json").unwrap();
+    let ollama = server("http://localhost:11434", Runtime::Ollama);
+    assert!(save(&file, "ollama", &ollama, &model("m", None)).is_err());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+}
+
+#[test]
+fn the_default_gateway_is_read_from_the_routes() {
+    let routes = "Iface\tDestination\tGateway \tFlags\n\
+                  eth0\t00F0FF0A\t00000000\t0001\n\
+                  eth0\t00000000\t0100F0AC\t0003\n";
+    assert_eq!(
+        default_gateway(routes),
+        Some(std::net::Ipv4Addr::new(172, 240, 0, 1))
+    );
+    assert_eq!(default_gateway("Iface\tDestination\tGateway\n"), None);
+}

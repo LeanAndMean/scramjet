@@ -21,6 +21,7 @@ mod image;
 mod instructions;
 mod lint;
 mod listed;
+pub mod local;
 pub mod login;
 mod mcp;
 mod messages;

@@ -108,6 +108,12 @@ pub fn saved_keys(path: &Path) -> Result<Vec<String>, String> {
     Ok(keyed.cloned().collect())
 }
 
+/// The API key saved in `path` for `provider`.
+pub fn saved_key(path: &Path, provider: &str) -> Option<String> {
+    let saved = saved(path).ok()?;
+    key(&saved, provider).map(|(key, _)| key.to_owned())
+}
+
 /// The API key saved among `saved` for `provider`, with the servers it was saved for
 /// (`providers::Origin`); none for one saved before keys named them.
 pub(super) fn key<'a>(

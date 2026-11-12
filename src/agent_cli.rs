@@ -39,6 +39,7 @@ mod job;
 mod keymap;
 mod keys;
 mod lint;
+mod local_login;
 mod login;
 mod markdown;
 mod packages;

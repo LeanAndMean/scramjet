@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.168.0 — Local models in /login
+
+### Added
+
+- `/login` → Local models: Ollama, llama.cpp's server and vLLM found running on this machine, or a runtime at an address you give, with each model's context window as the runtime reports it. A model is saved in your `models.json` only after it has called a harmless tool; a failure says at which step (not reachable, key needed, no models, did not answer, no tool call) and what to change. Saved runtimes can be checked again or removed from the same list.
+
 ## 2.167.0 — The sandbox in a list
 
 ### Added
