@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.185.0 — Edits with other indentation
+
+### Changed
+
+- An edit whose old text matches nowhere, even loosely, is looked for with each line's indentation set aside, as Codex's patches are. Found with the same indentation missing or added on its lines, it applies, with the new text's lines shifted alike; lines copied with their indentation right stay as they are. Found with indentation differing unevenly, the refusal quotes the file's lines exactly. Local models such as gpt-oss drop the indentation of the lines they copy.
+
 ## 2.184.2 — A line break in a grep pattern
 
 ### Fixed

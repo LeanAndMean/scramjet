@@ -1,7 +1,8 @@
 //! Finds an edit's `oldText` in a file as Scramjet's edit tool does: with line endings and a byte
 //! order mark aside, else also trailing whitespace and typographic quotes, dashes and spaces.
 //! Scramjet then writes the whole file in that normalized form; here the match is mapped back to
-//! the file, so only the text it covers changes.
+//! the file, so only the text it covers changes. Last, as Codex's `apply_patch`, each line's
+//! indentation is set aside too; the new text is then shifted as the old text's lines are.
 
 use std::cell::OnceCell;
 
@@ -13,10 +14,11 @@ struct View {
 }
 
 impl View {
-    /// `original` without a leading byte order mark and with `\r\n` as `\n`; when `loose`, also
+    /// `original` without a leading byte order mark and with `\r\n` as `\n`; when `Loose`, also
     /// without each line's trailing whitespace and with typographic quotes, dashes and spaces as
-    /// ASCII ones. Text dropped before a line's `\n` belongs to it.
-    fn new(original: &str, loose: bool) -> View {
+    /// ASCII ones; when `Flush`, also without its indentation. Text dropped before a line's `\n`
+    /// belongs to it.
+    fn new(original: &str, level: Level) -> View {
         let start = original
             .strip_prefix('\u{feff}')
             .map_or(0, |_| '\u{feff}'.len_utf8());
@@ -28,11 +30,15 @@ impl View {
         for line in original[start..].split_inclusive('\n') {
             let ending = line.strip_suffix('\n');
             let mut body = ending.map_or(line, |line| line.strip_suffix('\r').unwrap_or(line));
-            if loose {
+            if level != Level::Exact {
                 body = body.trim_end();
-                for (offset, c) in body.char_indices() {
-                    let char = &body[offset..offset + c.len_utf8()];
-                    let from = at + offset;
+                let indent = match level {
+                    Level::Flush => indentation(body).len(),
+                    _ => 0,
+                };
+                for (offset, c) in body[indent..].char_indices() {
+                    let char = &body[indent + offset..indent + offset + c.len_utf8()];
+                    let from = at + indent + offset;
                     view.push(from, plain(c).unwrap_or(char), from + char.len());
                 }
             } else {
@@ -108,10 +114,32 @@ fn plain(c: char) -> Option<&'static str> {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Level {
+    Exact,
+    Loose,
+    Flush,
+}
+
+/// The whitespace starting `line`.
+fn indentation(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
+/// What the file's lines have more (`Add`) or less (`Remove`) at their start than the old text's.
+#[derive(Clone, Copy, PartialEq)]
+enum Shift<'a> {
+    Add(&'a str),
+    Remove(&'a str),
+}
+
 pub enum Miss {
     Absent,
     /// The 1-based line where each occurrence starts.
     Many(Vec<usize>),
+    /// Found with indentation set aside, but not shifted alike on each line: the 1-based line
+    /// where it starts and the file's lines it covers, whole.
+    Uneven(usize, String),
 }
 
 /// Finds edits' old texts in one file.
@@ -119,14 +147,16 @@ pub struct Finder<'a> {
     original: &'a str,
     exact: View,
     loose: OnceCell<View>,
+    flush: OnceCell<View>,
 }
 
 impl<'a> Finder<'a> {
     pub fn new(original: &'a str) -> Finder<'a> {
         Finder {
             original,
-            exact: View::new(original, false),
+            exact: View::new(original, Level::Exact),
             loose: OnceCell::new(),
+            flush: OnceCell::new(),
         }
     }
 
@@ -148,20 +178,116 @@ impl<'a> Finder<'a> {
             Some(old) => (old, new.strip_suffix('\r').unwrap_or(new)),
             None => (old, new),
         };
-        Ok((self.locate(old, all)?, self.with_endings(new)))
+        match self.locate(old, all) {
+            Ok(ranges) => Ok((ranges, self.with_endings(new))),
+            Err(Miss::Absent) => {
+                let (ranges, new) = self.flush(old, new, all)?;
+                Ok((ranges, self.with_endings(&new)))
+            }
+            Err(miss) => Err(miss),
+        }
+    }
+
+    /// The places `old` is with each line's indentation set aside, and `new` shifted as the
+    /// file's lines are from `old`'s; the same shift on every line of every place.
+    fn flush(
+        &self,
+        old: &str,
+        new: &str,
+        all: bool,
+    ) -> Result<(Vec<(usize, usize)>, String), Miss> {
+        let (mut old, mut new) = (old.replace("\r\n", "\n"), new.replace("\r\n", "\n"));
+        // A last line of whitespace only is the indentation of the file's next line, left as it is.
+        for text in [&mut old, &mut new] {
+            if let Some(end) = text
+                .rfind('\n')
+                .filter(|&end| text[end..].trim().is_empty())
+            {
+                text.truncate(end + 1);
+            }
+        }
+        let flushed = View::new(&old, Level::Flush).text;
+        if flushed.trim().is_empty() {
+            return Err(Miss::Absent);
+        }
+        let view = self
+            .flush
+            .get_or_init(|| View::new(self.original, Level::Flush));
+        let mut ranges = view.find(&flushed, self.original, all)?;
+        let lines: Vec<&str> = old.split('\n').collect();
+        let mut shift = None;
+        // Lines whose indentation is the file's wherever they are: copied as they are, they stay.
+        let mut kept = vec![true; lines.len()];
+        for range in &mut ranges {
+            // Ending at a line's end, it leaves the next line's indentation in place.
+            if flushed.ends_with('\n') {
+                range.1 = self.original[..range.1]
+                    .rfind('\n')
+                    .map_or(range.1, |n| n + 1);
+            }
+            let line_start = self.original[..range.0].rfind('\n').map_or(0, |n| n + 1);
+            let file = self.original[line_start..].split('\n');
+            for (at, (old, file)) in lines.iter().zip(file).enumerate() {
+                let (theirs, ours) = (indentation(old), indentation(file));
+                // A first line starting within the file's tells nothing of its indentation.
+                if old.trim().is_empty()
+                    || at == 0 && (theirs.is_empty() || range.0 != line_start + ours.len())
+                {
+                    continue;
+                }
+                if theirs == ours {
+                    continue;
+                }
+                kept[at] = false;
+                let this = match (ours.strip_suffix(theirs), theirs.strip_suffix(ours)) {
+                    (Some(more), _) => Some(Shift::Add(more)),
+                    (None, Some(less)) => Some(Shift::Remove(less)),
+                    (None, None) => None,
+                };
+                if this.is_none() || shift.is_some_and(|shift| Some(shift) != this) {
+                    let first = self.original[..line_start].matches('\n').count() + 1;
+                    let last = range.1 - 1;
+                    let end = (self.original[last..].find('\n'))
+                        .map_or(self.original.len(), |n| last + n);
+                    let text = self.original[line_start..end].trim_end_matches('\r');
+                    return Err(Miss::Uneven(first, text.to_owned()));
+                }
+                shift = this;
+            }
+        }
+        let first = indentation(lines[0]);
+        let shifted = new
+            .split('\n')
+            .enumerate()
+            .map(|(at, line)| match (at, shift) {
+                (0, _) => line.strip_prefix(first).unwrap_or(line).to_owned(),
+                (_, _) if line.trim().is_empty() => line.to_owned(),
+                (_, _)
+                    if (lines.iter().zip(&kept).skip(1))
+                        .any(|(old, &kept)| kept && *old == line) =>
+                {
+                    line.to_owned()
+                }
+                (_, Some(Shift::Add(more))) => format!("{more}{line}"),
+                (_, Some(Shift::Remove(less))) => {
+                    line.strip_prefix(less).unwrap_or(line).to_owned()
+                }
+                (_, None) => line.to_owned(),
+            });
+        Ok((ranges, shifted.collect::<Vec<_>>().join("\n")))
     }
 
     /// The one place (or every place, when `all`) `old` is, line endings aside, else loosely.
     fn locate(&self, old: &str, all: bool) -> Result<Vec<(usize, usize)>, Miss> {
         match self
             .exact
-            .find(&View::new(old, false).text, self.original, all)
+            .find(&View::new(old, Level::Exact).text, self.original, all)
         {
             Err(Miss::Absent) => {}
             found => return found,
         }
-        let loose = self.loose.get_or_init(|| View::new(self.original, true));
-        let trimmed = View::new(old, true).text;
+        let loose = (self.loose).get_or_init(|| View::new(self.original, Level::Loose));
+        let trimmed = View::new(old, Level::Loose).text;
         // Whitespace ending `old` may be the indentation of the file's next line, which `new`
         // brings again; Scramjet's trimmed form would leave it in the file too.
         let last = &old[old.rfind('\n').map_or(0, |n| n + 1)..];
@@ -290,6 +416,59 @@ mod tests {
             replaced(code, "\"b\"\u{a0}\t", "c").as_deref(),
             Some("if “a”:\n    go()\nc \n")
         );
+    }
+
+    #[test]
+    fn indentation_set_aside_last_shifts_new_text_as_the_file_is_from_old_text() {
+        let replaced = |original: &str, old: &str, new: &str| {
+            let (ranges, new) = Finder::new(original).find(old, new, false).ok()?;
+            let mut text = original.to_owned();
+            text.replace_range(ranges[0].0..ranges[0].1, &new);
+            Some(text)
+        };
+        let code = "fn f() {\n    if a {\n        go();\n    }\n}\n";
+        assert_eq!(
+            replaced(code, "if a {\n    go();\n}", "if b {\n    stop();\n\n}").as_deref(),
+            Some("fn f() {\n    if b {\n        stop();\n\n    }\n}\n")
+        );
+        assert_eq!(
+            replaced("a:\n  b\n", "    a:\n      b", "    a:\n      c").as_deref(),
+            Some("a:\n  c\n")
+        );
+        // Ending at a line's end, or with the next line's indentation, leaves that line as it is.
+        let lines = "    a\r\n    b\r\n    c\r\n";
+        assert_eq!(
+            replaced(lines, "a\nb\n", "x\n").as_deref(),
+            Some("    x\r\n    c\r\n")
+        );
+        assert_eq!(
+            replaced(lines, "a\nb\n  ", "x\n  ").as_deref(),
+            Some("    x\r\n    c\r\n")
+        );
+        let all = Finder::new("  a\n b\n\n a\nb\n").find("a\n  b", "c\n  d", true);
+        assert!(matches!(all, Err(Miss::Uneven(4, text)) if text == " a\nb"));
+    }
+
+    #[test]
+    fn lines_whose_indentation_old_text_has_right_neither_shift_nor_are_shifted() {
+        let test = "fn t() {\n        assert_eq!(\n            x,\n            \"a \\\nb\"\n        );\n}\n";
+        let old = "assert_eq!(\n    x,\n    \"a \\\nb\"\n);";
+        let new = "assert_eq!(\n    y,\n    \"a \\\nb\"\n);";
+        let (ranges, new) = Finder::new(test).find(old, new, false).ok().unwrap();
+        let mut text = test.to_owned();
+        text.replace_range(ranges[0].0..ranges[0].1, &new);
+        assert_eq!(text, test.replace("x,", "y,"));
+    }
+
+    #[test]
+    fn indentation_not_shifted_alike_on_each_line_is_refused_with_the_files_lines() {
+        let test = "fn t() {\n        assert_eq!(\n            x,\n            \"a \\\n            b\"\n        );\n}\n";
+        let old = "assert_eq!(\n    x,\n    \"a \\\nb\"\n);";
+        assert!(matches!(
+            Finder::new(test).find(old, "", false),
+            Err(Miss::Uneven(2, text)) if text == test[9..test.len() - 3]
+        ));
+        assert!((Finder::new(test).find("assert_eq!(\n    x,\n", "", false)).is_ok());
     }
 
     #[test]

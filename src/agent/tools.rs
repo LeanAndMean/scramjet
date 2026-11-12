@@ -1366,6 +1366,21 @@ including all whitespace and newlines."
                     ),
                 });
             }
+            Err(matching::Miss::Uneven(first, text)) => {
+                let last = first + text.matches('\n').count();
+                let lines = match last == first {
+                    true => format!("Line {first} has"),
+                    false => format!("Lines {first}-{last} have"),
+                };
+                let what = match single {
+                    true => "the exact text".to_owned(),
+                    false => format!("edits[{index}]"),
+                };
+                return Err(format!(
+                    "Could not find {what} in {shown}. {lines} it with other indentation, not \
+shifted alike on each line. They are exactly:\n{text}"
+                ));
+            }
             Err(matching::Miss::Many(lines)) => {
                 let occurrences = lines.len();
                 let at = on_lines(lines);
@@ -2462,6 +2477,16 @@ occurrence."
             format!(
                 "Could not find the exact text in {path}. The old text must match exactly \
 including all whitespace and newlines."
+            )
+        );
+        std::fs::write(root.join("g.txt"), "x\n  a\n    b\n  c\n").unwrap();
+        let uneven = json!({"path":"g.txt","edits":[{"oldText":"a\nb\nc","newText":"d"}]});
+        let shown = root.join("g.txt").display().to_string();
+        assert_eq!(
+            (call("edit", uneven).run(&root, None, &cancel, &mut |_| {})).unwrap_err(),
+            format!(
+                "Could not find the exact text in {shown}. Lines 2-4 have it with other \
+indentation, not shifted alike on each line. They are exactly:\n  a\n    b\n  c"
             )
         );
         assert_eq!(
