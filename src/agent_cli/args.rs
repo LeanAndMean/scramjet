@@ -262,7 +262,8 @@ chosen last in their project, kept in $XDG_STATE_HOME/scramjet/last-used-models.
 global; retry: enabled, maxRetries (3), baseDelayMs (2000, doubled at each retry, give or take a tenth)
 and provider.maxRetryDelayMs (60000: a longer wait, the provider's or the backoff's, fails the
 request; 0 for no limit); compaction: enabled (true), reserveTokens (16384: compaction runs
-once the context passes the window less this) and keepRecentTokens (20000, kept whole), and
+once the context passes the window less this) and keepRecentTokens (20000, kept whole), each
+at most a quarter of the window on a local runtime's model, and
 branchSummary.reserveTokens (16384); images: autoResize (true: images over 2000x2000 pixels or
 4.5 MB are scaled down before they are sent) and blockImages (false; true: no image is sent);
 and the full screen's scrollWheelStep (3 lines a notch,

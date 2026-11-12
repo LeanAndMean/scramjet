@@ -617,11 +617,7 @@ impl Agent {
         let purpose = Purpose::Compaction(automatic);
         let previous = previous_summary(&self.conversation).map(str::to_owned);
         let start = usize::from(previous.is_some());
-        let Compacting {
-            reserve,
-            keep_recent,
-            ..
-        } = self.config.compacting;
+        let (reserve, keep_recent) = self.reserve_and_kept();
         let cut = cut_point(&self.conversation, start, keep_recent);
         if cut == start {
             return Ok(None);
@@ -767,10 +763,23 @@ impl Agent {
 
     /// Whether automatic compaction is on and `tokens` of context fill a `window` (`should_compact`).
     fn full(&self, tokens: u64, window: u64) -> bool {
+        let (reserve, _) = self.reserve_and_kept();
+        self.config.compacting.automatic && should_compact(tokens, window, self.info.input, reserve)
+    }
+
+    /// The settings' `reserveTokens` and `keepRecentTokens`, each at most a quarter of the window
+    /// on a model a local runtime serves: their defaults suit Scramjet's 200k windows, and on
+    /// Ollama's 32k or 40k one compaction would never run, or keep nearly everything.
+    fn reserve_and_kept(&self) -> (u64, u64) {
         let Compacting {
-            automatic, reserve, ..
+            reserve,
+            keep_recent,
+            ..
         } = self.config.compacting;
-        automatic && should_compact(tokens, window, self.info.input, reserve)
+        match (self.info.runtime, self.info.window) {
+            (Some(_), Some(window)) => (reserve.min(window / 4), keep_recent.min(window / 4)),
+            _ => (reserve, keep_recent),
+        }
     }
 
     /// As Scramjet counts the context: the last response's, if the current model gave it, and an
@@ -1685,7 +1694,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
     #[test]
     fn the_threshold_check_the_runtime_window_comes_before_each_request_of_a_turn() {
         let call = || {
-            let events = fixture::call_events(r#"{"command":"true"}"#, full_usage(14_000));
+            let events = fixture::call_events(r#"{"command":"true"}"#, full_usage(23_000));
             let text = serde_json::to_string(&events).unwrap();
             stream(
                 &serde_json::from_str::<Vec<Value>>(&text.replace("\"inert\"", "\"bash\""))
@@ -1737,6 +1746,27 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         let (ui, requests) = run(None, "provider-threshold");
         assert_eq!(ui.waits, [Purpose::Reply, Purpose::Reply]);
         assert_eq!(requests[1]["input"][0]["content"], "remember the goal");
+    }
+
+    #[test]
+    fn a_runtime_model_keeps_at_most_a_quarter_of_its_window_in_reserve_and_whole() {
+        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "runtime-quarter");
+        agent.set_context_window(Some(40_960));
+        assert_eq!(agent.reserve_and_kept(), (16_384, 20_000));
+        assert!(agent.full(24_577, 40_960));
+        agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);
+        assert_eq!(agent.reserve_and_kept(), (10_240, 10_240));
+        assert!(!agent.full(30_720, 40_960));
+        assert!(agent.full(30_721, 40_960));
+        // A smaller setting stays, and so do both on a window four times theirs or more.
+        agent.set_compacting(Compacting {
+            reserve: 4_000,
+            ..Default::default()
+        });
+        assert_eq!(agent.reserve_and_kept(), (4_000, 10_240));
+        agent.set_compacting(Compacting::default());
+        agent.set_context_window(Some(131_072));
+        assert_eq!(agent.reserve_and_kept(), (16_384, 20_000));
     }
 
     #[test]

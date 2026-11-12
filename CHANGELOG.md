@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.172.0 — Compaction fits small local windows
+
+### Changed
+
+- On a model a local runtime serves, `compaction.reserveTokens` and `keepRecentTokens` are each capped at a quarter of its window. With their defaults (16384 and 20000), a window of 16k or less never compacted, and Ollama silently dropped the start of a longer conversation; a 40k one compacted at 24k yet kept 20k whole, so it compacted again at its next check.
+
 ## 2.171.0 — Local models compact within a turn
 
 ### Changed
