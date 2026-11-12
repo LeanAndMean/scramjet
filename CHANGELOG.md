@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.213.0 — ACP loads saved sessions
+
+### Added
+
+- `scramjet acp` loads a saved session (`session/load`), showing its current branch again before it goes on: the prompts, replies, reasoning, each tool call with its result, and compactions, so clients such as Toad can reopen past conversations. A turn that failed is said in a message of its own.
+
 ## 2.212.0 — ACP lists, resumes and closes sessions
 
 ### Added

@@ -402,6 +402,7 @@ pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
     let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>)>, ui: &mut dyn AgentUi| {
         for (_, _, call) in calls.drain(..) {
             if let Some(call) = call {
+                ui.tool_input(&call.arguments);
                 ui.tool_call(call.name, &call.summary(), compact(&call).as_ref());
             }
         }
@@ -447,6 +448,7 @@ pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
                 }
                 // A call whose arguments do not parse had no call line, only its error.
                 if let Some(call) = &call {
+                    ui.tool_input(&call.arguments);
                     ui.tool_call(call.name, &call.summary(), compact(call).as_ref());
                 }
                 let asked = call

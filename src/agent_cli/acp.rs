@@ -13,6 +13,7 @@ use scramjet::agent::{
 };
 use serde_json::{Value, json};
 use std::{
+    cell::Cell,
     collections::HashMap,
     ffi::OsString,
     io::{BufRead, Read, Write},
@@ -297,6 +298,15 @@ struct Turn {
     configuring: Vec<Configure>,
 }
 
+/// How `session/new`, `resume` and `load` start a session.
+#[derive(Clone, Copy, PartialEq)]
+enum Opening {
+    New,
+    Resume,
+    /// Resumed, its current branch replayed before the answer.
+    Load,
+}
+
 /// What a session's thread is sent while it waits between turns.
 enum Job {
     /// Request `id`'s prompt.
@@ -333,8 +343,9 @@ impl Connection {
         }
         match method {
             "initialize" => self.initialize(&id, &params),
-            "session/new" => self.open(&id, &params, false),
-            "session/resume" => self.open(&id, &params, true),
+            "session/new" => self.open(&id, &params, Opening::New),
+            "session/resume" => self.open(&id, &params, Opening::Resume),
+            "session/load" => self.open(&id, &params, Opening::Load),
             "session/list" => self.list(&id, &params),
             "session/close" => self.close(&id, &params),
             "session/prompt" => self.prompt(id, &params),
@@ -413,7 +424,7 @@ impl Connection {
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
-                "loadSession": false,
+                "loadSession": true,
                 "sessionCapabilities": {"list": {}, "resume": {}, "close": {}},
                 "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
                 "mcpCapabilities": {"http": true, "sse": false},
@@ -428,9 +439,9 @@ impl Connection {
         self.out.respond(id, result);
     }
 
-    /// Starts a session in the folder `params` names: a new one, or with `resume` the saved one
-    /// it names, which the client already shows.
-    fn open(&mut self, id: &Value, params: &Value, resume: bool) {
+    /// Starts a session in the folder `params` names: a new one, or the saved one it names,
+    /// which the client already shows when resumed, and is shown again when loaded.
+    fn open(&mut self, id: &Value, params: &Value, opening: Opening) {
         let Some(cwd) = params["cwd"].as_str().map(PathBuf::from) else {
             return self.out.error(id, INVALID_PARAMS, "cwd is required");
         };
@@ -442,9 +453,9 @@ impl Connection {
             Ok(servers) => servers,
             Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
         };
-        let file = match resume {
-            false => None,
-            true => match self.resumable(params, &cwd) {
+        let file = match opening {
+            Opening::New => None,
+            Opening::Resume | Opening::Load => match self.resumable(params, &cwd) {
                 Ok(file) => Some(file),
                 Err((code, message)) => return self.out.error(id, code, &message),
             },
@@ -473,6 +484,9 @@ impl Connection {
                 }
             };
             let mut front = worker.front(session);
+            if opening == Opening::Load {
+                front.replay();
+            }
             front.shown = front.options();
             // Answered here, so that the commands' update follows it.
             let result = json!({"sessionId": front.ui.session, "configOptions": front.shown});
@@ -1074,6 +1088,9 @@ impl Worker {
             stopped: None,
             asked: None,
             cancel: self.cancel.clone(),
+            replaying: false,
+            held: Cell::new(None),
+            thinking: false,
         };
         Acp {
             session,
@@ -1118,6 +1135,16 @@ enum Ended {
 }
 
 impl Acp {
+    /// Shows the session's current branch again, as updates, as the full screen shows a resumed
+    /// session.
+    fn replay(&mut self) {
+        self.ui.replaying = true;
+        self.session.agent.show_conversation(&mut self.ui);
+        self.ui.flush();
+        self.ui.replaying = false;
+        (self.ui.asked, self.ui.stopped, self.ui.thinking) = (None, None, false);
+    }
+
     /// Lists the command sets' commands and the skills for the client.
     fn commands(&mut self) {
         let agent = &self.session.agent;
@@ -1534,11 +1561,33 @@ struct Updates {
     asked: Option<String>,
     /// The session's cancellation, for what is asked without the turn's.
     cancel: Arc<AtomicBool>,
+    /// The session's branch is being shown again (`session/load`).
+    replaying: bool,
+    /// A replayed tool call not sent yet, which takes its result's status and content, so
+    /// that it goes as one `tool_call`.
+    held: Cell<Option<Value>>,
+    /// The last replayed update was reasoning, whose response the next message is part of.
+    thinking: bool,
 }
 
 impl Updates {
     fn update(&self, update: Value) {
+        self.flush();
         self.out.update(&self.session, update);
+    }
+    /// Sends the replayed tool call held, if any.
+    fn flush(&self) {
+        if let Some(held) = self.held.take() {
+            self.out.update(&self.session, held);
+        }
+    }
+    /// Replayed, a message or reasoning starts a response of its own unless it follows the
+    /// reasoning of its own.
+    fn replayed(&mut self, thought: bool) {
+        if !self.thinking {
+            self.responses += 1;
+        }
+        self.thinking = thought;
     }
     fn chunk(&self, kind: &str, text: &str) {
         self.update(self.chunked(kind, text));
@@ -1590,6 +1639,13 @@ impl Updates {
         format!("call-{}", self.calls)
     }
     fn call_update(&self, fields: Value) {
+        let mut held = self.held.take();
+        if let (Some(Value::Object(held)), Value::Object(fields)) = (&mut held, &fields) {
+            held.extend(fields.clone());
+        }
+        if held.is_some() {
+            return self.held.set(held);
+        }
         let mut update = json!({"sessionUpdate": "tool_call_update", "toolCallId": self.call_id()});
         if let (Some(update), Some(fields)) = (update.as_object_mut(), fields.as_object()) {
             update.extend(fields.clone());
@@ -1845,7 +1901,12 @@ impl AgentUi for Updates {
                 self.streamed = true;
                 self.agent_message(text);
             }
-            StreamProgress::Reasoning(text) => self.chunk("agent_thought_chunk", text),
+            StreamProgress::Reasoning(text) => {
+                if self.replaying {
+                    self.replayed(true);
+                }
+                self.chunk("agent_thought_chunk", text)
+            }
             StreamProgress::Call(_) => {}
         }
     }
@@ -1855,6 +1916,9 @@ impl AgentUi for Updates {
         self.say("warning", &text);
     }
     fn assistant(&mut self, text: &str) {
+        if self.replaying {
+            self.replayed(false);
+        }
         if !self.streamed && !text.is_empty() {
             self.agent_message(text);
         }
@@ -1882,6 +1946,13 @@ impl AgentUi for Updates {
         let locations = self.locations();
         if !locations.is_empty() {
             update["locations"] = json!(locations);
+        }
+        if self.replaying {
+            // Whether a replayed write made its file is not known.
+            self.new_file = false;
+            self.thinking = false;
+            self.flush();
+            return self.held.set(Some(update));
         }
         // Whether a write makes its file is known only before it runs.
         self.new_file = name == "write"
@@ -1934,6 +2005,12 @@ impl AgentUi for Updates {
     fn command_started(&mut self, _command: &str, _include: bool) {}
     fn command_result(&mut self, _ran: &UserCommand) {}
     fn stopped(&mut self, error: Option<&str>) {
+        if self.replaying {
+            if let Some(error) = error {
+                self.message(&format!("The turn failed: {error}"));
+            }
+            return;
+        }
         if self.compacting {
             match error {
                 Some(error) => {
@@ -1968,13 +2045,33 @@ impl AgentUi for Updates {
     fn command_sent(&mut self, typed: &str, sent: &str) {
         self.expansion(typed, sent);
     }
-    /// A command queued during the turn: the client sent it as typed.
+    /// A command queued during the turn: the client sent it as typed. Replayed, as typed too.
     fn command_prompt(&mut self, typed: &str, sent: &str) {
+        if self.replaying {
+            self.user_message(typed);
+        }
         self.expansion(typed, sent);
     }
-    fn user_prompt(&mut self, _prompt: &str) {}
-    fn compaction_summary(&mut self, _summary: &str) {}
-    fn branch_summary(&mut self, _summary: &str) {}
+    /// Replayed only: the client sent the prompts of the turns it shows.
+    fn user_prompt(&mut self, prompt: &str) {
+        if self.replaying {
+            self.thinking = false;
+            self.user_message(prompt);
+        }
+    }
+    fn compaction_summary(&mut self, summary: &str) {
+        if self.replaying {
+            let fields = json!({"summary": [{"type": "text", "text": summary}]});
+            self.compaction_update("completed", fields, Some("Context compacted."));
+        }
+    }
+    fn branch_summary(&mut self, summary: &str) {
+        if self.replaying {
+            let fields = json!({"summary": [{"type": "text", "text": summary}],
+                "_meta": {"io.github.leanandmean.scramjet": {"branch": true}}});
+            self.compaction_update("completed", fields, Some("Earlier branch summarized."));
+        }
+    }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
         let text = self.asking(question);
         let options = [

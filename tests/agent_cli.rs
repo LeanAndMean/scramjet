@@ -3721,3 +3721,164 @@ fn acp_lists_resumes_and_closes_saved_sessions() {
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }
+
+#[test]
+#[cfg(unix)]
+fn acp_loads_a_saved_session_replaying_its_branch() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-load-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(&project).unwrap();
+    std::fs::write(project.join("a.txt"), "alpha\n").unwrap();
+    let event = |value: serde_json::Value| value.to_string();
+    let start = |id: &str| {
+        event(serde_json::json!({"type": "message_start",
+            "message": {"id": id, "usage": {"input_tokens": 3, "output_tokens": 1}}}))
+    };
+    let end = |reason: &str| {
+        [
+            event(serde_json::json!({"type": "message_delta",
+                "delta": {"stop_reason": reason}, "usage": {"output_tokens": 4}})),
+            event(serde_json::json!({"type": "message_stop"})),
+        ]
+    };
+    let mut call = vec![
+        start("msg_1"),
+        event(
+            serde_json::json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "thinking", "thinking": ""}}),
+        ),
+        event(
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "thinking_delta", "thinking": "Need the file."}}),
+        ),
+        event(
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "signature_delta", "signature": "s"}}),
+        ),
+        event(serde_json::json!({"type": "content_block_stop", "index": 0})),
+        event(
+            serde_json::json!({"type": "content_block_start", "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "read", "input": {}}}),
+        ),
+        event(
+            serde_json::json!({"type": "content_block_delta", "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": r#"{"path":"a.txt"}"#}}),
+        ),
+        event(serde_json::json!({"type": "content_block_stop", "index": 1})),
+    ];
+    call.extend(end("tool_use"));
+    let mut text = vec![
+        start("msg_2"),
+        event(
+            serde_json::json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        ),
+        event(
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "It says alpha."}}),
+        ),
+        event(serde_json::json!({"type": "content_block_stop", "index": 0})),
+    ];
+    text.extend(end("end_turn"));
+    let (port, bodies) = serve_events(vec![call, text]);
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    let mut ids = 0;
+    let mut request = |stdin: &mut std::process::ChildStdin, method: &str, params| {
+        ids += 1;
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": ids, "method": method, "params": params}),
+        );
+        until(&messages, |message| message["id"] == ids)
+    };
+    let initialized = request(
+        &mut stdin,
+        "initialize",
+        serde_json::json!({"protocolVersion": 1}),
+    );
+    assert_eq!(
+        initialized.0["result"]["agentCapabilities"]["loadSession"],
+        true
+    );
+    let params = serde_json::json!({"cwd": project, "mcpServers": []});
+    let session = request(&mut stdin, "session/new", params).0["result"]["sessionId"].clone();
+    let prompt = serde_json::json!([{"type": "text", "text": "what does a.txt say?"}]);
+    let params = serde_json::json!({"sessionId": session, "prompt": prompt});
+    let (ended, live) = request(&mut stdin, "session/prompt", params);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    for _ in 0..2 {
+        bodies.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+    let params = serde_json::json!({"sessionId": session});
+    request(&mut stdin, "session/close", params);
+
+    let load = |cwd: &std::path::Path| serde_json::json!({"sessionId": session, "cwd": cwd, "mcpServers": []});
+    let (answer, _) = request(&mut stdin, "session/load", load(&scratch.0));
+    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    let (answer, replayed) = request(&mut stdin, "session/load", load(&project));
+    assert!(answer["result"]["configOptions"].is_array(), "{answer}");
+    let updates: Vec<serde_json::Value> = (replayed.iter())
+        .inspect(|message| assert_eq!(message["params"]["sessionId"], session, "{message}"))
+        .map(|message| message["params"]["update"].clone())
+        .collect();
+    let kinds: Vec<&str> = (updates.iter())
+        .map(|update| update["sessionUpdate"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "user_message_chunk",
+            "agent_thought_chunk",
+            "agent_thought_chunk",
+            "tool_call",
+            "agent_message_chunk"
+        ],
+        "{updates:?}"
+    );
+    assert_eq!(updates[0]["content"]["text"], "what does a.txt say?");
+    assert_eq!(updates[1]["content"]["text"], "Need the file.");
+    // Reasoning and its reply share a response; the user's prompt and the call's reply do not.
+    assert_eq!(updates[1]["messageId"], updates[2]["messageId"]);
+    assert_ne!(updates[0]["messageId"], updates[1]["messageId"]);
+    assert_ne!(updates[1]["messageId"], updates[4]["messageId"]);
+    let call = &updates[3];
+    assert_eq!(call["status"], "completed", "{call}");
+    assert_eq!(call["kind"], "read");
+    assert_eq!(call["rawInput"], serde_json::json!({"path": "a.txt"}));
+    assert_eq!(
+        call["locations"],
+        serde_json::json!([{"path": project.join("a.txt")}])
+    );
+    assert!(
+        call["content"][0]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("alpha"),
+        "{call}"
+    );
+    assert_eq!(updates[4]["content"]["text"], "It says alpha.");
+    // The live turn's call carried the same input.
+    let live_call = (live.iter())
+        .map(|message| &message["params"]["update"])
+        .find(|update| update["sessionUpdate"] == "tool_call")
+        .unwrap();
+    assert_eq!(live_call["rawInput"], call["rawInput"]);
+    // Loaded, it goes on from its conversation; loading it again while open is refused.
+    let (answer, _) = request(&mut stdin, "session/load", load(&project));
+    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    let prompt = serde_json::json!([{"type": "text", "text": "and then"}]);
+    let params = serde_json::json!({"sessionId": session, "prompt": prompt});
+    let (ended, _) = request(&mut stdin, "session/prompt", params);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let body = bodies.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(
+        body.contains("what does a.txt say?") && body.contains("and then"),
+        "{body}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
