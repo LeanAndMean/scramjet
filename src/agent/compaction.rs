@@ -372,7 +372,7 @@ fn thinking(item: &Value) -> String {
 }
 
 /// A Responses request's tokens at chars/4: its instructions, tools and input.
-fn request_estimate(request: &Value) -> u64 {
+pub(super) fn request_estimate(request: &Value) -> u64 {
     let tools = request
         .get("tools")
         .map_or(0, |tools| tools.to_string().chars().count());
@@ -721,6 +721,7 @@ impl Agent {
         self.delegated.clear();
         // Unknown until the next response reports it.
         self.usage.context_tokens = None;
+        self.overcount = None;
         ui.usage(
             self.session_tokens(),
             self.context_tokens(),
@@ -922,7 +923,7 @@ impl Agent {
         };
         let (reserve, _) = self.reserve_and_kept();
         let target = window.saturating_sub(reserve);
-        let mut tokens = request_estimate(request);
+        let mut tokens = self.calibrated(request_estimate(request));
         let mut cut = 0;
         if tokens > target
             && let Some(input) = request["input"].as_array_mut()
@@ -931,7 +932,7 @@ impl Agent {
                 .filter(|item| item["type"] == "function_call_output")
                 .map(|item| estimate(std::slice::from_ref(item)))
                 .sum();
-            let rest = tokens - outputs;
+            let rest = tokens.saturating_sub(outputs);
             // When the rest leaves less than the reserve, the outputs take half what is left.
             let room = target
                 .saturating_sub(rest)
@@ -947,7 +948,7 @@ impl Agent {
                 // At two characters a token: chars/4 undercounts output such as `seq`'s, whose digits
                 // qwen3 takes one token each (live, such a request filled 12,224 of 12,288).
                 cut = fit_outputs(input, room * 2, note);
-                tokens = request_estimate(request);
+                tokens = self.calibrated(request_estimate(request));
             }
         }
         if *said {
@@ -983,12 +984,41 @@ impl Agent {
     }
 
     /// The larger of the context as reported and the next request by estimate: its instructions,
-    /// tools and conversation at chars/4.
+    /// tools and conversation at chars/4, `calibrated`.
     fn runtime_context(&self) -> u64 {
         let tools = serde_json::to_string(&self.tool_definitions()).unwrap_or_default();
         let base = (self.instructions().chars().count() + tools.chars().count()) as u64;
-        let estimated = base.div_ceil(4) + estimate(&self.conversation);
+        let estimated = self.calibrated(base.div_ceil(4) + estimate(&self.conversation));
         self.context_size().unwrap_or(0).max(estimated)
+    }
+
+    /// Learns from a reply of `model` how far chars/4 was from the runtime's count of the
+    /// request's `input`, when that count is of the whole request: llama.cpp and vLLM refuse a
+    /// prompt past their window, while Ollama 0.40.16 cuts it to half its window and two tokens
+    /// and reports that, so its count is taken only above half the window.
+    pub(super) fn calibrate(&mut self, model: &str, estimate: u64, input: u64) {
+        let (Some(runtime), Some(window)) = (self.info.runtime, self.info.window) else {
+            return;
+        };
+        let whole = match runtime {
+            super::local::Runtime::LlamaCpp | super::local::Runtime::Vllm => true,
+            super::local::Runtime::Ollama => input > window / 2 + 64,
+            super::local::Runtime::Other => false,
+        };
+        if whole && model == self.config.model {
+            self.overcount = Some((model.to_owned(), estimate as i64 - input as i64));
+        }
+    }
+
+    /// A chars/4 estimate of a request to the current model, less what that overcounted in its
+    /// last measured request (`calibrate`); the items added since count at chars/4.
+    fn calibrated(&self, estimate: u64) -> u64 {
+        match &self.overcount {
+            Some((model, overcount)) if *model == self.config.model => {
+                (estimate as i64 - overcount).max(0) as u64
+            }
+            _ => estimate,
+        }
     }
 }
 
@@ -1913,6 +1943,60 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         let (ui, requests) = run(None, "provider-threshold");
         assert_eq!(ui.waits, [Purpose::Reply, Purpose::Reply]);
         assert_eq!(requests[1]["input"][0]["content"], "remember the goal");
+    }
+
+    #[test]
+    fn a_runtime_model_counts_by_its_runtime_once_the_count_is_of_the_whole_request() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
+        // A 30,000-token window, so a threshold of 22,500; the first request is about 22,000
+        // tokens at chars/4, and a 16,000-character output adds 4,000 more.
+        let run = |runtime: crate::agent::local::Runtime, input: u64, name: &str| {
+            let arguments = json!({"command": "head -c 16000 /dev/zero | tr '\\0' x"});
+            let usage = json!({"input_tokens": input, "output_tokens": 10,
+                "total_tokens": input + 10});
+            let events = fixture::call_events(&arguments.to_string(), usage);
+            let text = serde_json::to_string(&events).unwrap();
+            let call = serde_json::from_str::<Vec<Value>>(&text.replace("\"inert\"", "\"bash\""));
+            let (endpoint, server) = serve(vec![
+                stream(&call.unwrap()),
+                stream(&fixture::text_events("summary", fixture::known_usage())),
+                stream(&fixture::text_events("done", fixture::known_usage())),
+            ]);
+            let (mut agent, _scratch) = agent(endpoint, name);
+            agent.set_context_window(Some(30_000));
+            agent.info.runtime = Some(runtime);
+            let model = agent.config.model.clone();
+            (agent.runtime_windows).insert(model, super::super::turn::RuntimeWindow::Read(30_000));
+            let base = request_estimate(&agent.request());
+            assert!(base < 20_000);
+            let filler = "word ".repeat(((21_900 - base) * 4 / 50) as usize);
+            for _ in 0..10 {
+                agent.add(json!({"role":"user", "content":filler})).unwrap();
+            }
+            let mut ui = Recorder::default();
+            agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+            drop(server);
+            ui.waits
+        };
+        let compacted = [
+            Purpose::Reply,
+            Purpose::Compaction(Some(AutoCompaction::Threshold)),
+            Purpose::Reply,
+        ];
+        // Ollama counted 17,000 of the 22,000 estimated, more than half its window, so the
+        // request was whole: about 21,000 tokens with the output, under the threshold.
+        let waits = run(crate::agent::local::Runtime::Ollama, 17_000, "calibrated");
+        assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
+        // A count of half its window may be of a prompt it cut, so chars/4 stands.
+        let waits = run(crate::agent::local::Runtime::Ollama, 15_002, "cut-count");
+        assert_eq!(waits, compacted);
+        // llama.cpp refuses a prompt past its window, so its count is always whole.
+        let waits = run(crate::agent::local::Runtime::LlamaCpp, 12_000, "llama-cpp");
+        assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
+        let waits = run(crate::agent::local::Runtime::Other, 12_000, "other");
+        assert_eq!(waits, compacted);
     }
 
     /// A turn on an Ollama model with a `window`: a 4,000-character output, then a 60,000 one,

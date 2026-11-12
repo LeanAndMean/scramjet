@@ -626,6 +626,10 @@ pub struct Agent {
     identities: HashMap<String, instructions::Identity>,
     /// What local runtimes said of their models' windows, by model reference (`follow_runtime`).
     runtime_windows: HashMap<String, turn::RuntimeWindow>,
+    /// By how many tokens chars/4 overcounts the current conversation's requests to a model a
+    /// local runtime serves, by its count of the last request it surely did not cut, and for
+    /// which model (`calibrate`); negative when it undercounts.
+    overcount: Option<(String, i64)>,
     /// The models of the user's scope (`set_model_scope`); empty: all.
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
@@ -786,6 +790,7 @@ impl Agent {
             provider: None,
             identities: HashMap::new(),
             runtime_windows: HashMap::new(),
+            overcount: None,
             model_scope: Vec::new(),
             hide_credentials: false,
             unattended: false,
@@ -1430,6 +1435,7 @@ impl Agent {
             context_tokens,
             ..Usage::default()
         };
+        self.overcount = None;
         self.restore_command();
         if let Some(model) = model {
             self.info = self.config.providers.info(&model);
@@ -1457,6 +1463,7 @@ impl Agent {
         self.conversation.clear();
         self.prompts.clear();
         self.usage = Usage::default();
+        self.overcount = None;
         self.restore_command();
         Ok(())
     }

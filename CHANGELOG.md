@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.175.0 — Local models count tokens as their runtime does
+
+### Changed
+
+- On a model a local runtime serves, compaction and the cutting of large tool outputs correct their characters-over-four estimate by the runtime's own count of the last request: by Ollama's when it is above half the window (below it the count may be of a prompt Ollama cut), by llama.cpp's and vLLM's always. Live against Ollama, chars/4 ran 19% over its count for the system prompt and tools; corrected, the next request's estimate was within 12 tokens, so compaction no longer runs early by that much.
+
 ## 2.174.0 — Local models fit a tool output too large for their window
 
 ### Changed

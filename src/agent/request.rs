@@ -160,6 +160,7 @@ impl Agent {
     pub(super) fn start_reply(&mut self, request: Value) -> Result<Replying, AgentError> {
         self.routed()?;
         let (info, retries) = (self.info.clone(), self.config.retries);
+        let estimate = super::compaction::request_estimate(&request);
         let cancel = Arc::new(AtomicBool::new(false));
         let (to, from) = mpsc::channel();
         let stop = cancel.clone();
@@ -190,6 +191,7 @@ impl Agent {
             from,
             cancel,
             model: self.config.model.clone(),
+            estimate,
             held: VecDeque::new(),
         })
     }
@@ -284,6 +286,8 @@ pub(super) struct Replying {
     cancel: Arc<AtomicBool>,
     /// The model asked, which produces the reply, though the session may change it meanwhile.
     pub(super) model: String,
+    /// The request's tokens at chars/4 (`compaction::request_estimate`).
+    pub(super) estimate: u64,
     /// What `pump` left for the turn: the requests sent and how the reply ended.
     held: VecDeque<Streamed>,
 }

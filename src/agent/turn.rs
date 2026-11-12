@@ -346,7 +346,7 @@ finish and is not checked on. Reply to continue.",
                     self.start_reply(request)?
                 }
             };
-            let model = replying.model.clone();
+            let (model, estimate) = (replying.model.clone(), replying.estimate);
             let reply = match self.wait_reply(replying, ui, cancel) {
                 Ok(reply) => reply,
                 Err(AgentError::ContextOverflow(message)) if !self.config.compacting.automatic => {
@@ -373,6 +373,9 @@ to a larger-context model)"
                 Err(error) => return Err(error),
             };
             self.usage.context_tokens = reply.usage.as_ref().and_then(|usage| usage.total_tokens);
+            if let Some(input) = reply.usage.as_ref().and_then(|usage| usage.input_tokens) {
+                self.calibrate(&model, estimate, input);
+            }
             let mut calls = Vec::new();
             let last = reply.items.len().saturating_sub(1);
             let saved = saved_usage(&reply);
