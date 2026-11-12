@@ -54,8 +54,6 @@ pub(super) struct Interactive {
     /// The packages' logins and the providers that list their models themselves, as the
     /// session last read them, for those lists to be kept current (`login::keep_lists_current`).
     pub(super) kept: Arc<Mutex<super::login::Kept>>,
-    /// A next step chosen from a list offered again (`reopen`), to run as if typed.
-    chosen: Option<(String, Start)>,
 }
 
 /// How the session ended.
@@ -119,6 +117,7 @@ impl Interactive {
                 agent,
                 settings,
                 scope: Vec::new(),
+                chosen: None,
             },
             ui,
             screen,
@@ -130,7 +129,6 @@ impl Interactive {
             keybindings,
             in_turn: false,
             kept,
-            chosen: None,
         };
         interactive.use_theme();
         Ok(interactive)
@@ -253,7 +251,7 @@ impl Interactive {
             if !self.builtin(prompt) {
                 queued = self.send(prompt, start.unwrap_or(Start::Typed));
             } else {
-                queued = self.chosen.take();
+                queued = self.session.chosen.take();
             }
         }
     }
@@ -348,61 +346,13 @@ impl Interactive {
         self.run_turn(Some(prompt), start)
     }
 
-    /// Asks again the question going back in the session reached, and goes on with its turn
-    /// (`Navigated::Moved`); the next step it ends with runs next.
+    /// Asks again the question going back in the session reached (`drive::ask_again`).
     pub(super) fn ask_again(&mut self) {
-        self.chosen = self.run_turn(None, Start::Typed);
+        drive::ask_again(self);
     }
 
-    /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was
-    /// left in (`Agent::resume_turn`), as `send` says.
     fn run_turn(&mut self, prompt: Option<&str>, start: Start) -> Option<(String, Start)> {
-        let hide = (self.session.settings.hide_credentials).hides(start == Start::Unattended);
-        self.session.agent.set_hide_credentials(hide);
-        self.session
-            .agent
-            .set_unattended(start == Start::Unattended);
-        let model = self.session.agent.model().to_owned();
-        let result = match self.screen.is_some() {
-            true => self.turn_on_screen(prompt),
-            false => self.during_turn(|agent, ui, cancel| match prompt {
-                Some(prompt) => agent.turn(prompt, ui, cancel),
-                None => agent.resume_turn(ui, cancel),
-            }),
-        };
-        // The agent's `switch_scramjet_model`, remembered as the user's choices are.
-        if self.session.agent.model() != model {
-            self.remember_model();
-        }
-        if let Err(error) = result {
-            // As the session saved it, for a resume to show it so.
-            let error = match error {
-                AgentError::Cancelled => None,
-                error => Some(error.to_string()),
-            };
-            match &self.screen {
-                Some(screen) => screen.event(Event::Stopped(error)),
-                None => self.ui.stopped(error.as_deref()),
-            }
-            if let Some(notice) = self.session.agent.take_interrupted() {
-                match &self.screen {
-                    Some(screen) => screen.event(Event::Notice(notice)),
-                    None => self.ui.notice(&notice),
-                }
-            }
-        }
-        // The full screen's footer shows the same.
-        if self.screen.is_none() {
-            self.say_styled(style::MUTED, &usage_line(&self.session.agent));
-        }
-        match (
-            self.session.agent.take_completed(),
-            self.session.agent.take_suggestion(),
-        ) {
-            (Some(completed), _) => drive::next_step(self, &completed),
-            (None, Some(suggested)) => drive::suggested(self, suggested),
-            (None, None) => None,
-        }
+        drive::run_turn(self, prompt, start)
     }
 
     /// Runs `prompt` as a model turn on the full screen, as `on_screen` does (`run_turn`). Where the turn
@@ -523,38 +473,9 @@ impl Interactive {
         result
     }
 
-    /// Offers again on the full screen the next-step list going back in the session reached, and
-    /// names its steps in line mode, which has no list to choose from; the step chosen runs
-    /// next, and `prompt`, the prompt gone back to, goes into the editor if none is.
+    /// Offers again the next-step list going back in the session reached (`drive::reopen`).
     pub(super) fn reopen(&mut self, offer: Reopened, prompt: Option<String>) {
-        if self.screen.is_none() {
-            let steps: Vec<_> = (offer.steps.iter().enumerate())
-                .map(|(at, step)| {
-                    let recommended = if offer.recommended == Some(at) {
-                        " (recommended)"
-                    } else {
-                        ""
-                    };
-                    format!("{}{}{recommended}", step.label(), step.fresh_mark())
-                })
-                .collect();
-            self.say(&format!("Next steps offered here: {}", steps.join(", ")));
-        } else {
-            let title = match offer.command {
-                Some(_) => "Select next step",
-                None => "Agent suggests a next step",
-            };
-            let (source, steps) = (offer.source(), &offer.steps);
-            if let Some((step, start, routed)) =
-                drive::offer(self, title, source, steps, offer.recommended, None)
-            {
-                self.chosen = drive::take_step(self, step, start, routed);
-                return;
-            }
-        }
-        if let Some(prompt) = prompt {
-            self.set_text(prompt);
-        }
+        drive::reopen(self, offer, prompt);
     }
 
     /// Remembers the session's model as the one chosen last (`drive::remember_model`).
@@ -793,6 +714,27 @@ impl Interactive {
 impl Front for Interactive {
     fn session(&mut self) -> &mut Session {
         &mut self.session
+    }
+
+    fn ui(&mut self) -> &mut dyn AgentUi {
+        Interactive::ui(self)
+    }
+
+    fn turn(&mut self, prompt: Option<&str>) -> Result<(), AgentError> {
+        match self.screen.is_some() {
+            true => self.turn_on_screen(prompt),
+            false => self.during_turn(|agent, ui, cancel| match prompt {
+                Some(prompt) => agent.turn(prompt, ui, cancel),
+                None => agent.resume_turn(ui, cancel),
+            }),
+        }
+    }
+
+    /// The usage line, which the full screen's footer shows instead.
+    fn turn_ended(&mut self) {
+        if self.screen.is_none() {
+            self.say_styled(style::MUTED, &usage_line(&self.session.agent));
+        }
     }
 
     fn chooses(&self) -> bool {

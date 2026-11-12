@@ -2,7 +2,9 @@
 //! cycles through, and what happens between turns (a completed command's next step), apart
 //! from how each front end shows it (`Front`).
 use super::settings::Settings;
-use scramjet::agent::{Agent, Completed, Next, Source, Step, Suggested};
+use scramjet::agent::{
+    Agent, AgentError, AgentUi, Completed, Next, Reopened, Source, Step, Suggested,
+};
 use std::time::Duration;
 
 /// How long `/autopilot on` waits before it chooses the recommended next step, as Scramjet.
@@ -13,6 +15,8 @@ pub(super) struct Session {
     pub(super) settings: Settings,
     /// The patterns of the models Ctrl+P cycles through (`scope::resolve`); empty: all.
     pub(super) scope: Vec<String>,
+    /// A next step chosen between turns (`reopen`, `ask_again`), to run next as if typed.
+    pub(super) chosen: Option<(String, Start)>,
 }
 
 /// How a prompt came to run.
@@ -54,6 +58,13 @@ pub(super) struct Routed {
 /// What drives a `Session` and shows it: the full screen, line mode.
 pub(super) trait Front {
     fn session(&mut self) -> &mut Session;
+    /// Where the agent shows what it does.
+    fn ui(&mut self) -> &mut dyn AgentUi;
+    /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was
+    /// left in (`Agent::resume_turn`), through any pauses for what the user typed meanwhile.
+    fn turn(&mut self, prompt: Option<&str>) -> Result<(), AgentError>;
+    /// Shows what a turn ended with, once its stop is shown.
+    fn turn_ended(&mut self);
     /// Whether the user can choose from lists and answer questions as they show.
     fn chooses(&self) -> bool;
     /// Lets the user choose one of the steps offered; `None`: dismissed, or nobody to choose.
@@ -70,6 +81,84 @@ pub(super) trait Front {
     fn recorded(&mut self, record: &str);
     /// Starts a new session; false if it could not.
     fn new_session(&mut self) -> bool;
+}
+
+/// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was left
+/// in. Returns the next step to run, when the turn's command completed with one, or the user
+/// chose one the agent suggested.
+pub(super) fn run_turn(
+    front: &mut dyn Front,
+    prompt: Option<&str>,
+    start: Start,
+) -> Option<(String, Start)> {
+    let Session {
+        agent, settings, ..
+    } = front.session();
+    agent.set_hide_credentials(settings.hide_credentials.hides(start == Start::Unattended));
+    agent.set_unattended(start == Start::Unattended);
+    let model = agent.model().to_owned();
+    let result = front.turn(prompt);
+    // The agent's `switch_scramjet_model`, remembered as the user's choices are.
+    if front.session().agent.model() != model {
+        remember_model(front);
+    }
+    if let Err(error) = result {
+        // As the session saved it, for a resume to show it so.
+        let error = match error {
+            AgentError::Cancelled => None,
+            error => Some(error.to_string()),
+        };
+        front.ui().stopped(error.as_deref());
+        if let Some(notice) = front.session().agent.take_interrupted() {
+            front.ui().notice(&notice);
+        }
+    }
+    front.turn_ended();
+    let agent = &mut front.session().agent;
+    match (agent.take_completed(), agent.take_suggestion()) {
+        (Some(completed), _) => next_step(front, &completed),
+        (None, Some(suggested)) => self::suggested(front, suggested),
+        (None, None) => None,
+    }
+}
+
+/// Asks again the question going back in the session reached, and goes on with its turn; the
+/// next step it ends with runs next.
+pub(super) fn ask_again(front: &mut dyn Front) {
+    front.session().chosen = run_turn(front, None, Start::Typed);
+}
+
+/// Offers again the next-step list going back in the session reached, or names its steps where
+/// nobody chooses from lists; the step chosen runs next, and `prompt`, the prompt gone back to,
+/// starts the next prompt if none is chosen.
+pub(super) fn reopen(front: &mut dyn Front, offer: Reopened, prompt: Option<String>) {
+    if !front.chooses() {
+        let steps: Vec<_> = (offer.steps.iter().enumerate())
+            .map(|(at, step)| {
+                let recommended = match offer.recommended == Some(at) {
+                    true => " (recommended)",
+                    false => "",
+                };
+                format!("{}{}{recommended}", step.label(), step.fresh_mark())
+            })
+            .collect();
+        front.say(&format!("Next steps offered here: {}", steps.join(", ")));
+    } else {
+        let title = match offer.command {
+            Some(_) => "Select next step",
+            None => "Agent suggests a next step",
+        };
+        let (source, steps) = (offer.source(), &offer.steps);
+        if let Some((step, start, routed)) =
+            self::offer(front, title, source, steps, offer.recommended, None)
+        {
+            front.session().chosen = take_step(front, step, start, routed);
+            return;
+        }
+    }
+    if let Some(prompt) = prompt {
+        front.edit(prompt);
+    }
 }
 
 /// The next step of a completed command, as Scramjet routes it: an edge set to `chain` or a
