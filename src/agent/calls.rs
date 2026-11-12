@@ -1749,6 +1749,9 @@ get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scra
                 ("search", json!({"q":"a"})),
                 ("open", json!({"path":"b.txt","line_start":2,"line_end":2})),
                 ("read", json!({"path":"b.txt","line_start":1,"line_end":1})),
+                // Its find-in-page: text to look for in files.
+                ("find", json!({"query":"Xa","path":"b.txt","max_results":5})),
+                ("find", json!({"pattern":"*.txt"})),
             ]),
             tool_call("call_2", "bash", json!({"command":"touch x.txt"})),
             tool_call(
@@ -1797,6 +1800,8 @@ sed.\n- Be concise";
                 "Tool search not found. Available tools: read, grep",
                 "Xay\n",
                 "X.y\n\n[Showing lines 1-1 of 2. Use offset=2 to continue.]",
+                "b.txt:2: Xay",
+                "Tool find not found. Available tools: read, grep",
                 "Tool bash not found. Available tools: read, grep",
                 "Tool get_scramjet_user_input not found. Available tools: read, grep"
             ]
@@ -1815,6 +1820,8 @@ sed.\n- Be concise";
                 "search",
                 "read",
                 "read",
+                "grep",
+                "find",
                 "bash",
                 question::NAME
             ]

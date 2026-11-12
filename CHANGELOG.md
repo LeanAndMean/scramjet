@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.182.4 — gpt-oss's find-in-page
+
+### Fixed
+
+- gpt-oss's `find` calls that carry its browser's `query` (text to look for, not a file pattern) run as a literal `grep`, where they failed for a missing `pattern`; its `max_results` on `find` sets the limit.
+
 ## 2.182.3 — Paths grep and find show
 
 ### Fixed

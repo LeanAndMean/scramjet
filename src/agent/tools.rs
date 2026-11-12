@@ -164,16 +164,11 @@ pub(super) fn not_found(name: &str, offered: &[impl AsRef<str>]) -> String {
 /// training. gpt-oss calls grep `search` and read `open` (its built-in browser's tools), with our
 /// arguments or its browser's (`query`, `ignore_case`, `max_results`; `line_start`, `line_end`,
 /// also given to read), and keeps calling them however often it is told no such tool exists.
+/// It also gives `find` a `query` for text in files, as its browser's find-in-page.
 /// The call is rewritten, name and arguments, so its history shows ours.
 pub(super) fn rename_habit(item: &mut Value, offered: &[impl AsRef<str>]) {
     let offers = |tool: &str| offered.iter().any(|name| name.as_ref() == tool);
-    let ours = match item["name"].as_str() {
-        Some("search") if !offers("search") => "grep",
-        Some("open") if !offers("open") => "read",
-        Some("read") => "read",
-        _ => return,
-    };
-    if item["type"] != "function_call" || !offers(ours) {
+    if item["type"] != "function_call" {
         return;
     }
     let Ok(Value::Object(mut arguments)) =
@@ -181,6 +176,19 @@ pub(super) fn rename_habit(item: &mut Value, offered: &[impl AsRef<str>]) {
     else {
         return;
     };
+    let queried = arguments.get("query").is_some_and(Value::is_string)
+        && !arguments.get("pattern").is_some_and(Value::is_string);
+    let ours = match item["name"].as_str() {
+        Some("search") if !offers("search") => "grep",
+        Some("find") if queried => "grep",
+        Some("find") if arguments.contains_key("max_results") => "find",
+        Some("open") if !offers("open") => "read",
+        Some("read") => "read",
+        _ => return,
+    };
+    if !offers(ours) {
+        return;
+    }
     let rename = |arguments: &mut serde_json::Map<String, Value>, theirs: &str, ours: &str| {
         if let Some(value) = arguments.remove(theirs) {
             arguments.entry(ours).or_insert(value);
@@ -195,6 +203,8 @@ pub(super) fn rename_habit(item: &mut Value, offered: &[impl AsRef<str>]) {
             arguments.insert("literal".into(), json!(true));
         }
         rename(&mut arguments, "ignore_case", "ignoreCase");
+        rename(&mut arguments, "max_results", "limit");
+    } else if ours == "find" {
         rename(&mut arguments, "max_results", "limit");
     } else {
         let given = |key| arguments.contains_key(key);
@@ -2343,6 +2353,33 @@ mod tests {
 
     fn call(name: &str, arguments: Value) -> Call<'_> {
         Call { name, arguments }
+    }
+
+    #[test]
+    fn gpt_oss_find_keeps_its_glob_and_takes_max_results_as_limit() {
+        let habit = |arguments: Value| {
+            let mut item =
+                json!({"type":"function_call","name":"find","arguments":arguments.to_string()});
+            rename_habit(&mut item, &["find", "grep"]);
+            let arguments: Value =
+                serde_json::from_str(item["arguments"].as_str().unwrap()).unwrap();
+            (item["name"].as_str().unwrap().to_owned(), arguments)
+        };
+        assert_eq!(
+            habit(json!({"pattern":"*.rs","max_results":3})),
+            ("find".into(), json!({"pattern":"*.rs","limit":3}))
+        );
+        assert_eq!(
+            habit(json!({"query":"a b","path":""})),
+            (
+                "grep".into(),
+                json!({"pattern":"a b","literal":true,"path":""})
+            )
+        );
+        assert_eq!(
+            habit(json!({"pattern":"x","query":"y"})),
+            ("find".into(), json!({"pattern":"x","query":"y"}))
+        );
     }
 
     #[test]
