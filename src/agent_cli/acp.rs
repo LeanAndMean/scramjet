@@ -58,7 +58,9 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         initialized: false,
         notices: false,
         compaction: false,
+        scramjet: false,
         sessions: HashMap::new(),
+        renamed: Arc::default(),
     };
     let (sent, inputs) = mpsc::channel();
     on_sigterm(sent.clone()).map_err(|e| format!("acp: SIGTERM: {e}"))?;
@@ -195,8 +197,15 @@ struct Connection {
     notices: bool,
     /// The client offered `session.compaction`.
     compaction: bool,
+    /// The client knows Scramjet's extensions (`_meta["io.github.leanandmean.scramjet"]`).
+    scramjet: bool,
     sessions: HashMap<String, Handle>,
+    /// The ids sessions took later (a next step's fresh session), each with the one `sessions`
+    /// holds it under.
+    renamed: Renamed,
 }
+
+type Renamed = Arc<Mutex<HashMap<String, String>>>;
 
 /// What this thread holds of a session that runs on its own.
 struct Handle {
@@ -248,8 +257,7 @@ impl Connection {
 
     fn notified(&mut self, method: &str, params: &Value) {
         if method == "session/cancel"
-            && let Some(handle) =
-                (params["sessionId"].as_str()).and_then(|id| self.sessions.get(id))
+            && let Some(handle) = self.handle(params)
         {
             let mut turn = lock(&handle.turn);
             if turn.running {
@@ -259,11 +267,21 @@ impl Connection {
         }
     }
 
+    /// The session `params` names, by any id it had.
+    fn handle(&self, params: &Value) -> Option<&Handle> {
+        let id = params["sessionId"].as_str()?;
+        match lock(&self.renamed).get(id) {
+            Some(first) => self.sessions.get(first),
+            None => self.sessions.get(id),
+        }
+    }
+
     fn initialize(&mut self, id: &Value, params: &Value) {
         self.initialized = true;
         let capabilities = &params["clientCapabilities"];
         self.notices = capabilities["session"]["notices"].is_object();
         self.compaction = capabilities["session"]["compaction"].is_object();
+        self.scramjet = capabilities["_meta"]["io.github.leanandmean.scramjet"].is_object();
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
@@ -300,6 +318,8 @@ impl Connection {
             out: self.out.clone(),
             notices: self.notices,
             compaction: self.compaction,
+            scramjet: self.scramjet,
+            renamed: self.renamed.clone(),
             cancel: cancel.clone(),
             turn: turn.clone(),
         };
@@ -348,8 +368,7 @@ impl Connection {
     }
 
     fn prompt(&mut self, id: Value, params: &Value) {
-        let Some(handle) = (params["sessionId"].as_str()).and_then(|id| self.sessions.get(id))
-        else {
+        let Some(handle) = self.handle(params) else {
             return self.out.error(&id, INVALID_PARAMS, "no such session");
         };
         let prompt = match prompt_content(&params["prompt"]) {
@@ -559,6 +578,8 @@ struct Worker {
     out: Out,
     notices: bool,
     compaction: bool,
+    scramjet: bool,
+    renamed: Renamed,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
 }
@@ -567,6 +588,7 @@ impl Worker {
     fn front(self, session: Session) -> Acp {
         let ui = Updates {
             out: self.out,
+            first: session.agent.session_id(),
             session: session.agent.session_id(),
             notices: self.notices,
             compaction: self.compaction,
@@ -592,6 +614,8 @@ impl Worker {
             cancel: self.cancel,
             turn: self.turn,
             reason: None,
+            scramjet: self.scramjet,
+            renamed: self.renamed,
         }
     }
 }
@@ -605,6 +629,8 @@ struct Acp {
     /// The stop reason of a model turn that ended without failing though it went no further:
     /// `max_tokens`, `refusal`.
     reason: Option<&'static str>,
+    scramjet: bool,
+    renamed: Renamed,
 }
 
 /// How a prompt's turns ended.
@@ -749,14 +775,26 @@ impl Front for Acp {
     fn recorded(&mut self, record: &str) {
         self.ui.notice(record);
     }
+    /// A client that knows Scramjet follows the new session's id; others keep the thread's,
+    /// and are told in it.
     fn session_changed(&mut self, message: &str, _change: Change) {
-        self.ui.notice(message);
+        let id = self.session.agent.session_id();
+        if self.scramjet && id != self.ui.session {
+            let params = json!({"sessionId": self.ui.session, "newSessionId": id});
+            self.ui.out.send(&json!({"jsonrpc": "2.0",
+                "method": "_io.github.leanandmean.scramjet/session_changed", "params": params}));
+            lock(&self.renamed).insert(id.clone(), self.ui.first.clone());
+            self.ui.session = id;
+        }
+        self.ui.tell(message);
     }
 }
 
 /// The agent's interface in a session: `session/update` notifications to the client.
 struct Updates {
     out: Out,
+    /// The session's id at its start, and the one its updates carry.
+    first: String,
     session: String,
     notices: bool,
     /// The client offered `session.compaction`.
@@ -912,6 +950,14 @@ impl Updates {
             .filter_map(|edit| Some((edit["oldText"].as_str()?, edit["newText"].as_str()?)))
             .map(|(old, new)| json!({"type": "diff", "path": path, "oldText": old, "newText": new}))
             .collect()
+    }
+    /// A notice that matters, as an agent message of its own without `session.notices`.
+    fn tell(&mut self, text: &str) {
+        if self.notices {
+            return self.say("info", text);
+        }
+        self.responses += 1;
+        self.agent_message(text);
     }
     fn say(&self, severity: &str, text: &str) {
         match self.notices {

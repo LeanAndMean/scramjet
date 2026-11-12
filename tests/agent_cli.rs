@@ -2666,3 +2666,139 @@ fn acp_shows_compactions_and_what_commands_sent() {
         assert!(child.wait().unwrap().success());
     }
 }
+
+#[test]
+#[cfg(unix)]
+fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-fresh-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    let flow = project.join(".scramjet/flow/commands");
+    std::fs::create_dir_all(&flow).unwrap();
+    let step = "---\nnext:\n  mode: closed\n  candidates:\n    - name: flow:done\n---\nStep.\n";
+    std::fs::write(flow.join("flow:step.md"), step).unwrap();
+    std::fs::write(flow.join("flow:done.md"), "Finish.\n").unwrap();
+    let autonomy = "edges:\n  flow:step:\n    flow:done: chain\n";
+    std::fs::write(project.join(".scramjet/autonomy.yaml"), autonomy).unwrap();
+    let report = |text: &str, input: serde_json::Value| {
+        let mut events = vec![
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}})
+            .to_string(),
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            serde_json::json!({"type": "content_block_start", "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_1",
+                    "name": "report_scramjet_command_status", "input": {}}})
+            .to_string(),
+            serde_json::json!({"type": "content_block_delta", "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": input.to_string()}})
+            .to_string(),
+            r#"{"type":"content_block_stop","index":1}"#.to_owned(),
+        ];
+        events.extend([
+            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#.to_owned(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]);
+        events
+    };
+    for follows in [true, false] {
+        let (port, _bodies) = serve_events(vec![
+            report(
+                "Stepped.",
+                serde_json::json!({"status": "completed", "summary": "Stepped.",
+                    "next_steps": [{"message": "/flow:done", "fresh_session": true,
+                        "reason": "Finish."}],
+                    "recommended_next_step": 0}),
+            ),
+            report(
+                "All done.",
+                serde_json::json!({"status": "completed", "summary": "Done."}),
+            ),
+        ]);
+        let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+        let capabilities = match follows {
+            true => serde_json::json!({"_meta": {"io.github.leanandmean.scramjet": {}}}),
+            false => serde_json::json!({}),
+        };
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
+        );
+        next(&messages);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+                "params": {"cwd": project, "mcpServers": []}}),
+        );
+        let session = next(&messages)["result"]["sessionId"].clone();
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+                "params": {"sessionId": session,
+                    "prompt": [{"type": "text", "text": "/flow:step"}]}}),
+        );
+        let (answer, before) = until(&messages, |message| message.get("id").is_some());
+        assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+        let changed = (before.iter()).position(|message| {
+            message["method"] == "_io.github.leanandmean.scramjet/session_changed"
+        });
+        let ids = |messages: &[serde_json::Value]| {
+            let mut ids: Vec<_> = (messages.iter())
+                .filter(|message| message["method"] == "session/update")
+                .map(|message| message["params"]["sessionId"].clone())
+                .collect();
+            ids.dedup();
+            ids
+        };
+        let texts: Vec<&str> = (before.iter())
+            .filter_map(|message| message["params"]["update"]["content"]["text"].as_str())
+            .collect();
+        assert!(texts.contains(&"/flow:done"), "{texts:?}");
+        assert!(texts.contains(&"All done."), "{texts:?}");
+        let fresh = match follows {
+            true => {
+                let at = changed.unwrap_or_else(|| panic!("{before:?}"));
+                let params = &before[at]["params"];
+                assert_eq!(params["sessionId"], session, "{params}");
+                let fresh = params["newSessionId"].clone();
+                assert_ne!(fresh, session);
+                assert_eq!(ids(&before[..at]), std::slice::from_ref(&session));
+                assert_eq!(ids(&before[at..]), std::slice::from_ref(&fresh));
+                fresh
+            }
+            false => {
+                assert_eq!(changed, None, "{before:?}");
+                assert_eq!(ids(&before), std::slice::from_ref(&session));
+                assert!(
+                    texts
+                        .iter()
+                        .any(|text| text.starts_with("✓ New session started")),
+                    "{texts:?}"
+                );
+                session.clone()
+            }
+        };
+        // The new id reaches the session, and with a follower so does the old one.
+        for id in [&fresh, &session] {
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
+                    "params": {"sessionId": id, "prompt": [{"type": "text", "text": "/model"}]}}),
+            );
+            let refused = next(&messages);
+            assert!(
+                refused["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("built-in"),
+                "{refused}"
+            );
+        }
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+    }
+}

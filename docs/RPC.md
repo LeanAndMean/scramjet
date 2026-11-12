@@ -59,7 +59,7 @@ ACP lets a connection hold several sessions, so a client may open several thread
 - **`session/resume`:** the same without the replay.
 - **`session/list`** `{cwd?, cursor?}`: `/resume`'s list, newest first, 50 a page, every project's when `cwd` is omitted. Each has `sessionId`, `cwd`, `title` (its name, else its first prompt), `updatedAt`, and `_meta` with `parentSession` (its chain) and the session file's path.
 - **`session/close`:** cancels the session's turn and drops its driver; the file stays. **`session/delete`:** as Ctrl+D in `/resume` (to the trash where a `trash` command exists): refused for a session active on the connection.
-- **Forks, branches, the tree, names:** extensions (section 8). A new session from a next step's `freshSession` or `/clear` in the core sends `_io.github.leanandmean.scramjet/session_changed` with the new `sessionId` (a Scramjet client follows it); other clients see the old session end its turn, and `session/list` shows the new one.
+- **Forks, branches, the tree, names:** extensions (section 8). A new session from a next step's `freshSession` or `/clear` in the core sends `_io.github.leanandmean.scramjet/session_changed` `{sessionId, newSessionId}` to a client that knows the extension, whose updates then carry the new id; either id reaches the session. Other clients keep the id they know for the thread, which goes on in the new session, said in an agent message (a notice with `session.notices`); `session/list` shows both files.
 
 ## 4. A prompt turn
 

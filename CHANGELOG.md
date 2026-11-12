@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.206.0 — ACP follows a next step's fresh session
+
+### Added
+
+- In `scramjet acp`, a next step that starts a fresh session sends `_io.github.leanandmean.scramjet/session_changed` with the new session's id to a client that knows Scramjet's extensions, and its updates then carry that id. Other clients keep their thread's id and are told in it that a new session started.
+
 ## 2.205.0 — ACP shows subagents' children
 
 ### Added
