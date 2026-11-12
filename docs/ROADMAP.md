@@ -92,7 +92,9 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 **Ahead of RPC mode (user decisions, second steer of 2026-11-11):** the private package's Windows login and the `[Providers]` banner, the progress indicator, item 52, the linter, setting up command-set repositories (with SemVer for Mach 12 and darkstar), other harnesses' sessions, write access granted while working, then local models in `/login` ([design](DESIGN.md#ahead-of-rpc-mode-2026-11-11)).
 
-**RPC mode (user decision, 2026-11-09):** `scramjet --mode rpc` for front ends built in other repositories ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)), after the platforms and before what is left of S3's parallel work and S5, now the lowest priority. Its protocol design is signed off by the user before it is built; no network surface and no daemon in this repository.
+**RPC mode (user decisions, 2026-11-09 and 2026-11-12):** headless over stdio on the Agent Client Protocol (ACP), with Scramjet's extras as extensions and sign-in through the protocol, for front ends built in other repositories ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)), before what is left of S3's parallel work and S5, now the lowest priority. Signed off on 2026-11-12; [RPC.md](RPC.md) is rewritten around ACP, then built from its stage 1 (the full screen onto a shared session driver). No network surface and no daemon in this repository.
+
+**Next (steer of 2026-11-12):** MCP servers outside the sandbox; then the local-model work trimmed to what is not specific to one model and retested on Qwen 3.8 27B ([design](DESIGN.md#local-models-scope-2026-11-12)); then RPC mode.
 
 ## S5 — Capacity and admission hardening
 

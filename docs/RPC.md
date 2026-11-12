@@ -1,6 +1,6 @@
 # RPC mode: proposal
 
-**Status: proposal, not signed off.** Nothing here is built. The user signs it off, changes it or drops parts of it at a steer ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). The decisions it needs are listed at the end. Written 2026-11-09 against scramjet-rs 0.125.0 and Scramjet's `packages/coding-agent/docs/rpc.md`.
+**Status: signed off at the steer of 2026-11-12, to be rewritten before anything is built.** The user took decisions 1–3 and 6 as below, reversed 5 (sign-in over RPC, by ACP's `authenticate` and `logout`), and for 4 chose the Agent Client Protocol (ACP) as the base in place of Scramjet's protocol and message shape, Scramjet's extras as extensions ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). Sections 2–6 still describe Scramjet's protocol until that rewrite; section 1 and its build order stand. Written 2026-11-09 against scramjet-rs 0.125.0 and Scramjet's `packages/coding-agent/docs/rpc.md`.
 
 `scramjet --mode rpc [options]` runs headless. A program that starts it writes commands to its stdin and reads responses, events and requests from its stdout, one JSON object per line. A client written for Scramjet's RPC mode should mostly work: names and shapes follow Scramjet's wherever scramjet-rs has the feature. Diagnostics go to stderr, never stdout.
 
