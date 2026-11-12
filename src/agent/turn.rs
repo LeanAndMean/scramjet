@@ -353,7 +353,6 @@ finish and is not checked on. Reply to continue.",
     fn run(&mut self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Result<(), AgentError> {
         let mut overflow_recovered = false;
         let mut past_window_said = false;
-        let mut thought_only_asked = false;
         for _ in 0..MAX_STEPS {
             // The calls a pause left running come first.
             if let Some(calls) = self.calls.take()
@@ -419,7 +418,6 @@ to a larger-context model)"
                 .filter(|&input| self.calibrate(&model, estimate, input))
                 .map(|input| json!({"estimate": estimate, "input": input}));
             let mut calls = Vec::new();
-            let thought_only = thought_only(&reply.items);
             let last = reply.items.len().saturating_sub(1);
             let saved = saved_usage(&reply);
             let timing = reply.timing.as_ref().map(saved_timing);
@@ -461,21 +459,8 @@ to a larger-context model)"
                 if self.continue_queued(ui)? {
                     continue;
                 }
-                // gpt-oss on Ollama now and then stops after reasoning about its next call. Chat
-                // Completions leaves such a reply out of the request, so it is asked again as is.
-                if thought_only
-                    && !thought_only_asked
-                    && self.info.protocol == super::client::Protocol::Completions
-                {
-                    thought_only_asked = true;
-                    ui.notice(
-                        "The reply was reasoning only, with no answer or tool call: asking again",
-                    );
-                    continue;
-                }
                 return Ok(());
             }
-            thought_only_asked = false;
             let calls = self.start_calls(calls, ui);
             if self.after_calls(calls, ui, cancel)? {
                 return Ok(());
@@ -543,23 +528,6 @@ to a larger-context model)"
 /// A response's usage as saved with its last item (`USAGE`), as Scramjet's usage counts it:
 /// input tokens neither read from the cache nor written to it, output tokens, cache reads and
 /// writes, and the cost when it is known.
-/// Whether a reply's items are reasoning with text, and nothing said or called.
-fn thought_only(items: &[Value]) -> bool {
-    let mut thought = false;
-    for item in items {
-        match item["type"].as_str() {
-            Some("reasoning") => {
-                let parts = item["summary"].as_array().into_iter().flatten();
-                let mut texts = parts.filter_map(|part| part["text"].as_str());
-                thought |= texts.any(|text| !text.trim().is_empty());
-            }
-            Some("message") if message_text(item).trim().is_empty() => {}
-            _ => return false,
-        }
-    }
-    thought
-}
-
 pub(super) fn saved_usage(reply: &super::client::Reply) -> Option<Value> {
     let usage = reply.usage.as_ref()?;
     let read = usage.cached_input_tokens.unwrap_or(0);
@@ -615,50 +583,6 @@ mod tests {
         question, show_items,
     };
     use crate::provider_fixture as fixture;
-
-    #[test]
-    fn a_completions_reply_of_reasoning_only_is_asked_again_once() {
-        let chat = |delta: Value| {
-            let chunks = [
-                json!({"choices": [{"index": 0, "delta": delta}]}),
-                json!({"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}),
-            ];
-            let mut body: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
-            body.push_str("data: [DONE]\n\n");
-            format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\r\n{body}",
-                body.len()
-            )
-            .into_bytes()
-        };
-        let thought = || chat(json!({"reasoning": "Let's search for it."}));
-        let (endpoint, server) = serve(vec![
-            thought(),
-            thought(),
-            thought(),
-            chat(json!({"content": "Found."})),
-        ]);
-        let (mut agent, _scratch) = agent(endpoint, "thought-only");
-        agent.set_providers(crate::agent::providers::Providers::given(
-            json!({"providers": {"local": {
-            "baseUrl": format!("http://{endpoint}/v1"), "api": "openai-completions",
-            "models": [{"id": "gpt-oss:20b", "reasoning": true}]}}}),
-        ));
-        agent.set_model("local/gpt-oss:20b").unwrap();
-        let mut ui = Recorder::default();
-        let cancel = AtomicBool::new(false);
-        agent.turn("look", &mut ui, &cancel).unwrap();
-        agent.turn("again", &mut ui, &cancel).unwrap();
-        let asked =
-            "notice The reply was reasoning only, with no answer or tool call: asking again";
-        assert_eq!(ui.shown.iter().filter(|s| *s == asked).count(), 2);
-        assert_eq!(ui.shown.last().map(String::as_str), Some("reply Found."));
-        let bodies = server.join().unwrap();
-        assert_eq!(bodies.len(), 4);
-        // The thought is left out, so the second request is the first again.
-        assert_eq!(bodies[0]["messages"], bodies[1]["messages"]);
-        assert_eq!(bodies[2]["messages"], bodies[3]["messages"]);
-    }
 
     #[test]
     fn a_local_model_takes_the_window_its_runtime_loaded_it_with() {

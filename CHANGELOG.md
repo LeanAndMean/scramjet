@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.194.0 — A reply of reasoning only ends the turn again
+
+### Changed
+
+- A Chat Completions reply that is only reasoning, with no answer and no tool call, ends the turn as on every other protocol, rather than being asked for again once (added in 2.188.0 for a habit of gpt-oss's).
+
 ## 2.193.0 — No renaming of gpt-oss's tool calls
 
 ### Changed
