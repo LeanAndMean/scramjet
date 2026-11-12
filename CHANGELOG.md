@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.190.1 — Ollama's cut prompts not taken as measured
+
+### Fixed
+
+- On an Ollama model, a request past the window, which Ollama shortens by dropping the conversation's first messages, no longer has its shortened count taken as the measure of later requests; such a count made later estimates too low, so compaction could stop while Ollama kept dropping the start.
+
 ## 2.190.0 — What is there instead
 
 ### Changed

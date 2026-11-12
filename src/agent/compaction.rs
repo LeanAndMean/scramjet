@@ -902,7 +902,8 @@ impl Agent {
 
     /// Before each request of a turn on a model a local runtime serves, the threshold check:
     /// such a runtime cuts a prompt longer than its window instead of refusing it (Ollama 0.40.16
-    /// answers 200, keeps half its window and reports the tokens it kept), so neither an overflow
+    /// answers 200, drops early messages or cuts the last to half its window, and reports the
+    /// tokens it kept), so neither an overflow
     /// error nor the reported usage shows it, and the request is measured by estimate too.
     pub(super) fn compact_for_runtime(
         &mut self,
@@ -1003,9 +1004,11 @@ impl Agent {
 
     /// Learns from a reply of `model` how far chars/4 was from the runtime's count of the
     /// request's `input`, when that count is of the whole request: llama.cpp, vLLM and LM Studio
-    /// refuse a prompt past their window, while Ollama 0.40.16 cuts it to half its window and
-    /// two tokens and reports that, so its count is taken above half the window, or below it
-    /// when the request was too small by chars/4 to be cut. Whether it was taken.
+    /// refuse a prompt past their window, while Ollama 0.40.16 drops early messages until it fits
+    /// (counts up to the window) or, when the last alone does not, cuts it to half the window and
+    /// two tokens, and reports what it kept. So Ollama's count is taken only for a request that
+    /// fit the window by the calibrated estimate, and never at half the window. Whether it was
+    /// taken.
     pub(super) fn calibrate(&mut self, model: &str, estimate: u64, input: u64) -> bool {
         let (Some(runtime), Some(window)) = (self.info.runtime, self.info.window) else {
             return false;
@@ -1015,7 +1018,7 @@ impl Agent {
             | super::local::Runtime::Vllm
             | super::local::Runtime::LmStudio => true,
             super::local::Runtime::Ollama => {
-                input > window / 2 + 64 || (input + 64 < window / 2 && estimate < window)
+                self.calibrated(estimate) < window && input.abs_diff(window / 2 + 2) > 64
             }
             super::local::Runtime::Other => false,
         };
@@ -2067,19 +2070,27 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
     }
 
     #[test]
-    fn an_ollama_count_below_half_its_window_is_taken_only_for_a_request_it_cannot_have_cut() {
+    fn an_ollama_count_is_taken_only_for_a_request_it_cannot_have_cut() {
         let endpoint: std::net::SocketAddr = "127.0.0.1:9".parse().unwrap();
         let (mut agent, _scratch) = agent(endpoint, "ollama-cut");
         agent.set_context_window(Some(30_000));
         agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);
         let model = agent.config.model.clone();
-        // Past the window by chars/4, so a count under half may be of a prompt it cut.
-        agent.calibrate(&model, 31_000, 10_000);
+        // Past the window by chars/4, so the prompt may have been cut: to half the window when
+        // its last message alone does not fit, else by dropping early messages, which leaves
+        // counts above half (3,423 to 3,719 of a 4,096 window, live).
+        assert!(!agent.calibrate(&model, 31_000, 10_000));
+        assert!(!agent.calibrate(&model, 40_000, 27_000));
         assert_eq!(agent.calibrated(20_000), 20_000);
-        agent.calibrate(&model, 12_000, 10_000);
+        assert!(agent.calibrate(&model, 12_000, 10_000));
         assert_eq!(agent.calibrated(20_000), 18_000);
-        agent.calibrate(&model, 29_000, 26_000);
+        assert!(agent.calibrate(&model, 29_000, 26_000));
         assert_eq!(agent.calibrated(30_000), 27_000);
+        // A count of half the window and two may be of a cut prompt whatever the estimate.
+        assert!(!agent.calibrate(&model, 16_000, 15_002));
+        // Past the window once calibrated, though not by chars/4 (digits count a token each).
+        assert!(agent.calibrate(&model, 10_000, 12_000));
+        assert!(!agent.calibrate(&model, 29_000, 29_500));
     }
 
     #[test]
