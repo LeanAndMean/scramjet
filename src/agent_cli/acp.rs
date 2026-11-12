@@ -7,8 +7,8 @@ use super::drive::{self, Change, Front, Messages, Offer, Picked, Session, Start}
 use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
-    AgentError, AgentUi, Answer, Attached, Choice, CompactRead, Compaction, Purpose, SessionChoice,
-    StreamProgress, Tokens, ToolDetail, UserCommand,
+    AgentError, AgentUi, Answer, Attached, Choice, CompactRead, Compaction, McpServer,
+    McpTransport, Purpose, SessionChoice, StreamProgress, Tokens, ToolDetail, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -207,7 +207,7 @@ impl Connection {
             "agentCapabilities": {
                 "loadSession": false,
                 "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
-                "mcpCapabilities": {"http": false, "sse": false},
+                "mcpCapabilities": {"http": true, "sse": false},
             },
             "agentInfo": {
                 "name": "scramjet",
@@ -227,9 +227,10 @@ impl Connection {
             let message = format!("cwd {} is not an absolute path to a folder", cwd.display());
             return self.out.error(id, INVALID_PARAMS, &message);
         }
-        if (params["mcpServers"].as_array()).is_some_and(|servers| !servers.is_empty()) {
-            eprintln!("scramjet: acp: the client's MCP servers are not used yet; ignored");
-        }
+        let servers = match mcp_servers(&params["mcpServers"]) {
+            Ok(servers) => servers,
+            Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
+        };
         let (started, starts) = mpsc::channel::<Result<String, String>>();
         let (prompts, prompted) = mpsc::channel();
         let (cancel, turn) = (Arc::<AtomicBool>::default(), Arc::<Mutex<Turn>>::default());
@@ -239,9 +240,9 @@ impl Connection {
             cancel: cancel.clone(),
             turn: turn.clone(),
         };
-        let arguments = self.arguments.clone();
+        let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
         let thread = std::thread::spawn(move || {
-            let session = match start_session(&arguments, &cwd) {
+            let session = match start_session(&arguments, &cwd, servers) {
                 Ok(session) => session,
                 Err(error) => {
                     let _ = started.send(Err(error));
@@ -249,6 +250,8 @@ impl Connection {
                 }
             };
             let mut front = worker.front(session);
+            // Answered here, so that the commands' update follows it.
+            out.respond(&answered, json!({"sessionId": front.ui.session}));
             let _ = started.send(Ok(front.ui.session.clone()));
             front.commands();
             for (id, Prompt { text, images }) in prompted {
@@ -266,7 +269,6 @@ impl Connection {
         });
         match starts.recv() {
             Ok(Ok(session)) => {
-                self.out.respond(id, json!({"sessionId": session}));
                 let handle = Handle {
                     prompts,
                     cancel,
@@ -376,8 +378,80 @@ fn prompt_content(blocks: &Value) -> Result<Prompt, String> {
     Ok(Prompt { text, images })
 }
 
-/// Starts a session in `cwd` with the options `arguments` give, as the full screen starts one.
-fn start_session(arguments: &[String], cwd: &Path) -> Result<Session, String> {
+/// The MCP servers `session/new` gives: stdio ones `{name, command, args, env}`, HTTP ones
+/// `{type: "http", name, url, headers}`, their variables and headers lists of `{name, value}`.
+fn mcp_servers(servers: &Value) -> Result<Vec<McpServer>, String> {
+    let servers = match servers {
+        Value::Null => return Ok(Vec::new()),
+        Value::Array(servers) => servers,
+        _ => return Err("mcpServers must be a list of servers".to_owned()),
+    };
+    let pairs = |server: &Value, key: &str| -> Result<Vec<(String, String)>, String> {
+        let Some(pairs) = server.get(key) else {
+            return Ok(Vec::new());
+        };
+        let wrong = || format!("{key} must be a list of {{name, value}}");
+        (pairs.as_array().ok_or_else(wrong)?.iter())
+            .map(
+                |pair| match (pair["name"].as_str(), pair["value"].as_str()) {
+                    (Some(name), Some(value)) => Ok((name.to_owned(), value.to_owned())),
+                    _ => Err(wrong()),
+                },
+            )
+            .collect()
+    };
+    let mut taken: Vec<McpServer> = Vec::new();
+    for server in servers {
+        let name = (server["name"].as_str())
+            .filter(|name| !name.trim().is_empty())
+            .ok_or("an MCP server without a name")?;
+        let given = |error: String| format!("MCP server {name}: {error}");
+        let server = match server["type"].as_str() {
+            None | Some("stdio") => {
+                let command = (server["command"].as_str())
+                    .filter(|command| !command.trim().is_empty())
+                    .ok_or_else(|| given("command is required".to_owned()))?;
+                let args = match &server["args"] {
+                    Value::Null => Vec::new(),
+                    Value::Array(args) => (args.iter())
+                        .map(|arg| arg.as_str().map(str::to_owned))
+                        .collect::<Option<_>>()
+                        .ok_or_else(|| given("args must be a list of strings".to_owned()))?,
+                    _ => return Err(given("args must be a list of strings".to_owned())),
+                };
+                let env = pairs(server, "env").map_err(given)?;
+                McpServer {
+                    name: name.to_owned(),
+                    transport: McpTransport::Program {
+                        command: command.to_owned(),
+                        args,
+                        env,
+                    },
+                }
+            }
+            Some("http") => {
+                let url = server["url"].as_str().unwrap_or_default();
+                let headers = pairs(server, "headers").map_err(given)?;
+                McpServer::http(name, url, headers).map_err(given)?
+            }
+            Some(other) => return Err(given(format!("the {other} transport is not supported"))),
+        };
+        if taken.iter().any(|known| known.name == server.name) {
+            return Err(given("given twice".to_owned()));
+        }
+        taken.push(server);
+    }
+    Ok(taken)
+}
+
+/// Starts a session in `cwd` with the options `arguments` give, as the full screen starts one,
+/// with the client's MCP `servers` beside the settings' (in place of those of the same name,
+/// and started though the settings disable that name).
+fn start_session(
+    arguments: &[String],
+    cwd: &Path,
+    servers: Vec<McpServer>,
+) -> Result<Session, String> {
     let options = Options::parse(arguments.iter().map(OsString::from))?
         .ok_or("--help is not a session's option")?;
     let choice = match options.start {
@@ -385,7 +459,12 @@ fn start_session(arguments: &[String], cwd: &Path) -> Result<Session, String> {
         _ => SessionChoice::New,
     };
     let root = super::project_root(Some(cwd.to_owned()))?;
-    let settings = Settings::load();
+    let mut settings = Settings::load();
+    settings.retries_given = options.retries;
+    let given = |name: &String| servers.iter().any(|server| &server.name == name);
+    (settings.mcp_servers).retain(|server| !given(&server.name));
+    (settings.disabled_mcp_servers).retain(|name| !given(name));
+    settings.mcp_servers.extend(servers);
     let session_dir = (options.session_dir.as_deref())
         .or(settings.session_dir.as_deref())
         .map(|directory| super::given_path(directory, cwd));

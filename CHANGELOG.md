@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.203.0 — The ACP client's MCP servers
+
+### Added
+
+- `scramjet acp` starts the MCP servers the client gives in `session/new`, over stdio or streamable HTTP (`mcpCapabilities.http`), with their variables and headers, for that session beside those of `settings.json`; one of the same name replaces the settings' entry, and runs though `disabledMcpServers` names it. A server it cannot take (the older SSE transport, a bad URL) refuses the session with what is wrong.
+
+### Fixed
+
+- In `scramjet acp`, `available_commands_update` no longer arrives before `session/new`'s answer, and `--retries` is followed.
+
 ## 2.202.0 — ACP's `max_tokens` and `refusal` stop reasons
 
 ### Added

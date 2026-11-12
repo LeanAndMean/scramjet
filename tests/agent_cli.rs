@@ -2296,3 +2296,90 @@ fn acp_tool_calls_carry_their_input_locations_and_diffs() {
         "{completed}"
     );
 }
+
+#[test]
+#[cfg(unix)]
+fn acp_sessions_start_the_clients_mcp_servers() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-mcp-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let log = scratch.0.join("mcp.log");
+    let input = serde_json::json!({"server": "editor", "tool": "echo",
+        "arguments": {"text": "from-client"}});
+    let (port, bodies) = serve_call("mcp_call", input);
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let initialized = next(&messages);
+    let capabilities = &initialized["result"]["agentCapabilities"]["mcpCapabilities"];
+    assert_eq!(capabilities["http"], true, "{initialized}");
+    let new = |id: u64, servers: serde_json::Value| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": servers}})
+    };
+    send(
+        &mut stdin,
+        new(
+            2,
+            serde_json::json!([{"type": "sse", "name": "old", "url": "http://127.0.0.1:1/",
+            "headers": []}]),
+        ),
+    );
+    let refused = next(&messages);
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    let server = repository().join("tests/support/mcp_server.py");
+    let mut web = Command::new("python3")
+        .arg(repository().join("tests/support/mcp_http_server.py"))
+        .env("MCP_TEST_TOKEN", "client-token")
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut port = String::new();
+    BufReader::new(web.stdout.take().unwrap())
+        .read_line(&mut port)
+        .unwrap();
+    let url = format!("http://127.0.0.1:{}/mcp", port.trim());
+    send(
+        &mut stdin,
+        new(
+            3,
+            serde_json::json!([
+                {"name": "editor", "command": "python3", "args": [server],
+                    "env": [{"name": "MCP_TEST_LOG", "value": log}]},
+                {"type": "http", "name": "web", "url": url,
+                    "headers": [{"name": "Authorization", "value": "Bearer client-token"}]},
+            ]),
+        ),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (answer, updates) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    let completed = (updates.iter())
+        .find(|message| message["params"]["update"]["status"] == "completed")
+        .unwrap();
+    assert!(
+        completed.to_string().contains("echo: from-client"),
+        "{completed}"
+    );
+    let first = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+    assert!(first.contains("- editor: Tools for scramjet-rs's tests"));
+    assert!(first.contains("- web: Remote tools for scramjet-rs's tests"));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    web.kill().unwrap();
+    web.wait().unwrap();
+    assert!(
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .contains("tools/call")
+    );
+}
