@@ -55,7 +55,7 @@ const SLASH_COMMANDS: [(&str, &str); 26] = [
     ),
     (
         "sandbox",
-        "Show or change the sandbox: /sandbox [MODE|network on|off|add DIR|remove DIR]",
+        "Show or change the sandbox in a list, or at once: /sandbox [MODE|network on|off|add DIR|remove DIR]",
     ),
     (
         "add-dir",

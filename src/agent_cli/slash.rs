@@ -157,6 +157,7 @@ impl Interactive {
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Mcp(argument)) => self.mcp(argument),
+            Some(Builtin::Sandbox("")) => self.sandbox_menu(),
             Some(Builtin::Sandbox(argument)) => self.sandbox(argument),
             Some(Builtin::AddDir(directory)) => self.add_dir(directory),
             Some(Builtin::Reload) => self.reload(),
@@ -314,7 +315,7 @@ impl Interactive {
     /// `/sandbox`: how the agent's tools are confined, or with an argument a change of it for
     /// the rest of the session: a mode (`off` for none), `network on|off`, `add DIR`, `remove
     /// DIR`.
-    fn sandbox(&mut self, argument: &str) {
+    pub(super) fn sandbox(&mut self, argument: &str) {
         let (word, rest) = argument.split_once(' ').unwrap_or((argument, ""));
         let rest = rest.trim();
         let current = self.agent.sandbox().cloned();
@@ -374,7 +375,7 @@ impl Interactive {
 
     /// `/sandbox remove DIR`: takes back the grant of `DIR`, and forgets it if it was granted
     /// always in this project.
-    fn remove_dir(&mut self, directory: &str) {
+    pub(super) fn remove_dir(&mut self, directory: &str) {
         let root = self.agent.root().to_owned();
         let mut sandbox = self.agent.sandbox().cloned();
         let revoked = (sandbox.as_mut()).and_then(|sandbox| sandbox.revoke(&root, directory));
@@ -404,7 +405,7 @@ impl Interactive {
     }
 
     /// `/add-dir DIR`: the sandbox lets the agent change `DIR` too, for the rest of the session.
-    fn add_dir(&mut self, directory: &str) {
+    pub(super) fn add_dir(&mut self, directory: &str) {
         if directory.is_empty() {
             return self.say("Usage: /add-dir DIR");
         }
@@ -730,26 +731,43 @@ pub(super) fn mcp_command(argument: &str) -> Option<McpCommand<'_>> {
     })
 }
 
-/// `/session`: the session's name, file and id, its messages, token usage and cost over the
-/// current conversation (subagents' too, in the cost), as Scramjet's `/session` shows them. Ends
-/// with a newline.
 const SANDBOX_USAGE: &str = "Usage: /sandbox [read-only|workspace-write|off | network on|off \
 | add DIR | remove DIR], or /add-dir DIR";
 
 /// What `/sandbox` shows: the mode, the network, what is writable and what stays read-only in it.
 fn sandbox_info(agent: &Agent) -> String {
-    let row =
-        |label: &str, value: String| format!("{} {value}\n", style::mark(style::MUTED, label));
     let mut info = format!("{}\n\n", style::mark(style::INFO_HEADING, "Sandbox"));
     let Some(sandbox) = agent.sandbox() else {
         info += "None: the agent's tools run with your access, the credential stores hidden as \
 the hideCredentials setting says.\n";
         return info + &format!("\n{SANDBOX_USAGE}");
     };
-    let root = agent.root();
-    info += &row("Mode:", sandbox.mode.name().to_owned());
+    let mode = sandbox.mode.name().to_owned();
     let network = if sandbox.network { "on" } else { "off" };
-    info += &row("Network:", network.to_owned());
+    let rows = [("Mode:", mode), ("Network:", network.to_owned())];
+    for (label, value) in rows.into_iter().chain(sandbox_paths(agent)) {
+        info += &format!("{} {value}\n", style::mark(style::MUTED, label));
+    }
+    info + &format!("\n{SANDBOX_USAGE}")
+}
+
+/// What `/sandbox`'s list says under its mode: what is writable and what stays read-only in it.
+pub(super) fn sandbox_summary(agent: &Agent) -> String {
+    (sandbox_paths(agent).into_iter())
+        .filter(|(label, _)| *label != "Always here:")
+        .map(|(label, value)| format!("{label} {value}."))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The sandbox's paths, labeled: writable, granted but gone, always granted here, and read-only
+/// in the writable ones; none without a sandbox.
+fn sandbox_paths(agent: &Agent) -> Vec<(&'static str, String)> {
+    let Some(sandbox) = agent.sandbox() else {
+        return Vec::new();
+    };
+    let root = agent.root();
+    let mut rows = Vec::new();
     let writable = sandbox.writable_roots(root);
     let project = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
     let listed = |paths: &[std::path::PathBuf]| match paths.is_empty() {
@@ -762,18 +780,18 @@ the hideCredentials setting says.\n";
             .collect::<Vec<_>>()
             .join(", "),
     };
-    info += &row("Writable:", listed(&writable));
+    rows.push(("Writable:", listed(&writable)));
     let missing: Vec<_> = (sandbox.writable.iter())
         .filter(|path| !path.is_dir())
         .cloned()
         .collect();
     if !missing.is_empty() {
-        info += &row("Granted, gone:", listed(&missing));
+        rows.push(("Granted, gone:", listed(&missing)));
     }
     if let Some(always) = Remembered::user().and_then(|kept| kept.of(root).ok())
         && !always.is_empty()
     {
-        info += &row("Always here:", listed(&always));
+        rows.push(("Always here:", listed(&always)));
     }
     let mut kept = sandbox.protected_paths(root);
     if sandbox.read_only_project(root).is_some()
@@ -782,11 +800,14 @@ the hideCredentials setting says.\n";
         kept.insert(0, project.clone());
     }
     if !kept.is_empty() {
-        info += &row("Read-only in them:", listed(&kept));
+        rows.push(("Read-only in them:", listed(&kept)));
     }
-    info + &format!("\n{SANDBOX_USAGE}")
+    rows
 }
 
+/// `/session`: the session's name, file and id, its messages, token usage and cost over the
+/// current conversation (subagents' too, in the cost), as Scramjet's `/session` shows them. Ends
+/// with a newline.
 fn session_info(agent: &Agent) -> String {
     let stats = agent.stats();
     let row =

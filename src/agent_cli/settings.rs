@@ -176,13 +176,15 @@ pub(super) enum Row {
     Tools,
     DefaultShell,
     Credentials,
+    Sandbox,
+    SandboxNetwork,
     Autopilot,
     NextSteps,
     Publishing,
     Installed,
 }
 
-pub(super) const ROWS: [Row; 30] = [
+pub(super) const ROWS: [Row; 32] = [
     Row::ThinkingLevel,
     Row::StartupModel,
     Row::ThinkingBlocks,
@@ -209,6 +211,8 @@ pub(super) const ROWS: [Row; 30] = [
     Row::Tools,
     Row::DefaultShell,
     Row::Credentials,
+    Row::Sandbox,
+    Row::SandboxNetwork,
     Row::Autopilot,
     Row::NextSteps,
     Row::Publishing,
@@ -219,6 +223,7 @@ pub(super) const ROWS: [Row; 30] = [
 pub(super) fn rows() -> Vec<Row> {
     (ROWS.into_iter())
         .filter(|&row| row != Row::DefaultShell || cfg!(windows))
+        .filter(|&row| !matches!(row, Row::Sandbox | Row::SandboxNetwork) || cfg!(unix))
         .collect()
 }
 
@@ -251,6 +256,8 @@ impl Row {
             Self::Tools => "Tools",
             Self::DefaultShell => "Shell of ! commands",
             Self::Credentials => "Credential stores",
+            Self::Sandbox => "Sandbox",
+            Self::SandboxNetwork => "Sandbox network",
             Self::Autopilot => "Autopilot",
             Self::NextSteps => "Next steps",
             Self::Publishing => "Publishing",
@@ -387,6 +394,14 @@ impl Row {
             Self::Credentials => {
                 "~/.ssh, ~/.netrc and other known stores, kept from the agent's tools: in turns no one \
                  started (a next step run at once, -p), always or never. Subagents never see them."
+            }
+            Self::Sandbox => {
+                "How new sessions confine the agent's tools: read-only, workspace-write (the \
+                 project writable) or off; --sandbox overrides it. /sandbox changes this session's."
+            }
+            Self::SandboxNetwork => {
+                "Whether commands in a new session's sandbox reach the network. /sandbox network \
+                 changes this session's."
             }
             Self::Autopilot => {
                 "On: when a command finishes, the next step it recommends runs after a 3-second \
@@ -1704,6 +1719,9 @@ impl Settings {
                 HideCredentials::Never => "never hidden",
             }
             .into(),
+            Row::Sandbox => self.sandbox.map_or("off", SandboxMode::name).into(),
+            Row::SandboxNetwork if self.sandbox_network => "on".into(),
+            Row::SandboxNetwork => "off".into(),
         }
     }
 
@@ -1844,6 +1862,26 @@ impl Settings {
                 self.hide_credentials = hide;
                 self.save("hideCredentials", json!(name))
             }
+            Row::Sandbox => {
+                self.sandbox = self.next_sandbox();
+                self.save(
+                    "sandbox",
+                    json!(self.sandbox.map_or("off", SandboxMode::name)),
+                )
+            }
+            Row::SandboxNetwork => {
+                self.sandbox_network = !self.sandbox_network;
+                self.save("sandboxNetwork", json!(self.sandbox_network))
+            }
+        }
+    }
+
+    /// The sandbox mode after the saved one, as Enter in `/settings` moves to it.
+    pub(super) fn next_sandbox(&self) -> Option<SandboxMode> {
+        match self.sandbox {
+            None => Some(SandboxMode::ReadOnly),
+            Some(SandboxMode::ReadOnly) => Some(SandboxMode::WorkspaceWrite),
+            Some(SandboxMode::WorkspaceWrite) => None,
         }
     }
 
@@ -3006,6 +3044,14 @@ mod tests {
             ]
         );
         assert_eq!(
+            seen(Row::Sandbox, &mut settings),
+            ["off", "read-only", "workspace-write", "off"]
+        );
+        assert_eq!(
+            seen(Row::SandboxNetwork, &mut settings),
+            ["on", "off", "on", "off"]
+        );
+        assert_eq!(
             seen(Row::Steering, &mut settings),
             [
                 "all at once",
@@ -3130,6 +3176,8 @@ mod tests {
                 "compaction": {"enabled": false},
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
+                "sandbox": "off",
+                "sandboxNetwork": false,
                 "defaultShell": if bash { "bash" } else { "powershell" },
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "never",

@@ -46,6 +46,7 @@ mod palette;
 mod programs;
 mod record;
 mod report;
+mod sandbox_menu;
 mod scope;
 mod screen;
 mod select;

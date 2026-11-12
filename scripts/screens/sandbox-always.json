@@ -69,13 +69,19 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Always here:"
+      "until": "(always here)"
     },
     {
       "sleep": 0.3
     },
     {
       "shot": "remembered"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
     },
     {
       "type": "/sandbox remove docs\r"
@@ -87,13 +93,19 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Mode: read-only"
+      "until": "Add a directory"
     },
     {
       "sleep": 0.3
     },
     {
       "shot": "forgotten"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
     },
     {
       "type": "\u0004"

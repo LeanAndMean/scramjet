@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.167.0 — The sandbox in a list
+
+### Added
+
+- `/sandbox` on its own opens a list of the session's sandbox: its mode (read-only, workspace-write or off), its network, "Add a directory…" and each directory granted, for the session or always here; Enter changes the mode or the network, adds a directory, or makes a granted one read-only again (and forgets it if it was granted always). `/sandbox` with an argument works as before, and so does `/sandbox` in line mode.
+- `/settings` has Sandbox and Sandbox network rows: the mode and network new sessions start with (`--sandbox` still overrides them). A mode is not saved when the sandbox cannot start on this machine.
+
 ## 2.166.0 — Write access kept for a project
 
 ### Added

@@ -10,7 +10,7 @@ use super::theme_editor::ThemeEditor;
 use super::{background, editor, installed, palette, select, style};
 use scramjet::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
-    Publication, Scope, Setting, config_directory, shortened, write_replacing,
+    Publication, Sandbox, Scope, Setting, config_directory, shortened, write_replacing,
 };
 use std::{
     path::{Path, PathBuf},
@@ -217,6 +217,12 @@ impl Interactive {
                     if let Err(error) = self.agent.set_autopilot(!self.agent.autopilot()) {
                         self.say(&format!("Error: {error}"));
                     }
+                }
+                Row::Sandbox
+                    if self.settings.next_sandbox().is_some()
+                        && let Err(error) = Sandbox::check() =>
+                {
+                    self.say(&format!("Error: {error}"));
                 }
                 row => {
                     if let Err(error) = self.settings.cycle(row) {

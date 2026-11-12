@@ -47,13 +47,19 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Writable:"
+      "until": "Add a directory"
     },
     {
       "sleep": 0.3
     },
     {
       "shot": "before"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
     },
     {
       "type": "/add-dir ..\r"
@@ -89,13 +95,85 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Mode: read-only"
+      "until": "Add a directory"
     },
     {
       "sleep": 0.3
     },
     {
       "shot": "after"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "/sandbox\r"
+    },
+    {
+      "until": "Add a directory"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Sandbox mode"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "modes"
+    },
+    {
+      "type": "\u001b[B\r"
+    },
+    {
+      "until": "Sandbox: workspace-write"
+    },
+    {
+      "type": "\u001b[B\r"
+    },
+    {
+      "until": "Sandbox: no network"
+    },
+    {
+      "type": "\u001b[B\u001b[B\r"
+    },
+    {
+      "until": "read-only again"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "taken-back"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Directory the agent may change"
+    },
+    {
+      "type": "../config\r"
+    },
+    {
+      "until": "/config is writable"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "added"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
     },
     {
       "type": "\u0004"

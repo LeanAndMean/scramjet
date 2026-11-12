@@ -12,7 +12,9 @@
       {
         "call": "request_permissions",
         "arguments": {
-          "write": ["docs"],
+          "write": [
+            "docs"
+          ],
           "reason": "The task adds a page to the documentation."
         }
       }
@@ -73,13 +75,19 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Mode: read-only"
+      "until": "Add a directory"
     },
     {
       "sleep": 0.3
     },
     {
       "shot": "after"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
     },
     {
       "type": "\u0004"
