@@ -5,6 +5,11 @@
 # ~/.scramjet/agent/auth.json; not a sandbox otherwise.
 set -e
 empty=$(mktemp "${TMPDIR:-/tmp}/without-credentials.XXXXXX")
+own=""
+trap 'rm -f "$empty"; [ -z "$own" ] || rm -rf "$own"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 args="--dev-bind / / --die-with-parent"
 # The stores as the scramjet-rs built beside this script lists them, with those packages name
 # (credentialFiles); else the common ones of src/agent/sandbox.rs.
@@ -49,5 +54,6 @@ if [ -d "$sockets" ] && [ "$(real "$sockets")" != "$(real "$state/scramjet/tmux/
 fi
 own=$(mktemp -d "${TMPDIR:-/tmp}/without-credentials-tmux.XXXXXX")
 args="$args --unsetenv TMUX --unsetenv TMUX_PANE --setenv TMUX_TMPDIR $own"
+# Not exec: the files above are removed when it ends.
 # shellcheck disable=SC2086
-exec bwrap $args -- "$@"
+bwrap $args -- "$@"

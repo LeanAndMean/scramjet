@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.189.0 — Did you mean
+
+### Changed
+
+- `read` given a file that does not exist names the project's files of the same name (for a `mod.rs`, `index.*` or `__init__.py`, also its directory's name as a file), as a model guessing a path (`src/agent/local/mod.rs` for `local.rs`) often means one of them.
+
+### Fixed
+
+- A `grep`, `find` or `ls` call with an empty `path` shows `in .` rather than `in ` with nothing after it.
+
 ## 2.188.1 — Matches elsewhere
 
 ### Fixed

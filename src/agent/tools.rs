@@ -408,14 +408,21 @@ impl<'a> Call<'a> {
             .as_str()
             .ok_or_else(|| format!("missing string argument `{field}`"))
     }
+    /// `path`, with none or an empty one as the project itself.
+    fn path_or_dot(&self) -> &str {
+        match self.arguments["path"].as_str() {
+            Some("") | None => ".",
+            Some(path) => path,
+        }
+    }
     /// A one-line description for display.
     pub fn summary(&self) -> String {
         match self.name {
             name if is_shell(name) => self.arguments["command"].as_str().unwrap_or("").to_owned(),
-            "ls" => shortened(self.arguments["path"].as_str().unwrap_or(".")),
+            "ls" => shortened(self.path_or_dot()),
             "grep" | "find" => {
                 let pattern = self.arguments["pattern"].as_str().unwrap_or("");
-                let path = shortened(self.arguments["path"].as_str().unwrap_or("."));
+                let path = shortened(self.path_or_dot());
                 match self.name {
                     "grep" => format!("/{pattern}/ in {path}"),
                     _ => format!("{pattern} in {path}"),
@@ -824,7 +831,13 @@ fn read(
     let given = call.str("path")?;
     let path = resolve(root, given);
     let failed = |e: io::Error| format!("{}: {e}", path.display());
-    let mut file = regular_file(&path, hidden)?;
+    let mut file =
+        regular_file(&path, hidden).map_err(|error| match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                with_alternatives(error, root, &path, hidden, cancel)
+            }
+            _ => error,
+        })?;
     // As much as `image::mime` looks at.
     let mut start = Vec::new();
     let read = (&mut file).take(4100).read_to_end(&mut start);
@@ -849,6 +862,49 @@ fn read(
         failed: false,
         image,
     })
+}
+
+/// `error` with the project's files named as the missing `path` is (or, for a `mod.rs`, `index.*`
+/// or `__init__.py`, as its directory), which models guessing a path often mean.
+fn with_alternatives(
+    error: String,
+    root: &Path,
+    path: &Path,
+    hidden: Option<&Hidden>,
+    cancel: &AtomicBool,
+) -> String {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return error;
+    };
+    let mut names = vec![name.to_owned()];
+    let stem = path.file_stem().and_then(|stem| stem.to_str());
+    if let (Some("mod" | "index" | "__init__"), Some(directory)) = (
+        stem,
+        path.parent()
+            .and_then(|parent| parent.file_name()?.to_str()),
+    ) {
+        names.push(match path.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) => format!("{directory}.{ext}"),
+            None => directory.to_owned(),
+        });
+    }
+    let mut found: Vec<String> = Vec::new();
+    for name in names {
+        let glob = globset::escape(&name);
+        let Ok(files) = search::find(root, root, &glob, 20, hidden, cancel) else {
+            continue;
+        };
+        for file in files {
+            if !file.ends_with('/') && !found.contains(&file) && found.len() < 5 {
+                found.push(file);
+            }
+        }
+    }
+    match found.as_slice() {
+        [] => error,
+        [one] => format!("{error}\n\n[Did you mean {one}?]"),
+        more => format!("{error}\n\n[Files of that name: {}]", more.join(", ")),
+    }
 }
 
 /// Scramjet's text for an image, which says how it was scaled or why it is left out.
@@ -3206,6 +3262,19 @@ src/a.rs:1: fn alpha() {}"
             "{limited}"
         );
         assert_eq!(text("ls", json!({"path":"src"})), "a.rs\ndeep/");
+        let missing = |path: &str| {
+            run("read", json!({"path":path}))
+                .unwrap_err()
+                .replace('\\', "/")
+        };
+        assert!(missing("b.rs").ends_with("\n\n[Did you mean src/deep/b.rs?]"));
+        assert!(missing("src/a/mod.rs").ends_with("\n\n[Did you mean src/a.rs?]"));
+        assert!(missing("src/a/mod.rs").contains("src/a/mod.rs: "));
+        assert!(!missing("ignored/c.rs").contains("["));
+        let shown = |name: &str, arguments: Value| call(name, arguments).summary();
+        assert_eq!(shown("grep", json!({"pattern":"x","path":""})), "/x/ in .");
+        assert_eq!(shown("find", json!({"pattern":"*.rs"})), "*.rs in .");
+        assert_eq!(shown("ls", json!({"path":""})), ".");
         assert_eq!(
             text("ls", json!({"limit":2})),
             ".gitignore\n.hidden.rs\n\n[2 entries limit reached. Use limit=4 for more]"
