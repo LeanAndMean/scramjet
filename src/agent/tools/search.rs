@@ -62,22 +62,13 @@ pub(super) fn grep(
     hidden: Option<&Hidden>,
     cancel: &AtomicBool,
 ) -> Result<(Vec<Matched>, bool), String> {
-    // As rg, a line break in the pattern is refused; it is the pattern's own, not an escape that
-    // literal would keep as text.
-    if options.pattern.contains('\n') {
-        return Err(
-            "The pattern holds a line break, and grep matches within single lines. \
-Search for one of its lines; a \\n written in code is a backslash and an n."
-                .into(),
-        );
-    }
     let matcher = RegexMatcherBuilder::new()
         .case_insensitive(options.ignore_case)
         .fixed_strings(options.literal)
         .multi_line(true)
         .line_terminator(Some(b'\n'))
         .build(options.pattern)
-        .map_err(|e| format!("{e}\nTo search for the pattern as plain text, set literal: true"))?;
+        .map_err(|e| e.to_string())?;
     let mut builder = walk(path, hidden, true, ".rgignore");
     if let Some(glob) = options.glob {
         let mut overrides = ignore::overrides::OverrideBuilder::new(root);

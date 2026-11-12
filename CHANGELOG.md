@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.197.0 — Search tools answer as Claude Code's do
+
+### Changed
+
+- `grep`, `find`, `read` and `ls` that find nothing answer plainly again ("No matches found", "No files found matching pattern", the missing path), as Claude Code's tools do: grep no longer searches the rest of the project or drops its glob to show matches elsewhere, find no longer greps a phrase it was given, read no longer lists files of the same name, and ls no longer lists the nearest directory above a missing one.
+- grep's errors are the pattern matcher's own, without the added advice to set `literal: true` or about line breaks in the pattern.
+
 ## 2.196.0 — Edits match as Codex's apply_patch does
 
 ### Changed
