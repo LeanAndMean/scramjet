@@ -1,0 +1,104 @@
+{
+  "size": "100x48",
+  "settings": {
+    "sandbox": "workspace-write"
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "replies": [
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "../granted.txt",
+          "content": "x\n"
+        }
+      }
+    ],
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "README.md",
+          "content": "changed\n"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo y > ../by-bash.txt && cat ../by-bash.txt; echo z > here.txt; ls .."
+        }
+      }
+    ],
+    [
+      {
+        "text": "Only the granted directory took the writes."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "sleep": 1
+    },
+    {
+      "type": "/sandbox\r"
+    },
+    {
+      "until": "Writable:"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "before"
+    },
+    {
+      "type": "/add-dir ..\r"
+    },
+    {
+      "until": "for this session"
+    },
+    {
+      "type": "/add-dir ../project\r"
+    },
+    {
+      "until": "already writable"
+    },
+    {
+      "type": "/sandbox read-only\r"
+    },
+    {
+      "until": "Sandbox: read-only"
+    },
+    {
+      "type": "Write them\r"
+    },
+    {
+      "until": "took the writes"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "turn"
+    },
+    {
+      "type": "/sandbox\r"
+    },
+    {
+      "until": "Mode: read-only"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "after"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}

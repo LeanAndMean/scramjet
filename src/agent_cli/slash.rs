@@ -7,7 +7,7 @@ use super::interactive::{Interactive, completions, model_line, saved_line};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
-use scramjet::agent::{Agent, AgentError, McpState, Providers};
+use scramjet::agent::{Agent, AgentError, McpState, Providers, Sandbox, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -43,6 +43,10 @@ pub(super) enum Builtin<'a> {
     Autopilot(&'a str),
     /// With its argument: `reconnect`, `enable` or `disable`, with a server's name or `all`.
     Mcp(&'a str),
+    /// With its argument: a mode, `network on|off`, `add DIR` or `remove DIR`.
+    Sandbox(&'a str),
+    /// Claude Code's `/add-dir DIR`, as `/sandbox add DIR`.
+    AddDir(&'a str),
     Reload,
     Exit,
 }
@@ -80,6 +84,8 @@ impl<'a> Builtin<'a> {
             "compact" => Self::Compact(argument),
             "autopilot" => Self::Autopilot(argument),
             "mcp" => Self::Mcp(argument),
+            "sandbox" => Self::Sandbox(argument),
+            "add-dir" => Self::AddDir(argument),
             "reload" if argument.is_empty() => Self::Reload,
             "exit" if argument.is_empty() => Self::Exit,
             _ => return None,
@@ -108,6 +114,8 @@ impl<'a> Builtin<'a> {
                 | Self::Logout
                 | Self::Autopilot(_)
                 | Self::Mcp(_)
+                | Self::Sandbox(_)
+                | Self::AddDir(_)
                 | Self::Reload
         )
     }
@@ -149,6 +157,8 @@ impl Interactive {
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Mcp(argument)) => self.mcp(argument),
+            Some(Builtin::Sandbox(argument)) => self.sandbox(argument),
+            Some(Builtin::AddDir(directory)) => self.add_dir(directory),
             Some(Builtin::Reload) => self.reload(),
             Some(Builtin::Exit) | None => return false,
         }
@@ -299,6 +309,93 @@ impl Interactive {
         }
         let state = if self.agent.autopilot() { "on" } else { "off" };
         self.say_styled(style::MUTED, &format!("Autopilot is {state}"));
+    }
+
+    /// `/sandbox`: how the agent's tools are confined, or with an argument a change of it for
+    /// the rest of the session: a mode (`off` for none), `network on|off`, `add DIR`, `remove
+    /// DIR`.
+    fn sandbox(&mut self, argument: &str) {
+        let (word, rest) = argument.split_once(' ').unwrap_or((argument, ""));
+        let rest = rest.trim();
+        let current = self.agent.sandbox().cloned();
+        let changed = match (word, rest) {
+            ("", "") => return self.say(&sandbox_info(&self.agent)),
+            ("add", directory) => return self.add_dir(directory),
+            ("network", "on" | "off") => match current {
+                Some(sandbox) => Sandbox {
+                    network: rest == "on",
+                    ..sandbox
+                },
+                None => {
+                    return self.say("No sandbox: commands reach the network as you can");
+                }
+            },
+            ("remove", directory) if !directory.is_empty() => {
+                let root = self.agent.root().to_owned();
+                let Some(mut sandbox) = current else {
+                    return self.say("No sandbox: nothing was granted");
+                };
+                match sandbox.revoke(&root, directory) {
+                    Some(path) => {
+                        self.agent.set_sandbox(Some(sandbox));
+                        let said = format!("{} is read-only again", path.display());
+                        return self.say_styled(style::MUTED, &said);
+                    }
+                    None => return self.say(&format!("{directory} was not granted")),
+                }
+            }
+            (mode, "") if let Some(mode) = SandboxMode::parse(mode) => {
+                if mode.is_some()
+                    && current.is_none()
+                    && let Err(error) = Sandbox::check()
+                {
+                    return self.say(&format!("Error: {error}"));
+                }
+                let Some(mode) = mode else {
+                    self.agent.set_sandbox(None);
+                    let said = "No sandbox: the agent's tools run with your access";
+                    return self.say_styled(style::MUTED, said);
+                };
+                let sandbox = match current {
+                    Some(sandbox) => Sandbox { mode, ..sandbox },
+                    None => Sandbox {
+                        mode,
+                        network: self.settings.sandbox_network,
+                        writable: Vec::new(),
+                    },
+                };
+                self.agent.set_sandbox(Some(sandbox));
+                let said = format!("Sandbox: {}", mode.name());
+                self.say_styled(style::MUTED, &said);
+                return;
+            }
+            _ => return self.say(SANDBOX_USAGE),
+        };
+        let said = match changed.network {
+            true => "Sandbox: commands reach the network",
+            false => "Sandbox: no network",
+        };
+        self.agent.set_sandbox(Some(changed));
+        self.say_styled(style::MUTED, said);
+    }
+
+    /// `/add-dir DIR`: the sandbox lets the agent change `DIR` too, for the rest of the session.
+    fn add_dir(&mut self, directory: &str) {
+        if directory.is_empty() {
+            return self.say("Usage: /add-dir DIR");
+        }
+        let root = self.agent.root().to_owned();
+        let Some(mut sandbox) = self.agent.sandbox().cloned() else {
+            return self.say("No sandbox: the agent can change every file you can already");
+        };
+        match sandbox.grant(&root, directory) {
+            Ok(path) => {
+                self.agent.set_sandbox(Some(sandbox));
+                let said = format!("{} is writable for this session", path.display());
+                self.say_styled(style::MUTED, &said);
+            }
+            Err(error) => self.say(&format!("Error: {error}")),
+        }
     }
 
     /// `/usage`: what is left of the quotas and what the saved sessions spent, read from their
@@ -612,6 +709,55 @@ pub(super) fn mcp_command(argument: &str) -> Option<McpCommand<'_>> {
 /// `/session`: the session's name, file and id, its messages, token usage and cost over the
 /// current conversation (subagents' too, in the cost), as Scramjet's `/session` shows them. Ends
 /// with a newline.
+const SANDBOX_USAGE: &str = "Usage: /sandbox [read-only|workspace-write|off | network on|off \
+| add DIR | remove DIR], or /add-dir DIR";
+
+/// What `/sandbox` shows: the mode, the network, what is writable and what stays read-only in it.
+fn sandbox_info(agent: &Agent) -> String {
+    let row =
+        |label: &str, value: String| format!("{} {value}\n", style::mark(style::MUTED, label));
+    let mut info = format!("{}\n\n", style::mark(style::INFO_HEADING, "Sandbox"));
+    let Some(sandbox) = agent.sandbox() else {
+        info += "None: the agent's tools run with your access, the credential stores hidden as \
+the hideCredentials setting says.\n";
+        return info + &format!("\n{SANDBOX_USAGE}");
+    };
+    let root = agent.root();
+    info += &row("Mode:", sandbox.mode.name().to_owned());
+    let network = if sandbox.network { "on" } else { "off" };
+    info += &row("Network:", network.to_owned());
+    let writable = sandbox.writable_roots(root);
+    let project = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    let listed = |paths: &[std::path::PathBuf]| match paths.is_empty() {
+        true => "none".to_owned(),
+        false => (paths.iter())
+            .map(|path| match *path == project {
+                true => format!("{} (the project)", path.display()),
+                false => path.display().to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    info += &row("Writable:", listed(&writable));
+    let missing: Vec<_> = (sandbox.writable.iter())
+        .filter(|path| !path.is_dir())
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        info += &row("Granted, gone:", listed(&missing));
+    }
+    let mut kept = sandbox.protected_paths(root);
+    if sandbox.mode == SandboxMode::ReadOnly
+        && (writable.iter()).any(|path| project.starts_with(path) && *path != project)
+    {
+        kept.insert(0, project.clone());
+    }
+    if !kept.is_empty() {
+        info += &row("Read-only in them:", listed(&kept));
+    }
+    info + &format!("\n{SANDBOX_USAGE}")
+}
+
 fn session_info(agent: &Agent) -> String {
     let stats = agent.stats();
     let row =

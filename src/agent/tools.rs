@@ -476,7 +476,7 @@ impl<'a> Call<'a> {
     pub fn run_in_sandbox(
         &self,
         root: &Path,
-        sandbox: Sandbox,
+        sandbox: &Sandbox,
         hidden: &Hidden,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
@@ -2952,6 +2952,7 @@ to see full lines]",
         let sandbox = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
             network: true,
+            writable: Vec::new(),
         };
         let done = AtomicBool::new(false);
         let mut shown = Vec::new();
@@ -2977,7 +2978,7 @@ to see full lines]",
                 let call = call(name, arguments);
                 let output = match round % 2 {
                     0 => call.run(&root, Some(&hidden), &cancel, &mut |_| {}),
-                    _ => call.run_in_sandbox(&root, sandbox, &hidden, &cancel, &mut |_| {}),
+                    _ => call.run_in_sandbox(&root, &sandbox, &hidden, &cancel, &mut |_| {}),
                 };
                 shown.push(output.map_or_else(|error| error, |output| output.text));
             }

@@ -853,7 +853,7 @@ impl Agent {
             return;
         }
         // Calls still running keep the servers they had.
-        let confined = (self.config.sandbox)
+        let confined = (self.config.sandbox.clone())
             .map(|sandbox| (sandbox, self.config.providers.credential_files().to_vec()));
         match self.mcp.as_mut().and_then(Arc::get_mut) {
             Some(running) => running.update(wanted, root, confined),
@@ -1719,16 +1719,22 @@ impl Agent {
     /// `None`, no more than `set_hide_credentials` says. Where bubblewrap cannot run, their
     /// commands fail (`Sandbox::check` says so first). A `!` command stays outside. The MCP
     /// servers start again in it.
+    /// The directories granted (`Sandbox::writable`) reach the MCP servers only when they start
+    /// again for another reason, so that a grant does not cut their sessions.
     pub fn set_sandbox(&mut self, sandbox: Option<Sandbox>) {
-        if self.config.sandbox != sandbox {
-            self.config.sandbox = sandbox;
+        let confinement = |sandbox: &Option<Sandbox>| {
+            (sandbox.as_ref()).map(|sandbox| (sandbox.mode, sandbox.network))
+        };
+        let restart = confinement(&self.config.sandbox) != confinement(&sandbox);
+        self.config.sandbox = sandbox;
+        if restart {
             self.mcp = None;
             self.start_mcp();
         }
     }
 
-    pub fn sandbox(&self) -> Option<Sandbox> {
-        self.config.sandbox
+    pub fn sandbox(&self) -> Option<&Sandbox> {
+        self.config.sandbox.as_ref()
     }
 
     /// The window automatic compaction checks; `None` skips the check.

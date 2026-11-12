@@ -306,6 +306,7 @@ fn in_the_sandbox_a_server_runs_on_its_own_and_writes_only_where_it_allows() {
     let sandbox = |mode| Sandbox {
         mode,
         network: false,
+        writable: Vec::new(),
     };
     let inside = project.join("log");
     // In the project, as the server's script may be under `/tmp`, hidden in the sandbox.
@@ -376,8 +377,9 @@ fn a_server_started_again_in_the_sandbox_cannot_read_a_store_made_since() {
     let sandbox = Sandbox {
         mode: SandboxMode::WorkspaceWrite,
         network: false,
+        writable: Vec::new(),
     };
-    let confined = || Some((sandbox, vec![store.clone()]));
+    let confined = || Some((sandbox.clone(), vec![store.clone()]));
     let configs = std::slice::from_ref(&server);
     let mut servers = Servers::start_within(
         configs,

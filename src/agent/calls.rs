@@ -125,7 +125,7 @@ impl Agent {
                 None => self.config.tools.clone(),
             },
             hide_credentials: self.hide_credentials,
-            sandbox: self.config.sandbox,
+            sandbox: self.config.sandbox.clone(),
             mcp: self.mcp.clone(),
         }
     }
@@ -545,7 +545,7 @@ impl Kit {
                 tools: &self.coding_tools,
             },
             hide_credentials: self.hide_credentials,
-            sandbox: self.sandbox,
+            sandbox: self.sandbox.as_ref(),
             mcp: self.mcp.as_deref(),
         }
     }
@@ -555,7 +555,7 @@ impl Kit {
 pub(super) struct Tools<'a> {
     parent: subagent::Parent<'a>,
     hide_credentials: bool,
-    sandbox: Option<Sandbox>,
+    sandbox: Option<&'a Sandbox>,
     mcp: Option<&'a mcp::Servers>,
 }
 
@@ -1101,6 +1101,7 @@ here\n\nkept.txt says original";
         agent.set_sandbox(Some(Sandbox {
             mode: SandboxMode::WorkspaceWrite,
             network: false,
+            writable: Vec::new(),
         }));
         let cancel = AtomicBool::new(false);
         agent

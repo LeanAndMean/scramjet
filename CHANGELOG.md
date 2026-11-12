@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.164.0 — Changing the sandbox while working
+
+### Added
+
+- `/sandbox` shows the sandbox's mode, network, writable directories and what stays read-only in them, and changes the mode (`off` included) or the network without a restart.
+- `/add-dir DIR`, and `--add-dir DIR` at start, as in Claude Code, let the sandboxed agent's commands, writes and edits change another directory for the session; its `.git`, `.scramjet` and `.agents` stay read-only unless granted by name. `/sandbox remove DIR` takes a grant back.
+
 ## 2.163.0 — Reading other harnesses' sessions
 
 ### Added

@@ -383,12 +383,24 @@ fn start(
         ));
     }
     let model = named.map_or_else(|| default_model(&providers), |named| named.model);
-    let sandbox = (options.sandbox.unwrap_or(settings.sandbox)).map(|mode| Sandbox {
+    let mut sandbox = (options.sandbox.unwrap_or(settings.sandbox)).map(|mode| Sandbox {
         mode,
         network: settings.sandbox_network,
+        writable: Vec::new(),
     });
     if sandbox.is_some() {
         Sandbox::check()?;
+    }
+    for directory in &options.add_dirs {
+        match &mut sandbox {
+            Some(sandbox) => match sandbox.grant(&root, directory) {
+                Err(error) if error.ends_with("already writable") => {}
+                granted => _ = granted.map_err(|error| format!("--add-dir {error}"))?,
+            },
+            None => warnings.push(format!(
+                "--add-dir {directory}: everything is writable without --sandbox; ignored"
+            )),
+        }
     }
     let config = AgentConfig {
         providers,

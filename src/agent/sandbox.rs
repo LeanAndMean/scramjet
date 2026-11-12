@@ -145,10 +145,13 @@ impl SandboxMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sandbox {
     pub mode: SandboxMode,
     pub network: bool,
+    /// Directories the user made writable besides the project, by their real paths, each with
+    /// what `PROTECTED` names in it kept read-only.
+    pub writable: Vec<PathBuf>,
 }
 
 impl Sandbox {
@@ -160,12 +163,58 @@ impl Sandbox {
         available().map_err(|error| format!("the sandbox cannot start: {error}"))
     }
 
-    /// Refuses a `write` or `edit` of `path` that the sandbox does not allow: any in
-    /// `read-only`; outside `root`, or in what stays protected in it, in `workspace-write`. A
-    /// path is taken by its real place, through the symlinks of the part that exists, which it
-    /// returns with the real `root`.
+    /// Makes the directory `path` (relative to `root`, or from `~`) writable too, by its real
+    /// path; refused when it is not a directory or is writable already.
+    pub fn grant(&mut self, root: &Path, path: &str) -> Result<PathBuf, String> {
+        let given = given(root, path);
+        let real = std::fs::canonicalize(&given).map_err(|error| format!("{path}: {error}"))?;
+        if !real.is_dir() {
+            return Err(format!("{path}: not a directory"));
+        }
+        if self.check_write(root, &real).is_ok() {
+            return Err(format!("{}: already writable", real.display()));
+        }
+        self.writable.push(real.clone());
+        Ok(real)
+    }
+
+    /// Takes back the grant of `path`, given as `grant` takes it or as listed; returns the
+    /// directory it was.
+    pub fn revoke(&mut self, root: &Path, path: &str) -> Option<PathBuf> {
+        let given = given(root, path);
+        let real = std::fs::canonicalize(&given).unwrap_or(given);
+        let index = self.writable.iter().position(|granted| *granted == real)?;
+        Some(self.writable.remove(index))
+    }
+
+    /// The writable directories, by their real paths: the project's in `workspace-write`, then
+    /// those granted that exist.
+    pub fn writable_roots(&self, root: &Path) -> Vec<PathBuf> {
+        let project = (self.mode == SandboxMode::WorkspaceWrite)
+            .then(|| std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned()));
+        let granted = self.writable.iter().filter(|path| path.is_dir()).cloned();
+        project.into_iter().chain(granted).collect()
+    }
+
+    /// What stays read-only in the writable directories (`PROTECTED`, where it exists), but what
+    /// holds a directory granted by name, such as a `.git` the user made writable.
+    pub fn protected_paths(&self, root: &Path) -> Vec<PathBuf> {
+        let granted = |kept: &PathBuf| self.writable.iter().any(|path| path.starts_with(kept));
+        let mut kept: Vec<PathBuf> = (self.writable_roots(root).iter())
+            .flat_map(|writable| protected(writable))
+            .filter(|kept| !granted(kept))
+            .collect();
+        kept.sort();
+        kept.dedup();
+        kept
+    }
+
+    /// Refuses a `write` or `edit` of `path` that the sandbox does not allow: outside the
+    /// writable directories (`writable_roots`), or in what stays protected in them. A path is
+    /// taken by its real place, through the symlinks of the part that exists, which it returns
+    /// with the real writable directory it is in.
     pub(super) fn check_write(
-        self,
+        &self,
         root: &Path,
         path: &Path,
     ) -> Result<(PathBuf, PathBuf), String> {
@@ -176,29 +225,50 @@ impl Sandbox {
                 self.mode.name()
             ))
         };
-        if self.mode == SandboxMode::ReadOnly {
+        let roots = self.writable_roots(root);
+        if roots.is_empty() {
             return refused("the sandbox is read-only");
         }
         let Some(real) = real_path(path) else {
             return refused("a symlink there points nowhere the sandbox can check");
         };
-        let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
-        if !real.starts_with(&root) {
-            return refused("outside the project, which the sandbox leaves read-only");
-        }
-        match protected(&root).iter().any(|kept| real.starts_with(kept)) {
+        // The innermost decides, as the mounts nest: a project read-only in a granted directory
+        // stays so, and its protected paths are those that apply.
+        let project = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+        let read_only = (self.mode == SandboxMode::ReadOnly).then_some(project);
+        let Some(writable) = (read_only.clone().into_iter().chain(roots))
+            .filter(|writable| real.starts_with(writable))
+            .max_by_key(|writable| writable.components().count())
+            .filter(|writable| Some(writable) != read_only.as_ref())
+        else {
+            return refused(match self.mode {
+                SandboxMode::WorkspaceWrite => {
+                    "outside the project, which the sandbox leaves read-only"
+                }
+                SandboxMode::ReadOnly => "the sandbox is read-only there",
+            });
+        };
+        match (self.protected_paths(root).iter()).any(|kept| real.starts_with(kept)) {
             true => refused("kept read-only in the sandbox"),
-            false => Ok((real, root)),
+            false => Ok((real, writable)),
         }
     }
 
     /// Writes `content` to `path` where `check_write` allows it, making the directories missing.
-    /// Each directory below the project's is opened from the one above it without following a
+    /// Each directory below the writable one is opened from the one above it without following a
     /// symlink, and so is the file, so that a symlink swapped in after the check (by a bash call
     /// running alongside) fails the write rather than leading it out of what was checked.
-    pub(super) fn write(self, root: &Path, path: &Path, content: &[u8]) -> Result<(), String> {
+    pub(super) fn write(&self, root: &Path, path: &Path, content: &[u8]) -> Result<(), String> {
         let (real, root) = self.check_write(root, path)?;
         write_beneath(&root, &real, content).map_err(|error| format!("{}: {error}", path.display()))
+    }
+}
+
+/// `path` as the user gave it: from `~`, else relative to `root`.
+fn given(root: &Path, path: &str) -> PathBuf {
+    match crate::os::after_tilde(path).zip(std::env::home_dir()) {
+        Some((rest, home)) => home.join(rest),
+        None => root.join(path),
     }
 }
 
@@ -621,7 +691,7 @@ pub(super) fn sandboxed(
     root: &Path,
     command: &str,
     hidden: &Hidden,
-    sandbox: Sandbox,
+    sandbox: &Sandbox,
 ) -> Result<Command, String> {
     let mut process = confined(root, hidden, Some(sandbox), None)?;
     process.arg(super::tools::shell_program()?);
@@ -637,7 +707,7 @@ pub(super) fn server(
     root: &Path,
     program: &str,
     hidden: &Hidden,
-    sandbox: Sandbox,
+    sandbox: &Sandbox,
 ) -> Result<Command, String> {
     let cache = super::session::state_directory().map(|directory| directory.join("sandbox-cache"));
     let cache = (cache.ok())
@@ -705,7 +775,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
 fn confined(
     root: &Path,
     _: &Hidden,
-    sandbox: Option<Sandbox>,
+    sandbox: Option<&Sandbox>,
     _: Option<&Path>,
 ) -> Result<Command, String> {
     if sandbox.is_some() {
@@ -728,13 +798,28 @@ pub(super) fn low(root: &Path) -> Result<Command, String> {
 fn confined(
     root: &Path,
     hidden: &Hidden,
-    sandbox: Option<Sandbox>,
+    sandbox: Option<&Sandbox>,
     writable_too: Option<&Path>,
 ) -> Result<Command, String> {
     let writable = sandbox.is_some_and(|sandbox| sandbox.mode == SandboxMode::WorkspaceWrite);
     let network = sandbox.is_some_and(|sandbox| sandbox.network);
+    let granted: Vec<PathBuf> = sandbox
+        .map(|sandbox| sandbox.writable_roots(root))
+        .unwrap_or_default()
+        .into_iter()
+        .skip(usize::from(writable))
+        .collect();
+    let kept = sandbox.map_or_else(Vec::new, |sandbox| sandbox.protected_paths(root));
     if cfg!(target_os = "macos") {
-        return Ok(closed(root, hidden, writable, network, writable_too));
+        return Ok(closed(
+            root,
+            hidden,
+            writable,
+            network,
+            &granted,
+            &kept,
+            writable_too,
+        ));
     }
     let mut process = Command::new(PROGRAM);
     process.args([
@@ -763,17 +848,23 @@ fn confined(
         }
     }
     let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
-    process.arg(if writable { "--bind" } else { "--ro-bind" });
-    process.arg(&real_root).arg(&real_root);
+    // The shallower first, so that the project read-only in a granted directory stays so, and a
+    // granted directory in a read-only project is writable.
+    let mut mounts: Vec<(&PathBuf, bool)> = vec![(&real_root, writable)];
+    mounts.extend(granted.iter().map(|directory| (directory, true)));
+    mounts.sort_by_key(|(path, _)| path.components().count());
+    for (path, writable) in mounts {
+        process.arg(if writable { "--bind" } else { "--ro-bind" });
+        process.arg(path).arg(path);
+    }
     // Before what is hidden, which a mount of a directory above it would uncover.
-    let kept = if writable {
-        let mut kept = protected(&real_root);
-        kept.retain(|path| !hidden.overlaps(path));
-        kept
-    } else {
-        Vec::new()
-    };
-    for directory in pinned(&real_root, &kept) {
+    let mut kept = kept;
+    kept.retain(|path| !hidden.overlaps(path));
+    let writable_roots = (writable.then_some(&real_root)).into_iter().chain(&granted);
+    let pinned: std::collections::BTreeSet<PathBuf> = writable_roots
+        .flat_map(|writable| pinned(writable, &kept))
+        .collect();
+    for directory in pinned {
         process.arg("--bind").arg(&directory).arg(&directory);
     }
     if Path::new(WSLG).is_dir() {
@@ -804,6 +895,8 @@ fn closed(
     hidden: &Hidden,
     writable: bool,
     network: bool,
+    granted: &[PathBuf],
+    kept: &[PathBuf],
     writable_too: Option<&Path>,
 ) -> Command {
     let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
@@ -814,22 +907,32 @@ fn closed(
         network,
         hidden: Default::default(),
     };
-    if writable {
-        let named = PROTECTED.iter().map(|name| real_root.join(name));
-        closed.protected = named.chain(protected(&real_root)).collect();
-        closed.protected.sort();
-        closed.protected.dedup();
-        closed.anchored = pinned(&real_root, &closed.protected).into_iter().collect();
-        closed.writable.push(real_root.clone());
-    } else {
-        // A project under a temporary directory stays read-only, as bubblewrap mounts it.
+    let roots: Vec<&PathBuf> = (writable.then_some(&real_root))
+        .into_iter()
+        .chain(granted)
+        .collect();
+    // Also where it does not exist yet, but where granted by name.
+    let named = (roots.iter()).flat_map(|root| PROTECTED.iter().map(|name| root.join(name)));
+    let named = named.filter(|path| !granted.iter().any(|grant| grant.starts_with(path)));
+    closed.protected = named.chain(kept.iter().cloned()).collect();
+    closed.protected.sort();
+    closed.protected.dedup();
+    for root in &roots {
+        closed.anchored.extend(pinned(root, &closed.protected));
+    }
+    closed.writable.extend(roots.into_iter().cloned());
+    if !writable && !granted.contains(&real_root) {
+        // A project under a temporary directory or a granted one stays read-only, as bubblewrap
+        // mounts it.
         closed.protected.push(real_root.clone());
     }
     // Renaming the project or a directory above it would move what it protects out of its path.
-    let above = real_root
-        .ancestors()
+    let above = (std::iter::once(&real_root).chain(granted))
+        .flat_map(|path| path.ancestors())
         .filter(|directory| directory.parent().is_some());
     closed.anchored.extend(above.map(Path::to_owned));
+    closed.anchored.sort();
+    closed.anchored.dedup();
     closed.writable.extend(writable_too.map(Path::to_owned));
     let (files, directories) = hidden.mounted();
     // Servers that commands with the stores hidden started run what a client asks writable and
@@ -1027,8 +1130,12 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
             (SandboxMode::WorkspaceWrite, true, "wrote\n", "connected"),
             (SandboxMode::ReadOnly, false, "", "no network"),
         ] {
-            let sandbox = Sandbox { mode, network };
-            let output = super::sandboxed(&root, &script, &hidden, sandbox)
+            let sandbox = Sandbox {
+                mode,
+                network,
+                writable: Vec::new(),
+            };
+            let output = super::sandboxed(&root, &script, &hidden, &sandbox)
                 .unwrap()
                 .output()
                 .unwrap();
@@ -1057,6 +1164,63 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
     }
 
     #[test]
+    fn bash_in_the_sandbox_writes_the_granted_directories() {
+        use super::{Sandbox, SandboxMode};
+        if super::available().is_err() {
+            return;
+        }
+        let home = std::env::temp_dir().join(format!("scramjet-grants-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        for directory in ["project/build", "other/.git", "other/src"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        let files = [
+            "a",
+            "build/a",
+            "../other/src/a",
+            "../other/.git/config",
+            "../a",
+        ];
+        let script = format!(
+            "for f in {}; do echo x > $f; done 2>/dev/null; true",
+            files.join(" ")
+        );
+        let hidden = super::Hidden::under(&home, Vec::new());
+        // Which files the command wrote, as seen outside the sandbox.
+        let run = |sandbox: &Sandbox| {
+            super::sandboxed(&root, &script, &hidden, sandbox)
+                .unwrap()
+                .output()
+                .unwrap();
+            let written = files.into_iter().filter(|file| root.join(file).exists());
+            let written: Vec<_> = written.collect();
+            for file in &written {
+                std::fs::remove_file(root.join(file)).unwrap();
+            }
+            written
+        };
+        let mut sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        sandbox.grant(&root, "../other").unwrap();
+        assert_eq!(run(&sandbox), ["a", "build/a", "../other/src/a"]);
+        // Read-only: the project too inside a granted directory, but what is granted in it. A
+        // repository nested in a granted directory is not its own, so it stays writable.
+        let mut sandbox = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            ..sandbox
+        };
+        sandbox.writable.clear();
+        sandbox.grant(&root, "build").unwrap();
+        sandbox.grant(&root, "..").unwrap();
+        let written = ["build/a", "../other/src/a", "../other/.git/config", "../a"];
+        assert_eq!(run(&sandbox), written);
+    }
+
+    #[test]
     fn the_main_agents_sandbox_refuses_writes_it_does_not_allow() {
         use super::{Sandbox, SandboxMode};
         let home = std::env::temp_dir().join(format!("scramjet-writes-{}", std::process::id()));
@@ -1071,28 +1235,98 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
         let write = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
             network: true,
+            writable: Vec::new(),
         };
         let read = Sandbox {
             mode: SandboxMode::ReadOnly,
-            ..write
+            ..write.clone()
         };
         assert!(write.check_write(&root, &root.join("src/new/a.rs")).is_ok());
-        let refused = |sandbox: Sandbox, path: &str| {
+        let refused = |sandbox: &Sandbox, path: &str| {
             sandbox
                 .check_write(&root, &root.join(path))
                 .expect_err(path)
         };
-        assert!(refused(read, "a.rs").ends_with("the sandbox is read-only (--sandbox read-only)"));
+        assert!(refused(&read, "a.rs").ends_with("the sandbox is read-only (--sandbox read-only)"));
         for path in ["../a.rs", "out/a.rs", "out/new/a.rs"] {
             assert!(
-                refused(write, path).contains("outside the project"),
+                refused(&write, path).contains("outside the project"),
                 "{path}"
             );
         }
-        assert!(refused(write, ".git/config").contains("kept read-only"));
+        assert!(refused(&write, ".git/config").contains("kept read-only"));
         for path in ["hook", "away", "away/a.rs", "loop"] {
-            assert!(refused(write, path).contains("points nowhere"), "{path}");
+            assert!(refused(&write, path).contains("points nowhere"), "{path}");
         }
+    }
+
+    #[test]
+    fn granted_directories_are_writable_but_their_own_protected_paths() {
+        use super::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-granted-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        for directory in ["project/.git", "project/build", "other/.git", "other/src"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        std::fs::write(home.join("file"), "").unwrap();
+        let home = std::fs::canonicalize(home).unwrap();
+        let mut sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        let allowed = |sandbox: &Sandbox, path: &str| sandbox.check_write(&root, &home.join(path));
+        assert!(allowed(&sandbox, "other/a.rs").is_err());
+        assert_eq!(sandbox.grant(&root, "../other"), Ok(home.join("other")));
+        assert!(
+            sandbox
+                .grant(&root, "../other/src")
+                .unwrap_err()
+                .ends_with("already writable")
+        );
+        assert!(
+            sandbox
+                .grant(&root, "../file")
+                .unwrap_err()
+                .ends_with("not a directory")
+        );
+        assert!(
+            sandbox
+                .grant(&root, "build")
+                .unwrap_err()
+                .ends_with("already writable")
+        );
+        assert_eq!(
+            allowed(&sandbox, "other/src/a.rs").unwrap(),
+            (home.join("other/src/a.rs"), home.join("other"))
+        );
+        assert!(allowed(&sandbox, "other/.git/config").is_err());
+        let kept = sandbox.protected_paths(&root);
+        assert_eq!(kept, [home.join("other/.git"), home.join("project/.git")]);
+        // A protected directory granted by name is writable.
+        assert_eq!(sandbox.grant(&root, ".git"), Ok(home.join("project/.git")));
+        assert!(allowed(&sandbox, "project/.git/config").is_ok());
+        assert_eq!(sandbox.protected_paths(&root), [home.join("other/.git")]);
+        // In read-only, the project stays read-only inside a granted directory, and a directory
+        // granted inside it is writable.
+        let mut read = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            network: false,
+            writable: Vec::new(),
+        };
+        assert!(allowed(&read, "project/build/a").is_err());
+        read.grant(&root, "build").unwrap();
+        read.grant(&root, "..").unwrap();
+        assert!(allowed(&read, "project/build/a").is_ok());
+        assert!(
+            allowed(&read, "project/a")
+                .unwrap_err()
+                .contains("read-only there")
+        );
+        assert!(allowed(&read, "other/a").is_ok());
+        assert_eq!(read.revoke(&root, ".."), Some(home.clone()));
+        assert!(allowed(&read, "other/a").is_err());
     }
 
     #[test]
@@ -1129,8 +1363,9 @@ touch vendor/lib/.git/hooks/post-checkout && rm -rf build && mv vendor v2 && ech
         let sandbox = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
             network: false,
+            writable: Vec::new(),
         };
-        let output = super::sandboxed(&root, script, &hidden, sandbox)
+        let output = super::sandboxed(&root, script, &hidden, &sandbox)
             .unwrap()
             .output()
             .unwrap();
@@ -1184,6 +1419,7 @@ touch vendor/lib/.git/hooks/post-checkout && rm -rf build && mv vendor v2 && ech
         let write = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
             network: true,
+            writable: Vec::new(),
         };
         write
             .write(&root, &root.join("src/new/deeper/a.rs"), b"made")

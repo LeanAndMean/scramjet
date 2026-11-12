@@ -120,6 +120,9 @@ but to NO_PROXY's hosts and this machine.
                          setting sandboxNetwork is false. It needs bubblewrap (bwrap) and
                          refuses to start without it; on macOS it runs under Seatbelt
                          (sandbox-exec). `!` commands you type stay outside
+  --add-dir DIR          let the sandbox's commands, write and edit change DIR too (its
+                         .git, .scramjet and .agents kept read-only); repeatable. /sandbox
+                         and /add-dir grant more while working
   --offline              no network at start, as SCRAMJET_OFFLINE=1: packages not cloned
                          yet are not cloned, and no newer release is looked for
   --verbose, --mode text, -ne, --no-extensions, -np, --no-prompt-templates
@@ -311,6 +314,8 @@ pub(super) struct Options {
     pub(super) ask: bool,
     /// `--sandbox`: `Some(None)` for `danger-full-access`.
     pub(super) sandbox: Option<Option<SandboxMode>>,
+    /// `--add-dir`: directories the sandbox makes writable too.
+    pub(super) add_dirs: Vec<String>,
     /// `--retries`, over the settings' `retry.maxRetries`.
     pub(super) retries: Option<u32>,
     /// `--cache-retention`, over the variables.
@@ -351,6 +356,7 @@ impl Options {
             only_tools: None,
             ask: false,
             sandbox: None,
+            add_dirs: Vec::new(),
             retries: None,
             cache_retention: None,
             api_key: None,
@@ -507,6 +513,7 @@ without spaces"
 workspace-write and danger-full-access"
                     ))?)
                 }
+                Some("--add-dir") => options.add_dirs.push(value()?),
                 Some("-p" | "--print") => options.print = true,
                 Some("-h" | "--help") => return Ok(None),
                 Some(file) if file.starts_with('@') => options.files.push(file[1..].to_owned()),

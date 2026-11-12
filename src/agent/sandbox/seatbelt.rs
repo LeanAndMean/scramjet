@@ -300,7 +300,15 @@ mod tests {
         let root = scratch.join("clone");
         std::fs::create_dir_all(&root).unwrap();
         let hidden = super::super::Hidden::default();
-        let text = spelled(&super::super::closed(&root, &hidden, false, false, None));
+        let text = spelled(&super::super::closed(
+            &root,
+            &hidden,
+            false,
+            false,
+            &[],
+            &[],
+            None,
+        ));
         std::fs::remove_dir_all(&scratch).unwrap();
         let (tmp, root) = (tmp.display(), root.display());
         assert!(
@@ -315,6 +323,51 @@ mod tests {
             assert!(text.contains(&anchor), "{anchor} in\n{text}");
         }
         assert!(!text.contains("(literal \"/\")"));
+    }
+
+    #[test]
+    fn granted_directories_are_writable_but_their_protected_paths() {
+        let (build, other) = (
+            PathBuf::from("/Users/u/p/build"),
+            PathBuf::from("/Users/u/o"),
+        );
+        let hidden = super::super::Hidden::default();
+        let granted = [build.clone(), other.clone(), other.join(".agents")];
+        let kept = [other.join(".git")];
+        let profile = super::super::closed(
+            Path::new("/Users/u/p"),
+            &hidden,
+            false,
+            false,
+            &granted,
+            &kept,
+            None,
+        );
+        let text = spelled(&profile);
+        let not = |path: &str| {
+            format!("(require-not (literal \"{path}\")) (require-not (subpath \"{path}\"))")
+        };
+        let build = format!(
+            "(allow file-write* (require-all (subpath \"/Users/u/p/build\") {} {} {}))",
+            not("/Users/u/p/build/.agents"),
+            not("/Users/u/p/build/.git"),
+            not("/Users/u/p/build/.scramjet"),
+        );
+        assert!(text.contains(&build), "{build} in\n{text}");
+        // `.agents` granted by name.
+        let other = text
+            .lines()
+            .find(|line| {
+                line.starts_with("(allow file-write* (require-all (subpath \"/Users/u/o\")")
+            })
+            .unwrap();
+        assert!(other.contains(&not("/Users/u/o/.git")), "{other}");
+        assert!(other.contains(&not("/Users/u/o/.scramjet")), "{other}");
+        assert!(!other.contains(&not("/Users/u/o/.agents")), "{other}");
+        assert!(text.contains("(allow file-write* (require-all (subpath \"/Users/u/o/.agents\") "));
+        assert!(!text.contains("(subpath \"/Users/u/p\")"), "{text}");
+        let anchor = "(vnode-type DIRECTORY) (literal \"/Users/u/o\"))";
+        assert!(text.contains(anchor), "{text}");
     }
 
     #[test]

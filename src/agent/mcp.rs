@@ -919,7 +919,7 @@ async fn run(
 ) -> Result<RunningService<RoleClient, ClientConfig>, String> {
     let mut command = match confined {
         Some((sandbox, named)) => {
-            sandbox::server(&root, program, &Hidden::current(named), *sandbox)?.into()
+            sandbox::server(&root, program, &Hidden::current(named), sandbox)?.into()
         }
         None => {
             let path = env
