@@ -146,8 +146,8 @@ impl Runtime {
 pub enum Switch {
     /// `reasoning_effort`, `none` for off: Ollama's and LM Studio's.
     Effort,
-    /// `reasoning_effort` levels, where `none` does not stop it: gpt-oss on Ollama 0.40.16, and in
-    /// its own chat template on llama.cpp b12282.
+    /// `reasoning_effort` levels, where `none` does not stop it: gpt-oss on Ollama 0.40.16, on
+    /// LM Studio (llmster 0.0.27), and in its own chat template on llama.cpp b12282.
     EffortNoOff,
     /// `chat_template_kwargs.enable_thinking`: Qwen3's chat templates, on vLLM and llama.cpp.
     ChatTemplate,
@@ -691,11 +691,16 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
                     .into_iter()
                     .flatten()
                     .find(|listed| listed.id == model);
+                checked.thinks |= loaded.as_ref().is_some_and(|loaded| loaded.reasoning);
                 checked.window = loaded.and_then(|loaded| loaded.window);
-                // It takes `reasoning_effort` and ignores `chat_template_kwargs` (llmster 0.0.27).
-                let off = json!({"reasoning_effort": "none"});
-                if checked.thinks && stops(server, model, key, off).await {
-                    checked.switch = Some(Switch::Effort);
+                // It takes `reasoning_effort` and ignores `chat_template_kwargs` (llmster 0.0.27);
+                // gpt-oss reads `none` as low there.
+                if checked.thinks {
+                    let off = json!({"reasoning_effort": "none"});
+                    checked.switch = Some(match stops(server, model, key, off).await {
+                        true => Switch::Effort,
+                        false => Switch::EffortNoOff,
+                    });
                 }
                 return Ok(checked);
             }

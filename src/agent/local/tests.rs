@@ -275,8 +275,23 @@ fn lm_studio(loaded: bool) -> impl Fn(&str, &str, &Value) -> (u16, Value) {
                     "trained_for_tool_use": true,
                     "reasoning": {"allowed_options": ["off", "on"], "default": "on"}}},
                 {"type": "embedding", "key": "text-embedding-nomic-embed-text-v1.5",
-                    "loaded_instances": [], "max_context_length": 2048}]}),
+                    "loaded_instances": [], "max_context_length": 2048},
+                {"type": "llm", "key": "openai/gpt-oss-20b", "loaded_instances": [],
+                    "max_context_length": 131072, "capabilities": {"vision": false,
+                    "trained_for_tool_use": true,
+                    "reasoning": {"allowed_options": ["low", "medium", "high"],
+                    "default": "low"}}}]}),
             ),
+            // gpt-oss reasons at every effort, and called the tool without reasoning first.
+            "/v1/chat/completions" if body["model"] == "openai/gpt-oss-20b" => {
+                let message = match body["tools"].is_array() {
+                    true => json!({"content": "", "reasoning": "",
+                        "tool_calls": [{"function": {"name": CHECK_TOOL,
+                        "arguments": "{\"word\":\"scramjet\"}"}}]}),
+                    false => json!({"content": "391", "reasoning": "Just multiply."}),
+                };
+                (200, json!({"choices": [{"message": message}]}))
+            }
             "/v1/chat/completions" => {
                 let message = match body["reasoning_effort"] == "none" {
                     true => json!({"content": "391"}),
@@ -316,6 +331,11 @@ fn lm_studio_is_told_apart_and_its_window_read_once_loaded() {
     assert_eq!(
         (checked.thinks, checked.switch),
         (true, Some(Switch::Effort))
+    );
+    let checked = check_tools(&server, "openai/gpt-oss-20b", None).unwrap();
+    assert_eq!(
+        (checked.thinks, checked.switch),
+        (true, Some(Switch::EffortNoOff))
     );
 
     // Before 0.4.0, only `/api/v0/models`.

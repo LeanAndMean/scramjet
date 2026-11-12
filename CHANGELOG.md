@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.181.0 — gpt-oss's thinking levels on LM Studio
+
+### Changed
+
+- `/login` → Local models offers thinking levels for an LM Studio model that thinks but that `none` does not stop, such as gpt-oss: low, medium and high reach it, and off is not offered. Such models were saved with no levels before. A model LM Studio lists as reasoning counts as thinking even when the check's answer showed none.
+
 ## 2.180.0 — gpt-oss's thinking levels on llama.cpp
 
 ### Changed
