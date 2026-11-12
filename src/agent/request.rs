@@ -469,7 +469,7 @@ pub(super) fn send(
         let token = (route.login.as_ref())
             .map(|login| login_token(login, cancel))
             .transpose();
-        let failure = match token {
+        let mut failure = match token {
             Err(ClientError::Cancelled) => return Err(AgentError::Cancelled),
             Err(ClientError::Failed(failure)) => failure,
             Ok(token) => 'sent: {
@@ -548,6 +548,11 @@ pub(super) fn send(
                     .take(300)
                     .collect(),
             });
+        }
+        if let (true, Some(runtime)) = (failure.refused, info.runtime) {
+            // A runtime nothing listens for has not been started: waiting will not start it.
+            failure.transient = false;
+            failure.message = format!("{}\n{}", failure.message, runtime.not_running(model));
         }
         let backoff = jittered(retries.delay.saturating_mul(2u32.pow(attempt.min(5))));
         let delay = backoff.min(max_wait).max(failure.wait.unwrap_or_default());
@@ -916,6 +921,55 @@ response is incomplete; retry the request."});
         );
         assert!(ui.retries.is_empty());
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_local_runtime_not_listening_fails_at_once_saying_how_to_start_it() {
+        let closed = "127.0.0.1:1".parse().unwrap();
+        let (mut agent, _scratch) = agent(closed, "runtime-not-running");
+        let request = json!({"model": agent.config.model, "input": []});
+        let send_it = |info: &ModelInfo| {
+            let mut retries = 0;
+            let retrying = Retries {
+                attempts: 1,
+                delay: Duration::ZERO,
+                max_wait: None,
+            };
+            let cancel = AtomicBool::new(false);
+            let sent = send(
+                &agent.executor,
+                info,
+                retrying,
+                &request,
+                true,
+                &cancel,
+                &mut |event| {
+                    if let Sending::Retrying(..) = event {
+                        retries += 1;
+                    }
+                },
+            );
+            match sent {
+                Err(AgentError::Provider(message)) => (message, retries),
+                other => panic!("{:?}", other.err()),
+            }
+        };
+        // A hosted provider refusing may be restarting: it is tried again.
+        let (message, retries) = send_it(&agent.info);
+        assert_eq!(retries, 1);
+        assert!(message.ends_with("(after 1 retries)"), "{message}");
+        agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);
+        let (message, retries) = send_it(&agent.info);
+        assert_eq!(retries, 0);
+        assert!(
+            message.starts_with("cannot connect to 127.0.0.1:1 "),
+            "{message}"
+        );
+        assert!(
+            message
+                .ends_with("\nIs Ollama running? Start it with `ollama serve`, then send again."),
+            "{message}"
+        );
     }
 
     #[test]

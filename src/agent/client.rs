@@ -150,6 +150,8 @@ pub(super) struct Failure {
     pub wait: Option<Duration>,
     /// What its response's headers said of the account's quota, as a reply's.
     pub quota: Option<super::quota::Quota>,
+    /// Nothing listened at the provider's address.
+    pub refused: bool,
 }
 
 /// A failure nothing says another attempt may cure, such as a file's.
@@ -173,6 +175,7 @@ impl Failure {
             overflow: false,
             wait: None,
             quota: None,
+            refused: false,
         }
     }
     /// A failure the provider explained, classified by its error code, then by its message.
@@ -417,6 +420,7 @@ async fn exchange(
                     || (matches!(status.as_u16(), 400 | 413) && text.trim().is_empty()),
                 wait,
                 quota: None,
+                refused: false,
             }),
         }
     } else {
@@ -654,8 +658,12 @@ pub(super) async fn connect_for(route: &Route, who: &str) -> Result<Connection, 
     let proxy = super::proxy::for_host(route.tls, &route.host, route.port)
         .map_err(|problem| Failure::new(problem, false))?;
     let socket = match &proxy {
-        None => (TcpStream::connect((route.host.as_str(), route.port)).await)
-            .map_err(|e| Failure::new(format!("cannot connect to {authority}{who}: {e}"), true))?,
+        None => {
+            (TcpStream::connect((route.host.as_str(), route.port)).await).map_err(|e| Failure {
+                refused: e.kind() == std::io::ErrorKind::ConnectionRefused,
+                ..Failure::new(format!("cannot connect to {authority}{who}: {e}"), true)
+            })?
+        }
         Some(proxy) => {
             let whom = format!("{authority}{who}");
             (super::proxy::tunnel(proxy, &route.host, route.port, &whom).await)

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.179.1 — A stopped local runtime says how to start it
+
+### Fixed
+
+- A model a local runtime serves, sent a prompt while the runtime is not running, fails at once with how to start it (`ollama serve`, `vllm serve MODEL`, `lms server start`…), rather than retrying for 14 seconds and saying only "Connection refused".
+
 ## 2.179.0 — Local models' token count kept across restarts
 
 ### Changed

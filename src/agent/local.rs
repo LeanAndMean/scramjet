@@ -90,6 +90,21 @@ impl Runtime {
         }
     }
 
+    /// What to say when nothing listens at its address for `model`.
+    pub fn not_running(self, model: &str) -> String {
+        let start = match self {
+            Runtime::Ollama => "`ollama serve`".to_owned(),
+            Runtime::LlamaCpp => "`llama-server -m` and the model's file".to_owned(),
+            Runtime::Vllm => format!("`vllm serve {model}`"),
+            Runtime::LmStudio => "`lms server start`".to_owned(),
+            Runtime::Other => return "Is the server running? Start it, then send again.".into(),
+        };
+        format!(
+            "Is {} running? Start it with {start}, then send again.",
+            self.name()
+        )
+    }
+
     /// What to change when a model answers without calling the tool.
     fn tools_hint(self) -> &'static str {
         match self {
