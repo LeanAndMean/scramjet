@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.178.0 — Local models keep their token count past a compaction
+
+### Changed
+
+- On a model a local runtime serves, how far its count of a request differed from the chars/4 estimate now carries over a compaction, `/new`, `/resume` and a `/tree` move, as a ratio, instead of starting again from chars/4, which ran 12–52% above Ollama's counts and compacted early.
+
 ## 2.177.1 — An Ollama model's window known before its first request
 
 ### Fixed

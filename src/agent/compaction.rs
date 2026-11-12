@@ -634,6 +634,14 @@ fn turn_prefix_tokens(reserve: u64) -> u64 {
     (reserve / 2).max(1)
 }
 
+/// A request a local runtime counted whole: its tokens by chars/4 and by the runtime, and
+/// whether the conversation still extends it.
+pub(super) struct Calibration {
+    estimate: u64,
+    input: u64,
+    extends: bool,
+}
+
 #[derive(Clone)]
 pub struct Compaction {
     /// The last response's context size and an estimate of the items after it, or without a
@@ -721,7 +729,7 @@ impl Agent {
         self.delegated.clear();
         // Unknown until the next response reports it.
         self.usage.context_tokens = None;
-        self.overcount = None;
+        self.conversation_replaced();
         ui.usage(
             self.session_tokens(),
             self.context_tokens(),
@@ -1010,19 +1018,35 @@ impl Agent {
             }
             super::local::Runtime::Other => false,
         };
-        if whole && model == self.config.model {
-            self.overcount = Some((model.to_owned(), estimate as i64 - input as i64));
+        if whole && model == self.config.model && estimate > 0 {
+            let calibration = Calibration {
+                estimate,
+                input,
+                extends: true,
+            };
+            self.calibrations.insert(model.to_owned(), calibration);
         }
     }
 
-    /// A chars/4 estimate of a request to the current model, less what that overcounted in its
-    /// last measured request (`calibrate`); the items added since count at chars/4.
+    /// After compaction, a move in the tree or a session switch, the next request no longer
+    /// extends the measured ones.
+    pub(super) fn conversation_replaced(&mut self) {
+        for calibration in self.calibrations.values_mut() {
+            calibration.extends = false;
+        }
+    }
+
+    /// A chars/4 estimate of a request to the current model, corrected by its last measured
+    /// request (`calibrate`): while the conversation extends that request, less what chars/4
+    /// overcounted in it, the items added since counting at chars/4; otherwise scaled by its
+    /// count over its estimate.
     fn calibrated(&self, estimate: u64) -> u64 {
-        match &self.overcount {
-            Some((model, overcount)) if *model == self.config.model => {
-                (estimate as i64 - overcount).max(0) as u64
+        match self.calibrations.get(&self.config.model) {
+            Some(last) if last.extends => (estimate + last.input).saturating_sub(last.estimate),
+            Some(last) => {
+                (u128::from(estimate) * u128::from(last.input) / u128::from(last.estimate)) as u64
             }
-            _ => estimate,
+            None => estimate,
         }
     }
 }
@@ -2030,11 +2054,28 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         let model = agent.config.model.clone();
         // Past the window by chars/4, so a count under half may be of a prompt it cut.
         agent.calibrate(&model, 31_000, 10_000);
-        assert_eq!(agent.overcount, None);
+        assert_eq!(agent.calibrated(20_000), 20_000);
         agent.calibrate(&model, 12_000, 10_000);
-        assert_eq!(agent.overcount, Some((model.clone(), 2_000)));
+        assert_eq!(agent.calibrated(20_000), 18_000);
         agent.calibrate(&model, 29_000, 26_000);
-        assert_eq!(agent.overcount, Some((model, 3_000)));
+        assert_eq!(agent.calibrated(30_000), 27_000);
+    }
+
+    #[test]
+    fn a_runtime_count_scales_estimates_after_the_conversation_is_replaced() {
+        let endpoint: std::net::SocketAddr = "127.0.0.1:9".parse().unwrap();
+        let (mut agent, _scratch) = agent(endpoint, "calibration-kept");
+        agent.set_context_window(Some(30_000));
+        agent.info.runtime = Some(crate::agent::local::Runtime::LlamaCpp);
+        let model = agent.config.model.clone();
+        agent.calibrate(&model, 20_000, 15_000);
+        // Items added since count at chars/4.
+        assert_eq!(agent.calibrated(24_000), 19_000);
+        // A compacted, resumed or new conversation keeps the runtime's measure as a ratio.
+        agent.conversation_replaced();
+        assert_eq!(agent.calibrated(8_000), 6_000);
+        agent.calibrate(&model, 10_000, 9_000);
+        assert_eq!(agent.calibrated(12_000), 11_000);
     }
 
     /// A turn on an Ollama model with a `window`: a 4,000-character output, then a 60,000 one,
@@ -2053,8 +2094,8 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         let (endpoint, server) = serve(vec![
             models,
             version,
-            call(4_000, 1_000),
-            call(60_000, 3_000),
+            call(4_000, 9_800),
+            call(60_000, 10_800),
             stream(&fixture::text_events("prefix", fixture::known_usage())),
             stream(&fixture::text_events("done", fixture::known_usage())),
         ]);

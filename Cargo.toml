@@ -1,6 +1,6 @@
 [package]
 name = "scramjet"
-version = "2.177.1"
+version = "2.178.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "An independent Rust terminal coding harness"
