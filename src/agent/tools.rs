@@ -52,6 +52,8 @@ const OUTPUT_TAIL_BYTES: usize = 8 << 10;
 const LS_LIMIT: usize = 500;
 const GREP_LIMIT: usize = 100;
 const FIND_LIMIT: usize = 1000;
+/// The lines of file contents a plain-word `find` that names no file shows.
+const FIND_GREP_LIMIT: usize = 20;
 /// Pi cuts a longer `grep` line to this many characters.
 const GREP_LINE_CHARS: usize = 500;
 /// Unchanged lines shown around each change in an edit diff, as in Scramjet.
@@ -1911,13 +1913,28 @@ fn find(
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
     let found = search::find(root, &path, pattern, limit, hidden, cancel)?;
     if found.is_empty() {
-        // Models searching for text (gpt-oss) take the bare answer as "the text is nowhere".
+        // Models searching for text (gpt-oss) take the bare answer as "the text is nowhere",
+        // and often keep giving find phrases after a hint alone.
         if !pattern.contains(['*', '?', '[', '{', '/']) {
-            return Ok(
-                "No files found matching pattern\n\n[find matches file names by glob, \
-such as *.rs or *name*. To search file contents, use grep]"
-                    .into(),
+            let mut arguments = json!({"pattern":pattern,"literal":true,"limit":FIND_GREP_LIMIT});
+            arguments["path"] = call.arguments["path"].clone();
+            let text = grep(
+                root,
+                &Call {
+                    name: "grep",
+                    arguments,
+                },
+                hidden,
+                cancel,
             );
+            let hint = "No files found matching pattern\n\n[find matches file names by glob, \
+such as *.rs or *name*. To search file contents, use grep";
+            return Ok(match text {
+                Ok(text) if text != "No matches found" => {
+                    format!("{hint}. As text, the pattern is in these lines:]\n\n{text}")
+                }
+                _ => format!("{hint}]"),
+            });
         }
         return Ok("No files found matching pattern".into());
     }
@@ -3131,6 +3148,12 @@ to see full lines]",
             text("find", json!({"pattern":"tool find"})),
             "No files found matching pattern\n\n[find matches file names by glob, such as *.rs \
 or *name*. To search file contents, use grep]"
+        );
+        assert_eq!(
+            text("find", json!({"pattern":"fn alpha","path":"src"})),
+            "No files found matching pattern\n\n[find matches file names by glob, such as *.rs \
+or *name*. To search file contents, use grep. As text, the pattern is in these lines:]\n\n\
+src/a.rs:1: fn alpha() {}"
         );
         let limited = text("find", json!({"pattern":"*.rs","limit":1}));
         assert!(

@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.188.0 — Local models that stop to think
+
+### Changed
+
+- A Chat Completions reply that is only reasoning, with no answer and no tool call, is asked for again once, saying so. Ollama's gpt-oss now and then stops after reasoning about its next search, which ended the turn with nothing done.
+- `find` given a plain phrase that names no file also shows up to 20 lines holding it as text, found as `grep` with `literal: true` would. Local models give `find` the text they look for, and often ignored the hint to use `grep`.
+
 ## 2.187.0 — No idle tools in -p
 
 ### Changed
