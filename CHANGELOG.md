@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.196.0 — Edits match as Codex's apply_patch does
+
+### Changed
+
+- An edit whose old text matches only with each line's indentation set aside now writes its new text as given, as Codex's `apply_patch` writes a patch's lines, rather than shifting it to the file's indentation or refusing it when the indentation differs unevenly.
+- An edit no longer matches with escapes such as `\n` and `\"` read as the characters they stand for (2.186.0), which could apply a change other than the one sent, and a refused edit no longer says that its new text is already in the file.
+
 ## 2.195.0 — vLLM's models are not told apart by name
 
 ### Changed
