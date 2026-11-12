@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.188.1 — Matches elsewhere
+
+### Fixed
+
+- `grep` given a `path` in the project where the pattern is not found shows up to 20 lines elsewhere in the project that hold it. Local models (gpt-oss) kept searching `tests/` for tests that are in `src/`.
+
 ## 2.188.0 — Local models that stop to think
 
 ### Changed

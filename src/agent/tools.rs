@@ -1834,7 +1834,26 @@ fn grep(
     };
     let (found, limited) = search::grep(root, &path, &options, hidden, cancel)?;
     if found.is_empty() {
-        return Ok("No matches found".into());
+        // Models given nothing in one directory (gpt-oss in `tests/`) keep searching it.
+        if path == root || !path.starts_with(root) {
+            return Ok("No matches found".into());
+        }
+        let mut arguments = json!({"pattern":pattern,"limit":FIND_GREP_LIMIT});
+        for key in ["ignoreCase", "literal", "glob"] {
+            arguments[key] = call.arguments[key].clone();
+        }
+        let call = Call {
+            name: "grep",
+            arguments,
+        };
+        return Ok(match grep(root, &call, hidden, cancel)? {
+            text if text == "No matches found" => text,
+            text => format!(
+                "No matches found in {}\n\n[Elsewhere in the project, the pattern is in these \
+lines; grep without path searches them all:]\n\n{text}",
+                shown(root, &path)
+            ),
+        });
     }
     let shown = |file: &Path| shown(root, file);
     let mut long = false;
@@ -1930,7 +1949,7 @@ fn find(
             let hint = "No files found matching pattern\n\n[find matches file names by glob, \
 such as *.rs or *name*. To search file contents, use grep";
             return Ok(match text {
-                Ok(text) if text != "No matches found" => {
+                Ok(text) if !text.starts_with("No matches found") => {
                     format!("{hint}. As text, the pattern is in these lines:]\n\n{text}")
                 }
                 _ => format!("{hint}]"),
@@ -3109,6 +3128,30 @@ to see full lines]",
         assert_eq!(
             text("grep", json!({"pattern":"nowhere"})),
             "No matches found"
+        );
+        assert_eq!(
+            text("grep", json!({"pattern":"nowhere","path":"src"})),
+            "No matches found"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"BETA","path":"src/deep/b.rs","ignoreCase":true,"context":1})
+            ),
+            "No matches found in src/deep/b.rs\n\n[Elsewhere in the project, the pattern is in \
+these lines; grep without path searches them all:]\n\nsrc/a.rs:4: fn beta() {}"
+        );
+        assert_eq!(
+            text(
+                "grep",
+                json!({"pattern":"alpha","path":"src/deep","glob":"*.md"})
+            ),
+            "No matches found"
+        );
+        assert_eq!(
+            text("find", json!({"pattern":"fn alpha","path":"src/deep"})),
+            "No files found matching pattern\n\n[find matches file names by glob, such as *.rs \
+or *name*. To search file contents, use grep]"
         );
         assert!(
             run("grep", json!({"pattern":"("}))
