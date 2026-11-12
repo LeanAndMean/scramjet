@@ -1,6 +1,6 @@
 # RPC mode on ACP: proposal
 
-**Status: signed off at the steer of 2026-11-12 and rewritten around the Agent Client Protocol (ACP) on 2026-11-12; stage 1 partly built, stage 2 done (`src/agent_cli/acp.rs`, 2.199.0–2.207.0), stage 3 done (2.208.0–2.210.0), stage 4 begun (2.210.0)** ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). The user's decisions stand: approvals and questions asked of the client (1), the autopilot countdown in the core (2), built-ins sent as prompt text refused (3), ACP in place of Scramjet 1's protocol and message shape (4), sign-in over the protocol by `authenticate` and `logout` (5), and the build order with the full screen's refactor first (6). The choices this rewrite made within them are `Choice:` trailers in its commit, for the next steer. Written against scramjet-rs 2.198.0 and ACP v1's pages at agentclientprotocol.com (`/protocol/v1/*.md`, fetched 2026-11-12).
+**Status: signed off at the steer of 2026-11-12 and rewritten around the Agent Client Protocol (ACP) on 2026-11-12; stage 1 partly built, stage 2 done (`src/agent_cli/acp.rs`, 2.199.0–2.207.0), stage 3 done (2.208.0–2.210.0), stage 4 begun (2.210.0; sessions 2.212.0–2.214.0, `compact` and `rename` 2.215.0)** ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)). The user's decisions stand: approvals and questions asked of the client (1), the autopilot countdown in the core (2), built-ins sent as prompt text refused (3), ACP in place of Scramjet 1's protocol and message shape (4), sign-in over the protocol by `authenticate` and `logout` (5), and the build order with the full screen's refactor first (6). The choices this rewrite made within them are `Choice:` trailers in its commit, for the next steer. Written against scramjet-rs 2.198.0 and ACP v1's pages at agentclientprotocol.com (`/protocol/v1/*.md`, fetched 2026-11-12).
 
 `scramjet acp [options]` runs headless as an ACP agent: the client starts it, writes JSON-RPC 2.0 to its stdin and reads its stdout, one message per line. ACP's clients (Zed, JetBrains IDEs, Neovim, Emacs's agent-shell, Toad, acpx) can run Scramjet, and what ACP lacks comes as extensions that other clients ignore. The options are the full screen's (`--model`, `--ask`, `--sandbox`, `--tools`, …); diagnostics go to stderr, never stdout.
 
@@ -44,7 +44,7 @@ The full screen, line mode and ACP mode drive the same `Session`. `-p` stays as 
   - `promptCapabilities`: `image` and `embeddedContext` true, `audio` false.
   - `mcpCapabilities`: `http` true, `sse` false (the older transport is refused, as in `settings.json`).
   - `auth.logout: {}`.
-  - `_meta["io.github.leanandmean.scramjet"]`: `{"version": 1}` and the extensions offered (section 8).
+  - `_meta["io.github.leanandmean.scramjet"]`: `{"version": 1, "methods": [...]}`, the extension methods the client may call (section 8).
 - **What the client offers** is kept per connection: `elicitation.form` and `.url` (section 5), `session.notices`, `session.compaction`, `session.configOptions.boolean`, and the `_meta["io.github.leanandmean.scramjet"]` object of a client that knows Scramjet's extensions (next steps, catch-up). An update or request the client has not offered is not sent; its fallback is said where it applies.
 - **The client's file system and terminals are not used.** Scramjet's own tools run every call, so the sandbox, the low integrity level on Windows, approvals and the output the model sees stay those of the full screen. The cost is that an IDE's unsaved buffers are not seen, and its terminal panel does not show the agent's commands.
 - **End:** at EOF on stdin, every running turn is cancelled, requests waiting on the client are dropped, and the process exits once the session files are written. SIGTERM does the same.
@@ -136,9 +136,9 @@ Methods named `_io.github.leanandmean.scramjet/<name>`, following ACP's reverse-
 | `set_api_key` | Section 6. No `sessionId`. |
 | `fork`, `branch` `{entryId?}` | `/fork` and `/branch`; the result has the new `sessionId`. |
 | `tree`, `navigate_tree` `{entryId, summarize?}`, `set_label` | `/tree`: its entries with `entryId`, labels and the current leaf. Navigating gives back the prompt to edit; a list or question that was open there is asked again. |
-| `compact` `{instructions?}` | `/compact`. |
+| `compact` `{instructions?}` | `/compact`: shown as `compaction_update`s; the result `{compacted}` says whether anything was old enough to compact. `session/cancel` stops it (`-32800`); prompts sent meanwhile run after it. |
 | `bash` `{command, exclude?}`, `abort_bash` | `!` and `!!`: the output goes into the conversation with the next prompt. |
-| `rename` `{name}` | `/rename`. |
+| `rename` `{name}` | `/rename`, then `session_info_update` with the title. During a turn it waits for the turn's next pause, as a config option does. |
 | `reload` | `/reload`. No `sessionId`. |
 | `usage` | `/usage`'s summary as data. No `sessionId`. |
 | `export_html` `{path?}` | `/export`. |

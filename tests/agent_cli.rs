@@ -1858,6 +1858,14 @@ fn serve_call(name: &str, input: serde_json::Value) -> (u16, std::sync::mpsc::Re
 /// A scripted Claude provider answering its requests with `replies`' events in turn, cycling:
 /// its port, and each request's body.
 fn serve_events(replies: Vec<Vec<String>>) -> (u16, std::sync::mpsc::Receiver<String>) {
+    serve_events_after(replies, |_| Duration::ZERO)
+}
+
+/// `serve_events`, holding request `n`'s reply for `delay(n)`.
+fn serve_events_after(
+    replies: Vec<Vec<String>>,
+    delay: impl Fn(usize) -> Duration + Send + 'static,
+) -> (u16, std::sync::mpsc::Receiver<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let (sent, received) = std::sync::mpsc::channel();
@@ -1892,6 +1900,7 @@ connection: close\r\n\r\n{body}",
             }
             let mut body = vec![0; length];
             std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+            std::thread::sleep(delay(n));
             stream
                 .write_all(replies[n % replies.len()].as_bytes())
                 .unwrap();
@@ -3026,6 +3035,148 @@ fn acp_shows_compactions_and_what_commands_sent() {
         drop(stdin);
         assert!(child.wait().unwrap().success());
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_compacts_and_renames_sessions_through_the_extensions() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-rename-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = |text: &str| {
+        [
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}})
+            .to_string(),
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]
+        .to_vec()
+    };
+    // Summaries are held, so that a prompt or a cancel comes during the compaction.
+    let replies = [reply("Hello."), reply("Again.")]
+        .into_iter()
+        .chain(std::iter::repeat_n(reply("The summary."), 8))
+        .collect();
+    let (port, bodies) = serve_events_after(replies, |n| match n {
+        0 | 1 => Duration::ZERO,
+        _ => Duration::from_millis(500),
+    });
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never",
+        "compaction": {"reserveTokens": 100, "keepRecentTokens": 1}});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1,
+                "clientCapabilities": {"session": {"compaction": {}}}}}),
+    );
+    let offered = &next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    assert_eq!(offered["version"], 1, "{offered}");
+    assert!(
+        (offered["methods"].as_array().unwrap().iter())
+            .any(|method| method == "_io.github.leanandmean.scramjet/compact"),
+        "{offered}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let prompt = |id: u64, text: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}})
+    };
+    let compact = |id: u64| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": "_io.github.leanandmean.scramjet/compact",
+            "params": {"sessionId": session, "instructions": "Keep the names."}})
+    };
+    for (id, text) in [(3, "first"), (4, "second")] {
+        send(&mut stdin, prompt(id, text));
+        let (answer, _) = until(&messages, |message| message.get("id").is_some());
+        assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    }
+    send(&mut stdin, compact(5));
+    send(&mut stdin, compact(6));
+    send(&mut stdin, prompt(7, "after it"));
+    let (refused, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(refused["id"], 6, "{refused}");
+    assert_eq!(refused["error"]["code"], -32602);
+    assert_eq!(refused["error"]["message"], "a turn is running");
+    let (compacted, updates) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(compacted["id"], 5, "{compacted}");
+    assert_eq!(compacted["result"]["compacted"], true, "{compacted}");
+    let statuses: Vec<_> = (updates.iter())
+        .map(|message| &message["params"]["update"])
+        .filter(|update| update["sessionUpdate"] == "compaction_update")
+        .map(|update| update["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["in_progress", "completed"], "{updates:?}");
+    let (turned, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(turned["id"], 7, "{turned}");
+    assert_eq!(turned["result"]["stopReason"], "end_turn", "{turned}");
+    let bodies: Vec<String> =
+        std::iter::from_fn(|| bodies.recv_timeout(Duration::from_secs(2)).ok()).collect();
+    assert!(bodies[2].contains("Keep the names."), "{}", bodies[2]);
+    let last = bodies.last().unwrap();
+    assert!(
+        last.contains("after it") && last.contains("The summary."),
+        "{last}"
+    );
+
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 8,
+            "method": "_io.github.leanandmean.scramjet/rename",
+            "params": {"sessionId": session, "name": " "}}),
+    );
+    assert_eq!(next(&messages)["error"]["message"], "name is required");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 9,
+            "method": "_io.github.leanandmean.scramjet/rename",
+            "params": {"sessionId": session, "name": "My work"}}),
+    );
+    let renamed = next(&messages);
+    assert_eq!(renamed["id"], 9, "{renamed}");
+    assert_eq!(renamed["result"], serde_json::json!({}));
+    let info = &next(&messages)["params"]["update"];
+    assert_eq!(info["sessionUpdate"], "session_info_update", "{info}");
+    assert_eq!(info["title"], "My work");
+    assert!(info["updatedAt"].as_str().unwrap().ends_with('Z'), "{info}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 10, "method": "session/list",
+            "params": {"cwd": project}}),
+    );
+    let listed = next(&messages);
+    assert_eq!(
+        listed["result"]["sessions"][0]["title"], "My work",
+        "{listed}"
+    );
+
+    send(&mut stdin, compact(11));
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "method": "session/cancel",
+            "params": {"sessionId": session}}),
+    );
+    let (cancelled, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(cancelled["id"], 11, "{cancelled}");
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+    send(&mut stdin, prompt(12, "still here"));
+    let (answer, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }
 
 #[test]

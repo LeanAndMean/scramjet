@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.215.0 — ACP compacts and renames sessions
+
+### Added
+
+- `scramjet acp` compacts a session on request (`_io.github.leanandmean.scramjet/compact`, with optional instructions), as `/compact` does, shown as compaction updates; it is refused while a turn runs, and prompts sent during it run once it ends. `session/cancel` stops it.
+- `scramjet acp` renames a session (`_io.github.leanandmean.scramjet/rename`), as `/rename` does, and tells the client its new title; `initialize` lists the extension methods offered.
+
 ## 2.214.0 — ACP deletes saved sessions
 
 ### Added

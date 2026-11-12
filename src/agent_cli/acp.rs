@@ -35,6 +35,12 @@ const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
 const NEXT_STEP: &str = "_io.github.leanandmean.scramjet/next_step";
 const HOLD: &str = "_io.github.leanandmean.scramjet/hold";
+const COMPACT: &str = "_io.github.leanandmean.scramjet/compact";
+const RENAME: &str = "_io.github.leanandmean.scramjet/rename";
+/// The extension methods the client may call, as `initialize` lists them.
+const EXTENSIONS: [&str; 3] = [HOLD, COMPACT, RENAME];
+/// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
+const REQUEST_CANCELLED: i64 = -32800;
 /// How often a wait looks again at what may end it.
 const POLL: Duration = Duration::from_millis(50);
 
@@ -294,7 +300,8 @@ struct Turn {
     waiting: Vec<Value>,
     /// The client held the countdown of the next-step list open (`hold`).
     held: bool,
-    /// Config options the client set while it runs, which the session takes at its next pause.
+    /// Config options and names the client set while it runs, which the session takes at its
+    /// next pause.
     configuring: Vec<Configure>,
 }
 
@@ -312,13 +319,19 @@ enum Job {
     /// Request `id`'s prompt.
     Prompt(Value, Prompt),
     Configure(Configure),
+    /// Request `id`'s compaction, with its instructions.
+    Compact(Value, String),
 }
 
-/// A `session/set_config_option` request, answered once the session takes it.
+/// A `session/set_config_option` or `rename` request, answered once the session takes it.
 struct Configure {
     id: Value,
-    option: String,
-    value: Value,
+    setting: Setting,
+}
+
+enum Setting {
+    Option { option: String, value: Value },
+    Rename(String),
 }
 
 impl Connection {
@@ -355,6 +368,8 @@ impl Connection {
                 true => self.out.respond(&id, json!({})),
                 false => self.out.error(&id, INVALID_PARAMS, "no such session"),
             },
+            COMPACT => self.compact(id, &params),
+            RENAME => self.rename(&id, &params),
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
     }
@@ -392,10 +407,32 @@ impl Connection {
         let Some(option) = params["configId"].as_str() else {
             return self.out.error(id, INVALID_PARAMS, "configId is required");
         };
-        let configure = Configure {
-            id: id.clone(),
+        let setting = Setting::Option {
             option: option.to_owned(),
             value: params["value"].clone(),
+        };
+        Self::settle(handle, id, setting);
+    }
+
+    /// Names the session, as `/rename` does, at once between turns, else at the turn's next
+    /// pause.
+    fn rename(&self, id: &Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
+        let name = params["name"].as_str().unwrap_or_default().trim();
+        if name.is_empty() {
+            return self.out.error(id, INVALID_PARAMS, "name is required");
+        }
+        Self::settle(handle, id, Setting::Rename(name.to_owned()));
+    }
+
+    /// Hands `setting` to the session, which takes it at once between turns, else at the turn's
+    /// next pause, and answers request `id` then.
+    fn settle(handle: &Handle, id: &Value, setting: Setting) {
+        let configure = Configure {
+            id: id.clone(),
+            setting,
         };
         let mut turn = lock(&handle.turn);
         if turn.running {
@@ -403,6 +440,24 @@ impl Connection {
         }
         drop(turn);
         let _ = handle.jobs.send(Job::Configure(configure));
+    }
+
+    /// Compacts the session's conversation, as `/compact` does; refused during a turn, as the
+    /// full screen refuses it. Prompts sent meanwhile wait for it, then run as a turn.
+    fn compact(&self, id: Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(&id, INVALID_PARAMS, "no such session");
+        };
+        let instructions = params["instructions"].as_str().unwrap_or_default();
+        let mut turn = lock(&handle.turn);
+        if turn.running {
+            drop(turn);
+            return self.out.error(&id, INVALID_PARAMS, "a turn is running");
+        }
+        turn.running = true;
+        handle.cancel.store(false, Ordering::Relaxed);
+        drop(turn);
+        let _ = handle.jobs.send(Job::Compact(id, instructions.to_owned()));
     }
 
     /// The session `params` names, by any id it had.
@@ -436,6 +491,7 @@ impl Connection {
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "authMethods": [],
+            "_meta": {"io.github.leanandmean.scramjet": {"version": 1, "methods": EXTENSIONS}},
         });
         self.out.respond(id, result);
     }
@@ -499,6 +555,10 @@ impl Connection {
                     Job::Prompt(id, prompt) => (id, prompt),
                     Job::Configure(configure) => {
                         front.configure_with(configure);
+                        continue;
+                    }
+                    Job::Compact(id, instructions) => {
+                        front.compact(&id, &instructions);
                         continue;
                     }
                 };
@@ -715,8 +775,11 @@ impl Connection {
             let instead = match builtin {
                 Builtin::Model(_) | Builtin::Autopilot(_) => {
                     "; session/set_config_option sets the model, thinking level and autopilot"
+                        .to_owned()
                 }
-                _ => "",
+                Builtin::Compact(_) => format!("; {COMPACT} compacts"),
+                Builtin::Rename(_) => format!("; {RENAME} renames"),
+                _ => String::new(),
             };
             let message =
                 format!("{name} is a built-in command, which ACP mode does not run{instead}");
@@ -1251,10 +1314,72 @@ impl Acp {
         }
     }
 
-    /// Sets the option `configure` names and answers its request with the options, or with why
-    /// it was not set.
+    /// Compacts the conversation for request `id`, answered with whether there was anything to
+    /// compact; then runs the prompts sent meanwhile as a turn.
+    fn compact(&mut self, id: &Value, instructions: &str) {
+        let agent = &mut self.session.agent;
+        match agent.compact(instructions, None, &mut self.ui, &self.cancel) {
+            Ok(Some(compaction)) => {
+                self.ui.compacted(&compaction, None);
+                self.ui.out.respond(id, json!({"compacted": true}));
+            }
+            Ok(None) => self.ui.out.respond(id, json!({"compacted": false})),
+            Err(AgentError::Cancelled) => {
+                if self.ui.compacting {
+                    self.ui.compaction_update("cancelled", json!({}), None);
+                }
+                self.ui.out.error(id, REQUEST_CANCELLED, "cancelled");
+            }
+            Err(error) => {
+                self.ui.compaction_failed(&error);
+                self.ui.out.error(id, INTERNAL_ERROR, &error.to_string());
+            }
+        }
+        let agent = &self.session.agent;
+        self.ui.window = agent.context_window();
+        let (context, cost) = (agent.context_tokens(), agent.session_tokens().cost);
+        self.ui.usage_update(context, cost);
+        let mut turn = lock(&self.turn);
+        let queued = match self.cancel.load(Ordering::Relaxed) {
+            true => Vec::new(),
+            false => turn.messages.take(),
+        };
+        if queued.is_empty() {
+            turn.running = false;
+            let waiting = std::mem::take(&mut turn.waiting);
+            drop(turn);
+            self.configure();
+            // Prompts the client cancelled with the compaction.
+            for id in &waiting {
+                self.ui.out.respond(id, json!({"stopReason": "cancelled"}));
+            }
+            return;
+        }
+        let first = turn.waiting.remove(0);
+        drop(turn);
+        self.run(first, queued.join("\n\n"));
+    }
+
+    /// Names the session for request `id`, as `/rename`, and tells the client its new title.
+    fn rename(&mut self, id: &Value, name: &str) {
+        if let Err(error) = self.session.agent.set_session_name(name) {
+            return self.ui.out.error(id, INTERNAL_ERROR, &error.to_string());
+        }
+        self.ui.out.respond(id, json!({}));
+        let now = utc_time(std::time::SystemTime::now());
+        self.ui.update(
+            json!({"sessionUpdate": "session_info_update", "title": name,
+            "updatedAt": now}),
+        );
+    }
+
+    /// Sets what `configure` names and answers its request, or says why it was not set.
     fn configure_with(&mut self, configure: Configure) {
-        let Configure { id, option, value } = configure;
+        let Configure { id, setting } = configure;
+        let (option, value) = match setting {
+            Setting::Option { option, value } => (option, value),
+            Setting::Rename(name) => return self.rename(&id, &name),
+        };
         match self.set_option(&option, &value) {
             Ok(()) => {
                 self.shown = self.options();
