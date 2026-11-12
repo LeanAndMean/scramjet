@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.180.0 — gpt-oss's thinking levels on llama.cpp
+
+### Changed
+
+- `/login` → Local models offers thinking levels for a llama.cpp model whose chat template takes `reasoning_effort`, such as gpt-oss's: low, medium and high reach its template; off is offered only where `none` stops its thinking. Such models were saved with no levels before.
+
 ## 2.179.1 — A stopped local runtime says how to start it
 
 ### Fixed

@@ -207,6 +207,22 @@ fn llama_cpp_and_vllm_say_their_windows() {
         model.unfit.as_deref(),
         Some("its chat template takes no tools")
     );
+    assert!(!model.effort_in_template);
+    // gpt-oss's template, as b12282 describes it.
+    let gpt_oss = serve(|_, path, _| match path {
+        "/v1/models" => (
+            200,
+            json!({"data": [{"id": "gpt-oss-20b", "owned_by": "llamacpp"}]}),
+        ),
+        "/props" => (
+            200,
+            json!({"build_info": "b12282-aa75ff323",
+            "chat_template_caps": {"supports_tool_calls": true, "supports_reasoning_effort": true,
+                "reasoning_effort_levels": ["minimal", "low", "medium", "high", "xhigh", "max"]}}),
+        ),
+        _ => not_found(),
+    });
+    assert!(probe(&gpt_oss, None).unwrap().models[0].effort_in_template);
 
     let vllm = serve(|_, path, _| match path {
         "/v1/models" => (
@@ -497,6 +513,38 @@ fn the_check_finds_whether_thinking_turns_off() {
     );
     let plain = check_tools(&vllm, "plain", None).unwrap();
     assert_eq!((plain.thinks, plain.switch), (false, None));
+}
+
+#[test]
+fn the_check_asks_a_llama_cpp_template_that_takes_effort_whether_none_stops_it() {
+    let url = serve(|_, _, body| {
+        let template_off = body["chat_template_kwargs"]["enable_thinking"] == false;
+        let none = body["reasoning_effort"] == "none";
+        let call = json!([{"function": {"name": CHECK_TOOL, "arguments": "{}"}}]);
+        let message = match (body["model"].as_str().unwrap(), template_off, none) {
+            (_, false, false) => {
+                json!({"content": "", "reasoning_content": "Call it.", "tool_calls": call})
+            }
+            ("gpt-oss" | "stops-at-none", true, _) => {
+                json!({"content": "3", "reasoning_content": "Count them."})
+            }
+            ("gpt-oss", _, true) => json!({"content": "3", "reasoning_content": "Count them."}),
+            ("stops-at-none", _, true) => json!({"content": "3"}),
+            (model, ..) => panic!("{model} asked again: {body}"),
+        };
+        (200, json!({"choices": [{"message": message}]}))
+    });
+    let takes_effort = |id: &str| LocalModel {
+        effort_in_template: true,
+        ..LocalModel::named(id)
+    };
+    let llama = Server {
+        models: vec![takes_effort("gpt-oss"), takes_effort("stops-at-none")],
+        ..server(&url, Runtime::LlamaCpp)
+    };
+    let switch = |id: &str| check_tools(&llama, id, None).unwrap().switch;
+    assert_eq!(switch("gpt-oss"), Some(Switch::EffortNoOff));
+    assert_eq!(switch("stops-at-none"), Some(Switch::Effort));
 }
 
 #[test]

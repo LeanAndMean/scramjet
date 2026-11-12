@@ -146,7 +146,8 @@ impl Runtime {
 pub enum Switch {
     /// `reasoning_effort`, `none` for off: Ollama's and LM Studio's.
     Effort,
-    /// `reasoning_effort` levels, where `none` does not stop it: gpt-oss on Ollama 0.40.16.
+    /// `reasoning_effort` levels, where `none` does not stop it: gpt-oss on Ollama 0.40.16, and in
+    /// its own chat template on llama.cpp b12282.
     EffortNoOff,
     /// `chat_template_kwargs.enable_thinking`: Qwen3's chat templates, on vLLM and llama.cpp.
     ChatTemplate,
@@ -173,6 +174,8 @@ pub struct LocalModel {
     pub reasoning: bool,
     /// How its thinking is turned off; `None` when it does not think or cannot be asked not to.
     pub switch: Option<Switch>,
+    /// Its chat template takes `reasoning_effort`, as llama.cpp says (`/props`).
+    pub effort_in_template: bool,
     pub images: bool,
     /// Why it cannot serve the agent, as the runtime says: it only embeds, or takes no tools.
     pub unfit: Option<String>,
@@ -186,6 +189,7 @@ impl LocalModel {
             trained: None,
             reasoning: false,
             switch: None,
+            effort_in_template: false,
             images: false,
             unfit: None,
         }
@@ -472,6 +476,7 @@ fn llama_cpp(data: &[Value], props: &Value) -> Vec<LocalModel> {
             .or_else(|| positive(&props["default_generation_settings"]["n_ctx"]));
         model.trained = positive(&listed["meta"]["n_ctx_train"]);
         model.images = props["modalities"]["vision"] == true;
+        model.effort_in_template = caps["supports_reasoning_effort"] == true;
         if caps["supports_tool_calls"] == false {
             model.unfit = Some("its chat template takes no tools".into());
         }
@@ -694,9 +699,23 @@ async fn check(server: &Server, model: &str, key: Option<&str>) -> Result<Checke
                 }
                 return Ok(checked);
             }
+            if !checked.thinks {
+                return Ok(checked);
+            }
             let off = json!({"chat_template_kwargs": {"enable_thinking": false}});
-            if checked.thinks && stops(server, model, key, off).await {
+            if stops(server, model, key, off).await {
                 checked.switch = Some(Switch::ChatTemplate);
+                return Ok(checked);
+            }
+            // llama.cpp passes `reasoning_effort` to a template that takes it; gpt-oss's has no off
+            // and reads `none` as its default.
+            let listed = server.models.iter().find(|listed| listed.id == model);
+            if listed.is_some_and(|listed| listed.effort_in_template) {
+                let off = json!({"reasoning_effort": "none"});
+                checked.switch = Some(match stops(server, model, key, off).await {
+                    true => Switch::Effort,
+                    false => Switch::EffortNoOff,
+                });
             }
             Ok(checked)
         }
