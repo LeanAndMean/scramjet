@@ -228,6 +228,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
     agent.set_hide_credentials(settings.hide_credentials.hides(true));
     agent.set_unattended(true);
+    // A message read from stdin (`-`) may start a command.
+    let commands = (messages.iter()).any(|message| message == "-" || message.starts_with('/'));
+    agent.leave_out_idle_tools(commands);
     if let Some(files) = files {
         agent.attach(files);
     }

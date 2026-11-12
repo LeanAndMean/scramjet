@@ -1732,6 +1732,35 @@ get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scra
     }
 
     #[test]
+    fn a_run_of_given_prompts_offers_no_tool_it_cannot_use() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (mut agent, _scratch) = agent(closed.local_addr().unwrap(), "idle-tools");
+        let names = |agent: &Agent| -> Vec<String> {
+            (agent.tool_definitions().as_array().unwrap().iter())
+                .map(|tool| tool["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let all = names(&agent);
+        assert!(all.contains(&status::NAME.to_owned()) && all.contains(&suggest::NAME.into()));
+        agent.leave_out_idle_tools(false);
+        let left: Vec<_> = (all.iter())
+            .filter(|name| ![status::NAME, suggest::NAME].contains(&name.as_str()))
+            .cloned()
+            .collect();
+        assert_eq!(names(&agent), left);
+        let instructions = agent.instructions();
+        assert!(!instructions.contains(status::SNIPPET), "{instructions}");
+        assert!(!instructions.contains(suggest::NAME), "{instructions}");
+        agent.leave_out_idle_tools(true);
+        assert!(names(&agent).contains(&status::NAME.to_owned()));
+        assert!(agent.instructions().contains(status::SNIPPET));
+        agent.lifecycle.prompted(status::Prompt::Command("waiting"));
+        agent.leave_out_idle_tools(false);
+        assert!(names(&agent).contains(&status::NAME.to_owned()));
+        assert!(!names(&agent).contains(&suggest::NAME.to_owned()));
+    }
+
+    #[test]
     fn the_tools_the_command_line_gives_are_the_only_ones_offered_and_run() {
         let (endpoint, server) = serve(vec![
             tool_calls(&[

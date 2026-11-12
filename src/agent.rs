@@ -639,6 +639,8 @@ pub struct Agent {
     hide_credentials: bool,
     /// Whether the turn runs with no one to answer a question (`set_unattended`).
     unattended: bool,
+    /// Harness tools this run cannot use, not offered (`leave_out_idle_tools`).
+    left_out: Vec<&'static str>,
     /// Whether a completed command's recommended next step runs without the user choosing it.
     autopilot: bool,
     /// The MCP servers, while the model is offered their tools.
@@ -797,6 +799,7 @@ impl Agent {
             model_scope: Vec::new(),
             hide_credentials: false,
             unattended: false,
+            left_out: Vec::new(),
             autopilot,
             mcp: None,
             calls: None,
@@ -1010,7 +1013,12 @@ impl Agent {
         let mcp = !self.enabled_mcp().is_empty();
         self.instructions = instructions::agent(
             &config.root,
-            &tools::offered(&config.tools, config.only_tools.as_deref(), mcp, false),
+            &self.without_left_out(tools::offered(
+                &config.tools,
+                config.only_tools.as_deref(),
+                mcp,
+                false,
+            )),
             &self.commands,
             &agents,
             &self.skills,
@@ -1410,7 +1418,30 @@ impl Agent {
         let config = &self.config;
         let mcp = !self.enabled_mcp().is_empty();
         let sandbox = config.sandbox.is_some();
-        tools::offered(&config.tools, config.only_tools.as_deref(), mcp, sandbox)
+        self.without_left_out(tools::offered(
+            &config.tools,
+            config.only_tools.as_deref(),
+            mcp,
+            sandbox,
+        ))
+    }
+
+    fn without_left_out(&self, mut offered: Vec<&'static str>) -> Vec<&'static str> {
+        offered.retain(|tool| !self.left_out.contains(tool));
+        offered
+    }
+
+    /// For a run whose only prompts are given at its start (`-p`): leaves out
+    /// `suggest_scramjet_next_steps`, as no one can choose a suggestion, and, unless `commands`
+    /// (a prompt may start a command) or the session left a command waiting,
+    /// `report_scramjet_command_status`, which only a command takes. Small models call them
+    /// anyway when offered.
+    pub fn leave_out_idle_tools(&mut self, commands: bool) {
+        self.left_out = vec![suggest::NAME];
+        if !commands && self.lifecycle.active().is_none() {
+            self.left_out.push(status::NAME);
+        }
+        self.instruct();
     }
 
     fn offers(&self, tool: &str) -> bool {

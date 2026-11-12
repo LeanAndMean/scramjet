@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.187.0 — No idle tools in -p
+
+### Changed
+
+- `-p` no longer offers `suggest_scramjet_next_steps`, which no one could answer there, nor, unless a message is a slash command (or `-`) or the continued session has a command waiting, `report_scramjet_command_status`. Small local models called them anyway; each request is also about 750 tokens smaller.
+
 ## 2.186.0 — Edits that spell escapes otherwise
 
 ### Changed
