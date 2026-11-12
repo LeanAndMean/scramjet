@@ -434,8 +434,9 @@ fn weights(items: &[Value], start: usize) -> Vec<u64> {
     weights
 }
 
-/// Walk backwards to ~20k tokens, then choose the next safe assistant/user boundary.
-/// Responses splits an assistant's text, reasoning and calls into separate items; outstanding
+/// Walk backwards to ~20k tokens, then choose the next safe assistant/user boundary, or the last
+/// one when the newest reply with its tool output alone passes the budget (where Scramjet's
+/// `findCutPoint` cuts nothing, and a local runtime then drops the prompt's start). Responses splits an assistant's text, reasoning and calls into separate items; outstanding
 /// calls prevent a cut anywhere inside a call/output group (including parallel calls).
 pub(super) fn cut_point(items: &[Value], start: usize, budget: u64) -> usize {
     let mut pending = HashSet::new();
@@ -461,7 +462,9 @@ pub(super) fn cut_point(items: &[Value], start: usize, budget: u64) -> usize {
     for i in (start..items.len()).rev() {
         tokens += weights[i];
         if tokens >= budget {
-            return cuts.iter().copied().find(|&cut| cut >= i).unwrap_or(start);
+            return (cuts.iter().copied().find(|&cut| cut >= i))
+                .or(cuts.last().copied())
+                .unwrap_or(start);
         }
     }
     start
@@ -801,7 +804,20 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        let (Some(tokens), Some(window)) = (self.context_size(), self.info.window) else {
+        match self.context_size() {
+            Some(tokens) => self.compact_if_full(tokens, ui, cancel),
+            None => Ok(()),
+        }
+    }
+
+    /// Compacts when `tokens` fill the window; a failed compaction is shown, not returned.
+    fn compact_if_full(
+        &mut self,
+        tokens: u64,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(), AgentError> {
+        let Some(window) = self.info.window else {
             return Ok(());
         };
         if !self.full(tokens, window) {
@@ -816,18 +832,48 @@ impl Agent {
         }
     }
 
-    /// Before each request of a turn on a model a local runtime serves, the check made before a
-    /// prompt: such a runtime cuts a prompt longer than its window instead of refusing it
-    /// (Ollama 0.40.16 answers 200 and drops the prompt's start), so no overflow error makes room.
+    /// Before each request of a turn on a model a local runtime serves, the threshold check:
+    /// such a runtime cuts a prompt longer than its window instead of refusing it (Ollama 0.40.16
+    /// answers 200, keeps half its window and reports the tokens it kept), so neither an overflow
+    /// error nor the reported usage shows it, and the request is measured by estimate too.
+    /// When the context still passes the window, says so unless `said`, and sets it.
     pub(super) fn compact_for_runtime(
         &mut self,
+        said: &mut bool,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        match self.info.runtime {
-            Some(_) => self.compact_before_prompt(ui, cancel),
-            None => Ok(()),
-        }
+        let Some(runtime) = self.info.runtime else {
+            return Ok(());
+        };
+        self.compact_if_full(self.runtime_context(), ui, cancel)?;
+        let tokens = self.runtime_context();
+        let Some(window) = self.info.window.filter(|&window| tokens > window && !*said) else {
+            return Ok(());
+        };
+        *said = true;
+        let outcome = match runtime {
+            super::local::Runtime::Ollama => {
+                "Ollama drops the conversation's start without saying so"
+            }
+            _ => "the runtime may refuse the request",
+        };
+        ui.notice(&format!(
+            "The next request, about {tokens} tokens with the system prompt and tools, is past \
+             {}'s {window}-token window, and compaction cannot cut it further: {outcome}. Load \
+             the model with a larger window, or ask for less output",
+            self.info.id
+        ));
+        Ok(())
+    }
+
+    /// The larger of the context as reported and the next request by estimate: its instructions,
+    /// tools and conversation at chars/4.
+    fn runtime_context(&self) -> u64 {
+        let tools = serde_json::to_string(&self.tool_definitions()).unwrap_or_default();
+        let base = (self.instructions().chars().count() + tools.chars().count()) as u64;
+        let estimated = base.div_ceil(4) + estimate(&self.conversation);
+        self.context_size().unwrap_or(0).max(estimated)
     }
 }
 
@@ -899,8 +945,9 @@ mod tests {
             json!({"type":"function_call","id":"fc_a","call_id":"a","name":"read","arguments":"{}"}),
             json!({"type":"function_call_output","call_id":"a","output":"large output".repeat(1000)}),
         ];
-        assert_eq!(cut_point(&reply, 0, 10), 0);
-        assert_eq!(cut_point(&reply, 0, estimate(&reply[2..])), 0);
+        // The reply with its output alone passes the budget: the cut comes just before it.
+        assert_eq!(cut_point(&reply, 0, 10), 1);
+        assert_eq!(cut_point(&reply, 0, estimate(&reply[2..])), 1);
         let users = vec![
             json!({"role":"user","content":"old"}),
             json!({"role":"user","content":"x".repeat(80_000)}),
@@ -1719,7 +1766,12 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             agent.info.runtime = runtime;
             let model = agent.config.model.clone();
             (agent.runtime_windows).insert(model, super::super::turn::RuntimeWindow::Read(30_000));
-            seed_long_conversation(&mut agent);
+            // Below the threshold with the system prompt and tools, which a runtime's check counts.
+            for content in ["remember the goal".to_owned(), "recent work ".repeat(3000)] {
+                agent
+                    .add(json!({"role":"user", "content":content}))
+                    .unwrap();
+            }
             let mut ui = Recorder::default();
             agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
             (ui, server.join().unwrap())
@@ -1746,6 +1798,63 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         let (ui, requests) = run(None, "provider-threshold");
         assert_eq!(ui.waits, [Purpose::Reply, Purpose::Reply]);
         assert_eq!(requests[1]["input"][0]["content"], "remember the goal");
+    }
+
+    #[test]
+    fn a_runtime_model_compacts_before_an_output_too_large_to_keep_and_says_when_it_still_overflows()
+     {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
+        let call = |chars: u64, total: u64| {
+            let arguments = json!({"command": format!("head -c {chars} /dev/zero | tr '\\0' x")});
+            let events = fixture::call_events(&arguments.to_string(), full_usage(total));
+            let text = serde_json::to_string(&events).unwrap();
+            stream(
+                &serde_json::from_str::<Vec<Value>>(&text.replace("\"inert\"", "\"bash\""))
+                    .unwrap(),
+            )
+        };
+        let (endpoint, server) = serve(vec![
+            call(4_000, 1_000),
+            call(60_000, 3_000),
+            stream(&fixture::text_events("prefix", fixture::known_usage())),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "runtime-large-output");
+        agent.set_context_window(Some(12_000));
+        agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);
+        let model = agent.config.model.clone();
+        (agent.runtime_windows).insert(model, super::super::turn::RuntimeWindow::Read(12_000));
+        let mut ui = Recorder::default();
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        let requests = server.join().unwrap();
+        // The first output fits; the second, cut at the tool's 50 KB, alone passes
+        // `keepRecentTokens` (3,000 here) and the window: the turn's start and first call are
+        // summarized, the second call is kept whole, and the user is told it still overflows.
+        assert_eq!(
+            ui.waits,
+            [
+                Purpose::Reply,
+                Purpose::Reply,
+                Purpose::Compaction(Some(AutoCompaction::Threshold)),
+                Purpose::Reply
+            ]
+        );
+        let input = requests[3]["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        assert!(text(&input[0]).contains("prefix"));
+        assert_eq!(input[1]["type"], "function_call");
+        assert!(tools::result_text(&input[2]["output"]).len() > 40_000);
+        let notices: Vec<&String> = (ui.shown.iter())
+            .filter(|s| s.starts_with("notice"))
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0].contains("past m's 12000-token window")
+                && notices[0].contains("Ollama drops the conversation's start"),
+            "{notices:?}"
+        );
     }
 
     #[test]

@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.173.0 — Local models say when a request overflows
+
+### Changed
+
+- On a model a local runtime serves, each request of a turn, the first included, is measured with its system prompt and tools as well as by the usage the runtime reports, which Ollama counts after cutting a prompt to fit; compaction runs on whichever is larger. When the request still passes the window, a notice says so once per turn, as Ollama then drops the conversation's start without an error.
+- When the newest reply with its tool output alone is more than compaction keeps whole (`keepRecentTokens`), compaction summarizes everything before that reply instead of nothing, on every provider: a turn reading several large files at once could not be compacted at all.
+
 ## 2.172.0 — Compaction fits small local windows
 
 ### Changed

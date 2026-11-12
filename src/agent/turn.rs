@@ -315,7 +315,8 @@ finish and is not checked on. Reply to continue.",
     /// the turn going when it would end.
     fn run(&mut self, ui: &mut dyn AgentUi, cancel: &AtomicBool) -> Result<(), AgentError> {
         let mut overflow_recovered = false;
-        for step in 0..MAX_STEPS {
+        let mut past_window_said = false;
+        for _ in 0..MAX_STEPS {
             // The calls a pause left running come first.
             if let Some(calls) = self.calls.take()
                 && self.after_calls(calls, ui, cancel)?
@@ -339,10 +340,7 @@ finish and is not checked on. Reply to continue.",
                     }
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui);
-                    // The first is checked before the prompt (`compact_before_prompt`).
-                    if step > 0 {
-                        self.compact_for_runtime(ui, cancel)?;
-                    }
+                    self.compact_for_runtime(&mut past_window_said, ui, cancel)?;
                     let request = self.request();
                     self.start_reply(request)?
                 }
