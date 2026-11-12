@@ -3021,39 +3021,16 @@ fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
     std::fs::write(flow.join("flow:done.md"), "Finish.\n").unwrap();
     let autonomy = "edges:\n  flow:step:\n    flow:done: chain\n";
     std::fs::write(project.join(".scramjet/autonomy.yaml"), autonomy).unwrap();
-    let report = |text: &str, input: serde_json::Value| {
-        let mut events = vec![
-            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
-            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
-            serde_json::json!({"type": "content_block_delta", "index": 0,
-                "delta": {"type": "text_delta", "text": text}})
-            .to_string(),
-            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
-            serde_json::json!({"type": "content_block_start", "index": 1,
-                "content_block": {"type": "tool_use", "id": "toolu_1",
-                    "name": "report_scramjet_command_status", "input": {}}})
-            .to_string(),
-            serde_json::json!({"type": "content_block_delta", "index": 1,
-                "delta": {"type": "input_json_delta", "partial_json": input.to_string()}})
-            .to_string(),
-            r#"{"type":"content_block_stop","index":1}"#.to_owned(),
-        ];
-        events.extend([
-            r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#.to_owned(),
-            r#"{"type":"message_stop"}"#.to_owned(),
-        ]);
-        events
-    };
     for follows in [true, false] {
         let (port, _bodies) = serve_events(vec![
-            report(
+            report_events(
                 "Stepped.",
                 serde_json::json!({"status": "completed", "summary": "Stepped.",
                     "next_steps": [{"message": "/flow:done", "fresh_session": true,
                         "reason": "Finish."}],
                     "recommended_next_step": 0}),
             ),
-            report(
+            report_events(
                 "All done.",
                 serde_json::json!({"status": "completed", "summary": "Done."}),
             ),
@@ -3140,5 +3117,251 @@ fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
         }
         drop(stdin);
         assert!(child.wait().unwrap().success());
+    }
+}
+
+/// A scripted Claude reply: `text`, then a `report_scramjet_command_status` call with `input`.
+fn report_events(text: &str, input: serde_json::Value) -> Vec<String> {
+    let mut events = vec![
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+        serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": text}})
+        .to_string(),
+        r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+        serde_json::json!({"type": "content_block_start", "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_1",
+                "name": "report_scramjet_command_status", "input": {}}})
+        .to_string(),
+        serde_json::json!({"type": "content_block_delta", "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": input.to_string()}})
+        .to_string(),
+        r#"{"type":"content_block_stop","index":1}"#.to_owned(),
+    ];
+    events.extend([
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ]);
+    events
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_offers_next_steps_with_the_extension_or_as_text_and_counts_down_under_autopilot() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-next-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    let flow = project.join(".scramjet/flow/commands");
+    std::fs::create_dir_all(&flow).unwrap();
+    let step = "---\nnext:\n  mode: closed\n  candidates:\n    - name: flow:done\n---\nStep.\n";
+    std::fs::write(flow.join("flow:step.md"), step).unwrap();
+    std::fs::write(flow.join("flow:done.md"), "Finish.\n").unwrap();
+    let stepped = report_events(
+        "Stepped.",
+        serde_json::json!({"status": "completed", "summary": "Stepped.",
+            "next_steps": [{"message": "/flow:done", "fresh_session": false, "reason": "Finish."}],
+            "recommended_next_step": 0}),
+    );
+    let done = report_events(
+        "All done.",
+        serde_json::json!({"status": "completed", "summary": "Done."}),
+    );
+    let instead = [
+        r#"{"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Instead."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let scramjet = serde_json::json!({"_meta": {"io.github.leanandmean.scramjet": {}}});
+    let booleans = serde_json::json!({"session": {"configOptions": {"boolean": {}}}});
+    // A session in `project` for a client offering `capabilities`, autopilot set to `autopilot`
+    // when given, and `/flow:step` sent: the process, its stdin and messages, the session's id,
+    // the provider's bodies.
+    let start = |capabilities: &serde_json::Value,
+                 autopilot: Option<serde_json::Value>,
+                 replies: Vec<Vec<String>>| {
+        let (port, bodies) = serve_events(replies);
+        let (child, mut stdin, messages) = acp(&scratch.0, port);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
+        );
+        next(&messages);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+                "params": {"cwd": project, "mcpServers": []}}),
+        );
+        let started = next(&messages);
+        let session = started["result"]["sessionId"].clone();
+        let options = &started["result"]["configOptions"];
+        assert_eq!(options[0]["id"], "autopilot", "{started}");
+        if let Some(value) = autopilot {
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "session/set_config_option",
+                    "params": {"sessionId": session, "configId": "autopilot", "value": value}}),
+            );
+            let (set, _) = until(&messages, |message| message["id"] == 5);
+            assert!(set["result"]["configOptions"].is_array(), "{set}");
+            let current = &set["result"]["configOptions"][0]["currentValue"];
+            assert!(*current == true || *current == "on", "{set}");
+        }
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+                "params": {"sessionId": session,
+                    "prompt": [{"type": "text", "text": "/flow:step"}]}}),
+        );
+        (child, stdin, messages, session, bodies)
+    };
+    let is_list = |message: &serde_json::Value| {
+        message["method"] == "_io.github.leanandmean.scramjet/next_step"
+    };
+    let texts = |messages: &[serde_json::Value]| -> Vec<String> {
+        (messages.iter())
+            .filter_map(|message| message["params"]["update"]["content"]["text"].as_str())
+            .map(str::to_owned)
+            .collect()
+    };
+
+    // The extension: the step chosen runs; a list cancelled ends the turn.
+    for (answer, runs) in [
+        (serde_json::json!({"index": 0}), true),
+        (serde_json::json!({"cancelled": true}), false),
+    ] {
+        let (mut child, mut stdin, messages, session, bodies) =
+            start(&scramjet, None, vec![stepped.clone(), done.clone()]);
+        let (list, _) = until(&messages, is_list);
+        let params = &list["params"];
+        assert_eq!(params["sessionId"], session);
+        assert_eq!(params["kind"], "nextStep");
+        assert_eq!(params["recommended"], 0);
+        assert_eq!(params["model"], "test/claude-test");
+        assert_eq!(params.get("autoselectMs"), None, "{list}");
+        let offered = serde_json::json!([{"message": "/flow:done", "reason": "Finish.",
+            "freshSession": false}]);
+        assert_eq!(params["steps"], offered);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": list["id"], "result": answer}),
+        );
+        let (ended, after) = until(&messages, |message| message["id"] == 3);
+        assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+        let shown = texts(&after);
+        assert_eq!(
+            shown.iter().any(|text| text == "All done."),
+            runs,
+            "{shown:?}"
+        );
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+        let bodies: Vec<String> = bodies.try_iter().collect();
+        assert_eq!(bodies.len(), if runs { 2 } else { 1 });
+        if runs {
+            assert!(bodies[1].contains("→ /flow:done"), "{}", bodies[1]);
+        }
+    }
+
+    // Under autopilot the countdown takes the recommended step and withdraws the request,
+    // unless the client holds it.
+    for hold in [false, true] {
+        let (mut child, mut stdin, messages, session, _bodies) = start(
+            &scramjet,
+            Some(serde_json::json!("on")),
+            vec![stepped.clone(), done.clone()],
+        );
+        let (list, _) = until(&messages, is_list);
+        assert_eq!(list["params"]["autoselectMs"], 3000, "{list}");
+        if hold {
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0",
+                    "method": "_io.github.leanandmean.scramjet/hold",
+                    "params": {"sessionId": session}}),
+            );
+            std::thread::sleep(Duration::from_secs(4));
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": list["id"],
+                    "result": {"cancelled": true}}),
+            );
+        }
+        let (ended, after) = until(&messages, |message| message["id"] == 3);
+        assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+        let withdrawn = (after.iter()).any(|message| {
+            message["method"] == "$/cancel_request" && message["params"]["requestId"] == list["id"]
+        });
+        assert_eq!(withdrawn, !hold, "{after:?}");
+        let shown = texts(&after);
+        assert_eq!(
+            shown.iter().any(|text| text == "All done."),
+            !hold,
+            "{shown:?}"
+        );
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+    }
+
+    // Without the extension the list is said; autopilot's countdown runs the same, and a
+    // prompt sent during it stops it and runs.
+    for (autopilot, prompted) in [(None, false), (Some(true), false), (Some(true), true)] {
+        let replies = match prompted {
+            true => vec![stepped.clone(), instead.clone()],
+            false => vec![stepped.clone(), done.clone()],
+        };
+        let capabilities = match autopilot {
+            Some(_) => &booleans,
+            None => &serde_json::json!({}),
+        };
+        let (mut child, mut stdin, messages, session, bodies) = start(
+            capabilities,
+            autopilot.map(serde_json::Value::Bool),
+            replies,
+        );
+        let (list, _) = until(&messages, |message| {
+            (message["params"]["update"]["content"]["text"].as_str())
+                .is_some_and(|text| text.starts_with("Select next step:"))
+        });
+        let list = list["params"]["update"]["content"]["text"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            list.contains("/flow:done (recommended) — Finish."),
+            "{list}"
+        );
+        let counts = autopilot.is_some();
+        assert_eq!(list.contains("runs in 3 s"), counts, "{list}");
+        if prompted {
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
+                    "params": {"sessionId": session,
+                        "prompt": [{"type": "text", "text": "do this instead"}]}}),
+            );
+        }
+        let (ended, after) = until(&messages, |message| message["id"] == 3);
+        assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+        assert!(!after.iter().any(is_list), "{after:?}");
+        let shown = texts(&after);
+        let ran = shown.iter().any(|text| text == "All done.");
+        assert_eq!(ran, counts && !prompted, "{shown:?}");
+        if prompted {
+            assert!(shown.iter().any(|text| text == "Instead."), "{shown:?}");
+            assert_eq!(next(&messages)["result"]["stopReason"], "end_turn");
+        }
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+        let bodies: Vec<String> = bodies.try_iter().collect();
+        assert_eq!(bodies.len(), if counts || prompted { 2 } else { 1 });
+        if prompted {
+            assert!(bodies[1].contains("do this instead"), "{}", bodies[1]);
+        }
     }
 }

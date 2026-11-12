@@ -77,6 +77,8 @@ pub(super) enum Start {
 /// Next steps for the user to choose from.
 pub(super) struct Offer<'a> {
     pub(super) title: &'a str,
+    /// The agent suggested them (`suggest_scramjet_next_steps`), outside a command.
+    pub(super) suggestion: bool,
     pub(super) steps: &'a [Step],
     pub(super) recommended: Option<usize>,
     /// How long the user has before the recommended step is chosen for them (`/autopilot on`).
@@ -287,6 +289,7 @@ pub(super) fn offer(
 ) -> Option<(Step, Start, Routed)> {
     let chosen = front.offer(Offer {
         title,
+        suggestion: source == Source::Suggestion,
         steps,
         recommended,
         autoselect,

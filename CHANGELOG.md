@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.210.0 — ACP offers next steps
+
+### Added
+
+- In `scramjet acp`, a finished command's next steps and the agent's suggested ones are offered to the client: as the `_io.github.leanandmean.scramjet/next_step` request to a client that knows Scramjet's extensions, which may also change the step's model, level and fresh session, else as an agent message that the next prompt answers. They used to be left out.
+- ACP sessions have an `autopilot` config option (a boolean where the client offers those, else `on`/`off`): with it on, the recommended step runs after the 3-second countdown unless the client answers, holds it (`_io.github.leanandmean.scramjet/hold`) or a prompt comes.
+
 ## 2.209.0 — ACP asks questions in the client's forms
 
 ### Added

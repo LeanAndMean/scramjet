@@ -3,7 +3,7 @@
 //! Each session runs on a thread of its own, driven as the full screen drives its own
 //! (`drive::run_turn`), while this thread reads the client's messages.
 use super::args::{Options, Start as Launch};
-use super::drive::{self, Change, Front, Messages, Offer, Picked, Session, Start};
+use super::drive::{self, Change, Front, Messages, Offer, Picked, Routed, Session, Start};
 use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
@@ -31,6 +31,10 @@ const INVALID_REQUEST: i64 = -32600;
 const METHOD_NOT_FOUND: i64 = -32601;
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
+const NEXT_STEP: &str = "_io.github.leanandmean.scramjet/next_step";
+const HOLD: &str = "_io.github.leanandmean.scramjet/hold";
+/// How often a wait looks again at what may end it.
+const POLL: Duration = Duration::from_millis(50);
 
 /// Runs `scramjet acp` with the options in `arguments` until the client closes stdin or SIGTERM
 /// comes.
@@ -59,6 +63,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         notices: false,
         compaction: false,
         forms: false,
+        booleans: false,
         scramjet: false,
         sessions: HashMap::new(),
         renamed: Arc::default(),
@@ -204,6 +209,12 @@ impl Out {
     fn forget(&self, id: &Value) {
         lock(&self.pending).remove(&id.to_string());
     }
+    /// Withdraws request `id`, whose answer is no longer waited for.
+    fn withdraw(&self, id: &Value) {
+        self.forget(id);
+        let params = json!({"requestId": id});
+        self.send(&json!({"jsonrpc": "2.0", "method": "$/cancel_request", "params": params}));
+    }
     fn update(&self, session: &str, update: Value) {
         let params = json!({"sessionId": session, "update": update});
         let notification = json!({"jsonrpc": "2.0", "method": "session/update", "params": params});
@@ -222,6 +233,8 @@ struct Connection {
     compaction: bool,
     /// The client offered `elicitation.form`.
     forms: bool,
+    /// The client offered `session.configOptions.boolean`.
+    booleans: bool,
     /// The client knows Scramjet's extensions (`_meta["io.github.leanandmean.scramjet"]`).
     scramjet: bool,
     sessions: HashMap<String, Handle>,
@@ -249,6 +262,12 @@ struct Turn {
     messages: Messages,
     /// The requests of those prompts, answered when the turn ends.
     waiting: Vec<Value>,
+    /// The client held the countdown of the next-step list open (`hold`).
+    held: bool,
+    /// `/autopilot` as the client last saw or set it, and whether the session has yet to take
+    /// the client's setting, which it does before its next routing.
+    autopilot: bool,
+    autopilot_set: bool,
 }
 
 impl Connection {
@@ -275,6 +294,11 @@ impl Connection {
             "initialize" => self.initialize(&id, &params),
             "session/new" => self.new_session(&id, &params),
             "session/prompt" => self.prompt(id, &params),
+            "session/set_config_option" => self.set_config_option(&id, &params),
+            HOLD => match self.hold(&params) {
+                true => self.out.respond(&id, json!({})),
+                false => self.out.error(&id, INVALID_PARAMS, "no such session"),
+            },
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
     }
@@ -288,7 +312,41 @@ impl Connection {
                 turn.messages.take();
                 handle.cancel.store(true, Ordering::Relaxed);
             }
+        } else if method == HOLD {
+            self.hold(params);
         }
+    }
+
+    /// Stops the countdown of the next-step list open in the session `params` names; whether
+    /// there is that session.
+    fn hold(&self, params: &Value) -> bool {
+        let Some(handle) = self.handle(params) else {
+            return false;
+        };
+        lock(&handle.turn).held = true;
+        true
+    }
+
+    /// Sets `autopilot`, the only option yet, which the session takes before its next routing.
+    fn set_config_option(&self, id: &Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
+        if params["configId"] != "autopilot" {
+            let message = format!("no config option {}", params["configId"]);
+            return self.out.error(id, INVALID_PARAMS, &message);
+        }
+        let on = match &params["value"] {
+            Value::Bool(on) => *on,
+            Value::String(value) if value == "on" => true,
+            Value::String(value) if value == "off" => false,
+            _ => return self.out.error(id, INVALID_PARAMS, "autopilot is on or off"),
+        };
+        let mut turn = lock(&handle.turn);
+        (turn.autopilot, turn.autopilot_set) = (on, true);
+        drop(turn);
+        let options = config_options(on, self.booleans);
+        self.out.respond(id, json!({"configOptions": options}));
     }
 
     /// The session `params` names, by any id it had.
@@ -306,6 +364,7 @@ impl Connection {
         self.notices = capabilities["session"]["notices"].is_object();
         self.compaction = capabilities["session"]["compaction"].is_object();
         self.forms = capabilities["elicitation"]["form"].is_object();
+        self.booleans = capabilities["session"]["configOptions"]["boolean"].is_object();
         self.scramjet = capabilities["_meta"]["io.github.leanandmean.scramjet"].is_object();
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
@@ -350,6 +409,7 @@ impl Connection {
             turn: turn.clone(),
         };
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
+        let booleans = self.booleans;
         let thread = std::thread::spawn(move || {
             let session = match start_session(&arguments, &cwd, servers) {
                 Ok(session) => session,
@@ -359,8 +419,12 @@ impl Connection {
                 }
             };
             let mut front = worker.front(session);
+            let autopilot = front.session.agent.autopilot();
+            lock(&front.turn).autopilot = autopilot;
+            let options = config_options(autopilot, booleans);
             // Answered here, so that the commands' update follows it.
-            out.respond(&answered, json!({"sessionId": front.ui.session}));
+            let result = json!({"sessionId": front.ui.session, "configOptions": options});
+            out.respond(&answered, result);
             let _ = started.send(Ok(front.ui.session.clone()));
             front.commands();
             for (id, Prompt { text, images }) in prompted {
@@ -438,6 +502,31 @@ impl Connection {
             let _ = handle.thread.join();
         }
     }
+}
+
+/// A session's config options, as ACP shows them: `autopilot`, a boolean for clients that
+/// offer those, else `on` or `off`.
+fn config_options(autopilot: bool, booleans: bool) -> Value {
+    let mut option = json!({
+        "id": "autopilot",
+        "name": "Autopilot",
+        "description": "When a command finishes, the next step it recommends runs after a \
+            3-second countdown, unless you choose.",
+        "category": "_autopilot",
+    });
+    match booleans {
+        true => {
+            option["type"] = json!("boolean");
+            option["currentValue"] = json!(autopilot);
+        }
+        false => {
+            option["type"] = json!("select");
+            option["currentValue"] = json!(if autopilot { "on" } else { "off" });
+            option["options"] = json!([{"value": "on", "name": "On"},
+                {"value": "off", "name": "Off"}]);
+        }
+    }
+    json!([option])
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -721,6 +810,7 @@ impl Acp {
     /// Runs `prompt` and the next steps that follow it on their own, then the prompts sent
     /// meanwhile that the agent did not take; answers request `id` and theirs when it ends.
     fn run(&mut self, id: Value, prompt: String) {
+        self.configure();
         let (mut prompt, mut start) = (prompt, Start::Typed);
         let stopped = loop {
             let next = drive::run_turn(self, Some(&prompt), start);
@@ -754,6 +844,87 @@ impl Acp {
             Ended::Reason(reason) => self.end_turn(&id, Ok(reason)),
             Ended::Failed(error) => self.end_turn(&id, Err((INTERNAL_ERROR, &error))),
         }
+    }
+
+    /// Takes the `autopilot` the client set since.
+    fn configure(&mut self) {
+        let mut turn = lock(&self.turn);
+        if !std::mem::take(&mut turn.autopilot_set) {
+            return;
+        }
+        let on = turn.autopilot;
+        drop(turn);
+        if let Err(error) = self.session.agent.set_autopilot(on) {
+            self.ui
+                .say("warning", &format!("Autopilot not set: {error}"));
+        }
+    }
+
+    /// The `next_step` request's parameters for `offer`.
+    fn next_step_params(&self, offer: &Offer) -> Value {
+        let agent = &self.session.agent;
+        let steps: Vec<Value> = (offer.steps.iter())
+            .map(|step| {
+                json!({"message": step.message, "reason": step.reason,
+                    "freshSession": step.fresh()})
+            })
+            .collect();
+        let kind = match offer.suggestion {
+            true => "suggestion",
+            false => "nextStep",
+        };
+        let mut params = json!({
+            "sessionId": self.ui.session,
+            "kind": kind,
+            "steps": steps,
+            "recommended": offer.recommended,
+            "model": agent.model(),
+            "thinkingLevel": agent.effort(),
+        });
+        if let Some(wait) = offer.autoselect {
+            params["autoselectMs"] = json!(u64::try_from(wait.as_millis()).unwrap_or(u64::MAX));
+        }
+        params
+    }
+
+    /// The step the client's answer to `next_step` chose, with the model, level and fresh
+    /// session it changed; `None` when it cancelled or failed.
+    fn picked(&self, offer: &Offer, mut message: Value) -> Option<Picked> {
+        let Some(result) = message.get_mut("result").map(Value::take) else {
+            let error = message["error"]["message"].as_str().unwrap_or("no reason");
+            let text = format!("The client failed {NEXT_STEP}: {error}");
+            self.ui.say("warning", &text);
+            return None;
+        };
+        if result["cancelled"] == true {
+            return None;
+        }
+        let at = (result["index"].as_u64())
+            .and_then(|at| usize::try_from(at).ok())
+            .filter(|at| *at < offer.steps.len());
+        let Some(at) = at else {
+            self.ui.refused(&result);
+            return None;
+        };
+        let agent = &self.session.agent;
+        let model = (result["model"].as_str())
+            .filter(|model| *model != agent.model())
+            .map(str::to_owned);
+        let effort = (result["thinkingLevel"].as_str())
+            .filter(|level| Some(*level) != agent.effort())
+            .map(str::to_owned);
+        let fresh =
+            (result["freshSession"].as_bool()).filter(|_| offer.steps[at].command.is_some());
+        let routed = Routed {
+            model,
+            effort,
+            fresh,
+        };
+        Some(Picked {
+            at,
+            timed: false,
+            routed,
+        })
     }
 
     /// Answers request `id` and those of the prompts sent during its turn, the turn having
@@ -806,12 +977,60 @@ impl Front for Acp {
         let (context, cost) = (agent.context_tokens(), agent.session_tokens().cost);
         self.ui.window = agent.context_window();
         self.ui.usage_update(context, cost);
+        self.configure();
     }
     fn chooses(&self) -> bool {
-        false
+        true
     }
-    fn offer(&mut self, _offer: Offer) -> Option<Picked> {
-        None
+    /// A client that knows Scramjet is asked with `next_step`; others are shown the list as an
+    /// agent message, which a prompt answers. Until the client answers, the session is cancelled
+    /// or a prompt comes; with a countdown not held, the recommended step is taken when it ends.
+    fn offer(&mut self, offer: Offer) -> Option<Picked> {
+        lock(&self.turn).held = false;
+        let deadline = offer.autoselect.map(|wait| Instant::now() + wait);
+        let request = match self.scramjet {
+            true => Some(
+                self.ui
+                    .out
+                    .request(NEXT_STEP, self.next_step_params(&offer)),
+            ),
+            false => {
+                self.ui.message(&listed(&offer));
+                deadline?;
+                None
+            }
+        };
+        let answer = loop {
+            let held = {
+                let turn = lock(&self.turn);
+                if self.cancel.load(Ordering::Relaxed) || !turn.messages.is_empty() {
+                    break None;
+                }
+                turn.held
+            };
+            if !held && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                break Some(None);
+            }
+            match &request {
+                Some((_, answered)) => match answered.recv_timeout(POLL) {
+                    Ok(message) => break Some(Some(message)),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break None,
+                },
+                None => std::thread::sleep(POLL),
+            }
+        };
+        if let (Some((id, _)), None | Some(None)) = (&request, &answer) {
+            self.ui.out.withdraw(id);
+        }
+        match answer? {
+            Some(message) => self.picked(&offer, message),
+            None => Some(Picked {
+                at: offer.recommended?,
+                timed: true,
+                routed: Routed::default(),
+            }),
+        }
     }
     /// A text step, for the user to send.
     fn edit(&mut self, text: String) {
@@ -1018,6 +1237,10 @@ impl Updates {
         if self.notices {
             return self.say("info", text);
         }
+        self.message(text);
+    }
+    /// An agent message of its own.
+    fn message(&mut self, text: &str) {
         self.responses += 1;
         self.agent_message(text);
     }
@@ -1026,7 +1249,7 @@ impl Updates {
     fn ask(&self, method: &str, params: Value, cancel: &AtomicBool) -> Option<Value> {
         let (id, answered) = self.out.request(method, params);
         loop {
-            match answered.recv_timeout(Duration::from_millis(50)) {
+            match answered.recv_timeout(POLL) {
                 Ok(mut message) => match message.get_mut("result") {
                     Some(result) => return Some(result.take()),
                     None => {
@@ -1037,11 +1260,7 @@ impl Updates {
                 },
                 Err(mpsc::RecvTimeoutError::Timeout) if !cancel.load(Ordering::Relaxed) => {}
                 Err(_) => {
-                    self.out.forget(&id);
-                    let params = json!({"requestId": id});
-                    let cancelled =
-                        json!({"jsonrpc": "2.0", "method": "$/cancel_request", "params": params});
-                    self.out.send(&cancelled);
+                    self.out.withdraw(&id);
                     return None;
                 }
             }
@@ -1136,6 +1355,34 @@ impl Updates {
             false => eprintln!("scramjet: {text}"),
         }
     }
+}
+
+/// `offer` as text, for a client that does not know `next_step`.
+fn listed(offer: &Offer) -> String {
+    let mut lines = vec![format!("{}:", offer.title)];
+    for (at, step) in offer.steps.iter().enumerate() {
+        let recommended = match offer.recommended == Some(at) {
+            true => " (recommended)",
+            false => "",
+        };
+        let reason = match step.description() {
+            reason if reason.is_empty() => reason,
+            reason => format!(" — {reason}"),
+        };
+        lines.push(format!(
+            "- {}{}{recommended}{reason}",
+            step.label(),
+            step.fresh_mark()
+        ));
+    }
+    lines.push(match offer.autoselect {
+        Some(wait) => format!(
+            "\nThe recommended step runs in {} s unless you send a prompt.",
+            wait.as_secs()
+        ),
+        None => "\nSend one to run it.".to_owned(),
+    });
+    lines.join("\n")
 }
 
 /// The ACP kind of the tool `name`.
