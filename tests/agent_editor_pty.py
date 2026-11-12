@@ -1569,6 +1569,160 @@ run([], first_login, NOTHING_OFFERED, variables={'XDG_CONFIG_HOME': first_login_
     columns=80, rows=30)
 
 
+def serve_ollama(seen):
+    """An Ollama asking for the key `sk-local`: qwen3:1.7b, which thinks and calls tools, loaded
+    with the window `seen['window']` once asked, and an embedding model. Each request's line,
+    `authorization` and JSON body is added to `seen['requests']`. Returns its address."""
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', 0))
+    listener.listen(8)
+    tags = {'models': [
+        {'name': 'qwen3:1.7b', 'model': 'qwen3:1.7b', 'details': {'context_length': 40960},
+         'capabilities': ['completion', 'tools', 'thinking']},
+        {'name': 'nomic-embed-text', 'model': 'nomic-embed-text', 'capabilities': ['embedding']}]}
+
+    def chat(body):
+        if not body.get('stream'):
+            message = {'role': 'assistant', 'content': 'ok'}
+            if body.get('tools'):
+                message = {'role': 'assistant', 'content': '', 'reasoning': 'It asks for a call.',
+                           'tool_calls': [{'id': 'call_1', 'type': 'function', 'function': {
+                               'name': body['tools'][0]['function']['name'], 'arguments': '{"word":"ok"}'}}]}
+            return 'application/json', json.dumps({'choices': [{'index': 0, 'message': message}]})
+        chunks = [{'choices': [{'index': 0, 'delta': {'role': 'assistant', 'content': 'Local reply.'}}]},
+                  {'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}],
+                   'usage': {'prompt_tokens': 900, 'completion_tokens': 3, 'total_tokens': 903}}]
+        return 'text/event-stream', ''.join('data: %s\n\n' % json.dumps(c) for c in chunks) + 'data: [DONE]\n\n'
+
+    def answer():
+        while True:
+            connection, _ = listener.accept()
+            head, _, body = receive(connection).partition(b'\r\n\r\n')
+            head = head.decode()
+            line = head.split('\r\n')[0]
+            key = re.search(r'(?i)\r\nauthorization: *([^\r]*)', head)
+            body = json.loads(body) if body else None
+            seen['requests'].append((line, key and key.group(1), body))
+            path = line.split()[1]
+            kind, status = 'application/json', '200 OK'
+            if not key or key.group(1) != 'Bearer sk-local':
+                status, text = '401 Unauthorized', json.dumps({'error': 'unauthorized'})
+            elif path == '/v1/models':
+                text = json.dumps({'object': 'list', 'data': [{'id': m['name'], 'owned_by': 'library'}
+                                                              for m in tags['models']]})
+            elif path == '/api/version':
+                text = json.dumps({'version': '0.40.16'})
+            elif path == '/api/tags':
+                text = json.dumps(tags)
+            elif path == '/api/ps':
+                loaded = [{'name': 'qwen3:1.7b', 'model': 'qwen3:1.7b', 'context_length': seen['window']}]
+                text = json.dumps({'models': loaded if seen['loaded'] else []})
+            elif path == '/v1/chat/completions':
+                seen['loaded'] = True
+                kind, text = chat(body)
+            else:
+                status, text = '404 Not Found', '{}'
+            connection.sendall(('HTTP/1.1 %s\r\ncontent-type: %s\r\ncontent-length: %d\r\nconnection: close'
+                                '\r\n\r\n%s' % (status, kind, len(text.encode()), text)).encode())
+            connection.close()
+
+    threading.Thread(target=answer, daemon=True).start()
+    return '127.0.0.1:%d' % listener.getsockname()[1]
+
+
+def local_models(read, until, send, output):
+    shown, on_screen = full_screen(columns=80, rows=30)(read, output)
+    models_file = os.path.join(local_home, 'scramjet', 'models.json')
+    auth = os.path.join(local_home, 'scramjet', 'auth.json')
+    on_screen('\u2500' * 20)
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    select_row(read, shown, send, 'Ollama, llama.cpp, vLLM', b'\x1b[B')
+    on_screen('Models a runtime serves here or at an address you give')
+    send(b'\r')
+    # Runtimes answering at their default ports here, if any, come first; an address is last.
+    on_screen('Another address\u2026')
+    select_row(read, shown, send, 'Another address', b'\x1b[A')
+    on_screen('A runtime elsewhere, or at another port: its address, as host:port')
+    send(b'\r')
+    on_screen('Runtime address (host:port)')
+    send(local_runtime.encode() + b'\r')
+    on_screen('http://%s asks for an API key' % local_runtime)
+    send(b'sk-local\r')
+    rows = on_screen('Ollama at http://%s' % local_runtime)
+    assert '\u203a qwen3:1.7b' in rows and '  nomic-embed-text left out' in rows, rows
+    on_screen("window known once loaded (the model's own: 40960); the check loads it; thinks")
+    send(b'\x1b[B')
+    on_screen('Left out: Ollama says it does not chat')
+    send(b'\r')
+    on_screen('nomic-embed-text is left out: Ollama says it does not chat')
+    assert not any(line.startswith('POST') for line, _, _ in local_seen['requests']), local_seen
+    send(b'\x1b[A\r')
+    on_screen('\u2713 qwen3:1.7b called echo_word with {"word":"ok"}', either='Error:')
+    on_screen('qwen3:1.7b thinks; its thinking level is sent as reasoning_effort, off as none')
+    rows = on_screen('\u2713 Saved ollama/qwen3:1.7b in')
+    words = ' '.join(' '.join(row.split()) for row in rows)
+    assert '(window 32768 tokens); choose it in /model' in words, rows
+    assert 'Warning' not in words, rows
+    rows = on_screen('qwen3:1.7b \u2713 saved')
+    # The check sent the tool, then asked it not to think.
+    posts = [body for line, _, body in local_seen['requests'] if line.startswith('POST')]
+    assert [bool(body.get('tools')) for body in posts] == [True, False], posts
+    assert posts[1]['reasoning_effort'] == 'none', posts
+    send(b'\x1b')
+    on_screen('qwen3:1.7b \u2713 saved', gone=True)
+    entry = json.load(open(models_file))['providers']['ollama']
+    assert entry['baseUrl'] == 'http://%s/v1' % local_runtime and entry['runtime'] == 'ollama', entry
+    assert [m['id'] for m in entry['models']] == ['qwen3:1.7b'], entry
+    assert entry['models'][0]['contextWindow'] == 32768, entry
+    assert json.load(open(auth))['ollama']['key'] == 'sk-local'
+    # /login lists it under Local models, not as another provider taking a key.
+    send(b'/login\r')
+    rows = on_screen('Log in to  ')
+    dialog = rows[[i for i, row in enumerate(rows) if row.startswith('Log in to  ')][-1]:]
+    assert dialog[4:7] == ['  API keys', '    test', '  Local models'], dialog
+    send(b'\x1b')
+    on_screen('Log in to  ', gone=True)
+    send(b'/model\r')
+    on_screen('  ollama')
+    select_row(read, shown, send, 'qwen3:1.7b', b'\x1b[B')
+    send(b'\r')
+    on_screen('Model set to (ollama) qwen3:1.7b')
+    # Loaded again with another window since: the turn follows it, and says so.
+    local_seen['window'] = 16384
+    before = len(local_seen['requests'])
+    send(b'hi\r')
+    on_screen('Local reply.')
+    words = ' '.join(' '.join(row.split()) for row in shown())
+    assert 'Ollama serves qwen3:1.7b with a 16384-token window, not the 32768 saved for it' in words, shown()
+    turn = [(line, key, body) for line, key, body in local_seen['requests'][before:] if body and body.get('stream')]
+    assert len(turn) == 1 and turn[0][1] == 'Bearer sk-local' and turn[0][2]['model'] == 'qwen3:1.7b', turn
+    # Removed: its entry and its key.
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    select_row(read, shown, send, 'Ollama, llama.cpp, vLLM', b'\x1b[B')
+    send(b'\r')
+    on_screen('Another address\u2026')
+    select_row(read, shown, send, '\u2713 saved: 1 model', b'\x1b[A')
+    send(b'\r')
+    on_screen('Add or check a model of http://%s' % local_runtime)
+    select_row(read, shown, send, 'Remove ollama and its models', b'\x1b[A')
+    on_screen('Only from models.json; the runtime is left as it is')
+    send(b'\r')
+    on_screen('\u2713 Removed ollama from')
+    assert 'ollama' not in json.load(open(models_file))['providers']
+    assert 'ollama' not in json.load(open(auth))
+    send(b'\x04')
+
+
+local_home = config_home('local')
+local_seen = {'requests': [], 'window': 32768, 'loaded': False}
+local_runtime = serve_ollama(local_seen)
+run([], local_models, variables={'XDG_CONFIG_HOME': local_home}, columns=80, rows=30)
+# Later journeys count the output rates their own turns measured.
+os.remove(os.path.join(work, 'state/scramjet/output-rates.json'))
+
+
 def serve_copilot_models(ids):
     """Copilot's API over TLS for localhost (tests/tls), listing models of `ids`; returns its port
     and the request lines it took."""
