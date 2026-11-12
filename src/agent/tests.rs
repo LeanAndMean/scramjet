@@ -406,6 +406,106 @@ pub(super) fn serve_answering(
     count: usize,
     mut answer: impl FnMut(&Value) -> Vec<u8> + Send + 'static,
 ) -> (SocketAddr, std::thread::JoinHandle<Vec<(String, Value)>>) {
+    let mut answered = 0;
+    serve_until(count, move |_, body| {
+        answered += 1;
+        (answer(body), answered == count)
+    })
+}
+
+/// As `serve`, a scripted Ollama 0.40.16: a request asking only for a count
+/// (`local::ollama_count`) is answered by `count` and, with its version check, left out of the
+/// requests returned; the others are answered in turn.
+pub(super) fn serve_ollama(
+    responses: Vec<Vec<u8>>,
+    mut count: impl FnMut(&Value) -> Vec<u8> + Send + 'static,
+) -> (SocketAddr, std::thread::JoinHandle<Vec<Value>>) {
+    let total = responses.len();
+    let mut responses = responses.into_iter();
+    // The version is asked after a count answered with 200.
+    let mut confirming = false;
+    let (address, server) = serve_until(total, move |head, body| {
+        if confirming && head.starts_with("get /api/version ") {
+            confirming = false;
+            return (json_reply(&json!({"version": "0.40.16"})), false);
+        }
+        if head.starts_with("post /api/chat ") {
+            let response = count(body);
+            confirming = response.starts_with(b"HTTP/1.1 200");
+            return (response, false);
+        }
+        let response = responses.next().unwrap();
+        (response, responses.len() == 0)
+    });
+    let bodies = std::thread::spawn(move || {
+        let requests = server.join().unwrap();
+        let mut after_count = false;
+        (requests.into_iter())
+            .filter(|(head, _)| {
+                let counting = head.starts_with("post /api/chat ")
+                    || (after_count && head.starts_with("get /api/version "));
+                after_count = head.starts_with("post /api/chat ");
+                !counting
+            })
+            .map(|(_, body)| body)
+            .collect()
+    });
+    (address, bodies)
+}
+
+fn json_reply(value: &Value) -> Vec<u8> {
+    let body = value.to_string();
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// A scripted Ollama's count of a request to its `/api/chat` (`serve_ollama`) with a `window`:
+/// its text at chars/4, times `percent` over 100, refused past the window.
+pub(super) fn ollama_counting(
+    window: u64,
+    percent: u64,
+) -> impl FnMut(&Value) -> Vec<u8> + Send + 'static {
+    move |body| {
+        let mut chars = body["tools"].to_string().chars().count();
+        for message in body["messages"].as_array().unwrap() {
+            for field in ["content", "thinking"] {
+                chars += message[field].as_str().unwrap_or_default().chars().count();
+            }
+            for call in message["tool_calls"].as_array().into_iter().flatten() {
+                chars += call["function"].to_string().chars().count();
+            }
+        }
+        let tokens = (chars as u64).div_ceil(4) * percent / 100;
+        match tokens > window {
+            true => ollama_refusal(tokens),
+            false => json_reply(&json!({"done": true, "prompt_eval_count": tokens})),
+        }
+    }
+}
+
+/// Ollama's refusal of a prompt of `tokens` past its window, as 0.40.16 answers `/api/chat`
+/// with `truncate: false`.
+pub(super) fn ollama_refusal(tokens: u64) -> Vec<u8> {
+    let body = json!({"error": format!("request ({tokens} tokens) exceeds the available \
+        context size (4096 tokens), try increasing it")})
+    .to_string();
+    format!(
+        "HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes()
+}
+
+/// Answers connections one at a time with what `answer` makes of each request's head and body
+/// (`serve_requests`), until it says it was the last; `count` is how many a test expects at
+/// least, for its message when it gets too few.
+fn serve_until(
+    count: usize,
+    mut answer: impl FnMut(&str, &Value) -> (Vec<u8>, bool) + Send + 'static,
+) -> (SocketAddr, std::thread::JoinHandle<Vec<(String, Value)>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     // A test whose agent makes fewer requests fails rather than waiting for good.
@@ -413,7 +513,8 @@ pub(super) fn serve_answering(
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
     let server = std::thread::spawn(move || {
         let mut requests = Vec::new();
-        for _ in 0..count {
+        let mut last = count == 0;
+        while !last {
             let connection = loop {
                 match listener.accept() {
                     Ok((connection, _)) => break connection,
@@ -451,7 +552,8 @@ pub(super) fn serve_answering(
                 0 => Value::Null,
                 _ => serde_json::from_slice(&body).unwrap(),
             };
-            let response = answer(&body);
+            let (response, done) = answer(&head, &body);
+            last = done;
             requests.push((head, body));
             reader.get_mut().write_all(&response).unwrap();
         }

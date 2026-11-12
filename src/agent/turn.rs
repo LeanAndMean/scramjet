@@ -288,7 +288,7 @@ finish and is not checked on. Reply to continue.",
     /// read it, until `cancel`). Said when it changes.
     fn follow_runtime(&mut self, ui: &mut dyn AgentUi, again: bool, cancel: &AtomicBool) {
         self.keep_runtime_window();
-        let (Some(runtime), Some(route)) = (self.info.runtime, &self.info.route) else {
+        let (Some(runtime), Some(_)) = (self.info.runtime, &self.info.route) else {
             return;
         };
         let model = self.config.model.clone();
@@ -303,13 +303,11 @@ finish and is not checked on. Reply to continue.",
             Some(RuntimeWindow::Unread { tries, last }) => (*last, if again { 0 } else { *tries }),
             None => (None, 0),
         };
-        let scheme = if route.tls { "https" } else { "http" };
-        let base = format!("{scheme}://{}{}", route.authority, route.path);
-        let url = base.strip_suffix("/v1").unwrap_or(&base);
-        let key = (route.headers.iter())
-            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-            .and_then(|(_, value)| value.strip_prefix("Bearer "));
-        let Some(window) = super::local::window_now(url, key, &self.info.id, cancel) else {
+        let Some((url, key)) = self.runtime_url() else {
+            return;
+        };
+        let Some(window) = super::local::window_now(&url, key.as_deref(), &self.info.id, cancel)
+        else {
             let tries = tries + 1;
             (self.runtime_windows).insert(model, RuntimeWindow::Unread { tries, last });
             return;
@@ -335,6 +333,18 @@ finish and is not checked on. Reply to continue.",
             self.info.id
         ));
         self.info.window = Some(window);
+    }
+
+    /// The address of the runtime serving the current model, without `/v1`, and its key.
+    pub(super) fn runtime_url(&self) -> Option<(String, Option<String>)> {
+        let route = self.info.route.as_ref()?;
+        let scheme = if route.tls { "https" } else { "http" };
+        let base = format!("{scheme}://{}{}", route.authority, route.path);
+        let url = base.strip_suffix("/v1").unwrap_or(&base).to_owned();
+        let key = (route.headers.iter())
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .and_then(|(_, value)| value.strip_prefix("Bearer "));
+        Some((url, key.map(str::to_owned)))
     }
 
     /// Model requests and tool calls until a final answer. As in Pi, messages the user sends
@@ -368,6 +378,7 @@ finish and is not checked on. Reply to continue.",
                     }
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui, false, cancel);
+                    self.measure_for_runtime(cancel);
                     self.compact_for_runtime(ui, cancel)?;
                     let mut request = self.request();
                     self.fit_for_runtime(&mut request, &mut past_window_said, ui);
@@ -696,14 +707,17 @@ mod tests {
                 reply(json!({"models": [{"model": "qwen3:1.7b", "context_length": window}]})),
             ]
         };
+        // Instructions and tools alone pass these windows: before each request Ollama is asked
+        // to count it, and refuses it.
+        let refused = || crate::agent::tests::ollama_refusal(9_000);
         let mut responses = probe(None);
         responses.extend(load(2048));
-        responses.push(chat("one"));
+        responses.extend([refused(), chat("one")]);
         responses.extend(probe(Some(4096)));
-        responses.push(chat("two"));
+        responses.extend([refused(), chat("two")]);
         responses.extend(probe(None));
         responses.extend(load(4096));
-        responses.push(chat("three"));
+        responses.extend([refused(), chat("three")]);
         let (endpoint, server) = serve(responses);
         let (mut agent, _scratch) = agent(endpoint, "runtime-window");
         agent.set_providers(crate::agent::providers::Providers::given(
@@ -764,7 +778,10 @@ mod tests {
             .filter(|body| **body == json!({"model": "qwen3:1.7b", "stream": false}))
             .count();
         let posted = requests.iter().filter(|body| !body.is_null()).count();
-        assert_eq!((requests.len(), posted, loads), (19, 5, 2));
+        let counts = (requests.iter())
+            .filter(|body| body["truncate"] == false && body["options"]["num_predict"] == 1)
+            .count();
+        assert_eq!((requests.len(), posted, loads, counts), (22, 8, 2, 3));
     }
 
     #[test]

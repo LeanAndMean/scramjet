@@ -916,6 +916,41 @@ impl Agent {
         self.compact_if_full(self.runtime_context(), ui, cancel)
     }
 
+    /// Before the threshold check on Ollama, the next request counted by Ollama itself
+    /// (`local::ollama_count`) when chars/4, as calibrated, says it would be compacted or cut:
+    /// a count Ollama reports for a request past its window is of what it kept
+    /// (`calibrate`), and chars/4 was 12–52% over on qwen3 live, so the estimate alone
+    /// compacts conversations that fit.
+    pub(super) fn measure_for_runtime(&mut self, cancel: &AtomicBool) {
+        let (Some(super::local::Runtime::Ollama), Some(window)) =
+            (self.info.runtime, self.info.window)
+        else {
+            return;
+        };
+        let request = self.request();
+        let estimate = request_estimate(&request);
+        let (reserve, _) = self.reserve_and_kept();
+        if estimate == 0 || self.calibrated(estimate) <= window.saturating_sub(reserve) {
+            return;
+        }
+        let Some((url, key)) = self.runtime_url() else {
+            return;
+        };
+        let body = super::completions::request_retaining(
+            &request,
+            &self.info,
+            super::CacheRetention::None,
+        );
+        if let Some(input) = super::local::ollama_count(&url, key.as_deref(), &body, cancel) {
+            let calibration = Calibration {
+                estimate,
+                input,
+                extends: true,
+            };
+            (self.calibrations).insert(self.config.model.clone(), calibration);
+        }
+    }
+
     /// On a model a local runtime serves, makes `request` fit the window less the reserve for
     /// the reply when compaction could not: its largest tool outputs are cut to their start and
     /// end in this request only, the session keeping them whole; when the rest of the request
@@ -1962,7 +1997,10 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
                 "done",
                 fixture::known_usage(),
             )));
-            let (endpoint, server) = serve(responses);
+            let (endpoint, server) = match runtime {
+                Some(_) => serve_ollama(responses, ollama_counting(30_000, 100)),
+                None => serve(responses),
+            };
             let (mut agent, _scratch) = agent(endpoint, name);
             agent.set_context_window(Some(30_000));
             agent.info.runtime = runtime;
@@ -2016,7 +2054,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         }
         // A 30,000-token window, so a threshold of 22,500; the first request is about 22,000
         // tokens at chars/4, and a 16,000-character output adds 4,000 more.
-        let run = |runtime: crate::agent::local::Runtime, input: u64, name: &str| {
+        let run = |runtime: crate::agent::local::Runtime, input: u64, percent: u64, name: &str| {
             let arguments = json!({"command": "head -c 16000 /dev/zero | tr '\\0' x"});
             let usage = json!({"input_tokens": input, "output_tokens": 10,
                 "total_tokens": input + 10});
@@ -2024,13 +2062,14 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             let text = serde_json::to_string(&events).unwrap();
             let call = serde_json::from_str::<Vec<Value>>(&text.replace("\"inert\"", "\"bash\""));
             let [models, version] = runtime_says("m", 30_000);
-            let (endpoint, server) = serve(vec![
+            let responses = vec![
                 models,
                 version,
                 stream(&call.unwrap()),
                 stream(&fixture::text_events("summary", fixture::known_usage())),
                 stream(&fixture::text_events("done", fixture::known_usage())),
-            ]);
+            ];
+            let (endpoint, server) = serve_ollama(responses, ollama_counting(30_000, percent));
             let (mut agent, _scratch) = agent(endpoint, name);
             agent.set_context_window(Some(30_000));
             agent.info.runtime = Some(runtime);
@@ -2052,20 +2091,25 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             Purpose::Compaction(Some(AutoCompaction::Threshold)),
             Purpose::Reply,
         ];
+        use crate::agent::local::Runtime;
         // Ollama counted 17,000 of the 22,000 estimated, more than half its window, so the
         // request was whole: about 21,000 tokens with the output, under the threshold.
-        let waits = run(crate::agent::local::Runtime::Ollama, 17_000, "calibrated");
+        let waits = run(Runtime::Ollama, 17_000, 100, "calibrated");
         assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
-        // A count of half its window may be of a prompt it cut, so chars/4 stands.
-        let waits = run(crate::agent::local::Runtime::Ollama, 15_002, "cut-count");
+        // A count of half its window may be of a prompt it cut, so chars/4 stands, unless
+        // Ollama, asked to count the next request without cutting it, counts it under the
+        // threshold.
+        let waits = run(Runtime::Ollama, 15_002, 100, "cut-count");
         assert_eq!(waits, compacted);
+        let waits = run(Runtime::Ollama, 15_002, 80, "counted");
+        assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
         // A count clear below half, of a request under the window by chars/4, was not cut.
-        let waits = run(crate::agent::local::Runtime::Ollama, 14_000, "under-half");
+        let waits = run(Runtime::Ollama, 14_000, 100, "under-half");
         assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
         // llama.cpp refuses a prompt past its window, so its count is always whole.
-        let waits = run(crate::agent::local::Runtime::LlamaCpp, 12_000, "llama-cpp");
+        let waits = run(Runtime::LlamaCpp, 12_000, 100, "llama-cpp");
         assert_eq!(waits, [Purpose::Reply, Purpose::Reply]);
-        let waits = run(crate::agent::local::Runtime::Other, 12_000, "other");
+        let waits = run(Runtime::Other, 12_000, 100, "other");
         assert_eq!(waits, compacted);
     }
 
@@ -2159,14 +2203,15 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             )
         };
         let [models, version] = runtime_says("m", window);
-        let (endpoint, server) = serve(vec![
+        let responses = vec![
             models,
             version,
             call(4_000, 9_800),
             call(60_000, 10_800),
             stream(&fixture::text_events("prefix", fixture::known_usage())),
             stream(&fixture::text_events("done", fixture::known_usage())),
-        ]);
+        ];
+        let (endpoint, server) = serve_ollama(responses, ollama_counting(window, 100));
         let (mut agent, scratch) = agent(endpoint, name);
         agent.set_context_window(Some(window));
         agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);

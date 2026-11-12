@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.191.0 — Ollama counts a long request before compaction
+
+### Changed
+
+- On an Ollama model (0.12.6 or later), when the estimate says the next request would be compacted or cut, Ollama is first asked to count it without cutting it. Conversations that fit are no longer compacted because the estimate ran 12–52% high, and the past-the-window notice gives Ollama's count. Where the request fits, Ollama keeps it cached for the real request, so this costs almost no time.
+
 ## 2.190.1 — Ollama's cut prompts not taken as measured
 
 ### Fixed

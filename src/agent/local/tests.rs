@@ -93,6 +93,65 @@ fn ollama(_: &str, path: &str, _: &Value) -> (u16, Value) {
 }
 
 #[test]
+fn ollama_counts_a_request_without_cutting_it() {
+    let body = json!({"model": "qwen3:1.7b", "stream": true, "reasoning_effort": "none",
+    "tools": [{"type": "function", "function": {"name": "read"}}],
+    "messages": [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": [{"type": "text", "text": "see "},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBOR"}},
+            {"type": "text", "text": "this"}]},
+        {"role": "assistant", "reasoning": "look first", "tool_calls": [{"id": "c1",
+            "type": "function", "function": {"name": "read", "arguments": "{\"path\":\"a\"}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "text of a"},
+    ]});
+    let native = ollama_native(&body);
+    assert_eq!(
+        native,
+        json!({"model": "qwen3:1.7b", "stream": false, "truncate": false,
+        "options": {"num_predict": 1}, "think": false,
+        "tools": [{"type": "function", "function": {"name": "read"}}],
+        "messages": [
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "see this", "images": ["iVBOR"]},
+            {"role": "assistant", "content": "", "thinking": "look first", "tool_calls": [
+                {"id": "c1", "function": {"index": 0, "name": "read", "arguments": {"path": "a"}}}]},
+            {"role": "tool", "content": "text of a", "tool_call_id": "c1", "tool_name": "read"},
+        ]})
+    );
+    let go = AtomicBool::new(false);
+    // Past its window Ollama 0.40.16 refuses the prompt, naming its count.
+    let refusing = serve(|method, path, body| match (method, path) {
+        ("POST", "/api/chat") if body["truncate"] == false => (
+            400,
+            json!({"error": "request (6017 tokens) exceeds the available context size (4096 \
+                tokens), try increasing it"}),
+        ),
+        _ => (404, json!({})),
+    });
+    assert_eq!(ollama_count(&refusing, None, &body, &go), Some(6017));
+    // One that fits is answered, and counted from 0.12.6 on, which keeps `truncate`.
+    let answering = |version: &'static str| {
+        serve(move |method, path, _| match (method, path) {
+            ("POST", "/api/chat") => (200, json!({"done": true, "prompt_eval_count": 517})),
+            ("GET", "/api/version") => (200, json!({"version": version})),
+            _ => (404, json!({})),
+        })
+    };
+    assert_eq!(
+        ollama_count(&answering("0.40.16"), None, &body, &go),
+        Some(517)
+    );
+    assert_eq!(
+        ollama_count(&answering("0.12.6"), None, &body, &go),
+        Some(517)
+    );
+    assert_eq!(ollama_count(&answering("0.12.5"), None, &body, &go), None);
+    let other = serve(|_, _, _| (400, json!({"error": "model not found"})));
+    assert_eq!(ollama_count(&other, None, &body, &go), None);
+}
+
+#[test]
 fn ollama_loads_a_model_to_say_its_window() {
     let generated = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen = generated.clone();

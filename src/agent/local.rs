@@ -329,6 +329,134 @@ pub fn window_now(url: &str, key: Option<&str>, id: &str, cancel: &AtomicBool) -
     ollama_window(&loaded.ok()?, id)
 }
 
+/// Ollama's count of the tokens of `body`, a Chat Completions request to it, asked of its native
+/// `/api/chat` with `truncate: false`, until `cancel`: a prompt past the window is refused with
+/// its count at once (Ollama 0.40.16 answers 400, "request (6017 tokens) exceeds the available
+/// context size"), while `/v1` would cut it and count what is left; one that fits is read and
+/// answered with one token, and stays cached for the request that follows, its count taken
+/// from Ollama 0.12.6 on: before, `truncate` was ignored.
+pub fn ollama_count(
+    url: &str,
+    key: Option<&str>,
+    body: &Value,
+    cancel: &AtomicBool,
+) -> Option<u64> {
+    let bearer = key.map(|key| format!("Bearer {key}"));
+    let mut headers = vec![("accept", "application/json")];
+    if let Some(bearer) = &bearer {
+        headers.push(("authorization", bearer));
+    }
+    let native = ollama_native(body).to_string().into_bytes();
+    let chat = format!("{url}/api/chat");
+    let counted = async {
+        let body = Some(("application/json", native));
+        let fetched =
+            client::fetch_within("local", "POST", &chat, &headers, body, 4096, CHECK_WAIT);
+        let fetched = fetched.await.map_err(|failure| failure.message)?;
+        let answer: Value = serde_json::from_slice(&fetched.body).unwrap_or_default();
+        if !(200..300).contains(&fetched.status) {
+            let error = answer["error"].as_str().unwrap_or_default();
+            let count =
+                (error.split_once("request (")).and_then(|(_, rest)| rest.split_once(" tokens)"));
+            return count
+                .and_then(|(count, _)| count.parse().ok())
+                .ok_or_else(|| error.to_owned());
+        }
+        let version = optional(format!("{url}/api/version"), key, LOOK_WAIT).await;
+        let numbers: Vec<u64> = (version["version"].as_str().unwrap_or_default())
+            .split(['.', '-'])
+            .take(3)
+            .map_while(|part| part.parse().ok())
+            .collect();
+        if numbers.len() < 3 || numbers[..] < [0, 12, 6][..] {
+            return Err(format!("Ollama {version} takes no truncate"));
+        }
+        positive(&answer["prompt_eval_count"]).ok_or_else(String::new)
+    };
+    super::login::blocking(async {
+        tokio::select! {
+            biased;
+            () = super::client::cancelled(cancel) => Err(String::new()),
+            counted = counted => counted,
+        }
+    })
+    .ok()
+}
+
+/// A Chat Completions request to Ollama as its native `/api/chat` takes it, as Ollama 0.40.16
+/// turns one into the other: text content as a string and images apart, a call's arguments as
+/// an object, reasoning as `thinking`, a tool result named after its call; nothing streamed and
+/// one token answered, the prompt never cut.
+fn ollama_native(body: &Value) -> Value {
+    let empty = Vec::new();
+    let messages = body["messages"].as_array().unwrap_or(&empty);
+    let mut names = std::collections::HashMap::new();
+    let native: Vec<Value> = (messages.iter())
+        .map(|message| {
+            let mut native = json!({"role": message["role"]});
+            let (mut text, mut images) = (String::new(), Vec::new());
+            match &message["content"] {
+                Value::String(content) => text.push_str(content),
+                Value::Array(parts) => {
+                    for part in parts {
+                        if let Some(part) = part["text"].as_str() {
+                            text.push_str(part);
+                        }
+                        let image = part["image_url"]["url"].as_str();
+                        if let Some((_, data)) = image.and_then(|url| url.split_once(";base64,")) {
+                            images.push(json!(data));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            native["content"] = json!(text);
+            if !images.is_empty() {
+                native["images"] = json!(images);
+            }
+            if let Some(thinking) = (REASONING_FIELDS.iter())
+                .find_map(|field| message[*field].as_str().filter(|text| !text.is_empty()))
+            {
+                native["thinking"] = json!(thinking);
+            }
+            if let Some(calls) = message["tool_calls"].as_array() {
+                let calls: Vec<Value> = (calls.iter().enumerate())
+                    .map(|(index, call)| {
+                        let function = &call["function"];
+                        if let Some(id) = call["id"].as_str() {
+                            names.insert(id.to_owned(), function["name"].clone());
+                        }
+                        let arguments = function["arguments"].as_str().unwrap_or("{}");
+                        let arguments =
+                            serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({}));
+                        json!({"id": call["id"], "function": {"index": index,
+                            "name": function["name"], "arguments": arguments}})
+                    })
+                    .collect();
+                native["tool_calls"] = json!(calls);
+            }
+            if let Some(id) = message["tool_call_id"].as_str() {
+                native["tool_call_id"] = json!(id);
+                if let Some(name) = names.get(id) {
+                    native["tool_name"] = name.clone();
+                }
+            }
+            native
+        })
+        .collect();
+    let mut request = json!({"model": body["model"], "messages": native, "stream": false,
+        "truncate": false, "options": {"num_predict": 1}});
+    if let Some(tools) = body["tools"].as_array().filter(|tools| !tools.is_empty()) {
+        request["tools"] = json!(tools);
+    }
+    match body["reasoning_effort"].as_str() {
+        Some("none") => request["think"] = json!(false),
+        Some(level) => request["think"] = json!(level),
+        None => {}
+    }
+    request
+}
+
 /// Ollama's `/api/ps` after loading model `id` (an empty `/api/generate`) with the window a
 /// request without options gets.
 async fn ollama_load(url: &str, key: Option<&str>, id: &str) -> Option<Value> {
