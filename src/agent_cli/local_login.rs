@@ -3,7 +3,7 @@
 //! harmless tool and saved as a provider of the user's `models.json`; saved ones are checked
 //! again, or removed, the same way. The runtime itself is never started, changed or stopped.
 
-use super::interactive::{self, Interactive};
+use super::interactive::Interactive;
 use super::screen::{Answer, Dialog, Optional};
 use super::select::{self, Picker};
 use super::style;
@@ -397,22 +397,7 @@ impl Interactive {
             );
         }
         self.providers_changed();
-        let reference = format!("{name}/{}", model.id);
-        if self.agent.offered_model(self.agent.model()).is_none()
-            && let Some(reference) = self.agent.offered_model(&reference)
-        {
-            match self.agent.set_model(&reference) {
-                Ok(()) => {
-                    self.agent.load_model_info();
-                    let line = interactive::model_line(&self.agent);
-                    self.say_styled(style::MUTED, &format!("This session now uses {line}"));
-                }
-                Err(error) => self.say(&format!("Error: model not set to {reference}: {error}")),
-            }
-            if let Some(screen) = &self.screen {
-                screen.footer(super::footer::Shown::of(&self.agent));
-            }
-        }
+        self.take_offered_model(Some(&format!("{name}/{}", model.id)));
     }
 
     /// The user's own `models.json`, beside the settings.

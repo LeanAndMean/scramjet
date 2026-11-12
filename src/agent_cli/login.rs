@@ -8,7 +8,7 @@
 //! it then carry. The lists the providers whose entries list no models give themselves are kept
 //! current alike.
 
-use super::interactive::Interactive;
+use super::interactive::{self, Interactive};
 use super::screen::{Answer, Dialog, Optional, Relisting};
 use super::select::{self, Picker};
 use super::text::{clip, visible};
@@ -246,6 +246,7 @@ impl Interactive {
                     ),
                 };
                 self.say(&said);
+                self.take_offered_model(None);
             }
             Err(error) => self.say(&format!(
                 "Error: the API key for {shown} was not saved: {error}"
@@ -383,6 +384,7 @@ impl Interactive {
                     "✓ Logged in to {shown}. Credentials saved to {saved}"
                 ));
                 self.logins_changed();
+                self.take_offered_model(None);
             }
             Err(error) if error == login::CANCELLED => {
                 self.say_styled(style::MUTED, "Login cancelled")
@@ -454,6 +456,31 @@ impl Interactive {
         self.agent.load_model_info();
         if let Some(screen) = &self.screen {
             screen.models(self.agent.models().unwrap_or_default());
+        }
+    }
+
+    /// When no provider offers the session's model (a first start with none leaves a
+    /// placeholder), takes `preferred` if offered, else the model a new session would start with.
+    pub(super) fn take_offered_model(&mut self, preferred: Option<&str>) {
+        if self.agent.offered_model(self.agent.model()).is_some() {
+            return;
+        }
+        let default = super::default_model(self.agent.providers());
+        let Some(reference) = (preferred.into_iter().chain([default.as_str()]))
+            .find_map(|model| self.agent.offered_model(model))
+        else {
+            return;
+        };
+        match self.agent.set_model(&reference) {
+            Ok(()) => {
+                self.agent.load_model_info();
+                let line = interactive::model_line(&self.agent);
+                self.say_styled(style::MUTED, &format!("This session now uses {line}"));
+            }
+            Err(error) => self.say(&format!("Error: model not set to {reference}: {error}")),
+        }
+        if let Some(screen) = &self.screen {
+            screen.footer(super::footer::Shown::of(&self.agent));
         }
     }
 }

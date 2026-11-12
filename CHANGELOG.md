@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.169.1 — A first login picks a model
+
+### Fixed
+
+- Logging in with `/login` (ChatGPT, GitHub Copilot, an API key or a package's login) when the session's model is one no provider offers, as on a first start with none, switches the session to the model a new session would start with, as saving a local model already did, instead of leaving it on a model it cannot reach.
+
 ## 2.169.0 — Thinking levels for local models
 
 ### Added

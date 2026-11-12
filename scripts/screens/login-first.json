@@ -1,0 +1,25 @@
+{
+  "size": "100x30",
+  "settings": {"theme": "scramjet-dark"},
+  "provider": {"models": []},
+  "models": {
+    "logins": {"acme": {"name": "Acme Cloud", "command": ["{root}/tests/support/login_program.sh"]}}
+  },
+  "replies": [
+    [{"text": "Hello from Acme Large."}]
+  ],
+  "steps": [
+    {"sleep": 1},
+    {"shot": "start"},
+    {"type": "/login\r"},
+    {"until": "Log in to"},
+    {"type": "\u001b[B\u001b[B\r"},
+    {"until": "This session now uses"},
+    {"sleep": 0.3},
+    {"shot": "logged-in"},
+    {"type": "Hello?\r"},
+    {"until": "Hello from Acme Large."},
+    {"sleep": 0.3},
+    {"shot": "reply"}
+  ]
+}

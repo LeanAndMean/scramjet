@@ -147,7 +147,8 @@ def receive(connection):
 
 def serve(replies, headers=None, total=None, log=None):
     """Answers each request with the next reply, then with `No more replies.`, each with `headers`
-    besides its own, appending each request's body to `log` as a line; the address."""
+    besides its own, appending each request's body to `log` as a line; the address. A GET, such as
+    a provider listing its models, is not found and takes no reply."""
     extra = b''.join(b'%s: %s\r\n' % (name.encode(), str(text).encode()) for name, text in (headers or {}).items())
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
@@ -160,6 +161,10 @@ def serve(replies, headers=None, total=None, log=None):
         while True:
             connection, _ = listener.accept()
             request = receive(connection)
+            if request.startswith(b'GET '):
+                connection.sendall(b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n')
+                connection.close()
+                continue
             if log:
                 with open(log, 'ab') as file:
                     file.write(request.partition(b'\r\n\r\n')[2].replace(b'\n', b' ') + b'\n')

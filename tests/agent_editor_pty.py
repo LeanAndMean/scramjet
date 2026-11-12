@@ -44,6 +44,7 @@ hanging = '127.0.0.1:%d' % silent.getsockname()[1]
 LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 # The models each scripted server offers, by its address (`provide`).
 catalogs = {}
+NOTHING_OFFERED = 'nothing offered'
 # More providers, by configuration directory, written as they are after the servers' (`provide`).
 more_providers = {}
 
@@ -68,9 +69,10 @@ def offering(address, models):
 
 def provide(endpoint, config):
     """Writes the models.json of the configuration directory `config`: the models the server at
-    `endpoint` offers, else gpt-6-luna, grouped by provider."""
+    `endpoint` offers, else gpt-6-luna, grouped by provider; none for `NOTHING_OFFERED`."""
     providers = {}
-    for entry in catalogs.get(endpoint) or [model('gpt-6-luna', [])]:
+    entries = [] if endpoint == NOTHING_OFFERED else catalogs.get(endpoint) or [model('gpt-6-luna', [])]
+    for entry in entries:
         entry = dict(entry)
         claude = entry['id'].startswith('claude-')
         entry.setdefault('api', 'anthropic-messages' if claude else 'openai-responses')
@@ -1543,6 +1545,27 @@ keyed_server = serve_replies([(['Keyed reply.'], 'Keyed reply.'), (['Unkeyed rep
 keyed_server_origin = 'http://%s' % keyed_server
 run([], logins, keyed_server, variables={'XDG_CONFIG_HOME': login_home, 'PATH': login_bin + os.pathsep + env['PATH'],
                            'WAYLAND_DISPLAY': 'wayland-test', 'OPENED': opened_page, 'CLIPBOARD': login_clipboard},
+    columns=80, rows=30)
+
+
+def first_login(read, until, send, output):
+    shown, on_screen = full_screen(columns=80, rows=30)(read, output)
+    on_screen('No provider offers any model: /login, or add providers to')
+    send(b'/login\r')
+    on_screen('Log in to  ')
+    send(b'\x1b[B' * 2 + b'\r')
+    on_screen('API key for listed  Enter submit')
+    send(b'sk-listed\r')
+    # The placeholder no provider offered gives way to the first model the login brought.
+    on_screen('This session now uses qwen-coder')
+    footer_shows(read, output, [project, stats('0/131k (0.0%, auto)', 'qwen-coder', 80)], columns=80, rows=30)
+    send(b'\x04')
+
+
+first_login_home = config_home('first-login')
+more_providers[first_login_home] = {'listed': {'baseUrl': 'http://%s/v1' % serve_listed_models([]),
+                                               'api': 'openai-completions'}}
+run([], first_login, NOTHING_OFFERED, variables={'XDG_CONFIG_HOME': first_login_home},
     columns=80, rows=30)
 
 
