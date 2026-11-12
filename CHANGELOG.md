@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.182.2 — gpt-oss's other tool names
+
+### Fixed
+
+- gpt-oss's `search` calls with its browser's `query` (not grep's `pattern`) now run grep too, and `open` runs `read`; its `line_start` and `line_end`, given to either, read those lines. One edit task on Ollama's gpt-oss:20b had run 49 requests, 31 of them refused `search` calls, without making the edit; it now finishes in 20 to 50.
+
 ## 2.182.1 — gpt-oss finds grep
 
 ### Fixed

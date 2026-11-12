@@ -147,9 +147,6 @@ pub const HARNESS_TOOLS: [&str; 13] = [
     super::mcp::CALL,
 ];
 
-/// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
-/// harness's own, those for MCP servers' tools only with `mcp` (servers are configured); with
-/// `only` (`--tools`), those it names alone, as Scramjet's allowlist.
 /// A call to a tool not offered; names those offered, as a model trained on other tools' names
 /// (gpt-oss's `search`) otherwise keeps calling them.
 pub(super) fn not_found(name: &str, offered: &[impl AsRef<str>]) -> String {
@@ -163,21 +160,67 @@ pub(super) fn not_found(name: &str, offered: &[impl AsRef<str>]) -> String {
     }
 }
 
-/// Renames a reply's call to the tool it means when a model calls it by a name of its training:
-/// gpt-oss calls grep `search` (its built-in browser tool's), with grep's arguments, and keeps
-/// calling it however often it is told the name is not a tool. Its history then shows grep.
+/// Turns a reply's call into the tool it means when a model calls one by a name of its
+/// training. gpt-oss calls grep `search` and read `open` (its built-in browser's tools), with our
+/// arguments or its browser's (`query`, `ignore_case`, `max_results`; `line_start`, `line_end`,
+/// also given to read), and keeps calling them however often it is told no such tool exists.
+/// The call is rewritten, name and arguments, so its history shows ours.
 pub(super) fn rename_habit(item: &mut Value, offered: &[impl AsRef<str>]) {
     let offers = |tool: &str| offered.iter().any(|name| name.as_ref() == tool);
-    if item["type"] != "function_call" || item["name"] != "search" || offers("search") {
+    let ours = match item["name"].as_str() {
+        Some("search") if !offers("search") => "grep",
+        Some("open") if !offers("open") => "read",
+        Some("read") => "read",
+        _ => return,
+    };
+    if item["type"] != "function_call" || !offers(ours) {
         return;
     }
-    let arguments: Value =
-        serde_json::from_str(item["arguments"].as_str().unwrap_or("")).unwrap_or_default();
-    if arguments["pattern"].is_string() && offers("grep") {
-        item["name"] = json!("grep");
+    let Ok(Value::Object(mut arguments)) =
+        serde_json::from_str::<Value>(item["arguments"].as_str().unwrap_or(""))
+    else {
+        return;
+    };
+    let rename = |arguments: &mut serde_json::Map<String, Value>, theirs: &str, ours: &str| {
+        if let Some(value) = arguments.remove(theirs) {
+            arguments.entry(ours).or_insert(value);
+        }
+    };
+    if ours == "grep" {
+        if !arguments.get("pattern").is_some_and(Value::is_string) {
+            let Some(query) = arguments.remove("query").filter(Value::is_string) else {
+                return;
+            };
+            arguments.insert("pattern".into(), query);
+            arguments.insert("literal".into(), json!(true));
+        }
+        rename(&mut arguments, "ignore_case", "ignoreCase");
+        rename(&mut arguments, "max_results", "limit");
+    } else {
+        let given = |key| arguments.contains_key(key);
+        let path = arguments.get("path").is_some_and(Value::is_string);
+        if !path || (item["name"] == "read" && !given("line_start") && !given("line_end")) {
+            return;
+        }
+        let start = arguments.remove("line_start").and_then(|n| n.as_u64());
+        let end = arguments.remove("line_end").and_then(|n| n.as_u64());
+        if !arguments.contains_key("offset") && !arguments.contains_key("limit") {
+            let first = start.unwrap_or(1).max(1);
+            if start.is_some() {
+                arguments.insert("offset".into(), json!(first));
+            }
+            if let Some(end) = end.filter(|&end| end >= first) {
+                arguments.insert("limit".into(), json!(end - first + 1));
+            }
+        }
     }
+    item["name"] = json!(ours);
+    item["arguments"] = json!(Value::Object(arguments).to_string());
 }
 
+/// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
+/// harness's own, those for MCP servers' tools only with `mcp` (servers are configured); with
+/// `only` (`--tools`), those it names alone, as Scramjet's allowlist.
 pub(super) fn offered(
     coding: &[String],
     only: Option<&[String]>,
