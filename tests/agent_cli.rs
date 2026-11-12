@@ -1931,11 +1931,29 @@ fn acp_with(
     std::process::ChildStdin,
     std::sync::mpsc::Receiver<serde_json::Value>,
 ) {
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000,
+        "input": ["text", "image"]}]);
+    acp_models(scratch, port, models, settings, given)
+}
+
+/// `acp_with`, the provider at `port` offering `models`.
+#[cfg(unix)]
+fn acp_models(
+    scratch: &std::path::Path,
+    port: u16,
+    models: serde_json::Value,
+    settings: serde_json::Value,
+    given: &[&str],
+) -> (
+    Child,
+    std::process::ChildStdin,
+    std::sync::mpsc::Receiver<serde_json::Value>,
+) {
     let config = scratch.join("config");
     std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let models = serde_json::json!({"providers": {"test": {
         "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
-        "models": [{"id": "claude-test", "contextWindow": 1000, "input": ["text", "image"]}],
+        "models": models,
     }}});
     std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
     std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
@@ -3200,7 +3218,13 @@ fn acp_offers_next_steps_with_the_extension_or_as_text_and_counts_down_under_aut
         let started = next(&messages);
         let session = started["result"]["sessionId"].clone();
         let options = &started["result"]["configOptions"];
-        assert_eq!(options[0]["id"], "autopilot", "{started}");
+        let autopilot_of = |options: &serde_json::Value| {
+            (options.as_array().unwrap().iter())
+                .find(|option| option["id"] == "autopilot")
+                .cloned()
+                .unwrap()
+        };
+        autopilot_of(options);
         if let Some(value) = autopilot {
             send(
                 &mut stdin,
@@ -3209,7 +3233,7 @@ fn acp_offers_next_steps_with_the_extension_or_as_text_and_counts_down_under_aut
             );
             let (set, _) = until(&messages, |message| message["id"] == 5);
             assert!(set["result"]["configOptions"].is_array(), "{set}");
-            let current = &set["result"]["configOptions"][0]["currentValue"];
+            let current = &autopilot_of(&set["result"]["configOptions"])["currentValue"];
             assert!(*current == true || *current == "on", "{set}");
         }
         send(
@@ -3364,4 +3388,177 @@ fn acp_offers_next_steps_with_the_extension_or_as_text_and_counts_down_under_aut
             assert!(bodies[1].contains("do this instead"), "{}", bodies[1]);
         }
     }
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-config-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let models = serde_json::json!([
+        {"id": "claude-test", "contextWindow": 1000, "reasoning": true},
+        {"id": "claude-other", "name": "Other", "contextWindow": 2000, "reasoning": true},
+    ]);
+    let booleans = serde_json::json!({"session": {"configOptions": {"boolean": {}}}});
+    // A session with the provider at `port`: the process, its stdin and messages, the session's
+    // id and the options it started with.
+    let start = |port: u16| {
+        let (child, mut stdin, messages) = acp_models(
+            &scratch.0,
+            port,
+            models.clone(),
+            serde_json::json!({"hideCredentials": "never"}),
+            &["--model", "test/claude-test", "--thinking", "low"],
+        );
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1, "clientCapabilities": booleans}}),
+        );
+        next(&messages);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+                "params": {"cwd": project, "mcpServers": []}}),
+        );
+        let started = next(&messages);
+        let session = started["result"]["sessionId"].clone();
+        let options = started["result"]["configOptions"].clone();
+        (child, stdin, messages, session, options)
+    };
+    let option = |options: &serde_json::Value, id: &str| {
+        (options.as_array().unwrap().iter())
+            .find(|option| option["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("no {id} in {options}"))
+    };
+    let set = |stdin: &mut std::process::ChildStdin,
+               id: u64,
+               session: &serde_json::Value,
+               option: &str,
+               value: serde_json::Value| {
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/set_config_option",
+                "params": {"sessionId": session, "configId": option, "value": value}}),
+        );
+    };
+
+    // Set while a bash call runs, the model is taken at the turn's pause and answered before
+    // the turn ends; the request after the call uses it.
+    let (port, bodies) = serve_bash_call("sleep 1");
+    let (mut child, mut stdin, messages, session, options) = start(port);
+    let model = option(&options, "model");
+    assert_eq!(model["currentValue"], "test/claude-test", "{options}");
+    assert_eq!(model["category"], "model");
+    let group = &model["options"][0];
+    assert_eq!(group["group"], "test", "{options}");
+    let names: Vec<_> = (group["options"].as_array().unwrap().iter())
+        .map(|value| (value["value"].clone(), value["name"].clone()))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("test/claude-test".into(), "claude-test".into()),
+            ("test/claude-other".into(), "Other".into())
+        ]
+    );
+    let level = option(&options, "thought_level");
+    assert_eq!(level["currentValue"], "low", "{options}");
+    let levels: Vec<_> = (level["options"].as_array().unwrap().iter())
+        .map(|value| value["value"].as_str().unwrap())
+        .collect();
+    assert_eq!(levels, ["none", "minimal", "low", "medium", "high"]);
+    assert_eq!(level["options"][0]["name"], "Off");
+    assert_eq!(option(&options, "autopilot")["currentValue"], false);
+
+    set(&mut stdin, 4, &session, "thought_level", "high".into());
+    let (answer, _) = until(&messages, |message| message["id"] == 4);
+    let options = &answer["result"]["configOptions"];
+    assert_eq!(
+        option(options, "thought_level")["currentValue"],
+        "high",
+        "{answer}"
+    );
+    let saved = std::fs::read_to_string(scratch.0.join("config/scramjet/settings.json")).unwrap();
+    assert!(
+        saved.contains(r#""defaultThinkingLevel": "high""#),
+        "{saved}"
+    );
+    for (id, option, value) in [
+        (5, "model", serde_json::json!("test/claude-none")),
+        (6, "thought_level", "xhigh".into()),
+        (7, "autopilot", "maybe".into()),
+        (8, "colour", "red".into()),
+    ] {
+        set(&mut stdin, id, &session, option, value);
+        let (answer, _) = until(&messages, |message| message["id"] == id);
+        assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    }
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    until(&messages, |message| {
+        message["params"]["update"]["status"] == "in_progress"
+    });
+    set(&mut stdin, 9, &session, "model", "test/claude-other".into());
+    let (answer, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(
+        answer["id"], 9,
+        "the change waits for the turn's end: {answer}"
+    );
+    let options = &answer["result"]["configOptions"];
+    assert_eq!(
+        option(options, "model")["currentValue"],
+        "test/claude-other"
+    );
+    let (answer, updates) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    assert!(
+        !(updates.iter())
+            .any(|message| message["params"]["update"]["sessionUpdate"] == "config_option_update"),
+        "the client's own change is in its answer only: {updates:?}"
+    );
+    let sent: Vec<serde_json::Value> = (0..2)
+        .map(|_| {
+            serde_json::from_str(&bodies.recv_timeout(Duration::from_secs(5)).unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(sent[0]["model"], "claude-test");
+    assert_eq!(sent[1]["model"], "claude-other");
+    let saved = std::fs::read_to_string(scratch.0.join("config/scramjet/settings.json")).unwrap();
+    assert!(saved.contains("claude-other"), "remembered: {saved}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+
+    // The agent's own switch is told in a `config_option_update`.
+    let (port, _bodies) = serve_call(
+        "switch_scramjet_model",
+        serde_json::json!({"provider": "test", "model": "claude-other"}),
+    );
+    let (mut child, mut stdin, messages, session, _) = start(port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (answer, updates) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    let update = (updates.iter())
+        .map(|message| &message["params"]["update"])
+        .find(|update| update["sessionUpdate"] == "config_option_update")
+        .unwrap_or_else(|| panic!("no config_option_update: {updates:?}"));
+    let options = &update["configOptions"];
+    assert_eq!(
+        option(options, "model")["currentValue"],
+        "test/claude-other",
+        "{update}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }

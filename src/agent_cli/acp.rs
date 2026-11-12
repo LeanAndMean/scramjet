@@ -7,8 +7,9 @@ use super::drive::{self, Change, Front, Messages, Offer, Picked, Routed, Session
 use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
-    AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction, McpServer,
-    McpTransport, Purpose, SessionChoice, StreamProgress, Tokens, ToolDetail, UserCommand,
+    Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
+    McpServer, McpTransport, ModelOption, Purpose, SessionChoice, StreamProgress, Tokens,
+    ToolDetail, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -247,7 +248,7 @@ type Renamed = Arc<Mutex<HashMap<String, String>>>;
 
 /// What this thread holds of a session that runs on its own.
 struct Handle {
-    prompts: mpsc::Sender<(Value, Prompt)>,
+    jobs: mpsc::Sender<Job>,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
     thread: JoinHandle<()>,
@@ -264,10 +265,22 @@ struct Turn {
     waiting: Vec<Value>,
     /// The client held the countdown of the next-step list open (`hold`).
     held: bool,
-    /// `/autopilot` as the client last saw or set it, and whether the session has yet to take
-    /// the client's setting, which it does before its next routing.
-    autopilot: bool,
-    autopilot_set: bool,
+    /// Config options the client set while it runs, which the session takes at its next pause.
+    configuring: Vec<Configure>,
+}
+
+/// What a session's thread is sent while it waits between turns.
+enum Job {
+    /// Request `id`'s prompt.
+    Prompt(Value, Prompt),
+    Configure(Configure),
+}
+
+/// A `session/set_config_option` request, answered once the session takes it.
+struct Configure {
+    id: Value,
+    option: String,
+    value: Value,
 }
 
 impl Connection {
@@ -327,26 +340,26 @@ impl Connection {
         true
     }
 
-    /// Sets `autopilot`, the only option yet, which the session takes before its next routing.
+    /// Hands the option set to the session, which takes it at once between turns, else at the
+    /// turn's next pause, as the full screen takes `/model` typed during a turn, and answers.
     fn set_config_option(&self, id: &Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
             return self.out.error(id, INVALID_PARAMS, "no such session");
         };
-        if params["configId"] != "autopilot" {
-            let message = format!("no config option {}", params["configId"]);
-            return self.out.error(id, INVALID_PARAMS, &message);
-        }
-        let on = match &params["value"] {
-            Value::Bool(on) => *on,
-            Value::String(value) if value == "on" => true,
-            Value::String(value) if value == "off" => false,
-            _ => return self.out.error(id, INVALID_PARAMS, "autopilot is on or off"),
+        let Some(option) = params["configId"].as_str() else {
+            return self.out.error(id, INVALID_PARAMS, "configId is required");
+        };
+        let configure = Configure {
+            id: id.clone(),
+            option: option.to_owned(),
+            value: params["value"].clone(),
         };
         let mut turn = lock(&handle.turn);
-        (turn.autopilot, turn.autopilot_set) = (on, true);
+        if turn.running {
+            return turn.configuring.push(configure);
+        }
         drop(turn);
-        let options = config_options(on, self.booleans);
-        self.out.respond(id, json!({"configOptions": options}));
+        let _ = handle.jobs.send(Job::Configure(configure));
     }
 
     /// The session `params` names, by any id it had.
@@ -396,20 +409,20 @@ impl Connection {
             Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
         };
         let (started, starts) = mpsc::channel::<Result<String, String>>();
-        let (prompts, prompted) = mpsc::channel();
+        let (jobs, given) = mpsc::channel();
         let (cancel, turn) = (Arc::<AtomicBool>::default(), Arc::<Mutex<Turn>>::default());
         let worker = Worker {
             out: self.out.clone(),
             notices: self.notices,
             compaction: self.compaction,
             forms: self.forms,
+            booleans: self.booleans,
             scramjet: self.scramjet,
             renamed: self.renamed.clone(),
             cancel: cancel.clone(),
             turn: turn.clone(),
         };
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
-        let booleans = self.booleans;
         let thread = std::thread::spawn(move || {
             let session = match start_session(&arguments, &cwd, servers) {
                 Ok(session) => session,
@@ -419,15 +432,20 @@ impl Connection {
                 }
             };
             let mut front = worker.front(session);
-            let autopilot = front.session.agent.autopilot();
-            lock(&front.turn).autopilot = autopilot;
-            let options = config_options(autopilot, booleans);
+            front.shown = front.options();
             // Answered here, so that the commands' update follows it.
-            let result = json!({"sessionId": front.ui.session, "configOptions": options});
+            let result = json!({"sessionId": front.ui.session, "configOptions": front.shown});
             out.respond(&answered, result);
             let _ = started.send(Ok(front.ui.session.clone()));
             front.commands();
-            for (id, Prompt { text, images }) in prompted {
+            for job in given {
+                let (id, Prompt { text, images }) = match job {
+                    Job::Prompt(id, prompt) => (id, prompt),
+                    Job::Configure(configure) => {
+                        front.configure_with(configure);
+                        continue;
+                    }
+                };
                 if !images.is_empty() {
                     match Attached::images(&images) {
                         Ok(attached) => front.session.agent.attach(attached),
@@ -443,7 +461,7 @@ impl Connection {
         match starts.recv() {
             Ok(Ok(session)) => {
                 let handle = Handle {
-                    prompts,
+                    jobs,
                     cancel,
                     turn,
                     thread,
@@ -466,9 +484,18 @@ impl Connection {
             Err(error) => return self.out.error(&id, INVALID_PARAMS, &error),
         };
         // With images the text goes after them, so it is never a command, as with `@` files.
-        if prompt.images.is_empty() && Builtin::parse(&prompt.text).is_some() {
+        if prompt.images.is_empty()
+            && let Some(builtin) = Builtin::parse(&prompt.text)
+        {
             let name = prompt.text.split_whitespace().next().unwrap_or_default();
-            let message = format!("{name} is a built-in command, which ACP mode does not run");
+            let instead = match builtin {
+                Builtin::Model(_) | Builtin::Autopilot(_) => {
+                    "; session/set_config_option sets the model, thinking level and autopilot"
+                }
+                _ => "",
+            };
+            let message =
+                format!("{name} is a built-in command, which ACP mode does not run{instead}");
             return self.out.error(&id, INVALID_PARAMS, &message);
         }
         let follow_up = params["_meta"]["io.github.leanandmean.scramjet"]["queue"] == "followUp";
@@ -488,7 +515,7 @@ impl Connection {
         turn.running = true;
         handle.cancel.store(false, Ordering::Relaxed);
         drop(turn);
-        let _ = handle.prompts.send((id, prompt));
+        let _ = handle.jobs.send(Job::Prompt(id, prompt));
     }
 
     /// At the end of input or SIGTERM: every turn cancelled, and each session's thread waited for, which
@@ -498,15 +525,75 @@ impl Connection {
             handle.cancel.store(true, Ordering::Relaxed);
         }
         for (_, handle) in self.sessions {
-            drop(handle.prompts);
+            drop(handle.jobs);
             let _ = handle.thread.join();
         }
     }
 }
 
-/// A session's config options, as ACP shows them: `autopilot`, a boolean for clients that
+/// A session's config options, as ACP shows them: `model`, the providers' `models` grouped by
+/// provider, the current model's first, as `/model` lists them; `thought_level`, the levels
+/// Shift+Tab cycles through, for a model that has them; `autopilot`, a boolean for clients that
 /// offer those, else `on` or `off`.
-fn config_options(autopilot: bool, booleans: bool) -> Value {
+fn config_options(agent: &Agent, models: &[ModelOption], booleans: bool) -> Value {
+    let current = agent.model();
+    let provider = |model: &ModelOption| model.provider.clone().unwrap_or_default();
+    let mut providers: Vec<String> = Vec::new();
+    for model in models {
+        if !providers.contains(&provider(model)) {
+            providers.push(provider(model));
+        }
+    }
+    if let Some(at) = (models.iter())
+        .find(|model| model.reference() == current)
+        .and_then(|model| providers.iter().position(|name| *name == provider(model)))
+    {
+        let first = providers.remove(at);
+        providers.insert(0, first);
+    }
+    let groups: Vec<Value> = (providers.iter())
+        .map(|name| {
+            let options: Vec<Value> = (models.iter())
+                .filter(|model| provider(model) == *name)
+                .map(|model| {
+                    let shown = model.name.as_deref().unwrap_or(&model.id);
+                    json!({"value": model.reference(), "name": shown})
+                })
+                .collect();
+            let (group, shown) = match name.is_empty() {
+                true => ("_none", "Offered by no provider"),
+                false => (name.as_str(), name.as_str()),
+            };
+            json!({"group": group, "name": shown, "options": options})
+        })
+        .collect();
+    let mut options = vec![json!({
+        "id": "model",
+        "name": "Model",
+        "category": "model",
+        "type": "select",
+        "currentValue": current,
+        "options": groups,
+    })];
+    let levels = agent.effort_levels();
+    if agent.reasons() && !levels.is_empty() {
+        let effort = agent.effort().unwrap_or(DEFAULT_LEVEL);
+        let mut values: Vec<&str> = levels.iter().map(String::as_str).collect();
+        if !values.contains(&effort) {
+            values.insert(0, effort);
+        }
+        let values: Vec<Value> = (values.into_iter())
+            .map(|level| json!({"value": level, "name": level_name(level)}))
+            .collect();
+        options.push(json!({
+            "id": "thought_level",
+            "name": "Thinking",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": effort,
+            "options": values,
+        }));
+    }
     let mut option = json!({
         "id": "autopilot",
         "name": "Autopilot",
@@ -514,6 +601,7 @@ fn config_options(autopilot: bool, booleans: bool) -> Value {
             3-second countdown, unless you choose.",
         "category": "_autopilot",
     });
+    let autopilot = agent.autopilot();
     match booleans {
         true => {
             option["type"] = json!("boolean");
@@ -526,7 +614,24 @@ fn config_options(autopilot: bool, booleans: bool) -> Value {
                 {"value": "off", "name": "Off"}]);
         }
     }
-    json!([option])
+    options.push(option);
+    Value::Array(options)
+}
+
+/// `thought_level`'s value while no level is set, which leaves it to the model.
+const DEFAULT_LEVEL: &str = "default";
+
+/// A thinking level as the client shows it, in Scramjet's words: `none` is off.
+fn level_name(level: &str) -> String {
+    if level == DEFAULT_LEVEL {
+        return "Model's default".to_owned();
+    }
+    let level = super::settings::scramjet_level(level);
+    let mut chars = level.chars();
+    (chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect()))
+    .unwrap_or_default()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -720,6 +825,7 @@ struct Worker {
     notices: bool,
     compaction: bool,
     forms: bool,
+    booleans: bool,
     scramjet: bool,
     renamed: Renamed,
     cancel: Arc<AtomicBool>,
@@ -761,6 +867,9 @@ impl Worker {
             reason: None,
             scramjet: self.scramjet,
             renamed: self.renamed,
+            booleans: self.booleans,
+            models: Vec::new(),
+            shown: Value::Null,
         }
     }
 }
@@ -776,6 +885,13 @@ struct Acp {
     reason: Option<&'static str>,
     scramjet: bool,
     renamed: Renamed,
+    /// The client offered `session.configOptions.boolean`.
+    booleans: bool,
+    /// The providers' models the `model` option lists, read again when the model is not among
+    /// them.
+    models: Vec<ModelOption>,
+    /// The config options the client was last given.
+    shown: Value,
 }
 
 /// How a prompt's turns ended.
@@ -846,17 +962,101 @@ impl Acp {
         }
     }
 
-    /// Takes the `autopilot` the client set since.
+    /// Takes the config options the client set during the turn.
     fn configure(&mut self) {
-        let mut turn = lock(&self.turn);
-        if !std::mem::take(&mut turn.autopilot_set) {
-            return;
+        let configuring = std::mem::take(&mut lock(&self.turn).configuring);
+        for configure in configuring {
+            self.configure_with(configure);
         }
-        let on = turn.autopilot;
-        drop(turn);
-        if let Err(error) = self.session.agent.set_autopilot(on) {
-            self.ui
-                .say("warning", &format!("Autopilot not set: {error}"));
+    }
+
+    /// Sets the option `configure` names and answers its request with the options, or with why
+    /// it was not set.
+    fn configure_with(&mut self, configure: Configure) {
+        let Configure { id, option, value } = configure;
+        match self.set_option(&option, &value) {
+            Ok(()) => {
+                self.shown = self.options();
+                self.ui
+                    .out
+                    .respond(&id, json!({"configOptions": self.shown}));
+            }
+            Err(error) => self.ui.out.error(&id, INVALID_PARAMS, &error),
+        }
+    }
+
+    /// Sets `option` to `value` as the full screen's `/model`, Shift+Tab and `/autopilot` do,
+    /// the model remembered and the level saved as the settings' default as they are there.
+    fn set_option(&mut self, option: &str, value: &Value) -> Result<(), String> {
+        let agent = &mut self.session.agent;
+        match option {
+            "model" => {
+                let model = value.as_str().ok_or("model is a provider/id string")?;
+                if model == agent.model() {
+                    return Ok(());
+                }
+                let listed = |models: &[ModelOption]| {
+                    (models.iter()).any(|listed| listed.reference() == model)
+                };
+                if !listed(&self.models) {
+                    self.models = agent.model_options();
+                }
+                if !listed(&self.models) {
+                    return Err(format!("no model {model} is offered"));
+                }
+                agent.set_model(model).map_err(|error| error.to_string())?;
+                agent.load_model_info();
+                self.ui.window = agent.context_window();
+                drive::remember_model(self);
+            }
+            "thought_level" => {
+                let level = value.as_str().ok_or("thought_level is a level's name")?;
+                let current = agent.effort().unwrap_or(DEFAULT_LEVEL);
+                if level == current {
+                    return Ok(());
+                }
+                if !agent.reasons() || !agent.effort_levels().iter().any(|known| known == level) {
+                    return Err(format!("{} takes no thinking level {level}", agent.model()));
+                }
+                agent.set_effort(level).map_err(|error| error.to_string())?;
+                if let Err(error) = self.session.settings.set_default_thinking_level(level) {
+                    self.ui
+                        .say("warning", &format!("Settings not saved: {error}"));
+                }
+            }
+            "autopilot" => {
+                let on = match value {
+                    Value::Bool(on) => *on,
+                    Value::String(value) if value == "on" => true,
+                    Value::String(value) if value == "off" => false,
+                    _ => return Err("autopilot is on or off".to_owned()),
+                };
+                agent.set_autopilot(on).map_err(|error| error.to_string())?;
+            }
+            other => return Err(format!("no config option {other}")),
+        }
+        Ok(())
+    }
+
+    /// The config options as they are now.
+    fn options(&mut self) -> Value {
+        let agent = &mut self.session.agent;
+        let current = agent.model();
+        if !(self.models.iter()).any(|model| model.reference() == current) {
+            self.models = agent.model_options();
+        }
+        config_options(agent, &self.models, self.booleans)
+    }
+
+    /// Tells the client of options that changed without its asking: the agent's
+    /// `switch_scramjet_model`, a next step's model or level.
+    fn options_changed(&mut self) {
+        let options = self.options();
+        if options != self.shown {
+            self.shown = options;
+            let update =
+                json!({"sessionUpdate": "config_option_update", "configOptions": self.shown});
+            self.ui.update(update);
         }
     }
 
@@ -934,6 +1134,8 @@ impl Acp {
         turn.running = false;
         let waiting = std::mem::take(&mut turn.waiting);
         drop(turn);
+        // Those set after the turn's last look, which no later turn would take.
+        self.configure();
         let ended = match self.cancel.load(Ordering::Relaxed) {
             true => Ok("cancelled"),
             false => ended,
@@ -956,6 +1158,7 @@ impl Front for Acp {
     }
     fn turn_starts(&mut self) {
         self.ui.window = self.session.agent.context_window();
+        self.options_changed();
     }
     fn turn(&mut self, prompt: Option<&str>) -> Result<(), AgentError> {
         let agent = &mut self.session.agent;
@@ -970,7 +1173,9 @@ impl Front for Acp {
         };
         result
     }
-    fn paused(&mut self) {}
+    fn paused(&mut self) {
+        self.configure();
+    }
     fn turn_stops(&mut self) {}
     fn turn_ended(&mut self) {
         let agent = &self.session.agent;
@@ -978,6 +1183,7 @@ impl Front for Acp {
         self.ui.window = agent.context_window();
         self.ui.usage_update(context, cost);
         self.configure();
+        self.options_changed();
     }
     fn chooses(&self) -> bool {
         true
@@ -987,7 +1193,7 @@ impl Front for Acp {
     /// or a prompt comes; with a countdown not held, the recommended step is taken when it ends.
     fn offer(&mut self, offer: Offer) -> Option<Picked> {
         lock(&self.turn).held = false;
-        let deadline = offer.autoselect.map(|wait| Instant::now() + wait);
+        let mut deadline = offer.autoselect.map(|wait| Instant::now() + wait);
         let request = match self.scramjet {
             true => Some(
                 self.ui
@@ -1001,13 +1207,20 @@ impl Front for Acp {
             }
         };
         let answer = loop {
-            let held = {
+            let (held, configuring) = {
                 let turn = lock(&self.turn);
                 if self.cancel.load(Ordering::Relaxed) || !turn.messages.is_empty() {
                     break None;
                 }
-                turn.held
+                (turn.held, !turn.configuring.is_empty())
             };
+            if configuring {
+                self.configure();
+                // Autopilot turned off stops its countdown.
+                if !self.session.agent.autopilot() {
+                    deadline = None;
+                }
+            }
             if !held && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                 break Some(None);
             }
@@ -1669,5 +1882,9 @@ impl AgentUi for Updates {
     }
     fn offers_choices(&mut self) -> bool {
         self.forms
+    }
+    /// A config option set during the turn, which its pause takes (`Acp::paused`).
+    fn pause(&mut self) -> bool {
+        !lock(&self.turn).configuring.is_empty()
     }
 }

@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.211.0 — ACP sets the model and thinking level
+
+### Added
+
+- ACP sessions have `model` and `thought_level` config options: the providers' models grouped by provider, as `/model` lists them, and the current model's thinking levels, as Shift+Tab cycles them. A change is remembered as `/model` and Shift+Tab remember it, and one set during a turn applies at the turn's next pause; when the agent's `switch_scramjet_model` or a next step changes them, a `config_option_update` tells the client.
+
+### Changed
+
+- An ACP `autopilot` setting now applies at once, as do the other options, and turning it off while a next step's countdown runs stops the countdown.
+
 ## 2.210.0 — ACP offers next steps
 
 ### Added

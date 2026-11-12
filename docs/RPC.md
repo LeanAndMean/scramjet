@@ -121,10 +121,10 @@ The core asks the user at six points. Each becomes a request to the client, whos
 
 `configOptions`, in every session's result, `session/set_config_option`'s answer and `config_option_update`:
 - `model` (category `model`): the models `/model` lists, grouped by provider, values `provider/id`.
-- `thought_level` (category `thought_level`): the current model's levels, as Shift+Tab cycles them; it changes with the model.
+- `thought_level` (category `thought_level`): the current model's levels, as Shift+Tab cycles them; it changes with the model, and is left out for a model with no levels. With no level set, the current value is `default` (the model's own), listed first.
 - `autopilot` (category `_autopilot`): a boolean for clients offering boolean options, else a select `on`/`off`; as `/autopilot on|off`.
 
-`--ask` and `--sandbox` stay launch options. A change during a turn waits for the turn's next pause between requests, as the same built-ins typed on the full screen do (`Builtin::interrupts`). A model or level chosen is remembered in the settings as the full screen remembers it. Session modes (deprecated in favor of config options) are not offered.
+`--ask` and `--sandbox` stay launch options. A change between turns applies at once; one during a turn waits for the turn's next pause (before a request, or while tool calls run), as the same built-ins typed on the full screen do (`Builtin::interrupts`), and is answered then; while a next-step list is open it applies at once, and autopilot turned off stops the countdown. The answer carries the options; `config_option_update` is sent only for changes the client did not make. A model or level chosen is remembered in the settings as the full screen remembers it. Session modes (deprecated in favor of config options) are not offered.
 
 ## 8. Extensions
 
