@@ -2685,6 +2685,7 @@ fn acp_tool_calls_carry_their_input_locations_and_diffs() {
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-edit-{}", std::process::id())));
     let project = scratch.0.join("project");
     std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(project).unwrap();
     let path = project.join("a.txt");
     std::fs::write(&path, "one\n").unwrap();
     let input =
@@ -3141,6 +3142,7 @@ fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
 }
 
 /// A scripted Claude reply: `text`, then a `report_scramjet_command_status` call with `input`.
+#[cfg(unix)]
 fn report_events(text: &str, input: serde_json::Value) -> Vec<String> {
     let mut events = vec![
         r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),

@@ -515,6 +515,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "Windows cannot name a file with `:`")]
     fn names_windows_cannot_check_out_a_missing_set_yaml_and_another_plugin_name_are_warned_about()
     {
         let plugin = "{\n  \"name\": \"other\",\n  \"license\": \"MIT\"\n}\n";
