@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.182.3 — Paths grep and find show
+
+### Fixed
+
+- `grep` and `find` show the files they find from the current directory (`src/agent/calls.rs`, not `agent/calls.rs` for a search in `src`, nor `calls.rs` for a file searched), as `rg` does, so the model reads them at the first try. Outside it they show the whole path. On Ollama's gpt-oss:20b, one edit task had 8 failed reads of such paths in 48 requests; two runs since had none.
+
 ## 2.182.2 — gpt-oss's other tool names
 
 ### Fixed

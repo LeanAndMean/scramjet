@@ -339,7 +339,7 @@ fn definition(name: &str, sandboxed: bool) -> Value {
             "limit":{"type":"integer","description":format!("Maximum number of matches to return (default: {GREP_LIMIT})")}},
           "required":["pattern"]}}),
         "find" => json!({"type":"function","name":"find","strict":false,
-        "description":format!("Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to {FIND_LIMIT} results or {}KB (whichever is hit first).", MAX_BYTES / 1024),
+        "description":format!("Search for files by glob pattern. Returns matching file paths relative to the current directory. Respects .gitignore. Output is truncated to {FIND_LIMIT} results or {}KB (whichever is hit first).", MAX_BYTES / 1024),
         "parameters":{"type":"object","properties":{
             "pattern":{"type":"string","description":"Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'"},
             "path":{"type":"string","description":"Directory to search in (default: current directory)"},
@@ -1696,9 +1696,19 @@ pub(super) fn end_commands() {
     std::mem::forget(groups);
 }
 
+/// A path `grep` or `find` found, as `rg` run in `root` shows it: from `root` when inside it, else
+/// whole. Pi's tools show it from the directory searched, and a model then reads `agent/x.rs`
+/// for `src/agent/x.rs`.
+fn shown(root: &Path, found: &Path) -> String {
+    match found.strip_prefix(root) {
+        Ok(inside) if !inside.as_os_str().is_empty() => inside.display().to_string(),
+        _ => found.display().to_string(),
+    }
+}
+
 /// Pi's `grep`: the matches as `path:line: text`, context lines read from the file as
-/// `path-line- text`, paths relative to a directory searched. With `hidden`, the stores are left
-/// out of the search.
+/// `path-line- text`, paths as `shown` gives them. With `hidden`, the stores are left out of the
+/// search.
 fn grep(
     root: &Path,
     call: &Call,
@@ -1707,8 +1717,9 @@ fn grep(
 ) -> Result<String, String> {
     let pattern = call.str("pattern")?;
     let path = resolve(root, call.arguments["path"].as_str().unwrap_or("."));
-    let metadata =
-        std::fs::metadata(&path).map_err(|_| format!("Path not found: {}", path.display()))?;
+    if std::fs::metadata(&path).is_err() {
+        return Err(format!("Path not found: {}", path.display()));
+    }
     let context = call.arguments["context"].as_u64().unwrap_or(0) as usize;
     let limit = call.arguments["limit"]
         .as_u64()
@@ -1724,16 +1735,7 @@ fn grep(
     if found.is_empty() {
         return Ok("No matches found".into());
     }
-    let shown = |file: &Path| match file.strip_prefix(&path) {
-        Ok(relative) if metadata.is_dir() && !relative.as_os_str().is_empty() => {
-            relative.display().to_string()
-        }
-        _ => file
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned(),
-    };
+    let shown = |file: &Path| shown(root, file);
     let mut long = false;
     let mut cut = |text: &str| match text.char_indices().nth(GREP_LINE_CHARS) {
         Some((at, _)) => {
@@ -1792,8 +1794,8 @@ fn grep(
     Ok(with_notices(&lines, notices))
 }
 
-/// Pi's `find`: the paths matching a glob, relative to the directory searched; the stores left
-/// out with `hidden`, as `grep`.
+/// Pi's `find`: the paths matching a glob, as `shown` gives them; the stores left out with
+/// `hidden`, as `grep`.
 fn find(
     root: &Path,
     call: &Call,
@@ -1808,7 +1810,7 @@ fn find(
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(FIND_LIMIT, |n| n.max(1) as usize);
-    let found = search::find(&path, pattern, limit, hidden, cancel)?;
+    let found = search::find(root, &path, pattern, limit, hidden, cancel)?;
     if found.is_empty() {
         return Ok("No files found matching pattern".into());
     }
@@ -2811,21 +2813,21 @@ inline image size limit.]",
         };
         assert_eq!(
             text("grep", json!({"pattern":"fn alpha","path":"src"})),
-            "a.rs:1: fn alpha() {}"
+            "src/a.rs:1: fn alpha() {}"
         );
         assert_eq!(
             text(
                 "grep",
                 json!({"pattern":"fn alpha","path":"src","ignoreCase":true,"glob":"**/deep/*"})
             ),
-            "deep/b.rs:1: fn Alpha() {}"
+            "src/deep/b.rs:1: fn Alpha() {}"
         );
         assert_eq!(
             text(
                 "grep",
                 json!({"pattern":"two","path":"src/a.rs","context":1})
             ),
-            "a.rs-2- // one\na.rs:3: // two\na.rs-4- fn beta() {}"
+            "src/a.rs-2- // one\nsrc/a.rs:3: // two\nsrc/a.rs-4- fn beta() {}"
         );
         assert_eq!(
             text(
@@ -2839,7 +2841,7 @@ inline image size limit.]",
                 "grep",
                 json!({"pattern":"^fn ","path":"src/a.rs","limit":1})
             ),
-            "a.rs:1: fn alpha() {}\n\n[1 matches limit reached. Use limit=2 for more, or \
+            "src/a.rs:1: fn alpha() {}\n\n[1 matches limit reached. Use limit=2 for more, or \
 refine pattern]"
         );
         assert_eq!(
@@ -2863,7 +2865,7 @@ matches limit reached. Use limit=2 for more, or refine pattern]"
                 "grep",
                 json!({"pattern":"Alpha|xxx","path":"src/deep","limit":1})
             ),
-            "b.rs:1: fn Alpha() {}\n\n[1 matches limit reached. Use limit=2 for more, or refine \
+            "src/deep/b.rs:1: fn Alpha() {}\n\n[1 matches limit reached. Use limit=2 for more, or refine \
 pattern]"
         );
         assert_eq!(
@@ -2878,7 +2880,7 @@ Use read tool to see full lines]",
         assert_eq!(
             long,
             format!(
-                "b.rs:2: {}... [truncated]\n\n[Some lines truncated to 500 chars. Use read tool \
+                "src/deep/b.rs:2: {}... [truncated]\n\n[Some lines truncated to 500 chars. Use read tool \
 to see full lines]",
                 "x".repeat(500)
             )
@@ -2904,7 +2906,7 @@ to see full lines]",
         assert_eq!(found, [".hidden.rs", "src/a.rs", "src/deep/b.rs"]);
         assert_eq!(
             text("find", json!({"pattern":"deep/*.rs","path":"src"})),
-            "deep/b.rs"
+            "src/deep/b.rs"
         );
         assert_eq!(
             text("find", json!({"pattern":"*.md"})),
@@ -3403,6 +3405,15 @@ to see full lines]",
 
     #[cfg(unix)]
     #[test]
+    fn found_paths_show_from_the_working_directory_or_whole() {
+        let root = Path::new("/w/project");
+        assert_eq!(shown(root, Path::new("/w/project/src/a.rs")), "src/a.rs");
+        assert_eq!(shown(root, Path::new("/w/other/a.rs")), "/w/other/a.rs");
+        assert_eq!(shown(root, root), "/w/project");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn subagent_tools_do_not_show_credential_stores() {
         let home =
             std::env::temp_dir().join(format!("scramjet-agent-hidden-{}", std::process::id()));
@@ -3445,7 +3456,7 @@ to see full lines]",
         }
         assert_eq!(
             run("grep", json!({"pattern":"SECRET","path":".."})),
-            Ok("project/a.txt:1: plain SECRET-not".into())
+            Ok("a.txt:1: plain SECRET-not".into())
         );
         assert_eq!(
             run("grep", json!({"pattern":"nowhere","path":".."})),
@@ -3457,11 +3468,11 @@ to see full lines]",
         );
         assert_eq!(
             run("grep", json!({"pattern":"needle","path":"abs"})),
-            Ok("f.txt:1: needle".into())
+            Ok("abs/f.txt:1: needle".into())
         );
         assert_eq!(
             run("find", json!({"pattern":"*.txt","path":"abs"})),
-            Ok("f.txt".into())
+            Ok("abs/f.txt".into())
         );
         let shown = run(
             "bash",

@@ -165,9 +165,10 @@ impl Sink for Collect<'_> {
 }
 
 /// The entries in `path` whose name matches the glob `pattern` (or, with a `/` in it, whose whole
-/// path does), as `fd --glob` finds them: relative to `path`, directories ending with `/`, at most
-/// `limit`.
+/// path does), as `fd --glob` finds them: shown as `super::shown` shows them, directories ending
+/// with `/`, at most `limit`.
 pub(super) fn find(
+    root: &Path,
     path: &Path,
     pattern: &str,
     limit: usize,
@@ -207,12 +208,11 @@ pub(super) fn find(
         if !matched {
             continue;
         }
-        let relative = entry.path().strip_prefix(path).unwrap_or(entry.path());
         let slash = match entry.file_type().is_some_and(|kind| kind.is_dir()) {
             true => "/",
             false => "",
         };
-        found.push(format!("{}{slash}", relative.display()));
+        found.push(format!("{}{slash}", super::shown(root, entry.path())));
         if found.len() == limit {
             break;
         }

@@ -1721,7 +1721,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
         assert_eq!(
             outputs,
             [
-                "a.txt:1: a needle",
+                "src/a.txt:1: a needle",
                 "a.txt",
                 "Tool write not found. Available tools: read, grep, ls, \
 report_scramjet_command_status, create_issue, create_pr, add_issue_comment, add_pr_comment, \
