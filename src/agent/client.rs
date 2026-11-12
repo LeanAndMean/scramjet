@@ -412,13 +412,16 @@ async fn exchange(
                 _ => break,
             }
         }
-        text.truncate(ERROR_BODY_BYTES);
-        let text = String::from_utf8_lossy(&text);
         let sent = (given
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str())))
         .chain(headers.iter().map(|(name, value)| (*name, value.as_str())));
-        let text = super::redact::redact(&text, &super::redact::secrets(sent));
+        // Redacted before the cut, so a secret across it leaves no prefix.
+        let mut text = super::redact::redact(
+            &String::from_utf8_lossy(&text),
+            &super::redact::secrets(sent),
+        );
+        text.truncate(text.floor_char_boundary(ERROR_BODY_BYTES));
         let limit = (protocol == Protocol::Codex)
             .then(|| super::codex::usage_limit(&text))
             .flatten();
@@ -551,6 +554,11 @@ pub(super) async fn fetch_within(
             request = request.header(*name, *value);
         }
         let (kind, body) = body.unwrap_or_default();
+        let mut secrets = super::redact::secrets(headers.iter().copied());
+        if kind == "application/x-www-form-urlencoded" {
+            secrets.extend(super::redact::form_secrets(&String::from_utf8_lossy(&body)));
+            secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
+        }
         if !kind.is_empty() {
             request = request.header("Content-Type", kind);
         }
@@ -584,7 +592,7 @@ pub(super) async fn fetch_within(
             status,
             body: bytes,
             location,
-            secrets: super::redact::secrets(headers.iter().copied()),
+            secrets,
         })
     };
     match tokio::time::timeout(timeout, exchange).await {

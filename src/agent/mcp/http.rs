@@ -433,7 +433,10 @@ impl StreamableHttpClient for Https {
             Err(error) => Err(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
                 format!(
                     "its answer is not JSON-RPC ({error}): {}",
-                    crate::agent::redact::redact(&shown(&body), &secrets)
+                    shown(
+                        crate::agent::redact::redact(&String::from_utf8_lossy(&body), &secrets)
+                            .as_bytes()
+                    )
                 ),
             ))),
         }

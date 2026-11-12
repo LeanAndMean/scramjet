@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.203.2 — Login tokens kept out of their endpoints' errors
+
+### Fixed
+
+- A login endpoint's error that echoes the refresh token or device code sent in its form (renewing a ChatGPT login, GitHub's device login) shows `[redacted]` in its place, and a credential cut across the end of a long error body no longer leaves its start shown.
+
 ## 2.203.1 — Credentials kept out of servers' errors
 
 ### Fixed

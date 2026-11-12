@@ -589,7 +589,7 @@ fn encode(text: &str) -> String {
     encoded
 }
 
-fn decode(text: &str) -> String {
+pub(super) fn decode(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut decoded = Vec::new();
     let mut at = 0;
@@ -1075,6 +1075,41 @@ mod tests {
         let models = list["models"].as_array().unwrap().len();
         assert_eq!((list["release"].as_str(), models), (Some("0.171.0"), 4));
         assert!(list["fetched"].as_f64().unwrap() > 0.0);
+    }
+
+    #[test]
+    fn a_refusal_echoing_the_refresh_token_shows_it_redacted() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/oauth/token", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut connection, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0; 4096];
+            while !String::from_utf8_lossy(&request).contains("client_id=") {
+                let read = connection.read(&mut chunk).unwrap();
+                request.extend_from_slice(&chunk[..read]);
+            }
+            let said = r#"{"error": "invalid refresh_token: rt_secret/0123456789"}"#;
+            let response = format!(
+                "HTTP/1.1 400 Bad Request\r\ncontent-length: {}\r\n\r\n{said}",
+                said.len()
+            );
+            connection.write_all(response.as_bytes()).unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let failed = refresh_at(&url, &json!({"refresh": "rt_secret/0123456789"})).unwrap_err();
+        assert_eq!(
+            failed.message,
+            "OpenAI's token endpoint answered HTTP 400: {\"error\": \"invalid refresh_token: \
+             [redacted]\"} (renewing the ChatGPT token; /login if it goes on)"
+        );
+        assert!(
+            server
+                .join()
+                .unwrap()
+                .contains("refresh_token=rt_secret%2F0123456789")
+        );
     }
 
     #[test]
