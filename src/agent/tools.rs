@@ -50,6 +50,8 @@ const OUTPUT_TAIL_BYTES: usize = 8 << 10;
 /// Pi's default number of entries `ls` lists, of matches `grep` returns and of paths `find`
 /// returns.
 const LS_LIMIT: usize = 500;
+/// Entries of the nearest directory shown when `ls` is given one that does not exist.
+const NEAREST_LISTED: u64 = 50;
 const GREP_LIMIT: usize = 100;
 const FIND_LIMIT: usize = 1000;
 /// The lines of file contents a plain-word `find` that names no file shows.
@@ -1733,8 +1735,13 @@ fn ls(root: &Path, call: &Call) -> Result<String, String> {
     let limit = call.arguments["limit"]
         .as_u64()
         .map_or(LS_LIMIT, |n| n as usize);
-    let metadata =
-        std::fs::metadata(&path).map_err(|_| format!("Path not found: {}", path.display()))?;
+    let Ok(metadata) = std::fs::metadata(&path) else {
+        return Err(with_nearest_listed(
+            format!("Path not found: {}", path.display()),
+            root,
+            &path,
+        ));
+    };
     if !metadata.is_dir() {
         return Err(format!("Not a directory: {}", path.display()));
     }
@@ -1771,6 +1778,31 @@ fn ls(root: &Path, call: &Call) -> Result<String, String> {
         )
     });
     Ok(with_notices(&listed, limited.into_iter().collect()))
+}
+
+/// `error` with what the nearest directory of the project above the missing `path` holds: models
+/// guessing a directory (`src`) otherwise spend their next call listing the project.
+fn with_nearest_listed(error: String, root: &Path, path: &Path) -> String {
+    let Some(nearest) = path
+        .ancestors()
+        .skip(1)
+        .take_while(|ancestor| ancestor.starts_with(root))
+        .find(|ancestor| ancestor.is_dir())
+    else {
+        return error;
+    };
+    let given = match nearest.strip_prefix(root) {
+        Ok(inside) if !inside.as_os_str().is_empty() => inside.display().to_string(),
+        _ => ".".to_owned(),
+    };
+    let call = Call {
+        name: "ls",
+        arguments: json!({"path": nearest, "limit": NEAREST_LISTED}),
+    };
+    match ls(root, &call) {
+        Ok(listed) => format!("{error}\n\n[{given} holds:]\n{listed}"),
+        Err(_) => error,
+    }
 }
 
 /// The first `lines` within `MAX_BYTES`, then Pi's notices in brackets, the given ones first.
@@ -1890,26 +1922,8 @@ fn grep(
     };
     let (found, limited) = search::grep(root, &path, &options, hidden, cancel)?;
     if found.is_empty() {
-        // Models given nothing in one directory (gpt-oss in `tests/`) keep searching it.
-        if path == root || !path.starts_with(root) {
-            return Ok("No matches found".into());
-        }
-        let mut arguments = json!({"pattern":pattern,"limit":FIND_GREP_LIMIT});
-        for key in ["ignoreCase", "literal", "glob"] {
-            arguments[key] = call.arguments[key].clone();
-        }
-        let call = Call {
-            name: "grep",
-            arguments,
-        };
-        return Ok(match grep(root, &call, hidden, cancel)? {
-            text if text == "No matches found" => text,
-            text => format!(
-                "No matches found in {}\n\n[Elsewhere in the project, the pattern is in these \
-lines; grep without path searches them all:]\n\n{text}",
-                shown(root, &path)
-            ),
-        });
+        let elsewhere = matches_elsewhere(root, &path, call, &options, hidden, cancel)?;
+        return Ok(elsewhere.unwrap_or_else(|| "No matches found".into()));
     }
     let shown = |file: &Path| shown(root, file);
     let mut long = false;
@@ -1968,6 +1982,74 @@ lines; grep without path searches them all:]\n\n{text}",
         ));
     }
     Ok(with_notices(&lines, notices))
+}
+
+/// For a `grep` that found nothing, the lines holding its pattern elsewhere in the project, with
+/// the same glob, or else in files its glob left out: models given nothing in one directory
+/// (gpt-oss in `tests/`) or with a guessed glob (`**/*.rs` in a Python project) keep searching
+/// there.
+fn matches_elsewhere(
+    root: &Path,
+    path: &Path,
+    call: &Call,
+    options: &search::Grep,
+    hidden: Option<&Hidden>,
+    cancel: &AtomicBool,
+) -> Result<Option<String>, String> {
+    let inside = path != root && path.starts_with(root);
+    let mut tries = Vec::new();
+    if inside {
+        tries.push((true, true));
+    }
+    if options.glob.is_some() {
+        tries.push((inside, false));
+    }
+    for (widen, keep_glob) in tries {
+        let probe = search::Grep {
+            glob: options.glob.filter(|_| keep_glob),
+            limit: 1,
+            ..*options
+        };
+        let at = if widen { root } else { path };
+        if search::grep(root, at, &probe, hidden, cancel)?.0.is_empty() {
+            continue;
+        }
+        let mut arguments = json!({"pattern":options.pattern,"limit":FIND_GREP_LIMIT});
+        let mut keys = vec!["ignoreCase", "literal"];
+        keys.extend(keep_glob.then_some("glob"));
+        keys.extend((!widen).then_some("path"));
+        for key in keys {
+            arguments[key] = call.arguments[key].clone();
+        }
+        let call = Call {
+            name: "grep",
+            arguments,
+        };
+        let text = grep(root, &call, hidden, cancel)?;
+        let glob = options.glob.unwrap_or_default();
+        let (missed, note) = match (widen, keep_glob) {
+            (true, true) => (
+                format!("No matches found in {}", shown(root, path)),
+                "Elsewhere in the project, the pattern is in these lines; grep without path \
+searches them all",
+            ),
+            (true, false) => (
+                format!(
+                    "No matches found in {} in files matching {glob}",
+                    shown(root, path)
+                ),
+                "Elsewhere in the project, in files the glob leaves out, the pattern is in these \
+lines; grep without path and glob searches them all",
+            ),
+            (false, _) => (
+                format!("No matches found in files matching {glob}"),
+                "In files the glob leaves out, the pattern is in these lines; grep without glob \
+searches them all",
+            ),
+        };
+        return Ok(Some(format!("{missed}\n\n[{note}:]\n\n{text}")));
+    }
+    Ok(None)
 }
 
 /// Pi's `find`: the paths matching a glob, as `shown` gives them; the stores left out with
@@ -3202,6 +3284,17 @@ these lines; grep without path searches them all:]\n\nsrc/a.rs:4: fn beta() {}"
                 "grep",
                 json!({"pattern":"alpha","path":"src/deep","glob":"*.md"})
             ),
+            "No matches found in src/deep in files matching *.md\n\n[Elsewhere in the project, \
+in files the glob leaves out, the pattern is in these lines; grep without path and glob searches \
+them all:]\n\n.hidden.rs:1: fn alpha() {}\nsrc/a.rs:1: fn alpha() {}"
+        );
+        assert_eq!(
+            text("grep", json!({"pattern":"fn beta","glob":"**/*.py"})),
+            "No matches found in files matching **/*.py\n\n[In files the glob leaves out, the \
+pattern is in these lines; grep without glob searches them all:]\n\nsrc/a.rs:4: fn beta() {}"
+        );
+        assert_eq!(
+            text("grep", json!({"pattern":"nowhere","glob":"*.py"})),
             "No matches found"
         );
         assert_eq!(
@@ -3262,6 +3355,23 @@ src/a.rs:1: fn alpha() {}"
             "{limited}"
         );
         assert_eq!(text("ls", json!({"path":"src"})), "a.rs\ndeep/");
+        assert_eq!(
+            run("ls", json!({"path":"src/gone/deeper"})).unwrap_err(),
+            format!(
+                "Path not found: {}\n\n[src holds:]\na.rs\ndeep/",
+                root.join("src/gone/deeper").display()
+            )
+        );
+        assert!(
+            run("ls", json!({"path":"gone"}))
+                .unwrap_err()
+                .contains("\n\n[. holds:]\n")
+        );
+        let outside = root.parent().unwrap().join("scramjet-rs-gone");
+        assert_eq!(
+            run("ls", json!({"path":outside})).unwrap_err(),
+            format!("Path not found: {}", outside.display())
+        );
         let missing = |path: &str| {
             run("read", json!({"path":path}))
                 .unwrap_err()

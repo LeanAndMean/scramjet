@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.190.0 — What is there instead
+
+### Changed
+
+- `ls` given a directory that does not exist shows what the nearest directory above it in the project holds (50 entries at most), as a model guessing `src` otherwise spends its next call listing the project.
+- `grep` with a `glob` that leaves out every file holding the pattern shows up to 20 lines in the files it left out (gpt-oss searched a Python project with `**/*.rs`).
+
 ## 2.189.0 — Did you mean
 
 ### Changed
