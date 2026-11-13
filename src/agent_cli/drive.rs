@@ -3,8 +3,8 @@
 //! from how each front end shows it (`Front`).
 use super::settings::{Delivery, Settings};
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Reopened,
-    SessionInfo, Source, Step, Suggested, shortened,
+    Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Remembered,
+    Reopened, Sandbox, SandboxMode, SessionInfo, Source, Step, Suggested, shortened,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -49,6 +49,100 @@ impl Session {
             scramjet::agent::login::Logins::user(),
         ));
     }
+
+    /// Makes `change` to the agent's sandbox for the rest of the session, as `/sandbox` does;
+    /// returns what to say and the warnings, or why it was not made.
+    pub(super) fn change_sandbox(
+        &mut self,
+        change: SandboxChange,
+    ) -> Result<(String, Vec<String>), String> {
+        let root = self.agent.root().to_owned();
+        let current = self.agent.sandbox().cloned();
+        match change {
+            SandboxChange::Mode(None) => {
+                self.agent.set_sandbox(None);
+                let said = "No sandbox: the agent's tools run with your access";
+                Ok((said.to_owned(), Vec::new()))
+            }
+            SandboxChange::Mode(Some(mode)) => {
+                let mut warnings = Vec::new();
+                let sandbox = match current {
+                    Some(sandbox) => Sandbox { mode, ..sandbox },
+                    None => {
+                        Sandbox::check()?;
+                        let mut sandbox = Sandbox {
+                            mode,
+                            network: self.settings.sandbox_network,
+                            writable: Vec::new(),
+                        };
+                        warnings = sandbox.grant_remembered(&root);
+                        sandbox
+                    }
+                };
+                self.agent.set_sandbox(Some(sandbox));
+                Ok((format!("Sandbox: {}", mode.name()), warnings))
+            }
+            SandboxChange::Network(network) => {
+                let Some(sandbox) = current else {
+                    return Err("No sandbox: commands reach the network as you can".to_owned());
+                };
+                self.agent.set_sandbox(Some(Sandbox { network, ..sandbox }));
+                let said = match network {
+                    true => "Sandbox: commands reach the network",
+                    false => "Sandbox: no network",
+                };
+                Ok((said.to_owned(), Vec::new()))
+            }
+            SandboxChange::Add(directory) => {
+                let Some(mut sandbox) = current else {
+                    let said = "No sandbox: the agent can change every file you can already";
+                    return Err(said.to_owned());
+                };
+                let path = sandbox.grant(&root, &directory)?;
+                self.agent.set_sandbox(Some(sandbox));
+                let said = format!("{} is writable for this session", path.display());
+                Ok((said, Vec::new()))
+            }
+            SandboxChange::Remove(directory) => {
+                let mut sandbox = current;
+                let revoked =
+                    (sandbox.as_mut()).and_then(|sandbox| sandbox.revoke(&root, &directory));
+                let path = (revoked.clone()).unwrap_or_else(|| Sandbox::resolve(&root, &directory));
+                let forgotten = match Remembered::user().map(|kept| kept.remove(&root, &path)) {
+                    Some(Ok(forgotten)) => forgotten,
+                    Some(Err(error)) => return Err(error),
+                    None => false,
+                };
+                if revoked.is_some() {
+                    self.agent.set_sandbox(sandbox);
+                }
+                let said = match (revoked.is_some(), forgotten) {
+                    (true, true) => format!(
+                        "{} is no longer granted in this project; read-only again",
+                        path.display()
+                    ),
+                    (false, true) => {
+                        format!("{} is no longer granted in this project", path.display())
+                    }
+                    (true, false) => format!("{} is read-only again", path.display()),
+                    (false, false) => return Err(format!("{directory} was not granted")),
+                };
+                Ok((said, Vec::new()))
+            }
+        }
+    }
+}
+
+/// A change of the session's sandbox, as `/sandbox` takes it.
+#[derive(Debug)]
+pub(super) enum SandboxChange {
+    /// A mode, `None` for no sandbox.
+    Mode(Option<SandboxMode>),
+    Network(bool),
+    /// A directory made writable too.
+    Add(String),
+    /// A directory's grant taken back, and forgotten if it was granted always in the project.
+    Remove(String),
 }
 
 /// Puts `servers` in place of the settings' MCP servers of the same names, enabled.

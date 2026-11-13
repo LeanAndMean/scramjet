@@ -5152,6 +5152,129 @@ fn acp_finds_the_projects_files_for_at_mentions_through_the_extension() {
 
 #[test]
 #[cfg(unix)]
+fn acp_shows_and_changes_the_sandbox_through_the_extension_as_slash_sandbox() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-sandbox-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    let extra = scratch.0.join("extra");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&extra).unwrap();
+    let extra = std::fs::canonicalize(&extra).unwrap();
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) =
+        acp_with(&scratch.0, 1, settings, &["--sandbox", "workspace-write"]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let offered = &next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    let method = "_io.github.leanandmean.scramjet/sandbox";
+    let methods = offered["methods"].as_array().unwrap();
+    assert!(methods.iter().any(|m| m == method), "{offered}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let mut id = 2;
+    let mut ask = |method: &str, mut params: serde_json::Value| {
+        id += 1;
+        params["sessionId"] = session.clone();
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        );
+        until(&messages, |message| message["id"] == id).0
+    };
+    let shown = ask(method, serde_json::json!({}))["result"].clone();
+    assert_eq!(shown["mode"], "workspace-write", "{shown}");
+    assert_eq!(shown["network"], true, "{shown}");
+    assert_eq!(shown["granted"], serde_json::json!([]), "{shown}");
+    assert_eq!(shown["message"], serde_json::Value::Null, "{shown}");
+    assert!(
+        shown["summary"].as_str().unwrap().contains("Writable:"),
+        "{shown}"
+    );
+    let added = ask(method, serde_json::json!({"add": extra}))["result"].clone();
+    let said = format!("{} is writable for this session", extra.display());
+    assert_eq!(added["message"], said, "{added}");
+    assert_eq!(
+        added["granted"],
+        serde_json::json!([{"path": extra, "granted": true, "always": false}]),
+        "{added}"
+    );
+    let again = ask(method, serde_json::json!({"add": extra}));
+    assert!(
+        again["error"]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("already writable"),
+        "{again}"
+    );
+    let network = ask(method, serde_json::json!({"network": false}))["result"].clone();
+    assert_eq!(network["network"], false, "{network}");
+    assert_eq!(network["message"], "Sandbox: no network");
+    let read_only = ask(method, serde_json::json!({"mode": "read-only"}))["result"].clone();
+    assert_eq!(read_only["mode"], "read-only", "{read_only}");
+    assert_eq!(read_only["network"], false, "{read_only}");
+    assert_eq!(read_only["granted"].as_array().unwrap().len(), 1);
+    let state = ask(
+        "_io.github.leanandmean.scramjet/state",
+        serde_json::json!({}),
+    );
+    assert_eq!(state["result"]["sandbox"], "read-only", "{state}");
+    let removed = ask(method, serde_json::json!({"remove": extra}))["result"].clone();
+    let said = format!("{} is read-only again", extra.display());
+    assert_eq!(removed["message"], said, "{removed}");
+    assert_eq!(removed["granted"], serde_json::json!([]), "{removed}");
+    let gone = ask(method, serde_json::json!({"remove": extra}));
+    assert!(
+        gone["error"]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("was not granted"),
+        "{gone}"
+    );
+    let off = ask(method, serde_json::json!({"mode": "off"}))["result"].clone();
+    assert_eq!(off["mode"], "danger-full-access", "{off}");
+    assert_eq!(off["network"], serde_json::Value::Null, "{off}");
+    let state = ask(
+        "_io.github.leanandmean.scramjet/state",
+        serde_json::json!({}),
+    );
+    assert_eq!(state["result"]["sandbox"], "danger-full-access", "{state}");
+    let no_network = ask(method, serde_json::json!({"network": false}));
+    assert!(
+        no_network["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("No sandbox"),
+        "{no_network}"
+    );
+    for wrong in [
+        serde_json::json!({"mode": "open"}),
+        serde_json::json!({"network": "yes"}),
+        serde_json::json!({"add": " "}),
+        serde_json::json!({"mode": "off", "network": true}),
+    ] {
+        let refused = ask(method, wrong.clone());
+        assert_eq!(refused["error"]["code"], -32602, "{wrong}: {refused}");
+    }
+    let typed = serde_json::json!({"prompt": [{"type": "text", "text": "/add-dir /tmp"}]});
+    let typed = ask("session/prompt", typed);
+    assert!(
+        typed["error"]["message"].as_str().unwrap().contains(method),
+        "{typed}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-fresh-{}", std::process::id())),

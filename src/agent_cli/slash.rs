@@ -3,11 +3,12 @@
 //! `settings_menu.rs`; `/hotkeys` and `/keybindings` in `hotkeys.rs`; `/resume`, `/fork`,
 //! `/branch`, `/clone` and `/tree` in `sessions.rs`; `/model` and `/scoped-models` in
 //! `scope.rs`; `/login` and `/logout` in `login.rs`.
+use super::drive::{self, SandboxChange};
 use super::interactive::{Interactive, completions};
+use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
-use super::{drive, terminal};
-use scramjet::agent::{Agent, AgentError, McpState, Remembered, Sandbox, SandboxMode};
+use scramjet::agent::{Agent, AgentError, McpState, Remembered, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -271,90 +272,17 @@ impl Interactive {
     pub(super) fn sandbox(&mut self, argument: &str) {
         let (word, rest) = argument.split_once(' ').unwrap_or((argument, ""));
         let rest = rest.trim();
-        let current = self.session.agent.sandbox().cloned();
-        let changed = match (word, rest) {
+        let change = match (word, rest) {
             ("", "") => return self.say(&sandbox_info(&self.session.agent)),
             ("add", directory) => return self.add_dir(directory),
-            ("network", "on" | "off") => match current {
-                Some(sandbox) => Sandbox {
-                    network: rest == "on",
-                    ..sandbox
-                },
-                None => {
-                    return self.say("No sandbox: commands reach the network as you can");
-                }
-            },
-            ("remove", directory) if !directory.is_empty() => return self.remove_dir(directory),
-            (mode, "") if let Some(mode) = SandboxMode::parse(mode) => {
-                if mode.is_some()
-                    && current.is_none()
-                    && let Err(error) = Sandbox::check()
-                {
-                    return self.say(&format!("Error: {error}"));
-                }
-                let Some(mode) = mode else {
-                    self.session.agent.set_sandbox(None);
-                    let said = "No sandbox: the agent's tools run with your access";
-                    return self.say_styled(style::MUTED, said);
-                };
-                let sandbox = match current {
-                    Some(sandbox) => Sandbox { mode, ..sandbox },
-                    None => {
-                        let mut sandbox = Sandbox {
-                            mode,
-                            network: self.session.settings.sandbox_network,
-                            writable: Vec::new(),
-                        };
-                        for warning in sandbox.grant_remembered(self.session.agent.root()) {
-                            self.say(&format!("Warning: {warning}"));
-                        }
-                        sandbox
-                    }
-                };
-                self.session.agent.set_sandbox(Some(sandbox));
-                let said = format!("Sandbox: {}", mode.name());
-                self.say_styled(style::MUTED, &said);
-                return;
+            ("network", "on" | "off") => SandboxChange::Network(rest == "on"),
+            ("remove", directory) if !directory.is_empty() => {
+                SandboxChange::Remove(directory.to_owned())
             }
+            (mode, "") if let Some(mode) = SandboxMode::parse(mode) => SandboxChange::Mode(mode),
             _ => return self.say(SANDBOX_USAGE),
         };
-        let said = match changed.network {
-            true => "Sandbox: commands reach the network",
-            false => "Sandbox: no network",
-        };
-        self.session.agent.set_sandbox(Some(changed));
-        self.say_styled(style::MUTED, said);
-    }
-
-    /// `/sandbox remove DIR`: takes back the grant of `DIR`, and forgets it if it was granted
-    /// always in this project.
-    pub(super) fn remove_dir(&mut self, directory: &str) {
-        let root = self.session.agent.root().to_owned();
-        let mut sandbox = self.session.agent.sandbox().cloned();
-        let revoked = (sandbox.as_mut()).and_then(|sandbox| sandbox.revoke(&root, directory));
-        let path = (revoked.clone()).unwrap_or_else(|| Sandbox::resolve(&root, directory));
-        let forgotten = match Remembered::user().map(|kept| kept.remove(&root, &path)) {
-            Some(Ok(forgotten)) => forgotten,
-            Some(Err(error)) => return self.say(&format!("Error: {error}")),
-            None => false,
-        };
-        if revoked.is_some() {
-            self.session.agent.set_sandbox(sandbox);
-        }
-        let said = match (revoked.is_some(), forgotten) {
-            (_, true) => format!(
-                "{} is no longer granted in this project{}",
-                path.display(),
-                if revoked.is_some() {
-                    "; read-only again"
-                } else {
-                    ""
-                }
-            ),
-            (true, false) => format!("{} is read-only again", path.display()),
-            (false, false) => return self.say(&format!("{directory} was not granted")),
-        };
-        self.say_styled(style::MUTED, &said);
+        self.change_sandbox(change);
     }
 
     /// `/add-dir DIR`: the sandbox lets the agent change `DIR` too, for the rest of the session.
@@ -362,17 +290,24 @@ impl Interactive {
         if directory.is_empty() {
             return self.say("Usage: /add-dir DIR");
         }
-        let root = self.session.agent.root().to_owned();
-        let Some(mut sandbox) = self.session.agent.sandbox().cloned() else {
-            return self.say("No sandbox: the agent can change every file you can already");
-        };
-        match sandbox.grant(&root, directory) {
-            Ok(path) => {
-                self.session.agent.set_sandbox(Some(sandbox));
-                let said = format!("{} is writable for this session", path.display());
+        self.change_sandbox(SandboxChange::Add(directory.to_owned()));
+    }
+
+    /// `/sandbox remove DIR`: takes back the grant of `DIR`, and forgets it if it was granted
+    /// always in this project.
+    pub(super) fn remove_dir(&mut self, directory: &str) {
+        self.change_sandbox(SandboxChange::Remove(directory.to_owned()));
+    }
+
+    fn change_sandbox(&mut self, change: SandboxChange) {
+        match self.session.change_sandbox(change) {
+            Ok((said, warnings)) => {
+                for warning in warnings {
+                    self.say(&format!("Warning: {warning}"));
+                }
                 self.say_styled(style::MUTED, &said);
             }
-            Err(error) => self.say(&format!("Error: {error}")),
+            Err(error) => self.say(&error),
         }
     }
 

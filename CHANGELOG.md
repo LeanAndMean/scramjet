@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.239.0 — The sandbox changed over ACP
+
+### Added
+
+- `scramjet acp` shows and changes the session's sandbox (`_io.github.leanandmean.scramjet/sandbox`) as `/sandbox` and `/add-dir` do: its mode, the network, and directories made writable or taken back, so a front end such as Flightdeck can offer them.
+
+### Changed
+
+- A refused `/sandbox` or `/add-dir` says why without an `Error:` in front, as its other refusals did.
+
 ## 2.238.0 — `@` file completion over ACP
 
 ### Added

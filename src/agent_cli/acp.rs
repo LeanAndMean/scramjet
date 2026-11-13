@@ -3,13 +3,16 @@
 //! Each session runs on a thread of its own, driven as the full screen drives its own
 //! (`drive::run_turn`), while this thread reads the client's messages.
 use super::args::{Options, Start as Launch};
-use super::drive::{self, Change, Front, Messages, Offer, Picked, Routed, Session, Start};
+use super::drive::{
+    self, Change, Front, Messages, Offer, Picked, Routed, SandboxChange, Session, Start,
+};
 use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose, Reopened,
-    SessionChoice, Shell, StreamProgress, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
+    Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose,
+    Remembered, Reopened, SandboxMode, SessionChoice, Shell, StreamProgress, Tokens, ToolDetail,
+    TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -60,8 +63,9 @@ const STATE: &str = "_io.github.leanandmean.scramjet/state";
 const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
 const MCP: &str = "_io.github.leanandmean.scramjet/mcp";
 const FILES: &str = "_io.github.leanandmean.scramjet/files";
+const SANDBOX: &str = "_io.github.leanandmean.scramjet/sandbox";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 19] = [
+const EXTENSIONS: [&str; 20] = [
     HOLD,
     COMPACT,
     RENAME,
@@ -81,6 +85,7 @@ const EXTENSIONS: [&str; 19] = [
     EVENTS,
     MCP,
     FILES,
+    SANDBOX,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -337,7 +342,7 @@ impl Log {
             options: Value::Null,
             usage: Value::Null,
             asks: false,
-            sandbox: "danger-full-access",
+            sandbox: FULL_ACCESS,
         }
     }
     fn number(&mut self, message: &mut Value) {
@@ -589,6 +594,8 @@ enum Setting {
     /// `set_label`'s entry and its label, `None` to take it away.
     Label(usize, Option<String>),
     Mcp,
+    /// `sandbox`'s change, if any.
+    Sandbox(Option<SandboxChange>),
 }
 
 impl Connection {
@@ -647,6 +654,7 @@ impl Connection {
             EVENTS => self.events(&id, &params),
             MCP => self.mcp(id, &params),
             FILES => self.files(id, &params),
+            SANDBOX => self.sandbox(&id, &params),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
                 false => self.unknown(&id, &params),
@@ -786,6 +794,51 @@ impl Connection {
         let server = (params["server"].as_str()).filter(|name| !name.is_empty() && *name != "all");
         let job = Job::Mcp(id.clone(), action, server.map(str::to_owned));
         self.busy(&id, params, job);
+    }
+
+    /// `/sandbox`: the session's sandbox, after the change `params` gives (`mode`, `network`,
+    /// `add` or `remove`, at most one), made at the turn's next pause as the full screen makes it.
+    fn sandbox(&self, id: &Value, params: &Value) {
+        let given: Vec<&str> = (["mode", "network", "add", "remove"].into_iter())
+            .filter(|key| !params[key].is_null())
+            .collect();
+        let change = match given[..] {
+            [] => None,
+            ["mode"] => match params["mode"].as_str().and_then(SandboxMode::parse) {
+                Some(mode) => Some(SandboxChange::Mode(mode)),
+                None => {
+                    let message = "mode is read-only, workspace-write or danger-full-access";
+                    return self.out.error(id, INVALID_PARAMS, message);
+                }
+            },
+            ["network"] => match params["network"].as_bool() {
+                Some(network) => Some(SandboxChange::Network(network)),
+                None => {
+                    return self
+                        .out
+                        .error(id, INVALID_PARAMS, "network is true or false");
+                }
+            },
+            [key @ ("add" | "remove")] => {
+                let directory = params[key].as_str().map(str::trim).unwrap_or_default();
+                if directory.is_empty() {
+                    let message = format!("{key} is a directory");
+                    return self.out.error(id, INVALID_PARAMS, &message);
+                }
+                Some(match key {
+                    "add" => SandboxChange::Add(directory.to_owned()),
+                    _ => SandboxChange::Remove(directory.to_owned()),
+                })
+            }
+            _ => {
+                let message = "at most one of mode, network, add and remove";
+                return self.out.error(id, INVALID_PARAMS, message);
+            }
+        };
+        let Some(handle) = self.handle(params) else {
+            return self.unknown(id, params);
+        };
+        Self::settle(handle, id, Setting::Sandbox(change));
     }
 
     /// Hands `setting` to the session, which takes it at once between turns, else at the turn's
@@ -1489,6 +1542,7 @@ impl Connection {
                 Builtin::Fork(_) => format!("; {FORK} forks"),
                 Builtin::Branch(_) => format!("; {BRANCH} branches"),
                 Builtin::Tree(_) => format!("; {TREE} lists the entries, {NAVIGATE} moves"),
+                Builtin::Sandbox(_) | Builtin::AddDir(_) => format!("; {SANDBOX} changes it"),
                 _ => String::new(),
             };
             let message =
@@ -1733,6 +1787,8 @@ fn config_options(agent: &Agent, models: &[ModelOption], booleans: bool) -> Valu
 
 /// `thought_level`'s value while no level is set, which leaves it to the model.
 const DEFAULT_LEVEL: &str = "default";
+/// The sandbox's mode when there is none, by Codex's name.
+const FULL_ACCESS: &str = "danger-full-access";
 
 /// A thinking level as the client shows it, in Scramjet's words: `none` is off.
 fn level_name(level: &str) -> String {
@@ -2459,6 +2515,36 @@ impl Acp {
     }
 
     /// Answers request `id` with the MCP servers, as `/mcp` lists them.
+    /// Makes `change`, if any, and answers with the sandbox as it is then.
+    fn sandbox(&mut self, id: &Value, change: Option<SandboxChange>) {
+        let (message, warnings) = match change.map(|change| self.session.change_sandbox(change)) {
+            None => (None, Vec::new()),
+            Some(Ok((said, warnings))) => (Some(said), warnings),
+            Some(Err(error)) => return self.ui.out.error(id, INVALID_PARAMS, &error),
+        };
+        let agent = &self.session.agent;
+        let sandbox = agent.sandbox();
+        let mode = sandbox.map_or(FULL_ACCESS, |sandbox| sandbox.mode.name());
+        lock(&self.ui.log).sandbox = mode;
+        let root = agent.root();
+        let always = (Remembered::user().and_then(|kept| kept.of(root).ok())).unwrap_or_default();
+        let granted = sandbox.map_or(&[][..], |sandbox| &sandbox.writable[..]);
+        let mut listed: Vec<Value> = (granted.iter())
+            .map(|path| json!({"path": path, "granted": true, "always": always.contains(path)}))
+            .collect();
+        let others = always.iter().filter(|path| !granted.contains(path));
+        listed.extend(others.map(|path| json!({"path": path, "always": true, "granted": false})));
+        let result = json!({
+            "mode": mode,
+            "network": sandbox.map(|sandbox| sandbox.network),
+            "granted": listed,
+            "summary": super::slash::sandbox_summary(agent),
+            "message": message,
+            "warnings": warnings,
+        });
+        self.ui.out.respond(id, result);
+    }
+
     fn mcp_servers(&mut self, id: &Value) {
         let servers = self.mcp_list();
         self.ui.out.respond(id, json!({"servers": servers}));
@@ -2540,6 +2626,7 @@ impl Acp {
             Setting::Tree => return self.tree(&id),
             Setting::Label(line, label) => return self.label(&id, line, label.as_deref()),
             Setting::Mcp => return self.mcp_servers(&id),
+            Setting::Sandbox(change) => return self.sandbox(&id, change),
         };
         match self.set_option(&option, &value) {
             Ok(()) => {
