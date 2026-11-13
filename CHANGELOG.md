@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.232.0 — ChatGPT and GitHub Copilot hear from Scramjet
+
+### Changed
+
+- Requests to ChatGPT and GitHub Copilot, and ChatGPT's sign-in, now name the client `scramjet` (`originator` and `User-Agent`) rather than `scramjet-rs`.
+
 ## 2.231.2 — GitHub Copilot's sign-in described plainly
 
 ### Fixed

@@ -16,10 +16,10 @@ use std::{
 pub const PROVIDER: &str = "github-copilot";
 /// VS Code's Copilot client, as Scramjet and other open clients log in.
 const CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
-/// What scramjet-rs says of itself to GitHub and to Copilot.
+/// What Scramjet says of itself to GitHub and to Copilot.
 const USER_AGENT: (&str, &str) = (
     "User-Agent",
-    concat!("scramjet-rs/", env!("CARGO_PKG_VERSION")),
+    concat!("scramjet/", env!("CARGO_PKG_VERSION")),
 );
 /// The editor Copilot's API is told it serves, since it refuses one it does not know (`unknown
 /// Editor-Version header for IDE auth`) and a request without (live, 2026-11-05). GitHub sells
@@ -620,7 +620,7 @@ mod tests {
                 .contains("authorization: Bearer tid=1;exp=2;proxy-ep=")
         );
         // Each names scramjet-rs; only Copilot's API is told of an editor, which it requires.
-        let ours = format!("user-agent: scramjet-rs/{}\r\n", env!("CARGO_PKG_VERSION"));
+        let ours = format!("user-agent: scramjet/{}\r\n", env!("CARGO_PKG_VERSION"));
         for (i, (head, _)) in requests.iter().enumerate() {
             assert!(head.contains(&ours), "{head}");
             let editor = head.contains("editor-version: vscode/1.107.0\r\n");

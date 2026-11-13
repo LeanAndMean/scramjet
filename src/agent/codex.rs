@@ -37,7 +37,7 @@ const CLAIM: &str = "https://api.openai.com/auth";
 /// ChatGPT's backend; Codex's requests go to `/codex/responses` under it.
 pub(super) const BASE_URL: &str = "https://chatgpt.com/backend-api";
 /// What the login and the model requests say of their client.
-const ORIGINATOR: &str = "scramjet-rs";
+const ORIGINATOR: &str = "scramjet";
 /// What Codex's own client says of itself, as the model list's request says it.
 const CODEX: &str = "codex_cli_rs";
 /// What a listed model keeps of what the backend says of it (each also has its instructions).
@@ -516,7 +516,7 @@ pub(super) fn entry(listed: &Value) -> Value {
         "api": "openai-codex-responses",
         "headers": {
             "originator": ORIGINATOR,
-            "User-Agent": user_agent("scramjet-rs", env!("CARGO_PKG_VERSION")),
+            "User-Agent": user_agent("scramjet", env!("CARGO_PKG_VERSION")),
             "OpenAI-Beta": "responses=experimental",
         },
         "models": models,
@@ -878,7 +878,7 @@ mod tests {
         assert_eq!(asked("code_challenge"), challenge);
         assert_eq!(asked("state"), browser.state);
         assert_eq!(asked("state").len(), 32);
-        assert_eq!(asked("originator"), "scramjet-rs");
+        assert_eq!(asked("originator"), "scramjet");
         assert_eq!(asked("codex_cli_simplified_flow"), "true");
         let callback = browser.listener.as_ref().unwrap().local_addr().unwrap();
         let (state, verifier) = (browser.state.clone(), browser.verifier.clone());
@@ -1435,7 +1435,7 @@ mod tests {
             ("chatgpt.com", "/backend-api", true)
         );
         for (name, value) in [
-            ("originator", "scramjet-rs"),
+            ("originator", "scramjet"),
             ("openai-beta", "responses=experimental"),
         ] {
             assert!(
