@@ -288,7 +288,8 @@ impl Agent {
         let at =
             |line: Option<usize>| line.and_then(|line| entries.iter().find(|e| e.line == line));
         let Some(entry) = at(Some(line)) else {
-            return Err(AgentError::Session(std::io::Error::other(
+            return Err(AgentError::Session(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
                 "no such entry in the session",
             )));
         };

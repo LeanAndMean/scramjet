@@ -3352,6 +3352,246 @@ fn acp_forks_branches_and_lists_the_tree_through_the_extensions() {
 
 #[test]
 #[cfg(unix)]
+fn acp_labels_and_moves_in_the_tree_through_the_extensions() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-move-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let ended = |stop: &str| {
+        [
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            serde_json::json!({"type": "message_delta", "delta": {"stop_reason": stop},
+                "usage": {"output_tokens": 4}})
+            .to_string(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]
+    };
+    let start = r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#;
+    let reply = |text: &str| {
+        let mut events = vec![
+            start.to_owned(),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#
+                .to_owned(),
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}})
+            .to_string(),
+        ];
+        events.extend(ended("end_turn"));
+        events
+    };
+    let question = serde_json::json!({"type": "confirm", "message": "Ready?"}).to_string();
+    let mut asks = vec![
+        start.to_owned(),
+        serde_json::json!({"type": "content_block_start", "index": 0, "content_block":
+            {"type": "tool_use", "id": "toolu_1", "name": "get_scramjet_user_input", "input": {}}})
+        .to_string(),
+        serde_json::json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": question}})
+        .to_string(),
+    ];
+    asks.extend(ended("tool_use"));
+    let replies = vec![
+        reply("One."),
+        asks,
+        reply("Two."),
+        reply("Again."),
+        reply("Summary."),
+        reply("Three."),
+    ];
+    let (port, bodies) = serve_events(replies);
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 100000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    let capabilities = serde_json::json!({"elicitation": {"form": {}},
+        "session": {"compaction": {}}, "_meta": {"io.github.leanandmean.scramjet": {}}});
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
+    );
+    let offered = &next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    let methods = offered["methods"].as_array().unwrap();
+    for method in ["navigate_tree", "set_label"] {
+        let method = format!("_io.github.leanandmean.scramjet/{method}");
+        assert!(methods.iter().any(|m| *m == method), "{offered}");
+    }
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    // The answer to request `id`, the questions asked meanwhile confirmed; with the messages
+    // before it and how many questions were asked.
+    let answer = |stdin: &mut std::process::ChildStdin, id: u64| {
+        let (mut before, mut asked) = (Vec::new(), 0);
+        loop {
+            let message = next(&messages);
+            if message["method"] == "elicitation/create" {
+                asked += 1;
+                let result = serde_json::json!({"action": "accept", "content": {"answer": true}});
+                send(
+                    stdin,
+                    serde_json::json!({"jsonrpc": "2.0", "id": message["id"], "result": result}),
+                );
+            } else if message["id"] == id && message.get("method").is_none() {
+                return (message, before, asked);
+            } else {
+                before.push(message);
+            }
+        }
+    };
+    let prompt = |id: u64, text: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}})
+    };
+    let extension = |id: u64, method: &str, mut params: serde_json::Value| {
+        params["sessionId"] = session.clone();
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": format!("_io.github.leanandmean.scramjet/{method}"), "params": params})
+    };
+    send(&mut stdin, prompt(3, "first"));
+    assert_eq!(answer(&mut stdin, 3).0["result"]["stopReason"], "end_turn");
+    send(&mut stdin, prompt(4, "second"));
+    let (ended, _, asked) = answer(&mut stdin, 4);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert_eq!(asked, 1);
+    let tree = |stdin: &mut std::process::ChildStdin, id: u64| {
+        send(stdin, extension(id, "tree", serde_json::json!({})));
+        let tree = answer(stdin, id).0["result"].clone();
+        let entries: Vec<_> = (tree["entries"].as_array().unwrap().iter())
+            .filter(|entry| entry["kind"] != "model" && entry["kind"] != "thoughtLevel")
+            .cloned()
+            .collect();
+        (entries, tree["currentId"].clone())
+    };
+    let (entries, current) = tree(&mut stdin, 5);
+    let kinds: Vec<_> = (entries.iter())
+        .map(|entry| entry["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["prompt", "reply", "prompt", "toolResult", "reply"],
+        "{entries:?}"
+    );
+    let id = |at: usize| entries[at]["entryId"].clone();
+
+    send(
+        &mut stdin,
+        extension(
+            6,
+            "set_label",
+            serde_json::json!({"entryId": id(2), "label": " here "}),
+        ),
+    );
+    assert_eq!(answer(&mut stdin, 6).0["result"]["label"], "here");
+    send(
+        &mut stdin,
+        extension(
+            7,
+            "set_label",
+            serde_json::json!({"entryId": 9999, "label": "x"}),
+        ),
+    );
+    let refused = answer(&mut stdin, 7).0;
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    let (labeled, _) = tree(&mut stdin, 8);
+    assert_eq!(labeled[2]["label"], "here", "{labeled:?}");
+    send(
+        &mut stdin,
+        extension(9, "set_label", serde_json::json!({"entryId": id(2)})),
+    );
+    assert_eq!(
+        answer(&mut stdin, 9).0["result"]["label"],
+        serde_json::Value::Null
+    );
+    let (unlabeled, _) = tree(&mut stdin, 10);
+    assert!(unlabeled[2].get("label").is_none(), "{unlabeled:?}");
+
+    send(
+        &mut stdin,
+        extension(11, "navigate_tree", serde_json::json!({"entryId": current})),
+    );
+    assert_eq!(answer(&mut stdin, 11).0["result"]["moved"], false);
+
+    // Back at the question, it is asked again and its turn goes on.
+    send(
+        &mut stdin,
+        extension(12, "navigate_tree", serde_json::json!({"entryId": id(3)})),
+    );
+    let (ended, before, asked) = answer(&mut stdin, 12);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert_eq!(asked, 1, "{before:?}");
+    let said = |before: &[serde_json::Value], text: &str| {
+        before
+            .iter()
+            .any(|message| message["params"]["update"]["content"]["text"] == text)
+    };
+    assert!(said(&before, "Again."), "{before:?}");
+
+    // The branch left summarized: shown as a compaction marked as a branch's.
+    send(
+        &mut stdin,
+        extension(
+            13,
+            "navigate_tree",
+            serde_json::json!({"entryId": id(1), "summarize": true}),
+        ),
+    );
+    let (moved, before, _) = answer(&mut stdin, 13);
+    assert_eq!(moved["result"]["moved"], true, "{moved}");
+    assert_eq!(
+        moved["result"]["prompt"],
+        serde_json::Value::Null,
+        "{moved}"
+    );
+    let compactions: Vec<_> = (before.iter())
+        .map(|message| &message["params"]["update"])
+        .filter(|update| update["sessionUpdate"] == "compaction_update")
+        .collect();
+    assert_eq!(compactions.len(), 2, "{before:?}");
+    assert_eq!(compactions[0]["status"], "in_progress");
+    assert_eq!(compactions[1]["status"], "completed");
+    for update in &compactions {
+        assert_eq!(
+            update["_meta"]["io.github.leanandmean.scramjet"]["branch"], true,
+            "{update}"
+        );
+    }
+    let summary = compactions[1]["summary"][0]["text"].as_str().unwrap();
+    assert!(summary.contains("Summary."), "{summary}");
+
+    // At a prompt, it is given back to edit.
+    send(
+        &mut stdin,
+        extension(14, "navigate_tree", serde_json::json!({"entryId": id(2)})),
+    );
+    let moved = answer(&mut stdin, 14).0;
+    assert_eq!(moved["result"]["moved"], true, "{moved}");
+    assert_eq!(moved["result"]["prompt"], "second", "{moved}");
+    send(&mut stdin, prompt(15, "third"));
+    assert_eq!(answer(&mut stdin, 15).0["result"]["stopReason"], "end_turn");
+    let bodies: Vec<String> =
+        std::iter::from_fn(|| bodies.recv_timeout(Duration::from_secs(2)).ok()).collect();
+    assert_eq!(bodies.len(), 6);
+    let last = bodies.last().unwrap();
+    assert!(
+        last.contains("first") && last.contains("third") && !last.contains("second"),
+        "{last}"
+    );
+    send(&mut stdin, prompt(16, "/tree"));
+    let refused = answer(&mut stdin, 16).0;
+    let message = refused["error"]["message"].as_str().unwrap();
+    assert!(
+        message.ends_with("scramjet/navigate_tree moves"),
+        "{refused}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_exports_sessions_and_gives_the_usage_through_the_extensions() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-export-{}", std::process::id())),

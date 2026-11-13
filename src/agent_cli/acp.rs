@@ -8,8 +8,8 @@ use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    McpServer, McpTransport, ModelOption, Purpose, SessionChoice, StreamProgress, Tokens,
-    ToolDetail, TreeEntry, TreeItem, UserCommand,
+    McpServer, McpTransport, ModelOption, Navigated, Purpose, SessionChoice, StreamProgress,
+    Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -42,8 +42,12 @@ const SPENT: &str = "_io.github.leanandmean.scramjet/usage";
 const FORK: &str = "_io.github.leanandmean.scramjet/fork";
 const BRANCH: &str = "_io.github.leanandmean.scramjet/branch";
 const TREE: &str = "_io.github.leanandmean.scramjet/tree";
+const NAVIGATE: &str = "_io.github.leanandmean.scramjet/navigate_tree";
+const LABEL: &str = "_io.github.leanandmean.scramjet/set_label";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 8] = [HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE];
+const EXTENSIONS: [&str; 10] = [
+    HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE, NAVIGATE, LABEL,
+];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
 /// How often a wait looks again at what may end it.
@@ -330,6 +334,9 @@ enum Job {
     Fork(Value, usize),
     /// Request `id`'s branch, with the name it is given, if any.
     Branch(Value, String),
+    /// Request `id`'s move to the entry on that line, with the branch left summarized when
+    /// a focus is given (empty for none).
+    Navigate(Value, usize, Option<String>),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -347,6 +354,8 @@ enum Setting {
     /// `export_html`'s path, if given.
     Export(Option<String>),
     Tree,
+    /// `set_label`'s entry and its label, `None` to take it away.
+    Label(usize, Option<String>),
 }
 
 impl Connection {
@@ -393,6 +402,8 @@ impl Connection {
                 Some(handle) => Self::settle(handle, &id, Setting::Tree),
                 None => self.out.error(&id, INVALID_PARAMS, "no such session"),
             },
+            NAVIGATE => self.navigate(id, &params),
+            LABEL => self.label(&id, &params),
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
     }
@@ -494,19 +505,56 @@ impl Connection {
     /// Compacts the session's conversation, as `/compact` does; refused during a turn, as the
     /// full screen refuses it. Prompts sent meanwhile wait for it, then run as a turn.
     fn compact(&self, id: Value, params: &Value) {
-        let Some(handle) = self.handle(params) else {
-            return self.out.error(&id, INVALID_PARAMS, "no such session");
-        };
         let instructions = params["instructions"].as_str().unwrap_or_default();
+        let job = Job::Compact(id.clone(), instructions.to_owned());
+        self.busy(&id, params, job);
+    }
+
+    /// Moves the session's conversation to the entry `entryId`, as `/tree` does; with
+    /// `summarize` (`true`, or the focus as a string) the branch left is summarized first.
+    /// Refused during a turn; prompts sent meanwhile wait for it.
+    fn navigate(&self, id: Value, params: &Value) {
+        let Some(line) = params["entryId"].as_u64() else {
+            return self.out.error(&id, INVALID_PARAMS, "entryId is required");
+        };
+        let focus = match &params["summarize"] {
+            Value::Bool(true) => Some(String::new()),
+            Value::String(focus) => Some(focus.trim().to_owned()),
+            _ => None,
+        };
+        self.busy(&id, params, Job::Navigate(id.clone(), line as usize, focus));
+    }
+
+    /// Labels the entry `entryId`, or takes its label away (no `label`, or an empty one), at
+    /// the turn's next pause.
+    fn label(&self, id: &Value, params: &Value) {
+        let Some(line) = params["entryId"].as_u64() else {
+            return self.out.error(id, INVALID_PARAMS, "entryId is required");
+        };
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
+        let label = (params["label"].as_str().map(str::trim))
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned);
+        Self::settle(handle, id, Setting::Label(line as usize, label));
+    }
+
+    /// Hands `job` to the session `params` names as its turn, unless one runs there:
+    /// `session/cancel` stops it, and prompts sent meanwhile wait for it.
+    fn busy(&self, id: &Value, params: &Value, job: Job) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
         let mut turn = lock(&handle.turn);
         if turn.running {
             drop(turn);
-            return self.out.error(&id, INVALID_PARAMS, "a turn is running");
+            return self.out.error(id, INVALID_PARAMS, "a turn is running");
         }
         turn.running = true;
         handle.cancel.store(false, Ordering::Relaxed);
         drop(turn);
-        let _ = handle.jobs.send(Job::Compact(id, instructions.to_owned()));
+        let _ = handle.jobs.send(job);
     }
 
     /// Continues in a new session before the prompt at `entryId`, as `/fork` does; refused
@@ -645,6 +693,10 @@ impl Connection {
                         front.branch(&id, &name);
                         continue;
                     }
+                    Job::Navigate(id, line, focus) => {
+                        front.navigate(id, line, focus.as_deref());
+                        continue;
+                    }
                 };
                 if !images.is_empty() {
                     match Attached::images(&images) {
@@ -655,7 +707,7 @@ impl Connection {
                         }
                     }
                 }
-                front.run(id, text);
+                front.run(id, Some(text));
             }
         });
         match starts.recv() {
@@ -867,7 +919,7 @@ impl Connection {
                 Builtin::Usage(_) => format!("; {SPENT} gives the usage"),
                 Builtin::Fork(_) => format!("; {FORK} forks"),
                 Builtin::Branch(_) => format!("; {BRANCH} branches"),
-                Builtin::Tree(_) => format!("; {TREE} lists the entries"),
+                Builtin::Tree(_) => format!("; {TREE} lists the entries, {NAVIGATE} moves"),
                 _ => String::new(),
             };
             let message =
@@ -907,6 +959,16 @@ impl Connection {
         for thread in self.closed {
             let _ = thread.join();
         }
+    }
+}
+
+/// The JSON-RPC error for `error`: the client's when it named no entry of the session.
+fn code(error: &AgentError) -> i64 {
+    match error {
+        AgentError::Session(error) if error.kind() == std::io::ErrorKind::InvalidInput => {
+            INVALID_PARAMS
+        }
+        _ => INTERNAL_ERROR,
     }
 }
 
@@ -1385,13 +1447,14 @@ impl Acp {
         self.ui.out.update(&self.ui.session, update);
     }
 
-    /// Runs `prompt` and the next steps that follow it on their own, then the prompts sent
-    /// meanwhile that the agent did not take; answers request `id` and theirs when it ends.
-    fn run(&mut self, id: Value, prompt: String) {
+    /// Runs `prompt`, or with none goes on with the turn the session holds, and the next steps
+    /// that follow on their own, then the prompts sent meanwhile that the agent did not take;
+    /// answers request `id` and theirs when it ends.
+    fn run(&mut self, id: Value, prompt: Option<String>) {
         self.configure();
         let (mut prompt, mut start) = (prompt, Start::Typed);
         let stopped = loop {
-            let next = drive::run_turn(self, Some(&prompt), start);
+            let next = drive::run_turn(self, prompt.as_deref(), start);
             let stopped = self.ui.stopped.take();
             if let Some(reason) = self.reason.take() {
                 // What the model finished stays shown; the reason says why it went no further.
@@ -1407,7 +1470,7 @@ impl Acp {
             }
             if let Some((step, how)) = next {
                 self.ui.user_message(&step);
-                (prompt, start) = (step, how);
+                (prompt, start) = (Some(step), how);
                 continue;
             }
             let mut turn = lock(&self.turn);
@@ -1416,7 +1479,7 @@ impl Acp {
                 break Ended::Reason("end_turn");
             }
             drop(turn);
-            (prompt, start) = (queued.join("\n\n"), Start::Typed);
+            (prompt, start) = (Some(queued.join("\n\n")), Start::Typed);
         };
         match stopped {
             Ended::Reason(reason) => self.end_turn(&id, Ok(reason)),
@@ -1453,6 +1516,79 @@ impl Acp {
                 self.ui.out.error(id, INTERNAL_ERROR, &error.to_string());
             }
         }
+        self.after_job();
+    }
+
+    /// Moves the conversation to the entry on `line` for request `id`, with the branch left
+    /// summarized when `focus` is given, as `/tree` does. Answered with whether it moved and the
+    /// prompt gone back to, to edit; a question gone back to is asked again, and the answer
+    /// comes when its turn ends, as a prompt's. A next-step list offered there is named.
+    fn navigate(&mut self, id: Value, line: usize, focus: Option<&str>) {
+        let agent = &mut self.session.agent;
+        let navigated = agent.navigate(line, focus, &mut self.ui, &self.cancel);
+        let summarizing = self.ui.compacting;
+        let branch = json!({"io.github.leanandmean.scramjet": {"branch": true}});
+        match navigated {
+            Ok(Navigated::AlreadyThere) => self.ui.out.respond(&id, json!({"moved": false})),
+            Ok(Navigated::Moved {
+                prompt,
+                offer,
+                question,
+            }) => {
+                if summarizing {
+                    let mut fields = json!({"_meta": branch});
+                    if let Some(summary) = self.branch_summary() {
+                        fields["summary"] = json!([{"type": "text", "text": summary}]);
+                    }
+                    let said = "Earlier branch summarized.";
+                    self.ui.compaction_update("completed", fields, Some(said));
+                }
+                self.session_changed("✓ Navigated to selected point", Change::Kept);
+                self.switched();
+                if question {
+                    return self.run(id, None);
+                }
+                let result = json!({"moved": true, "prompt": prompt});
+                self.ui.out.respond(&id, result);
+                if let Some(offer) = offer {
+                    self.ui.tell(&drive::offered_here(&offer));
+                }
+            }
+            Err(AgentError::Cancelled) => {
+                if summarizing {
+                    let fields = json!({"_meta": branch});
+                    self.ui.compaction_update("cancelled", fields, None);
+                }
+                self.ui.out.error(&id, REQUEST_CANCELLED, "cancelled");
+            }
+            Err(error) => {
+                if summarizing {
+                    let said = format!("Branch summary failed: {error}");
+                    let fields = json!({"error": error.to_string(), "_meta": branch});
+                    self.ui.compaction_update("failed", fields, Some(&said));
+                }
+                self.ui.out.error(&id, code(&error), &error.to_string());
+            }
+        }
+        self.after_job();
+    }
+
+    /// The branch summary the conversation now ends with, if any.
+    fn branch_summary(&self) -> Option<String> {
+        let tree = self.session.agent.tree().ok()?;
+        let current = tree
+            .entries
+            .iter()
+            .find(|entry| Some(entry.line) == tree.current)?;
+        match &current.item {
+            TreeItem::BranchSummary(summary) => Some(summary.clone()),
+            _ => None,
+        }
+    }
+
+    /// After a compaction or a move the client waited for: the usage, then the prompts sent
+    /// meanwhile as a turn, or the session left idle.
+    fn after_job(&mut self) {
         let agent = &self.session.agent;
         self.ui.window = agent.context_window();
         let (context, cost) = (agent.context_tokens(), agent.session_tokens().cost);
@@ -1467,7 +1603,7 @@ impl Acp {
             let waiting = std::mem::take(&mut turn.waiting);
             drop(turn);
             self.configure();
-            // Prompts the client cancelled with the compaction.
+            // Prompts the client cancelled with the job.
             for id in &waiting {
                 self.ui.out.respond(id, json!({"stopReason": "cancelled"}));
             }
@@ -1475,7 +1611,7 @@ impl Acp {
         }
         let first = turn.waiting.remove(0);
         drop(turn);
-        self.run(first, queued.join("\n\n"));
+        self.run(first, Some(queued.join("\n\n")));
     }
 
     /// Names the session for request `id`, as `/rename`, answered with `result`, and tells the
@@ -1563,6 +1699,18 @@ impl Acp {
         self.ui.usage_update(context, cost);
     }
 
+    /// Labels the entry on `line` for request `id`, or takes its label away; answered with the
+    /// label given.
+    fn label(&mut self, id: &Value, line: usize, label: Option<&str>) {
+        match self.session.agent.set_label(line, label) {
+            Ok(label) => {
+                let label = label.map(|label| label.text);
+                self.ui.out.respond(id, json!({"label": label}));
+            }
+            Err(error) => self.ui.out.error(id, code(&error), &error.to_string()),
+        }
+    }
+
     /// The session's entries as `/tree` lists them, for request `id`.
     fn tree(&mut self, id: &Value) {
         match self.session.agent.tree() {
@@ -1583,6 +1731,7 @@ impl Acp {
             Setting::Rename(name) => return self.rename(&id, &name, json!({})),
             Setting::Export(path) => return self.export(&id, path.as_deref()),
             Setting::Tree => return self.tree(&id),
+            Setting::Label(line, label) => return self.label(&id, line, label.as_deref()),
         };
         match self.set_option(&option, &value) {
             Ok(()) => {
@@ -2258,6 +2407,10 @@ impl AgentUi for Updates {
             // A compaction may ask for two summaries.
             Purpose::Compaction(_) if !self.compacting => {
                 self.compaction_update("in_progress", json!({}), None);
+            }
+            Purpose::BranchSummary if !self.compacting => {
+                let branch = json!({"io.github.leanandmean.scramjet": {"branch": true}});
+                self.compaction_update("in_progress", json!({"_meta": branch}), None);
             }
             _ => {}
         }

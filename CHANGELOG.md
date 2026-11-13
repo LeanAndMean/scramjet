@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.218.0 — ACP moves in the tree and labels entries
+
+### Added
+
+- `scramjet acp` moves a session's conversation to one of its entries (`_io.github.leanandmean.scramjet/navigate_tree`), as `/tree` does: the prompt gone back to is given back to edit, a question gone back to is asked again, and with `summarize` the branch left is summarized first, shown as a compaction. It is refused while a turn runs.
+- `scramjet acp` labels an entry, or takes its label away (`…/set_label`), as `/tree`'s labels do.
+
 ## 2.217.0 — ACP forks, branches and lists the tree
 
 ### Added
