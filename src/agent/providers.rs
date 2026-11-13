@@ -1865,18 +1865,17 @@ mod tests {
         );
         // A list read from another URL is not its: it is asked for, and what failed is said, but
         // not asked again until it is forgotten.
-        let (other, server) = serve_json(1, |_, _| json!({"error": "no"}));
+        let (other, server) = serve_json(2, |_, _| json!({"error": "no"}));
         let mut moved = Providers::given_logged_in(document(&other), logins.clone());
         let failed = "models: provider openai: lists no models, and asking its server for them \
                       failed: openai's model list has no data";
         assert_eq!(moved.problems(), [failed]);
-        server.join().unwrap();
         moved.reload();
         assert_eq!(moved.problems(), [failed]);
         moved.forget_list("openai");
         moved.reload();
-        let problem = &moved.problems()[0];
-        assert!(problem.contains("cannot connect to 127.0.0.1"), "{problem}");
+        assert_eq!(moved.problems(), [failed]);
+        assert_eq!(server.join().unwrap().len(), 2);
         // A key saved, or logged out of, has what its provider lists asked for again.
         let saved = logins.provided("anthropic");
         assert!(saved.exists());

@@ -375,10 +375,11 @@ fn each_failing_step_is_named() {
         failed.to_string(),
         format!("no models: OpenAI-compatible server at {empty} lists none")
     );
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", closed.local_addr().unwrap());
-    drop(closed);
-    assert_eq!(probe(&url, None).unwrap_err().step, Step::NotReachable);
+    // The discard port: nothing listens there, and no test can take it.
+    assert_eq!(
+        probe("http://127.0.0.1:9", None).unwrap_err().step,
+        Step::NotReachable
+    );
     let web = serve(|_, _, _| not_found());
     let failed = probe(&web, None).unwrap_err();
     assert!(

@@ -1081,9 +1081,8 @@ fn http_servers_that_cannot_be_reached_or_refuse_say_why() {
     }
     let scratch = scratch("http-failing");
     let remote = Remote::start(&[("MCP_TEST_TOKEN", "secret".to_owned())]);
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = closed.local_addr().unwrap().port();
-    drop(closed);
+    // The discard port: nothing listens there, and no test can take it.
+    let port = 9;
     // As the system says it: errno 111 on Linux, 61 on macOS.
     let connection_refused = std::io::Error::from_raw_os_error(if cfg!(windows) {
         10061
@@ -1186,14 +1185,10 @@ fn a_session_the_server_forgot_is_started_again() {
     }
     let scratch = scratch("http-restart");
     let log = scratch.0.join("log");
-    let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = free.local_addr().unwrap().port();
-    drop(free);
-    let env = [
-        ("MCP_TEST_LOG", log.display().to_string()),
-        ("MCP_TEST_PORT", port.to_string()),
-    ];
+    let mut env = vec![("MCP_TEST_LOG", log.display().to_string())];
     let remote = Remote::start(&env);
+    let port = remote.1;
+    env.push(("MCP_TEST_PORT", port.to_string()));
     let url = format!("http://127.0.0.1:{port}/mcp");
     let servers = started(
         &[Server::http("test", &url, Vec::new()).unwrap()],

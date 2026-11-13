@@ -3784,9 +3784,8 @@ fn acp_requires_authentication_for_a_model_whose_login_is_not_made() {
     assert!(child.wait().unwrap().success());
 
     // With no model offered at all, a sign-in is what is missing.
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let closed_port = closed.local_addr().unwrap().port();
-    drop(closed);
+    // The discard port: nothing listens there, and no test can take it.
+    let closed_port = 9;
     let settings = serde_json::json!({"hideCredentials": "never"});
     let models = serde_json::json!([]);
     let (mut child, mut stdin, messages) =
