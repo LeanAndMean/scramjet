@@ -1631,6 +1631,33 @@ impl Settings {
         })
     }
 
+    /// Disables the MCP servers `names`, or enables them, leaving the file's other names as
+    /// they are: those of servers an ACP client gives in their place are not in memory.
+    pub(super) fn set_mcp_servers_disabled(
+        &mut self,
+        names: &[String],
+        disabled: bool,
+    ) -> io::Result<()> {
+        let named = |name: &str| names.iter().any(|given| given == name);
+        self.disabled_mcp_servers.retain(|name| !named(name));
+        if disabled {
+            self.disabled_mcp_servers.extend(names.iter().cloned());
+        }
+        self.update(|object| {
+            let mut listed = match object.remove("disabledMcpServers") {
+                Some(Value::Array(listed)) => listed,
+                _ => Vec::new(),
+            };
+            listed.retain(|name| name.as_str().is_none_or(|name| !named(name)));
+            if disabled {
+                listed.extend(names.iter().map(|name| json!(name)));
+            }
+            if !listed.is_empty() {
+                object.insert("disabledMcpServers".into(), Value::Array(listed));
+            }
+        })
+    }
+
     /// The value `row` shows in `/settings`; the thinking level, autopilot, the next steps,
     /// publishing and what is installed are the session's, not the settings'.
     pub(super) fn shown(&self, row: Row) -> String {

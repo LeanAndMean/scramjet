@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.236.0 — ACP lists and manages the MCP servers
+
+### Added
+
+- `scramjet acp` gives `/mcp` to front ends such as Flightdeck (`mcp`): each MCP server with how it is, its tools or why it failed, and `reconnect`, `enable` and `disable` for one or all.
+
+### Fixed
+
+- `scramjet acp` no longer refuses with "a turn is running" a request sent as soon as a compaction, a move in the tree, a fork or an MCP action answers.
+
 ## 2.235.0 — ACP lists the providers that take an API key
 
 ### Added

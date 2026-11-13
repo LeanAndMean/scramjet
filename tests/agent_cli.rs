@@ -3414,6 +3414,119 @@ fn acp_sessions_start_the_clients_mcp_servers() {
 
 #[test]
 #[cfg(unix)]
+fn acp_lists_reconnects_enables_and_disables_mcp_servers_as_slash_mcp() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-mcp-list-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let server = repository().join("tests/support/mcp_server.py");
+    let program = serde_json::json!({"command": "python3", "args": [server, "--key=secret-arg"]});
+    let settings = serde_json::json!({"hideCredentials": "never",
+        "mcpServers": {"editor": program, "kept": program, "mine": program,
+            "broken": {"command": "python3", "args": [server],
+                "env": {"MCP_TEST_MODE": "exit"}}},
+        "disabledMcpServers": ["kept", "mine"]});
+    let (mut child, mut stdin, messages) = acp_with(&scratch.0, 1, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let offered = next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"].clone();
+    assert!(
+        (offered["methods"].as_array().unwrap().iter())
+            .any(|method| method == "_io.github.leanandmean.scramjet/mcp"),
+        "{offered}"
+    );
+    // The client's `mine` in place of the settings' disabled one.
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": [
+                {"name": "mine", "command": "python3", "args": [server], "env": []}]}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let mut id = 2;
+    let mut mcp = |params: serde_json::Value| {
+        id += 1;
+        let mut params = params;
+        params["sessionId"] = session.clone();
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id,
+                "method": "_io.github.leanandmean.scramjet/mcp", "params": params}),
+        );
+        until(&messages, |message| message["id"] == id).0
+    };
+    let reconnected = mcp(serde_json::json!({"action": "reconnect"}));
+    let servers = reconnected["result"]["servers"].as_array().unwrap().clone();
+    let named = |name: &str| {
+        (servers.iter())
+            .find(|server| server["name"] == name)
+            .unwrap_or_else(|| panic!("{reconnected}"))
+            .clone()
+    };
+    let editor = named("editor");
+    assert_eq!(editor["state"], "ready", "{reconnected}");
+    assert_eq!(editor["command"], "python3", "{reconnected}");
+    assert!(editor["tools"].as_array().unwrap().contains(&"echo".into()));
+    assert_eq!(named("broken")["state"], "failed", "{reconnected}");
+    assert!(named("broken")["error"].is_string(), "{reconnected}");
+    assert_eq!(named("mine")["state"], "ready", "{reconnected}");
+    assert_eq!(named("kept")["state"], "disabled", "{reconnected}");
+    // A program's arguments may hold a key: only its name is given.
+    assert!(
+        !reconnected.to_string().contains("secret-arg"),
+        "{reconnected}"
+    );
+
+    let disabled = mcp(serde_json::json!({"action": "disable", "server": "editor"}));
+    let editor = &disabled["result"]["servers"].as_array().unwrap();
+    let editor = editor
+        .iter()
+        .find(|server| server["name"] == "editor")
+        .unwrap();
+    assert_eq!(editor["state"], "disabled", "{disabled}");
+    let saved = || -> serde_json::Value {
+        let file = scratch.0.join("config/scramjet/settings.json");
+        serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap()
+    };
+    assert_eq!(
+        saved()["disabledMcpServers"],
+        serde_json::json!(["kept", "mine", "editor"])
+    );
+    let refused = mcp(serde_json::json!({"action": "reconnect", "server": "editor"}));
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    let refused = mcp(serde_json::json!({"action": "disable", "server": "mine"}));
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    let refused = mcp(serde_json::json!({"action": "enable", "server": "nobody"}));
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nobody")
+    );
+    let refused = mcp(serde_json::json!({"action": "restart"}));
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+
+    // All the settings' servers; the file's `mine` stays, as the client's is not the settings'.
+    let enabled = mcp(serde_json::json!({"action": "enable", "server": "all"}));
+    assert!(enabled["result"]["servers"].is_array(), "{enabled}");
+    assert_eq!(saved()["disabledMcpServers"], serde_json::json!(["mine"]));
+    let listed = mcp(serde_json::json!({}));
+    let servers = listed["result"]["servers"].as_array().unwrap();
+    assert_eq!(servers.len(), 4, "{listed}");
+    assert!(
+        (servers.iter()).all(|server| server["state"] != "disabled"),
+        "{listed}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_shows_compactions_and_what_commands_sent() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-compact-{}", std::process::id())),

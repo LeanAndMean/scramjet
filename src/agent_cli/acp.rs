@@ -8,7 +8,7 @@ use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    Ending, KeyFrom, McpServer, McpTransport, ModelOption, Navigated, Purpose, Reopened,
+    Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose, Reopened,
     SessionChoice, Shell, StreamProgress, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
@@ -58,8 +58,9 @@ const SET_API_KEY: &str = "_io.github.leanandmean.scramjet/set_api_key";
 const API_KEYS: &str = "_io.github.leanandmean.scramjet/api_keys";
 const STATE: &str = "_io.github.leanandmean.scramjet/state";
 const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
+const MCP: &str = "_io.github.leanandmean.scramjet/mcp";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 17] = [
+const EXTENSIONS: [&str; 18] = [
     HOLD,
     COMPACT,
     RENAME,
@@ -77,6 +78,7 @@ const EXTENSIONS: [&str; 17] = [
     API_KEYS,
     STATE,
     EVENTS,
+    MCP,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -247,12 +249,18 @@ impl Out {
         let _ = writeln!(stdout, "{line}").and_then(|()| stdout.flush());
     }
     fn respond(&self, id: &Value, result: Value) {
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
+        self.send(&Self::response(id, result));
+    }
+    fn response(id: &Value, result: Value) -> Value {
+        json!({"jsonrpc": "2.0", "id": id, "result": result})
     }
     fn error(&self, id: &Value, code: i64, message: &str) {
+        self.send(&Self::failure(id, code, message));
+    }
+    fn failure(id: &Value, code: i64, message: &str) -> Value {
         // Again in `data`, where clients such as Toad 0.6.20 look for what to show.
         let error = json!({"code": code, "message": message, "data": {"details": message}});
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "error": error}));
+        json!({"jsonrpc": "2.0", "id": id, "error": error})
     }
     /// ACP's error for a session not known, naming it in `data` as ACP's error page asks.
     fn unknown(&self, id: &Value, session: &str, message: &str) {
@@ -546,6 +554,16 @@ enum Job {
     Credentials(String),
     /// Request `id`'s `session/load` (true) or `resume` of the session open already.
     Reopen(Value, bool),
+    /// Request `id`'s `mcp` action, on the server named or on all.
+    Mcp(Value, McpAction, Option<String>),
+}
+
+/// What `mcp` does besides listing, as `/mcp reconnect`, `enable` and `disable`.
+#[derive(Clone, Copy)]
+enum McpAction {
+    Reconnect,
+    /// Enables them (true) or disables them.
+    Enable(bool),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -565,6 +583,7 @@ enum Setting {
     Tree,
     /// `set_label`'s entry and its label, `None` to take it away.
     Label(usize, Option<String>),
+    Mcp,
 }
 
 impl Connection {
@@ -621,6 +640,7 @@ impl Connection {
             BASH => self.bash(id, &params),
             STATE => self.state(&id, &params),
             EVENTS => self.events(&id, &params),
+            MCP => self.mcp(id, &params),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
                 false => self.unknown(&id, &params),
@@ -715,6 +735,29 @@ impl Connection {
                 .map_or(0, |since| since.as_millis() as u64);
             out.respond(&id, super::usage::data(&history, now));
         });
+    }
+
+    /// `/mcp`: the session's MCP servers, listed at the turn's next pause; `reconnect`, `enable`
+    /// and `disable` a server, or all, are refused during a turn, as the full screen refuses them.
+    fn mcp(&self, id: Value, params: &Value) {
+        let action = match params["action"].as_str() {
+            None => {
+                return match self.handle(params) {
+                    Some(handle) => Self::settle(handle, &id, Setting::Mcp),
+                    None => self.unknown(&id, params),
+                };
+            }
+            Some("reconnect") => McpAction::Reconnect,
+            Some("enable") => McpAction::Enable(true),
+            Some("disable") => McpAction::Enable(false),
+            Some(other) => {
+                let message = format!("no mcp action {other}: reconnect, enable or disable");
+                return self.out.error(&id, INVALID_PARAMS, &message);
+            }
+        };
+        let server = (params["server"].as_str()).filter(|name| !name.is_empty() && *name != "all");
+        let job = Job::Mcp(id.clone(), action, server.map(str::to_owned));
+        self.busy(&id, params, job);
     }
 
     /// Hands `setting` to the session, which takes it at once between turns, else at the turn's
@@ -1144,6 +1187,10 @@ impl Connection {
                     }
                     Job::Reload(_done) => {
                         front.reload();
+                        continue;
+                    }
+                    Job::Mcp(id, action, server) => {
+                        front.mcp(&id, action, server.as_deref());
                         continue;
                     }
                     Job::Shell(shell) => {
@@ -1744,6 +1791,42 @@ fn queued_text(prompt: Prompt) -> Result<String, String> {
 
 /// The MCP servers `session/new` gives: stdio ones `{name, command, args, env}`, HTTP ones
 /// `{type: "http", name, url, headers}`, their variables and headers lists of `{name, value}`.
+/// An MCP server as `mcp` lists it, with `state` how it is, or `None` when it is disabled: a
+/// program by its name alone, as its arguments may hold a key, and a URL without its query.
+fn mcp_entry(server: &McpServer, state: Option<&McpState>) -> Value {
+    let mut entry = json!({"name": server.name});
+    match &server.transport {
+        McpTransport::Program { command, .. } => entry["command"] = json!(command),
+        McpTransport::Http { .. } => entry["url"] = json!(server.address().1),
+    }
+    let Some(state) = state else {
+        entry["state"] = json!("disabled");
+        return entry;
+    };
+    match state {
+        McpState::Starting => entry["state"] = json!("starting"),
+        McpState::Ready {
+            tools,
+            about,
+            direct,
+        } => {
+            entry["state"] = json!("ready");
+            entry["tools"] = json!(tools);
+            entry["about"] = json!(about);
+            entry["offered"] = match direct {
+                Some(true) => json!("direct"),
+                Some(false) => json!("search"),
+                None => Value::Null,
+            };
+        }
+        McpState::Failed(why) => {
+            entry["state"] = json!("failed");
+            entry["error"] = json!(why);
+        }
+    }
+    entry
+}
+
 fn mcp_servers(servers: &Value) -> Result<Vec<McpServer>, String> {
     let servers = match servers {
         Value::Null => return Ok(Vec::new()),
@@ -2107,24 +2190,24 @@ impl Acp {
     /// compact; then runs the prompts sent meanwhile as a turn.
     fn compact(&mut self, id: &Value, instructions: &str) {
         let agent = &mut self.session.agent;
-        match agent.compact(instructions, None, &mut self.ui, &self.cancel) {
+        let answer = match agent.compact(instructions, None, &mut self.ui, &self.cancel) {
             Ok(Some(compaction)) => {
                 self.ui.compacted(&compaction, None);
-                self.ui.out.respond(id, json!({"compacted": true}));
+                Out::response(id, json!({"compacted": true}))
             }
-            Ok(None) => self.ui.out.respond(id, json!({"compacted": false})),
+            Ok(None) => Out::response(id, json!({"compacted": false})),
             Err(AgentError::Cancelled) => {
                 if self.ui.compacting {
                     self.ui.compaction_update("cancelled", json!({}), None);
                 }
-                self.ui.out.error(id, REQUEST_CANCELLED, "cancelled");
+                Out::failure(id, REQUEST_CANCELLED, "cancelled")
             }
             Err(error) => {
                 self.ui.compaction_failed(&error);
-                self.ui.out.error(id, INTERNAL_ERROR, &error.to_string());
+                Out::failure(id, INTERNAL_ERROR, &error.to_string())
             }
-        }
-        self.after_job();
+        };
+        self.after_job(answer);
     }
 
     /// Moves the conversation to the entry on `line` for request `id`, with the branch left
@@ -2136,8 +2219,8 @@ impl Acp {
         let navigated = agent.navigate(line, focus, &mut self.ui, &self.cancel);
         let summarizing = self.ui.compacting;
         let branch = json!({"io.github.leanandmean.scramjet": {"branch": true}});
-        match navigated {
-            Ok(Navigated::AlreadyThere) => self.ui.out.respond(&id, json!({"moved": false})),
+        let answer = match navigated {
+            Ok(Navigated::AlreadyThere) => Out::response(&id, json!({"moved": false})),
             Ok(Navigated::Moved {
                 prompt,
                 offer,
@@ -2164,7 +2247,7 @@ impl Acp {
                     let fields = json!({"_meta": branch});
                     self.ui.compaction_update("cancelled", fields, None);
                 }
-                self.ui.out.error(&id, REQUEST_CANCELLED, "cancelled");
+                Out::failure(&id, REQUEST_CANCELLED, "cancelled")
             }
             Err(error) => {
                 if summarizing {
@@ -2172,10 +2255,10 @@ impl Acp {
                     let fields = json!({"error": error.to_string(), "_meta": branch});
                     self.ui.compaction_update("failed", fields, Some(&said));
                 }
-                self.ui.out.error(&id, code(&error), &error.to_string());
+                Out::failure(&id, code(&error), &error.to_string())
             }
-        }
-        self.after_job();
+        };
+        self.after_job(answer);
     }
 
     /// The branch summary the conversation now ends with, if any.
@@ -2191,10 +2274,10 @@ impl Acp {
         }
     }
 
-    /// After a compaction or a move the client waited for: the usage, then the prompts sent
-    /// meanwhile as a turn, or the session left idle.
-    fn after_job(&mut self) {
-        self.ui.usage_of(&self.session.agent);
+    /// After a job the client waited for: `answer`, the usage, then the prompts sent meanwhile
+    /// as a turn, or the session left idle. The session is idle before `answer` goes, so the
+    /// client's next request on it is not refused as during a turn.
+    fn after_job(&mut self, answer: Value) {
         let mut turn = lock(&self.turn);
         let queued = match self.cancel.load(Ordering::Relaxed) {
             true => Vec::new(),
@@ -2205,6 +2288,8 @@ impl Acp {
             let waiting = std::mem::take(&mut turn.waiting);
             let shells = std::mem::take(&mut turn.shells);
             drop(turn);
+            self.ui.out.send(&answer);
+            self.ui.usage_of(&self.session.agent);
             self.add_shells(shells);
             self.configure();
             // Prompts the client cancelled with the job.
@@ -2215,6 +2300,8 @@ impl Acp {
         }
         let first = turn.waiting.remove(0);
         drop(turn);
+        self.ui.out.send(&answer);
+        self.ui.usage_of(&self.session.agent);
         let ids = queued.iter().map(|queued| queued.id.clone()).collect();
         let text = texts(queued).join("\n\n");
         self.ui.taken(&text, ids);
@@ -2257,7 +2344,7 @@ impl Acp {
             Ok(None) => Ok(None),
             Err(error) => Err(error),
         };
-        match forked {
+        let answer = match forked {
             Ok(Some((prompt, offer))) => {
                 drive::changed(self, "Forked to new session", Change::Kept);
                 self.switched();
@@ -2266,11 +2353,11 @@ impl Acp {
             }
             Ok(None) => {
                 let message = format!("no prompt at entry {line}");
-                self.ui.out.error(id, INVALID_PARAMS, &message);
+                Out::failure(id, INVALID_PARAMS, &message)
             }
-            Err(error) => self.ui.out.error(id, INTERNAL_ERROR, &error.to_string()),
-        }
-        self.after_job();
+            Err(error) => Out::failure(id, INTERNAL_ERROR, &error.to_string()),
+        };
+        self.after_job(answer);
     }
 
     /// After a fork or a move: the next-step list `offer` gone back to offered again, and
@@ -2284,8 +2371,7 @@ impl Acp {
                 return self.run((id.clone(), result), Some(step), start);
             }
         }
-        self.ui.out.respond(id, result);
-        self.after_job();
+        self.after_job(Out::response(id, result));
     }
 
     /// Continues in a new session with the whole conversation for request `id`, named `name`
@@ -2340,6 +2426,78 @@ impl Acp {
         }
     }
 
+    /// Answers request `id` with the MCP servers, as `/mcp` lists them.
+    fn mcp_servers(&mut self, id: &Value) {
+        let servers = self.mcp_list();
+        self.ui.out.respond(id, json!({"servers": servers}));
+    }
+
+    fn mcp_list(&self) -> Vec<Value> {
+        let agent = &self.session.agent;
+        let (running, disabled) = (agent.mcp_servers(), agent.disabled_mcp());
+        (running.iter())
+            .map(|(server, state)| mcp_entry(server, Some(state)))
+            .chain(disabled.iter().map(|server| mcp_entry(server, None)))
+            .collect()
+    }
+
+    /// `/mcp reconnect`, `enable` or `disable` for request `id`, on the server named or on all,
+    /// answered with the servers then; the client's servers are not enabled or disabled, as the
+    /// settings do not list them.
+    fn mcp(&mut self, id: &Value, action: McpAction, server: Option<&str>) {
+        let answer = match self.mcp_change(action, server) {
+            Ok(()) => Out::response(id, json!({"servers": self.mcp_list()})),
+            Err(error) => Out::failure(id, INVALID_PARAMS, &error),
+        };
+        self.after_job(answer);
+    }
+
+    fn mcp_change(&mut self, action: McpAction, server: Option<&str>) -> Result<(), String> {
+        let agent = &mut self.session.agent;
+        let names = agent.mcp_names();
+        if let Some(name) = server
+            && !names.iter().any(|listed| listed == name)
+        {
+            return Err(format!("no MCP server named {name}"));
+        }
+        let enable = match action {
+            McpAction::Reconnect => {
+                if let Some(name) = server
+                    && agent.mcp_disabled().iter().any(|listed| listed == name)
+                {
+                    return Err(format!("MCP server {name} is disabled"));
+                }
+                agent.reconnect_mcp(server, &mut self.ui, &self.cancel)?;
+                return Ok(());
+            }
+            McpAction::Enable(enable) => enable,
+        };
+        let given = |name: &str| self.servers.iter().any(|given| given.name == name);
+        if let Some(name) = server
+            && given(name)
+        {
+            return Err(format!(
+                "MCP server {name} is the client's: the settings do not list it"
+            ));
+        }
+        let disabled = agent.mcp_disabled();
+        let changed: Vec<String> = (names.into_iter())
+            .filter(|listed| server.is_none_or(|name| listed == name) && !given(listed))
+            .filter(|listed| disabled.contains(listed) == enable)
+            .collect();
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let settings = &mut self.session.settings;
+        if let Err(error) = settings.set_mcp_servers_disabled(&changed, !enable) {
+            self.ui
+                .say("warning", &format!("Settings not saved: {error}"));
+        }
+        let disabled = self.session.settings.disabled_mcp_servers.clone();
+        self.session.agent.set_mcp_disabled(disabled);
+        Ok(())
+    }
+
     /// Sets what `configure` names and answers its request, or says why it was not set.
     fn configure_with(&mut self, configure: Configure) {
         let Configure { id, setting } = configure;
@@ -2349,6 +2507,7 @@ impl Acp {
             Setting::Export(path) => return self.export(&id, path.as_deref()),
             Setting::Tree => return self.tree(&id),
             Setting::Label(line, label) => return self.label(&id, line, label.as_deref()),
+            Setting::Mcp => return self.mcp_servers(&id),
         };
         match self.set_option(&option, &value) {
             Ok(()) => {
