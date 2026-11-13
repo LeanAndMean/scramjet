@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.234.0 — ACP says when a queued prompt goes in
+
+### Changed
+
+- `scramjet acp` tells a client that knows Scramjet's extension when a prompt it sent during a turn is queued (`queued`), and sends the prompt back as a user message where the agent takes it, so a front end such as Flightdeck can show it in its place rather than where it was sent.
+
 ## 2.233.0 — ACP shows calls running together as they run
 
 ### Changed

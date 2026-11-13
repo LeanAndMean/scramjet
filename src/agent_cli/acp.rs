@@ -53,6 +53,7 @@ const USER_COMMAND: &str = "_io.github.leanandmean.scramjet/user_command";
 const STATUS: &str = "_io.github.leanandmean.scramjet/status";
 const QUESTION: &str = "_io.github.leanandmean.scramjet/question";
 const ENTRY: &str = "_io.github.leanandmean.scramjet/entry";
+const QUEUED: &str = "_io.github.leanandmean.scramjet/queued";
 const SET_API_KEY: &str = "_io.github.leanandmean.scramjet/set_api_key";
 const STATE: &str = "_io.github.leanandmean.scramjet/state";
 const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
@@ -462,13 +463,24 @@ struct Handle {
     log: Shared,
 }
 
+/// A prompt sent during a turn, as text, with the id of its request.
+struct Queued {
+    text: String,
+    id: Value,
+}
+
+/// The texts of `queued`.
+fn texts(queued: Vec<Queued>) -> Vec<String> {
+    queued.into_iter().map(|queued| queued.text).collect()
+}
+
 /// A session's turn, as both threads see it.
 #[derive(Default)]
 struct Turn {
     running: bool,
     /// Prompts sent while it runs, for the agent to take: `messages.steering` before its next
     /// request, `messages.follow_ups` when it would end.
-    messages: Messages,
+    messages: Messages<Queued>,
     /// The requests of those prompts, answered when the turn ends.
     waiting: Vec<Value>,
     /// The client held the countdown of the next-step list open (`hold`).
@@ -907,7 +919,10 @@ impl Connection {
             "running": turn.running,
             "request": log.open,
             "question": question,
-            "queue": {"steering": turn.messages.steering, "followUp": turn.messages.follow_ups},
+            "queue": {
+                "steering": turn.messages.steering.iter().map(|queued| &queued.text).collect::<Vec<_>>(),
+                "followUp": turn.messages.follow_ups.iter().map(|queued| &queued.text).collect::<Vec<_>>(),
+            },
             "bash": turn.bash.is_some(),
             "configOptions": log.options,
             "ask": log.asks,
@@ -1368,7 +1383,20 @@ impl Connection {
                     return self.out.error(&id, INVALID_PARAMS, &error);
                 }
             };
-            turn.messages.push(text, follow_up);
+            // Told under the turn's lock, so before the agent can take it.
+            if self.scramjet {
+                let queue = if follow_up { "followUp" } else { "steering" };
+                let told = json!({"sessionId": params["sessionId"], "promptId": id,
+                    "queue": queue});
+                lock(&handle.log).notify(&self.out, QUEUED, told);
+            }
+            turn.messages.push(
+                Queued {
+                    text,
+                    id: id.clone(),
+                },
+                follow_up,
+            );
             turn.waiting.push(id);
             return;
         }
@@ -1835,6 +1863,7 @@ impl Worker {
             entry: None,
             call_ids: HashMap::new(),
             prompt_shown: None,
+            taken_ids: Default::default(),
             title: None,
         };
         Acp {
@@ -1992,7 +2021,10 @@ impl Acp {
                 break Ended::Reason("end_turn");
             }
             drop(turn);
-            (prompt, start) = (Some(queued.join("\n\n")), Start::Typed);
+            let ids = queued.iter().map(|queued| queued.id.clone()).collect();
+            let text = texts(queued).join("\n\n");
+            self.ui.taken(&text, ids);
+            (prompt, start) = (Some(text), Start::Typed);
         };
         match stopped {
             Ended::Reason(reason) => self.end_turn((&id, result), Ok(reason)),
@@ -2138,7 +2170,10 @@ impl Acp {
         }
         let first = turn.waiting.remove(0);
         drop(turn);
-        self.run((first, json!({})), Some(queued.join("\n\n")), Start::Typed);
+        let ids = queued.iter().map(|queued| queued.id.clone()).collect();
+        let text = texts(queued).join("\n\n");
+        self.ui.taken(&text, ids);
+        self.run((first, json!({})), Some(text), Start::Typed);
     }
 
     /// Names the session for request `id`, as `/rename`, answered with `result`, and tells the
@@ -2654,6 +2689,8 @@ struct Updates {
     call_ids: HashMap<String, String>,
     /// The message that showed the prompt saved next, if one did.
     prompt_shown: Option<String>,
+    /// The requests of the queued prompts the turn took, in order, not yet shown as taken.
+    taken_ids: std::collections::VecDeque<Value>,
     /// The title the prompt saved next gives a session with no name and no prompt yet.
     title: Option<String>,
 }
@@ -2733,6 +2770,31 @@ impl Updates {
         self.responses += 1;
         self.prompt_shown = Some(format!("response-{}", self.responses));
         self.chunk("user_message_chunk", text);
+    }
+    /// The queued prompts the turn took, kept to be shown as they are added (`take_queued`).
+    fn taking(&mut self, taken: Vec<Queued>) -> Vec<String> {
+        self.taken_ids
+            .extend(taken.iter().map(|queued| queued.id.clone()));
+        texts(taken)
+    }
+    /// The queued prompt the turn adds now, `text`, shown where it goes in.
+    fn take_queued(&mut self, text: &str) {
+        if let Some(id) = self.taken_ids.pop_front() {
+            self.taken(text, vec![id]);
+        }
+    }
+    /// The prompts of requests `ids`, sent during a turn and given to the agent as `text`: a
+    /// client that knows Scramjet is told where they go into the conversation; others showed
+    /// them when they sent them.
+    fn taken(&mut self, text: &str, ids: Vec<Value>) {
+        if !self.scramjet {
+            return;
+        }
+        self.responses += 1;
+        self.prompt_shown = Some(format!("response-{}", self.responses));
+        let mut update = self.chunked("user_message_chunk", text);
+        add_meta(&mut update, json!({"promptIds": ids}));
+        self.update(update);
     }
     /// What the command or skill `typed` sent in its place, as a message of its own.
     fn expansion(&mut self, typed: &str, sent: &str) {
@@ -3326,16 +3388,20 @@ impl AgentUi for Updates {
     }
     /// A command queued during the turn: the client sent it as typed. Replayed, as typed too.
     fn command_prompt(&mut self, typed: &str, sent: &str) {
-        if self.replaying {
-            self.user_message(typed);
+        match self.replaying {
+            true => self.user_message(typed),
+            false => self.take_queued(typed),
         }
         self.expansion(typed, sent);
     }
-    /// Replayed only: the client sent the prompts of the turns it shows.
+    /// Replayed; live, a prompt queued during the turn, taken.
     fn user_prompt(&mut self, prompt: &str) {
-        if self.replaying {
-            self.thinking = false;
-            self.user_message(prompt);
+        match self.replaying {
+            true => {
+                self.thinking = false;
+                self.user_message(prompt);
+            }
+            false => self.take_queued(prompt),
         }
     }
     fn compaction_summary(&mut self, summary: &str) {
@@ -3390,10 +3456,12 @@ impl AgentUi for Updates {
         self.say("info", record);
     }
     fn steering(&mut self) -> Vec<String> {
-        lock(&self.turn).messages.steer(self.steering)
+        let taken = lock(&self.turn).messages.steer(self.steering);
+        self.taking(taken)
     }
     fn follow_up(&mut self) -> Vec<String> {
-        lock(&self.turn).messages.follow_up(self.follow_up)
+        let taken = lock(&self.turn).messages.follow_up(self.follow_up);
+        self.taking(taken)
     }
     fn usage(&mut self, tokens: Tokens, context: Option<u64>, rate: Option<f64>) {
         self.usage_update((tokens, context, rate));

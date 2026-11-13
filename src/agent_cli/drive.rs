@@ -60,40 +60,48 @@ pub(super) fn with_servers(settings: &mut Settings, servers: &[McpServer]) {
 }
 
 /// Messages given while a turn runs, until the agent takes them: steering for the model's next
-/// request, follow-ups for when the turn would end.
-#[derive(Default)]
-pub(super) struct Messages {
-    pub(super) steering: Vec<String>,
-    pub(super) follow_ups: Vec<String>,
+/// request, follow-ups for when the turn would end. ACP keeps each with its prompt's request.
+pub(super) struct Messages<T = String> {
+    pub(super) steering: Vec<T>,
+    pub(super) follow_ups: Vec<T>,
 }
 
-impl Messages {
-    pub(super) fn push(&mut self, text: String, follow_up: bool) {
+impl<T> Default for Messages<T> {
+    fn default() -> Self {
+        Messages {
+            steering: Vec::new(),
+            follow_ups: Vec::new(),
+        }
+    }
+}
+
+impl<T> Messages<T> {
+    pub(super) fn push(&mut self, message: T, follow_up: bool) {
         match follow_up {
-            true => self.follow_ups.push(text),
-            false => self.steering.push(text),
+            true => self.follow_ups.push(message),
+            false => self.steering.push(message),
         }
     }
     /// The steering messages `delivery` gives the agent at once (`AgentUi::steering`).
-    pub(super) fn steer(&mut self, delivery: Delivery) -> Vec<String> {
+    pub(super) fn steer(&mut self, delivery: Delivery) -> Vec<T> {
         deliver(&mut self.steering, delivery)
     }
     /// The follow-ups `delivery` gives the agent at once (`AgentUi::follow_up`).
-    pub(super) fn follow_up(&mut self, delivery: Delivery) -> Vec<String> {
+    pub(super) fn follow_up(&mut self, delivery: Delivery) -> Vec<T> {
         deliver(&mut self.follow_ups, delivery)
     }
     pub(super) fn is_empty(&self) -> bool {
         self.steering.is_empty() && self.follow_ups.is_empty()
     }
     /// All the messages, in the order they are sent, leaving none.
-    pub(super) fn take(&mut self) -> Vec<String> {
+    pub(super) fn take(&mut self) -> Vec<T> {
         let mut all = std::mem::take(&mut self.steering);
         all.append(&mut self.follow_ups);
         all
     }
 }
 
-fn deliver(queued: &mut Vec<String>, delivery: Delivery) -> Vec<String> {
+fn deliver<T>(queued: &mut Vec<T>, delivery: Delivery) -> Vec<T> {
     match delivery {
         Delivery::All => std::mem::take(queued),
         Delivery::OneAtATime if queued.is_empty() => Vec::new(),
@@ -587,7 +595,7 @@ mod tests {
 
     #[test]
     fn queued_messages_are_delivered_as_the_modes_say() {
-        let mut messages = Messages::default();
+        let mut messages = Messages::<String>::default();
         for text in ["one", "two"] {
             messages.push(text.into(), false);
         }

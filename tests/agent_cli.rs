@@ -2159,6 +2159,85 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
 
 #[test]
 #[cfg(unix)]
+fn acp_tells_a_scramjet_client_when_its_queued_prompts_are_taken() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-queued-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (port, bodies) = serve_bash_call("sleep 2; echo slept");
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities":
+                {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = until(&messages, |message| message["id"] == 2).0["result"]["sessionId"].clone();
+    let prompt = |id: u64, text: &str, queue: Option<&str>| {
+        let mut prompt = serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}});
+        if let Some(queue) = queue {
+            prompt["params"]["_meta"] =
+                serde_json::json!({"io.github.leanandmean.scramjet": {"queue": queue}});
+        }
+        prompt
+    };
+    send(&mut stdin, prompt(3, "hi", None));
+    until(&messages, |message| {
+        message["params"]["update"]["status"] == "in_progress"
+    });
+    send(&mut stdin, prompt(4, "steer this", None));
+    send(&mut stdin, prompt(5, "then this", Some("followUp")));
+    let mut answered = Vec::new();
+    let mut seen = Vec::new();
+    while answered.len() < 3 {
+        let message = next(&messages);
+        let params = &message["params"];
+        if message.get("method").is_none() {
+            assert_eq!(message["result"]["stopReason"], "end_turn", "{message}");
+            answered.push(message["id"].clone());
+        } else if message["method"] == "_io.github.leanandmean.scramjet/queued" {
+            assert_eq!(params["sessionId"], session, "{message}");
+            seen.push(format!("queued {} {}", params["promptId"], params["queue"]));
+        } else if params["update"]["sessionUpdate"] == "user_message_chunk" {
+            let meta = &params["update"]["_meta"]["io.github.leanandmean.scramjet"];
+            let text = &params["update"]["content"]["text"];
+            seen.push(format!("taken {} {text}", meta["promptIds"]));
+        } else if params["update"]["sessionUpdate"] == "tool_call" {
+            seen.push("call".to_owned());
+        }
+    }
+    assert_eq!(
+        seen,
+        [
+            r#"queued 4 "steering""#,
+            r#"queued 5 "followUp""#,
+            r#"taken [4] "steer this""#,
+            r#"taken [5] "then this""#,
+            "call",
+        ]
+    );
+    answered.sort_by_key(|id| id.as_u64());
+    assert_eq!(answered, [3, 4, 5]);
+    let sent: Vec<String> = (0..4)
+        .map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap())
+        .collect();
+    assert!(sent[1].contains("steer this") && !sent[1].contains("then this"));
+    assert!(sent[2].contains("then this"));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_asks_the_client_before_calls_under_ask() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-ask-{}", std::process::id())));
