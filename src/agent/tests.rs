@@ -467,6 +467,14 @@ pub(super) fn serve_json(
     count: usize,
     mut answer: impl FnMut(&str, &str) -> Value + Send + 'static,
 ) -> (String, std::thread::JoinHandle<Vec<(String, String)>>) {
+    serve_json_status(count, move |head, body| (200, answer(head, body)))
+}
+
+/// As `serve_json`, each answer with the HTTP status `answer` gives it.
+pub(super) fn serve_json_status(
+    count: usize,
+    mut answer: impl FnMut(&str, &str) -> (u16, Value) + Send + 'static,
+) -> (String, std::thread::JoinHandle<Vec<(String, String)>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let server = std::thread::spawn(move || {
@@ -489,9 +497,10 @@ pub(super) fn serve_json(
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
             let body = String::from_utf8(body).unwrap();
-            let answer = answer(&head, &body).to_string();
+            let (status, answer) = answer(&head, &body);
+            let answer = answer.to_string();
             let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{answer}",
+                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{answer}",
                 answer.len()
             );
             reader.get_mut().write_all(response.as_bytes()).unwrap();

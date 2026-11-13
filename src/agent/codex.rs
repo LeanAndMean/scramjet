@@ -54,6 +54,8 @@ const LISTED_FIELDS: [&str; 7] = [
 /// Where the login and the list go.
 #[derive(Clone, Debug)]
 pub(super) struct Urls {
+    /// OpenAI's sign-in, where the device login's pages and endpoints are.
+    issuer: String,
     authorize: String,
     token: String,
     /// ChatGPT's backend.
@@ -66,6 +68,7 @@ pub(super) struct Urls {
 impl Default for Urls {
     fn default() -> Self {
         Self {
+            issuer: "https://auth.openai.com".to_owned(),
             authorize: "https://auth.openai.com/oauth/authorize".to_owned(),
             token: "https://auth.openai.com/oauth/token".to_owned(),
             api: BASE_URL.to_owned(),
@@ -150,14 +153,7 @@ impl BrowserLogin {
             ("code_verifier", &self.verifier),
             ("redirect_uri", REDIRECT_URI),
         ]);
-        let credential = tokens(&self.urls.token, form, cancel)?;
-        // Kept even when the list fails, which needs no new login to be read again.
-        login::save(&logins.auth, PROVIDER, credential.clone())?;
-        let kept = |error: String| match error == login::CANCELLED {
-            true => "logged in, but the model list was cancelled: /login again for it".to_owned(),
-            false => format!("logged in, but {error}"),
-        };
-        save_models(&credential, &self.urls, logins, cancel).map_err(kept)
+        signed_in(&self.urls, form, logins, cancel)
     }
 
     /// The authorization code, from whichever comes first: the browser or the user.
@@ -228,6 +224,136 @@ impl BrowserLogin {
         );
         let _ = connection.write_all(answer.as_bytes());
         code
+    }
+}
+
+/// Takes the tokens OpenAI's token endpoint answers `form` with, then lists the account's models
+/// and saves the login and its models in `logins`, as `BrowserLogin::finish`.
+fn signed_in(
+    urls: &Urls,
+    form: String,
+    logins: &login::Logins,
+    cancel: &AtomicBool,
+) -> Result<Option<String>, String> {
+    let credential = tokens(&urls.token, form, cancel)?;
+    // Kept even when the list fails, which needs no new login to be read again.
+    login::save(&logins.auth, PROVIDER, credential.clone())?;
+    let kept = |error: String| match error == login::CANCELLED {
+        true => "logged in, but the model list was cancelled: /login again for it".to_owned(),
+        false => format!("logged in, but {error}"),
+    };
+    save_models(&credential, urls, logins, cancel).map_err(kept)
+}
+
+/// A device login under way, as `codex login --device-auth`
+/// (`codex-rs/login/src/device_code_auth.rs`): the user enters `code` at `url`, on any machine,
+/// while `finish` asks OpenAI whether it was entered. No local port is needed.
+pub struct DeviceLogin {
+    pub url: String,
+    pub code: String,
+    device_auth_id: String,
+    interval: Duration,
+    urls: Urls,
+}
+
+/// How long a device code lasts, as Codex waits for it.
+const DEVICE_WAIT: Duration = Duration::from_secs(15 * 60);
+
+impl DeviceLogin {
+    pub fn start() -> Result<Self, String> {
+        Self::start_at(Urls::default())
+    }
+
+    pub(super) fn start_at(urls: Urls) -> Result<Self, String> {
+        let url = format!("{}/api/accounts/deviceauth/usercode", urls.issuer);
+        let body = json!({"client_id": CLIENT_ID}).to_string().into_bytes();
+        let headers = [("Accept", "application/json")];
+        let fetched = login::blocking(client::fetch(
+            PROVIDER,
+            "POST",
+            &url,
+            &headers,
+            Some(("application/json", body)),
+        ))
+        .map_err(|failure| failure.message)?;
+        if fetched.status == 404 {
+            return Err("OpenAI offers no device code sign-in here (HTTP 404)".to_owned());
+        }
+        let answer = login::answer(fetched, "OpenAI's device code endpoint")?;
+        let code = answer["user_code"].as_str().or(answer["usercode"].as_str());
+        let (Some(id), Some(code)) = (answer["device_auth_id"].as_str(), code) else {
+            return Err(format!(
+                "OpenAI's device code answer lacks a field: {answer}"
+            ));
+        };
+        // Codex reads the interval as a number in a string.
+        let interval = match &answer["interval"] {
+            Value::String(text) => text.trim().parse::<f64>().ok(),
+            other => other.as_f64(),
+        };
+        Ok(Self {
+            url: format!("{}/codex/device", urls.issuer),
+            code: code.to_owned(),
+            device_auth_id: id.to_owned(),
+            interval: Duration::from_secs_f64(interval.unwrap_or(5.0).clamp(1.0, 60.0)),
+            urls,
+        })
+    }
+
+    /// Waits for the user to enter the code, then takes the tokens and saves the login and its
+    /// models as `BrowserLogin::finish`. `cancel` stops it.
+    pub fn finish(
+        self,
+        logins: &login::Logins,
+        cancel: &AtomicBool,
+    ) -> Result<Option<String>, String> {
+        let answer = self.wait(cancel)?;
+        let field = |name: &str| answer[name].as_str().filter(|text| !text.is_empty());
+        let (Some(code), Some(verifier)) = (field("authorization_code"), field("code_verifier"))
+        else {
+            return Err("OpenAI's device sign-in answer lacks its code or verifier".to_owned());
+        };
+        let redirect = format!("{}/deviceauth/callback", self.urls.issuer);
+        let form = form(&[
+            ("grant_type", "authorization_code"),
+            ("client_id", CLIENT_ID),
+            ("code", code),
+            ("code_verifier", verifier),
+            ("redirect_uri", &redirect),
+        ]);
+        signed_in(&self.urls, form, logins, cancel)
+    }
+
+    /// OpenAI's answer once the code is entered: it says 403 or 404 until then.
+    fn wait(&self, cancel: &AtomicBool) -> Result<Value, String> {
+        let url = format!("{}/api/accounts/deviceauth/token", self.urls.issuer);
+        let body = json!({"device_auth_id": self.device_auth_id, "user_code": self.code});
+        let body = body.to_string().into_bytes();
+        let headers = [("Accept", "application/json")];
+        let until = std::time::Instant::now() + DEVICE_WAIT;
+        loop {
+            let asked = client::fetch(
+                PROVIDER,
+                "POST",
+                &url,
+                &headers,
+                Some(("application/json", body.clone())),
+            );
+            let fetched = cancellable(cancel, asked).map_err(|failure: Failure| failure.message)?;
+            if !matches!(fetched.status, 403 | 404) {
+                return login::answer(fetched, "OpenAI's device sign-in");
+            }
+            let wake = std::time::Instant::now() + self.interval;
+            if wake > until {
+                return Err("the code expired before it was entered".to_owned());
+            }
+            while std::time::Instant::now() < wake {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(login::CANCELLED.to_owned());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
     }
 }
 
@@ -638,7 +764,7 @@ fn base64url(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::tests::{ScratchDir, serve_json};
+    use crate::agent::tests::{ScratchDir, serve_json, serve_json_status};
 
     /// An access token naming the ChatGPT account `account`, as OpenAI's do.
     fn token(account: &str) -> String {
@@ -671,6 +797,7 @@ mod tests {
     /// OpenAI, npm and ChatGPT on a closed port: a test that should send nothing reaches none.
     pub(super) fn closed() -> Urls {
         Urls {
+            issuer: "http://127.0.0.1:1".to_owned(),
             authorize: "http://127.0.0.1:1/oauth/authorize".to_owned(),
             token: "http://127.0.0.1:1/oauth/token".to_owned(),
             api: "http://127.0.0.1:1/backend-api".to_owned(),
@@ -729,6 +856,7 @@ mod tests {
             }
         });
         let urls = Urls {
+            issuer: "https://auth.example".to_owned(),
             authorize: "https://auth.example/oauth/authorize".to_owned(),
             token: format!("{base}/oauth/token"),
             api: format!("{base}/backend-api"),
@@ -864,6 +992,132 @@ mod tests {
     }
 
     #[test]
+    fn a_device_login_waits_for_the_code_then_saves_the_tokens_and_the_models() {
+        let access = token("acc-2");
+        let served = access.clone();
+        let mut polled = 0;
+        let (base, server) = serve_json_status(6, move |head, _| {
+            let path = head.split(' ').nth(1).unwrap_or_default();
+            match path {
+                "/api/accounts/deviceauth/usercode" => (
+                    200,
+                    json!({"device_auth_id": "da-1", "user_code": "ABCD-1234", "interval": "1"}),
+                ),
+                "/api/accounts/deviceauth/token" => {
+                    polled += 1;
+                    match polled {
+                        1 => (403, json!({"error": "pending"})),
+                        _ => (
+                            200,
+                            json!({"authorization_code": "ac-1",
+                            "code_challenge": "ch", "code_verifier": "cv-1"}),
+                        ),
+                    }
+                }
+                "/oauth/token" => (
+                    200,
+                    json!({"access_token": served, "refresh_token": "rt-2",
+                    "id_token": "id", "expires_in": 864000}),
+                ),
+                "/%40openai%2Fcodex/latest" => (200, json!({"version": "0.170.0"})),
+                "/backend-api/codex/models?client_version=0.170.0" => {
+                    (200, json!({"models": listed()}))
+                }
+                _ => (404, json!({})),
+            }
+        });
+        let urls = Urls {
+            issuer: base.clone(),
+            authorize: format!("{base}/oauth/authorize"),
+            token: format!("{base}/oauth/token"),
+            api: format!("{base}/backend-api"),
+            release: format!("{base}/%40openai%2Fcodex/latest"),
+        };
+        let device = DeviceLogin::start_at(urls).unwrap();
+        assert_eq!(device.url, format!("{base}/codex/device"));
+        assert_eq!(device.code, "ABCD-1234");
+        let scratch = scratch("device");
+        let logins = login::Logins {
+            auth: scratch.0.join("config/auth.json"),
+            lists: scratch.0.join("state/logins"),
+        };
+        let warned = device.finish(&logins, &AtomicBool::new(false)).unwrap();
+        assert_eq!(warned, None);
+        let requests = server.join().unwrap();
+        let lines: Vec<&str> = (requests.iter())
+            .map(|(head, _)| head.lines().next().unwrap())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "POST /api/accounts/deviceauth/usercode HTTP/1.1",
+                "POST /api/accounts/deviceauth/token HTTP/1.1",
+                "POST /api/accounts/deviceauth/token HTTP/1.1",
+                "POST /oauth/token HTTP/1.1",
+                "GET /%40openai%2Fcodex/latest HTTP/1.1",
+                "GET /backend-api/codex/models?client_version=0.170.0 HTTP/1.1"
+            ]
+        );
+        let body = |index: usize| serde_json::from_str::<Value>(&requests[index].1).unwrap();
+        assert_eq!(body(0), json!({"client_id": CLIENT_ID}));
+        assert_eq!(
+            body(2),
+            json!({"device_auth_id": "da-1", "user_code": "ABCD-1234"})
+        );
+        let redirect = encode(&format!("{base}/deviceauth/callback"));
+        assert_eq!(
+            requests[3].1,
+            format!(
+                "grant_type=authorization_code&client_id={CLIENT_ID}&code=ac-1&code_verifier=cv-1&redirect_uri={redirect}"
+            )
+        );
+        let saved = login::saved(&logins.auth).unwrap();
+        assert_eq!(saved[PROVIDER]["access"].as_str(), Some(access.as_str()));
+        assert_eq!(saved[PROVIDER]["accountId"], "acc-2");
+        assert!(logins.listed(PROVIDER).exists());
+    }
+
+    #[test]
+    fn a_device_login_says_why_it_cannot_start_and_stops_when_cancelled() {
+        let mut polled = 0;
+        let (base, server) = serve_json_status(3, move |head, _| {
+            match head.split(' ').nth(1).unwrap_or_default() {
+                "/api/accounts/deviceauth/usercode" => {
+                    polled += 1;
+                    match polled {
+                        1 => (404, json!({})),
+                        _ => (200, json!({"device_auth_id": "da-1", "user_code": "C"})),
+                    }
+                }
+                _ => (403, json!({})),
+            }
+        });
+        let urls = Urls {
+            issuer: base.clone(),
+            ..closed()
+        };
+        let refused = DeviceLogin::start_at(urls.clone()).err().unwrap();
+        assert!(refused.contains("no device code sign-in"), "{refused}");
+        let device = DeviceLogin::start_at(urls).unwrap();
+        assert_eq!(device.interval, Duration::from_secs(5));
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            stop.store(true, Ordering::Relaxed);
+        });
+        let scratch = scratch("device-cancel");
+        let logins = login::Logins {
+            auth: scratch.0.join("config/auth.json"),
+            lists: scratch.0.join("state/logins"),
+        };
+        let stopped = device.finish(&logins, &cancel).err().unwrap();
+        assert_eq!(stopped, login::CANCELLED);
+        assert_eq!(server.join().unwrap().len(), 3);
+        assert!(!logins.auth.exists());
+    }
+
+    #[test]
     fn a_pasted_address_or_code_is_the_answer_unless_it_is_another_logins() {
         let browser = BrowserLogin::start_at(closed(), "127.0.0.1:0").unwrap();
         let state = browser.state.clone();
@@ -931,6 +1185,7 @@ mod tests {
             _ => json!({"detail": "not here"}),
         });
         let urls = Urls {
+            issuer: String::new(),
             authorize: String::new(),
             token: format!("{base}/oauth/token"),
             api: base.clone(),
@@ -967,6 +1222,7 @@ mod tests {
             }
         });
         let urls = Urls {
+            issuer: String::new(),
             authorize: String::new(),
             token: format!("{base}/oauth/token"),
             api: base.clone(),
@@ -1003,6 +1259,7 @@ mod tests {
             _ => json!({"error": "Not found"}),
         });
         let urls = Urls {
+            issuer: String::new(),
             authorize: String::new(),
             token: format!("{base}/oauth/token"),
             api: base.clone(),

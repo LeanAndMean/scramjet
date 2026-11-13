@@ -47,7 +47,7 @@ impl Method {
     }
     fn advertised(&self) -> Value {
         let description = match self {
-            Self::ChatGpt => "Sign in with your ChatGPT account in the browser".to_owned(),
+            Self::ChatGpt => "Sign in with your ChatGPT account by a device code".to_owned(),
             Self::Copilot => "Sign in to GitHub with a device code (an Enterprise server through \
                               _meta's enterprise)"
                 .to_owned(),
@@ -216,18 +216,13 @@ fn sign_in(
 ) -> Result<Option<String>, String> {
     match method {
         Method::ChatGpt => {
-            let browser = codex::BrowserLogin::start()?;
-            if !browser.listening() {
-                return Err(
-                    "port 1455 is in use, so the browser cannot come back: sign in from \
-                            a terminal with /login, which takes its last address pasted"
-                        .to_owned(),
-                );
-            }
-            pages.open(&browser.url, "Sign in to ChatGPT in the browser");
-            // Nothing is pasted here: the browser comes back by itself.
-            let (_paste, pasted) = mpsc::channel();
-            browser.finish(&pasted, &AtomicBool::new(false), logins, pages.cancel)
+            let device = codex::DeviceLogin::start()?;
+            let message = format!(
+                "Enter the code {} on OpenAI's page to sign in to ChatGPT",
+                device.code
+            );
+            pages.open(&device.url, &message);
+            device.finish(logins, pages.cancel)
         }
         Method::Copilot => {
             let device = copilot::DeviceLogin::start(enterprise)?;

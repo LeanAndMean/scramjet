@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.231.0 — ChatGPT's sign-in over ACP by a device code
+
+### Changed
+
+- In `scramjet acp`, signing in to ChatGPT gives a device code to enter at OpenAI's page, as `codex login --device-auth` does, in place of the browser login, which needed port 1455 free on the machine running Scramjet. A client on another machine (a phone through Flightdeck) can now sign in. `/login` in the terminal keeps the browser login.
+
 ## 2.230.1 — Permission requests show the call
 
 ### Fixed
