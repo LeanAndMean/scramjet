@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.220.0 — ACP runs ! commands
+
+### Added
+
+- `scramjet acp` runs a command in the session's project as `!` does, or `!!` with `exclude` (`_io.github.leanandmean.scramjet/bash`), also while a turn runs, and answers with its output, exit code and whether it was stopped; `…/abort_bash` stops it. Its output goes to the model with the next prompt, after the turn when one runs.
+
 ## 2.219.0 — ACP reloads the settings
 
 ### Added

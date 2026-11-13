@@ -8,8 +8,8 @@ use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    McpServer, McpTransport, ModelOption, Navigated, Purpose, SessionChoice, StreamProgress,
-    Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
+    Ending, McpServer, McpTransport, ModelOption, Navigated, Purpose, SessionChoice, Shell,
+    StreamProgress, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -45,9 +45,13 @@ const TREE: &str = "_io.github.leanandmean.scramjet/tree";
 const NAVIGATE: &str = "_io.github.leanandmean.scramjet/navigate_tree";
 const LABEL: &str = "_io.github.leanandmean.scramjet/set_label";
 const RELOAD: &str = "_io.github.leanandmean.scramjet/reload";
+const BASH: &str = "_io.github.leanandmean.scramjet/bash";
+const ABORT_BASH: &str = "_io.github.leanandmean.scramjet/abort_bash";
+const USER_COMMAND: &str = "_io.github.leanandmean.scramjet/user_command";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 11] = [
-    HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE, NAVIGATE, LABEL, RELOAD,
+const EXTENSIONS: [&str; 13] = [
+    HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE, NAVIGATE, LABEL, RELOAD, BASH,
+    ABORT_BASH,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -297,6 +301,8 @@ struct Handle {
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
     thread: JoinHandle<()>,
+    /// The project, where `bash` runs its commands.
+    root: PathBuf,
 }
 
 /// A session's turn, as both threads see it.
@@ -313,6 +319,10 @@ struct Turn {
     /// Config options and names the client set while it runs, which the session takes at its
     /// next pause.
     configuring: Vec<Configure>,
+    /// What stops the `bash` command running, if one runs.
+    bash: Option<Arc<AtomicBool>>,
+    /// The `bash` commands that ended while it ran, added to the conversation when it ends.
+    shells: Vec<Shell>,
 }
 
 /// How `session/new`, `resume` and `load` start a session.
@@ -340,6 +350,8 @@ enum Job {
     Navigate(Value, usize, Option<String>),
     /// `reload`, done when the sender is dropped.
     Reload(mpsc::Sender<()>),
+    /// A `bash` command that ended between turns, to add to the conversation.
+    Shell(Shell),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -408,6 +420,11 @@ impl Connection {
             NAVIGATE => self.navigate(id, &params),
             LABEL => self.label(&id, &params),
             RELOAD => self.reload(id),
+            BASH => self.bash(id, &params),
+            ABORT_BASH => match self.abort_bash(&params) {
+                true => self.out.respond(&id, json!({})),
+                false => self.out.error(&id, INVALID_PARAMS, "no such session"),
+            },
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
     }
@@ -423,6 +440,8 @@ impl Connection {
             }
         } else if method == HOLD {
             self.hold(params);
+        } else if method == ABORT_BASH {
+            self.abort_bash(params);
         }
     }
 
@@ -596,6 +615,72 @@ impl Connection {
         });
     }
 
+    /// Runs `command` in the session's project as `!` does, or `!!` with `exclude`, alongside
+    /// its turn if one runs: its output goes into the conversation at once between turns, else
+    /// when the turn ends, as the full screen adds a `!` typed during a turn. Answered when it
+    /// ends, with its output, exit code and whether it was aborted; one at a time per session.
+    fn bash(&self, id: Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(&id, INVALID_PARAMS, "no such session");
+        };
+        let command = params["command"]
+            .as_str()
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        if command.is_empty() {
+            return self.out.error(&id, INVALID_PARAMS, "command is required");
+        }
+        let include = params["exclude"] != true;
+        let cancel = Arc::<AtomicBool>::default();
+        let mut turn = lock(&handle.turn);
+        if turn.bash.is_some() {
+            drop(turn);
+            return self.out.error(&id, INVALID_PARAMS, "a command is running");
+        }
+        turn.bash = Some(cancel.clone());
+        drop(turn);
+        let (out, turn, jobs) = (self.out.clone(), handle.turn.clone(), handle.jobs.clone());
+        let (root, scramjet, session) = (handle.root.clone(), self.scramjet, &params["sessionId"]);
+        let mut said = json!({"sessionId": session, "command": command, "include": include});
+        std::thread::spawn(move || {
+            let tell = |params: &Value| {
+                if scramjet {
+                    let notification =
+                        json!({"jsonrpc": "2.0", "method": USER_COMMAND, "params": params});
+                    out.send(&notification);
+                }
+            };
+            tell(&said);
+            let shell = Shell::run(&root, &command, include, &cancel, &mut |_| {});
+            let result = ran(&shell.shown());
+            let mut held = lock(&turn);
+            held.bash = None;
+            match held.running {
+                true => held.shells.push(shell),
+                false => {
+                    let _ = jobs.send(Job::Shell(shell));
+                }
+            }
+            drop(held);
+            said["result"] = result.clone();
+            tell(&said);
+            out.respond(&id, result);
+        });
+    }
+
+    /// Stops the `bash` command running in the session `params` names, if one runs; whether
+    /// there is that session.
+    fn abort_bash(&self, params: &Value) -> bool {
+        let Some(handle) = self.handle(params) else {
+            return false;
+        };
+        if let Some(cancel) = &lock(&handle.turn).bash {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        true
+    }
+
     /// Hands `job` to the session `params` names unless a turn runs there.
     fn between_turns(&self, id: &Value, params: &Value, job: Job) {
         let Some(handle) = self.handle(params) else {
@@ -664,7 +749,7 @@ impl Connection {
                 Err((code, message)) => return self.out.error(id, code, &message),
             },
         };
-        let (started, starts) = mpsc::channel::<Result<String, String>>();
+        let (started, starts) = mpsc::channel::<Result<(String, PathBuf), String>>();
         let (jobs, given) = mpsc::channel();
         let (cancel, turn) = (Arc::<AtomicBool>::default(), Arc::<Mutex<Turn>>::default());
         let worker = Worker {
@@ -695,7 +780,8 @@ impl Connection {
             // Answered here, so that the commands' update follows it.
             let result = json!({"sessionId": front.ui.session, "configOptions": front.shown});
             out.respond(&answered, result);
-            let _ = started.send(Ok(front.ui.session.clone()));
+            let root = front.session.agent.root().to_path_buf();
+            let _ = started.send(Ok((front.ui.session.clone(), root)));
             front.commands();
             for job in given {
                 let (id, Prompt { text, images }) = match job {
@@ -724,6 +810,10 @@ impl Connection {
                         front.reload();
                         continue;
                     }
+                    Job::Shell(shell) => {
+                        front.add_shells(vec![shell]);
+                        continue;
+                    }
                 };
                 if !images.is_empty() {
                     match Attached::images(&images) {
@@ -738,12 +828,13 @@ impl Connection {
             }
         });
         match starts.recv() {
-            Ok(Ok(session)) => {
+            Ok(Ok((session, root))) => {
                 let handle = Handle {
                     jobs,
                     cancel,
                     turn,
                     thread,
+                    root,
                 };
                 self.sessions.insert(session, handle);
             }
@@ -878,6 +969,9 @@ impl Connection {
                 turn.messages.take();
                 handle.cancel.store(true, Ordering::Relaxed);
             }
+            if let Some(bash) = &turn.bash {
+                bash.store(true, Ordering::Relaxed);
+            }
             drop(turn);
             drop(handle.jobs);
             self.closed.push(handle.thread);
@@ -978,6 +1072,9 @@ impl Connection {
     fn end(self) {
         for handle in self.sessions.values() {
             handle.cancel.store(true, Ordering::Relaxed);
+            if let Some(bash) = &lock(&handle.turn).bash {
+                bash.store(true, Ordering::Relaxed);
+            }
         }
         for (_, handle) in self.sessions {
             drop(handle.jobs);
@@ -987,6 +1084,19 @@ impl Connection {
             let _ = thread.join();
         }
     }
+}
+
+/// `bash`'s result for the command `shown`, as Scramjet 1's RPC gives it: what it printed, its
+/// exit code (null when it did not exit), whether it was aborted, and why it failed otherwise.
+fn ran(shown: &UserCommand) -> Value {
+    let mut result = json!({"output": shown.output, "exitCode": null, "cancelled": false});
+    match &shown.ending {
+        Ending::Done => result["exitCode"] = json!(0),
+        Ending::Exited(code) => result["exitCode"] = json!(code),
+        Ending::Cancelled => result["cancelled"] = json!(true),
+        Ending::Failed(why) => result["error"] = json!(why),
+    }
+    result
 }
 
 /// The JSON-RPC error for `error`: the client's when it named no entry of the session.
@@ -1477,6 +1587,16 @@ impl Acp {
         self.options_changed();
     }
 
+    /// Adds the `bash` commands that ended to the conversation, for the model (`!`) or only to
+    /// be shown again (`!!`).
+    fn add_shells(&mut self, shells: Vec<Shell>) {
+        for shell in shells {
+            if let Err(error) = self.session.agent.add_shell(shell, &mut self.ui) {
+                self.ui.say("warning", &format!("Error: {error}"));
+            }
+        }
+    }
+
     /// Lists the command sets' commands and the skills for the client.
     fn commands(&mut self) {
         let agent = &self.session.agent;
@@ -1652,7 +1772,9 @@ impl Acp {
         if queued.is_empty() {
             turn.running = false;
             let waiting = std::mem::take(&mut turn.waiting);
+            let shells = std::mem::take(&mut turn.shells);
             drop(turn);
+            self.add_shells(shells);
             self.configure();
             // Prompts the client cancelled with the job.
             for id in &waiting {
@@ -1943,7 +2065,9 @@ impl Acp {
         let mut turn = lock(&self.turn);
         turn.running = false;
         let waiting = std::mem::take(&mut turn.waiting);
+        let shells = std::mem::take(&mut turn.shells);
         drop(turn);
+        self.add_shells(shells);
         // Those set after the turn's last look, which no later turn would take.
         self.configure();
         let ended = match self.cancel.load(Ordering::Relaxed) {

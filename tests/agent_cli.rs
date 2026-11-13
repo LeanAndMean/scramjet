@@ -3286,6 +3286,127 @@ fn acp_reloads_the_settings_commands_and_models_through_the_extension() {
 
 #[test]
 #[cfg(unix)]
+fn acp_runs_bang_commands_between_and_during_turns_through_the_extension() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-bash-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    // The first reply is held, so that a command runs and ends during its turn.
+    let (port, bodies) = serve_events_after(vec![reply.clone(), reply], |n| match n {
+        0 => Duration::from_millis(1000),
+        _ => Duration::ZERO,
+    });
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 100000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities":
+                {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let bash = |id: u64, command: &str, exclude: bool| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": "_io.github.leanandmean.scramjet/bash",
+            "params": {"sessionId": session, "command": command, "exclude": exclude}})
+    };
+    let prompt = |id: u64, text: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}})
+    };
+    let answered = |messages: &std::sync::mpsc::Receiver<serde_json::Value>| {
+        until(messages, |message| message.get("id").is_some())
+    };
+
+    send(&mut stdin, bash(3, "pwd; exit 3", false));
+    let (ran, before) = answered(&messages);
+    assert_eq!(ran["id"], 3, "{ran}");
+    let output = project.canonicalize().unwrap().display().to_string();
+    assert_eq!(
+        ran["result"],
+        serde_json::json!({"output": output, "exitCode": 3, "cancelled": false}),
+        "{ran}"
+    );
+    let told: Vec<_> = (before.iter())
+        .filter(|message| message["method"] == "_io.github.leanandmean.scramjet/user_command")
+        .map(|message| &message["params"])
+        .collect();
+    assert_eq!(told.len(), 2, "{before:?}");
+    assert_eq!(told[0]["command"], "pwd; exit 3");
+    assert_eq!(told[0]["include"], true);
+    assert!(told[0].get("result").is_none(), "{}", told[0]);
+    assert_eq!(told[1]["result"], ran["result"]);
+    send(&mut stdin, bash(4, "echo secret", true));
+    assert_eq!(answered(&messages).0["result"]["exitCode"], 0);
+
+    send(&mut stdin, bash(5, "sleep 30", false));
+    send(&mut stdin, bash(6, "true", false));
+    let (refused, _) = answered(&messages);
+    assert_eq!(refused["id"], 6, "{refused}");
+    assert_eq!(refused["error"]["message"], "a command is running");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 7,
+            "method": "_io.github.leanandmean.scramjet/abort_bash",
+            "params": {"sessionId": session}}),
+    );
+    let started = Instant::now();
+    let (first, _) = answered(&messages);
+    let (second, _) = answered(&messages);
+    let mut both = [first, second];
+    both.sort_by_key(|message| message["id"].as_u64());
+    assert_eq!(both[0]["id"], 5);
+    assert_eq!(both[0]["result"]["cancelled"], true, "{}", both[0]);
+    assert_eq!(both[1]["result"], serde_json::json!({}), "{}", both[1]);
+    assert!(started.elapsed() < Duration::from_secs(10));
+
+    send(&mut stdin, prompt(8, "first"));
+    std::thread::sleep(Duration::from_millis(200));
+    send(&mut stdin, bash(9, "echo during", false));
+    let (during, _) = answered(&messages);
+    assert_eq!(during["id"], 9, "{during}");
+    assert_eq!(during["result"]["output"], "during");
+    let (turned, _) = answered(&messages);
+    assert_eq!(turned["result"]["stopReason"], "end_turn", "{turned}");
+    send(&mut stdin, prompt(10, "second"));
+    assert_eq!(answered(&messages).0["result"]["stopReason"], "end_turn");
+    let first = bodies.recv_timeout(Duration::from_secs(5)).unwrap();
+    let second = bodies.recv_timeout(Duration::from_secs(5)).unwrap();
+    let messages = |body: &str| {
+        serde_json::from_str::<serde_json::Value>(body).unwrap()["messages"].to_string()
+    };
+    let (first, second) = (messages(&first), messages(&second));
+    assert!(first.contains("Ran `pwd; exit 3`"), "{first}");
+    assert!(first.contains("Ran `sleep 30`"), "{first}");
+    // `!!`'s output is never sent; one ending during a turn goes with the next prompt.
+    assert!(
+        !first.contains("secret") && !first.contains("during"),
+        "{first}"
+    );
+    assert!(second.contains("Ran `echo during`"), "{second}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_forks_branches_and_lists_the_tree_through_the_extensions() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-fork-{}", std::process::id())));
