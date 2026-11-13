@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.226.0 — ACP tells the working status
+
+### Added
+
+- `scramjet acp` tells a client that knows Scramjet's extensions what the full screen's working line says (`status`: waiting for the reply, compacting, summarizing a branch, retrying or held by the provider, with the wait left), and when a turn ends on a question the next prompt answers (`question`, with its text).
+- A provider's request to wait (Retry-After) is a `notice` too.
+
 ## 2.225.0 — ACP catches a client up
 
 ### Added

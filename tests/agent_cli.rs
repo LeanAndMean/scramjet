@@ -1831,6 +1831,11 @@ fn serve_bash_call(command: &str) -> (u16, std::sync::mpsc::Receiver<String>) {
 
 /// As `serve_bash_call`, with a call of the tool `name` with `input`.
 fn serve_call(name: &str, input: serde_json::Value) -> (u16, std::sync::mpsc::Receiver<String>) {
+    serve_events(call_events(name, input))
+}
+
+/// A Claude reply calling the tool `name` with `input`, then one with a short text.
+fn call_events(name: &str, input: serde_json::Value) -> Vec<Vec<String>> {
     let input = input.to_string();
     let call = vec![
         r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
@@ -1852,7 +1857,7 @@ fn serve_call(name: &str, input: serde_json::Value) -> (u16, std::sync::mpsc::Re
     ]
     .map(str::to_owned)
     .to_vec();
-    serve_events(vec![call, text])
+    vec![call, text]
 }
 
 /// A scripted Claude provider answering its requests with `replies`' events in turn, cycling:
@@ -1866,24 +1871,35 @@ fn serve_events_after(
     replies: Vec<Vec<String>>,
     delay: impl Fn(usize) -> Duration + Send + 'static,
 ) -> (u16, std::sync::mpsc::Receiver<String>) {
+    let replies: Vec<String> = replies.iter().map(|events| sse_reply(events)).collect();
+    serve_raw_after(replies, delay)
+}
+
+/// An HTTP response streaming `events`, Claude's.
+fn sse_reply(events: &[String]) -> String {
+    let body: String = (events.iter())
+        .map(|event| {
+            let kind: serde_json::Value = serde_json::from_str(event).unwrap();
+            let kind = kind["type"].as_str().unwrap().to_owned();
+            format!("event: {kind}\ndata: {event}\n\n")
+        })
+        .collect();
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\
+connection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// A scripted provider answering its requests with `replies`, whole HTTP responses, in turn,
+/// cycling, holding request `n`'s for `delay(n)`: its port, and each request's body.
+fn serve_raw_after(
+    replies: Vec<String>,
+    delay: impl Fn(usize) -> Duration + Send + 'static,
+) -> (u16, std::sync::mpsc::Receiver<String>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let (sent, received) = std::sync::mpsc::channel();
-    let reply = |events: &[String]| {
-        let body: String = (events.iter())
-            .map(|event| {
-                let kind: serde_json::Value = serde_json::from_str(event).unwrap();
-                let kind = kind["type"].as_str().unwrap().to_owned();
-                format!("event: {kind}\ndata: {event}\n\n")
-            })
-            .collect();
-        format!(
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\
-connection: close\r\n\r\n{body}",
-            body.len()
-        )
-    };
-    let replies: Vec<String> = replies.iter().map(|events| reply(events)).collect();
     std::thread::spawn(move || {
         for (n, socket) in listener.incoming().enumerate() {
             let mut stream = socket.unwrap();
@@ -2528,6 +2544,11 @@ fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
     );
     assert!(result(&seen).contains("parked"), "{seen:?}");
     assert!(bodies.is_empty(), "{bodies:?}");
+    // A client that does not know Scramjet's extensions gets none of its notifications.
+    assert!(
+        (seen.iter()).all(|message| !message.to_string().contains("_io.github")),
+        "{seen:?}"
+    );
     // A write grant: a permission request whose last option denies.
     let grant = serde_json::json!({"write": ["/var/tmp"], "reason": "to build"});
     let (asked, _, seen, _) = acp_asked(
@@ -2553,6 +2574,82 @@ fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
     assert_eq!(kinds.first(), Some(&"allow_once"));
     assert_eq!(kinds.last(), Some(&"reject_once"));
     assert!(result(&seen).contains("stay read-only"), "{seen:?}");
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_tells_a_client_that_knows_the_extension_the_status_and_a_question_left_open() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-status-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let question = serde_json::json!({"type": "freetext", "message": "Which branch?"});
+    let busy = "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\n\
+content-length: 2\r\nconnection: close\r\n\r\n{}";
+    let mut replies = vec![busy.to_owned()];
+    replies.extend(
+        call_events("get_scramjet_user_input", question)
+            .iter()
+            .map(|e| sse_reply(e)),
+    );
+    let (port, _bodies) = serve_raw_after(replies, |_| Duration::ZERO);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) =
+        acp_with(&scratch.0, port, settings, &["--retries", "1"]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities":
+                {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (ended, seen) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let ours = |name: &str| format!("_io.github.leanandmean.scramjet/{name}");
+    let statuses: Vec<&serde_json::Value> = (seen.iter())
+        .filter(|message| message["method"] == ours("status"))
+        .map(|message| &message["params"])
+        .collect();
+    let states: Vec<&str> = (statuses.iter())
+        .map(|status| status["state"].as_str().unwrap())
+        .collect();
+    // Waiting, retrying after the 503, waiting again for the call, then for the reply after it
+    // is not sent: the question ends the turn.
+    assert_eq!(states, ["waiting", "retrying", "waiting"], "{statuses:?}");
+    assert_eq!(statuses[0]["sessionId"], session);
+    assert_eq!(statuses[0]["text"], "Waiting for reply");
+    let retrying = statuses[1];
+    assert!(
+        retrying["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Retrying (1/1) in "),
+        "{retrying}"
+    );
+    assert!(retrying["delayMs"].as_u64().unwrap() > 0, "{retrying}");
+    // The question goes just before the turn's response.
+    let last = seen.last().unwrap();
+    assert_eq!(last["method"], ours("question"), "{last}");
+    assert_eq!(
+        last["params"],
+        serde_json::json!({"sessionId": session, "question": "Which branch?",
+            "_meta": {"io.github.leanandmean.scramjet": {"seq": last["params"]["_meta"]
+                ["io.github.leanandmean.scramjet"]["seq"]}}})
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
 }
 
 #[test]

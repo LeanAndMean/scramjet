@@ -84,9 +84,9 @@ ACP lets a connection hold several sessions, so a client may open several thread
 | `session_info_update` | The session renamed (`rename`) or titled by its first prompt. |
 
 **Extension notifications** (`_io.github.leanandmean.scramjet/…`, ignored by other clients):
-- `status`: what the full screen's working line says (waiting for the model, compacting, retrying in N s, held for a provider's Retry-After).
+- `status` `{sessionId, state, text, delayMs?}`: what the full screen's working line says when a request starts or waits, until the next update or the turn's end. `state` is `waiting` (for the model's reply), `compacting`, `summarizing` (a branch left by `navigate_tree`), `retrying` or `cooling` (held for a provider's Retry-After), the last two with `delayMs` until the request goes again; `text` as the full screen words it.
 - `next_step`: Scramjet's record of the step chosen or the list dismissed.
-- `question`: a freetext question was asked; the turn has ended and the next prompt answers it.
+- `question` `{sessionId, question}`: the turn ended on a question the client was not asked with a form (freetext, or any without `elicitation.form`), its text; the next prompt answers it. Sent just before the turn's response.
 - `user_command`: a `!` command's start `{sessionId, command, include}` and the same with `result` when it ends (section 8's `bash`).
 - `session_changed`: section 3.
 

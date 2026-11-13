@@ -50,6 +50,8 @@ const RELOAD: &str = "_io.github.leanandmean.scramjet/reload";
 const BASH: &str = "_io.github.leanandmean.scramjet/bash";
 const ABORT_BASH: &str = "_io.github.leanandmean.scramjet/abort_bash";
 const USER_COMMAND: &str = "_io.github.leanandmean.scramjet/user_command";
+const STATUS: &str = "_io.github.leanandmean.scramjet/status";
+const QUESTION: &str = "_io.github.leanandmean.scramjet/question";
 const SET_API_KEY: &str = "_io.github.leanandmean.scramjet/set_api_key";
 const STATE: &str = "_io.github.leanandmean.scramjet/state";
 const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
@@ -1752,6 +1754,7 @@ impl Worker {
             first: session.agent.session_id(),
             session: session.agent.session_id(),
             notices: self.notices,
+            scramjet: self.scramjet,
             compaction: self.compaction,
             forms: self.forms,
             compactions: 0,
@@ -2367,6 +2370,13 @@ impl Acp {
             true => Ok("cancelled"),
             false => ended,
         };
+        let mut log = lock(&self.ui.log);
+        if let (true, Ok("end_turn"), Some(question)) = (self.scramjet, ended, log.question.clone())
+        {
+            let params = json!({"sessionId": self.ui.session, "question": question});
+            log.notify(&self.ui.out, QUESTION, params);
+        }
+        drop(log);
         for id in Some(id).into_iter().chain(&waiting) {
             match ended {
                 Err((code, error)) => self.ui.out.error(id, code, error),
@@ -2516,6 +2526,8 @@ struct Updates {
     first: String,
     session: String,
     notices: bool,
+    /// The client knows Scramjet's extensions.
+    scramjet: bool,
     /// The client offered `session.compaction`.
     compaction: bool,
     /// The client offered `elicitation.form`.
@@ -2872,6 +2884,17 @@ impl Updates {
             &format!("Cancelled: the client answered {answer}, which was not asked"),
         );
     }
+    /// What the full screen's working line says now, for a client that knows the extension.
+    fn status(&self, state: &str, text: &str, delay: Option<Duration>) {
+        if !self.scramjet || self.replaying {
+            return;
+        }
+        let mut params = json!({"sessionId": self.session, "state": state, "text": text});
+        if let Some(delay) = delay {
+            params["delayMs"] = json!(delay.as_millis() as u64);
+        }
+        lock(&self.log).notify(&self.out, STATUS, params);
+    }
     fn say(&self, severity: &str, text: &str) {
         match self.notices {
             true => {
@@ -2923,6 +2946,12 @@ fn kind(name: &str) -> &'static str {
 
 impl AgentUi for Updates {
     fn waiting(&mut self, purpose: Purpose) {
+        let state = match purpose {
+            Purpose::Reply => "waiting",
+            Purpose::Compaction(_) => "compacting",
+            Purpose::BranchSummary => "summarizing",
+        };
+        self.status(state, super::terminal::waiting_for(purpose), None);
         match purpose {
             Purpose::Reply => {
                 self.responses += 1;
@@ -2958,6 +2987,14 @@ impl AgentUi for Updates {
         let seconds = delay.as_secs_f64().ceil();
         let text = format!("Retrying ({attempt}/{retries}) in {seconds} s: {error}");
         self.say("warning", &text);
+        let shown = format!("{} {seconds}s", super::terminal::retrying(attempt, retries));
+        self.status("retrying", &shown, Some(delay));
+    }
+    fn cooling(&mut self, delay: Duration) {
+        let seconds = delay.as_secs_f64().ceil();
+        let text = format!("{} {seconds}s", super::terminal::COOLING);
+        self.say("info", &text);
+        self.status("cooling", &text, Some(delay));
     }
     fn assistant(&mut self, text: &str) {
         if self.replaying {
