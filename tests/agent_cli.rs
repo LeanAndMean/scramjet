@@ -2955,20 +2955,21 @@ fn acp_turns_stopped_at_the_output_limit_or_by_a_refusal_say_so() {
 }
 
 /// The `tool_call` update and the completed one of a prompt turn in `project` whose reply
-/// calls `name` with `input`.
+/// calls `name` with `input`, for a client offering `capabilities`.
 #[cfg(unix)]
 fn acp_call(
     scratch: &std::path::Path,
     project: &std::path::Path,
     name: &str,
     input: &serde_json::Value,
+    capabilities: serde_json::Value,
 ) -> (serde_json::Value, serde_json::Value) {
     let (port, _bodies) = serve_call(name, input.clone());
     let (mut child, mut stdin, messages) = acp(scratch, port);
     send(
         &mut stdin,
         serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
-            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+            "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
     );
     next(&messages);
     send(
@@ -3076,9 +3077,9 @@ fn acp_shows_calls_running_together_as_they_run() {
     let text = &updates[bash_done]["content"][0]["content"]["text"];
     assert!(text.as_str().unwrap().contains("slow"), "{text}");
     assert_eq!(
-        updates[completed("call-2").unwrap()]["content"][1],
-        serde_json::json!({"type": "diff", "path": project.join("b.txt"), "oldText": null,
-            "newText": "new\n"})
+        updates[completed("call-2").unwrap()]["content"],
+        serde_json::json!([{"type": "diff", "path": project.join("b.txt"), "oldText": null,
+            "newText": "new\n"}])
     );
 }
 
@@ -3195,31 +3196,46 @@ fn acp_tool_calls_carry_their_input_locations_and_diffs() {
     std::fs::write(&path, "one\n").unwrap();
     let input =
         serde_json::json!({"path": "a.txt", "edits": [{"oldText": "one", "newText": "two"}]});
-    let (call, completed) = acp_call(&scratch.0, &project, "edit", &input);
+    let none = || serde_json::json!({});
+    let (call, completed) = acp_call(&scratch.0, &project, "edit", &input, none());
     assert_eq!(call["kind"], "edit", "{call}");
     assert_eq!(call["rawInput"], input);
     assert_eq!(call["locations"], serde_json::json!([{"path": path}]));
-    assert_eq!(completed["content"][0]["type"], "content", "{completed}");
+    // Only ACP's diff, which such a client draws: the fenced one would show it twice.
+    let diff =
+        serde_json::json!({"type": "diff", "path": path, "oldText": "one", "newText": "two"});
     assert_eq!(
-        completed["content"][1],
-        serde_json::json!({"type": "diff", "path": path, "oldText": "one", "newText": "two"})
+        completed["content"],
+        serde_json::json!([diff]),
+        "{completed}"
     );
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+    // A client knowing Scramjet's extensions gets the fenced diff first, with its context.
+    let ours = serde_json::json!({"_meta": {"io.github.leanandmean.scramjet": {}}});
+    let input =
+        serde_json::json!({"path": "a.txt", "edits": [{"oldText": "two", "newText": "three"}]});
+    let (_, completed) = acp_call(&scratch.0, &project, "edit", &input, ours);
+    let text = completed["content"][0]["content"]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.starts_with("```diff\n") && text.contains("+1 three"),
+        "{completed}"
+    );
+    assert_eq!(completed["content"][1]["type"], "diff", "{completed}");
     // A write making its file: a diff from nothing; one replacing a file: its output only.
     let input = serde_json::json!({"path": "b.txt", "content": "new\n"});
-    let (_, completed) = acp_call(&scratch.0, &project, "write", &input);
+    let (_, completed) = acp_call(&scratch.0, &project, "write", &input, none());
     let path = project.join("b.txt");
     assert_eq!(
-        completed["content"][1],
-        serde_json::json!({"type": "diff", "path": path, "oldText": null, "newText": "new\n"}),
+        completed["content"],
+        serde_json::json!([{"type": "diff", "path": path, "oldText": null, "newText": "new\n"}]),
         "{completed}"
     );
-    let (_, completed) = acp_call(&scratch.0, &project, "write", &input);
-    assert_eq!(
-        completed["content"].as_array().unwrap().len(),
-        1,
-        "{completed}"
-    );
+    let (_, completed) = acp_call(&scratch.0, &project, "write", &input, none());
+    let content = completed["content"].as_array().unwrap();
+    assert_eq!(content.len(), 1, "{completed}");
+    assert_eq!(content[0]["type"], "content", "{completed}");
 }
 
 #[test]

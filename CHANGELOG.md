@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.237.1 — An edit shows once in Zed
+
+### Fixed
+
+- In Zed and other ACP clients, an edit or a new file's write shows once, as the client's own diff; the same diff also showed as text above it. Flightdeck keeps its numbered diff.
+
 ## 2.237.0 — Commands' output shows in Zed
 
 ### Changed

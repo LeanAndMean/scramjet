@@ -3573,11 +3573,17 @@ impl AgentUi for Updates {
             Some(ToolDetail::Diff(diff)) if !failed => format!("```diff\n{diff}\n```"),
             _ => output.to_owned(),
         };
-        let mut content =
-            vec![json!({"type": "content", "content": {"type": "text", "text": text}})];
-        if !failed {
-            content.extend(self.diffs(detail));
-        }
+        let diffs = if failed {
+            Vec::new()
+        } else {
+            self.diffs(detail)
+        };
+        // Other clients draw ACP's diffs, and would show the fenced one beside them again.
+        let mut content = match self.scramjet || diffs.is_empty() {
+            true => vec![json!({"type": "content", "content": {"type": "text", "text": text}})],
+            false => Vec::new(),
+        };
+        content.extend(diffs);
         let status = match failed {
             true => "failed",
             false => "completed",
