@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.230.1 — Permission requests show the call
+
+### Fixed
+
+- In `scramjet acp`, a permission request's `toolCall` carries the call's `title`, `kind`, `rawInput` and `locations`, as its `tool_call` update showed them, so a client can show what it allows without looking the call up.
+
 ## 2.230.0 — ACP passes ACP's test kit
 
 ### Changed

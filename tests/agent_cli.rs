@@ -2200,6 +2200,11 @@ fn acp_asks_the_client_before_calls_under_ask() {
             assert_eq!(params["sessionId"], session);
             assert_eq!(params["toolCall"]["toolCallId"], call_id.clone().unwrap());
             assert!(request.to_string().contains("Run in"), "{request}");
+            let shown = &call.unwrap()["params"]["update"];
+            for key in ["title", "kind", "rawInput"] {
+                assert_eq!(params["toolCall"][key], shown[key], "{key}: {request}");
+            }
+            assert_eq!(params["toolCall"]["rawInput"]["command"], "echo ran-it");
             let kinds: Vec<_> = (params["options"].as_array().unwrap().iter())
                 .map(|option| option["kind"].as_str().unwrap())
                 .collect();

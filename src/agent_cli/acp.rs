@@ -1823,6 +1823,7 @@ impl Worker {
             root: session.agent.root().to_path_buf(),
             input: Value::Null,
             call: (String::new(), Value::Null),
+            call_shown: Value::Null,
             new_file: false,
             window: None,
             used: None,
@@ -2631,6 +2632,9 @@ struct Updates {
     /// The arguments of the tool call announced next, then its name and them.
     input: Value,
     call: (String, Value),
+    /// What the call announced last showed (`title`, `kind`, `rawInput`, `locations`), which a
+    /// permission request about it repeats.
+    call_shown: Value,
     /// The write announced last makes its file.
     new_file: bool,
     window: Option<u64>,
@@ -2924,11 +2928,13 @@ impl Updates {
         let offered: Vec<Value> = (options.iter())
             .map(|(id, name, kind)| json!({"optionId": id, "name": name, "kind": kind}))
             .collect();
-        let params = json!({
-            "sessionId": self.session,
-            "toolCall": {"toolCallId": self.call_id(), "content": content},
-            "options": offered,
-        });
+        let mut call = match &self.call_shown {
+            Value::Object(_) => self.call_shown.clone(),
+            _ => json!({}),
+        };
+        call["toolCallId"] = json!(self.call_id());
+        call["content"] = content;
+        let params = json!({"sessionId": self.session, "toolCall": call, "options": offered});
         let outcome = self.ask("session/request_permission", params, cancel)?;
         let outcome = &outcome["outcome"];
         if outcome["outcome"] != "selected" {
@@ -3141,6 +3147,12 @@ impl AgentUi for Updates {
         let locations = self.locations();
         if !locations.is_empty() {
             update["locations"] = json!(locations);
+        }
+        self.call_shown = json!({});
+        for key in ["title", "kind", "rawInput", "locations"] {
+            if let Some(value) = update.get(key) {
+                self.call_shown[key] = value.clone();
+            }
         }
         if self.replaying {
             // Whether a replayed write made its file is not known.
