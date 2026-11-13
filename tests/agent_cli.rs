@@ -3181,6 +3181,111 @@ fn acp_compacts_and_renames_sessions_through_the_extensions() {
 
 #[test]
 #[cfg(unix)]
+fn acp_reloads_the_settings_commands_and_models_through_the_extension() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-reload-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    // Held, so that the reload comes during the turn.
+    let (port, _bodies) = serve_events_after(vec![reply], |_| Duration::from_millis(500));
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1,
+                "clientCapabilities": {"session": {"notices": {}}}}}),
+    );
+    let offered = &next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    assert!(
+        (offered["methods"].as_array().unwrap().iter())
+            .any(|method| method == "_io.github.leanandmean.scramjet/reload"),
+        "{offered}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let commands = &next(&messages)["params"]["update"];
+    assert_eq!(commands["sessionUpdate"], "available_commands_update");
+    let greets = |listed: &serde_json::Value| {
+        (listed.as_array().unwrap().iter()).any(|command| command["name"] == "skill:greet")
+    };
+    assert!(!greets(&commands["availableCommands"]), "{commands}");
+    let reload = |id: u64| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": "_io.github.leanandmean.scramjet/reload"})
+    };
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]}}),
+    );
+    send(&mut stdin, reload(4));
+    let (refused, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(refused["id"], 4, "{refused}");
+    assert_eq!(refused["error"]["message"], "a turn is running");
+    let (answer, _) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+
+    let config = scratch.0.join("config/scramjet");
+    let skill = scratch.0.join("skills/greet");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: greet\ndescription: Greets the user.\n---\nSay hello.\n",
+    )
+    .unwrap();
+    let settings = serde_json::json!({"hideCredentials": "never",
+        "skills": [scratch.0.join("skills")], "commandSets": 5});
+    std::fs::write(config.join("settings.json"), settings.to_string()).unwrap();
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test", "contextWindow": 1000},
+            {"id": "claude-other", "contextWindow": 1000}],
+    }}});
+    std::fs::write(config.join("models.json"), models.to_string()).unwrap();
+    send(&mut stdin, reload(5));
+    let (reloaded, updates) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(reloaded["id"], 5, "{reloaded}");
+    assert_eq!(reloaded["result"], serde_json::json!({}), "{reloaded}");
+    let updates: Vec<_> = (updates.iter())
+        .map(|message| &message["params"]["update"])
+        .collect();
+    let of = |kind: &str| {
+        (updates.iter())
+            .find(|update| update["sessionUpdate"] == kind)
+            .unwrap_or_else(|| panic!("no {kind} in {updates:?}"))
+    };
+    let warning = of("notice")["title"].as_str().unwrap();
+    assert!(
+        warning.contains("commandSets must be a list of directories"),
+        "{warning}"
+    );
+    let listed = &of("available_commands_update")["availableCommands"];
+    assert!(greets(listed), "{listed}");
+    let options = of("config_option_update")["configOptions"].to_string();
+    assert!(options.contains("test/claude-other"), "{options}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_forks_branches_and_lists_the_tree_through_the_extensions() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-fork-{}", std::process::id())));

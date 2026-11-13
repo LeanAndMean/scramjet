@@ -3,8 +3,8 @@
 //! from how each front end shows it (`Front`).
 use super::settings::{Delivery, Settings};
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Completed, Navigated, Next, Reopened, SessionInfo, Source, Step,
-    Suggested, shortened,
+    Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Reopened,
+    SessionInfo, Source, Step, Suggested, shortened,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -19,6 +19,44 @@ pub(super) struct Session {
     pub(super) scope: Vec<String>,
     /// A next step chosen between turns (`reopen`, `ask_again`), to run next as if typed.
     pub(super) chosen: Option<(String, Start)>,
+}
+
+impl Session {
+    /// `/reload`'s part in the session: the settings read again, with `servers` (a client's) over
+    /// their MCP servers, and the shell, tools, command sets, skills, MCP servers, retries,
+    /// compaction and providers taken from them.
+    pub(super) fn reload(&mut self, servers: &[McpServer]) {
+        self.settings.reload();
+        with_servers(&mut self.settings, servers);
+        let settings = &self.settings;
+        scramjet::agent::set_shell(
+            settings.shell_path.clone(),
+            settings.shell_command_prefix.clone(),
+        );
+        scramjet::agent::set_user_shell(settings.default_shell);
+        scramjet::agent::set_images(settings.resize_images, settings.block_images);
+        self.agent.reload(
+            settings.tools.clone(),
+            settings.command_sets.clone(),
+            settings.skills.clone(),
+            settings.mcp_servers.clone(),
+            settings.disabled_mcp_servers.clone(),
+        );
+        self.agent.set_retries(settings.retries());
+        self.agent.set_compacting(settings.compacting);
+        self.agent.set_providers(Providers::read(
+            settings.models_files(),
+            scramjet::agent::login::Logins::user(),
+        ));
+    }
+}
+
+/// Puts `servers` in place of the settings' MCP servers of the same names, enabled.
+pub(super) fn with_servers(settings: &mut Settings, servers: &[McpServer]) {
+    let given = |name: &String| servers.iter().any(|server| &server.name == name);
+    (settings.mcp_servers).retain(|server| !given(&server.name));
+    (settings.disabled_mcp_servers).retain(|name| !given(name));
+    settings.mcp_servers.extend(servers.iter().cloned());
 }
 
 /// Messages given while a turn runs, until the agent takes them: steering for the model's next

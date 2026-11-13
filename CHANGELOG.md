@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.219.0 — ACP reloads the settings
+
+### Added
+
+- `scramjet acp` reads the settings again in every open session (`_io.github.leanandmean.scramjet/reload`), as `/reload` does: the command sets, agents, skills, MCP servers, providers and context files, with what is wrong in them as notices, and the commands and models listed again. The MCP servers the client gave stay. It is refused while a turn runs.
+
 ## 2.218.0 — ACP moves in the tree and labels entries
 
 ### Added

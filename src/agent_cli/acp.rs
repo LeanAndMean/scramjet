@@ -44,9 +44,10 @@ const BRANCH: &str = "_io.github.leanandmean.scramjet/branch";
 const TREE: &str = "_io.github.leanandmean.scramjet/tree";
 const NAVIGATE: &str = "_io.github.leanandmean.scramjet/navigate_tree";
 const LABEL: &str = "_io.github.leanandmean.scramjet/set_label";
+const RELOAD: &str = "_io.github.leanandmean.scramjet/reload";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 10] = [
-    HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE, NAVIGATE, LABEL,
+const EXTENSIONS: [&str; 11] = [
+    HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE, NAVIGATE, LABEL, RELOAD,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -337,6 +338,8 @@ enum Job {
     /// Request `id`'s move to the entry on that line, with the branch left summarized when
     /// a focus is given (empty for none).
     Navigate(Value, usize, Option<String>),
+    /// `reload`, done when the sender is dropped.
+    Reload(mpsc::Sender<()>),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -404,6 +407,7 @@ impl Connection {
             },
             NAVIGATE => self.navigate(id, &params),
             LABEL => self.label(&id, &params),
+            RELOAD => self.reload(id),
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
     }
@@ -573,6 +577,25 @@ impl Connection {
         self.between_turns(id, params, Job::Branch(id.clone(), name.to_owned()));
     }
 
+    /// Reads the settings and what they name again in every session, as `/reload` does, and
+    /// answers once all have; refused while a turn runs in any, as the full screen refuses it.
+    fn reload(&self, id: Value) {
+        let busy = |handle: &Handle| lock(&handle.turn).running;
+        if self.sessions.values().any(busy) {
+            return self.out.error(&id, INVALID_PARAMS, "a turn is running");
+        }
+        let (done, finished) = mpsc::channel();
+        for handle in self.sessions.values() {
+            let _ = handle.jobs.send(Job::Reload(done.clone()));
+        }
+        drop(done);
+        let out = self.out.clone();
+        std::thread::spawn(move || {
+            while finished.recv().is_ok() {}
+            out.respond(&id, json!({}));
+        });
+    }
+
     /// Hands `job` to the session `params` names unless a turn runs there.
     fn between_turns(&self, id: &Value, params: &Value, job: Job) {
         let Some(handle) = self.handle(params) else {
@@ -657,14 +680,14 @@ impl Connection {
         };
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
         let thread = std::thread::spawn(move || {
-            let session = match start_session(&arguments, &cwd, servers, file) {
+            let session = match start_session(&arguments, &cwd, &servers, file) {
                 Ok(session) => session,
                 Err(error) => {
                     let _ = started.send(Err(error));
                     return;
                 }
             };
-            let mut front = worker.front(session);
+            let mut front = worker.front(session, servers);
             if opening == Opening::Load {
                 front.replay();
             }
@@ -695,6 +718,10 @@ impl Connection {
                     }
                     Job::Navigate(id, line, focus) => {
                         front.navigate(id, line, focus.as_deref());
+                        continue;
+                    }
+                    Job::Reload(_done) => {
+                        front.reload();
                         continue;
                     }
                 };
@@ -1287,7 +1314,7 @@ fn mcp_servers(servers: &Value) -> Result<Vec<McpServer>, String> {
 fn start_session(
     arguments: &[String],
     cwd: &Path,
-    servers: Vec<McpServer>,
+    servers: &[McpServer],
     file: Option<PathBuf>,
 ) -> Result<Session, String> {
     let options = Options::parse(arguments.iter().map(OsString::from))?
@@ -1300,10 +1327,7 @@ fn start_session(
     let root = super::project_root(Some(cwd.to_owned()))?;
     let mut settings = Settings::load();
     settings.retries_given = options.retries;
-    let given = |name: &String| servers.iter().any(|server| &server.name == name);
-    (settings.mcp_servers).retain(|server| !given(&server.name));
-    (settings.disabled_mcp_servers).retain(|name| !given(name));
-    settings.mcp_servers.extend(servers);
+    drive::with_servers(&mut settings, servers);
     let session_dir = (options.session_dir.as_deref())
         .or(settings.session_dir.as_deref())
         .map(|directory| super::given_path(directory, cwd));
@@ -1344,7 +1368,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn front(self, session: Session) -> Acp {
+    fn front(self, session: Session, servers: Vec<McpServer>) -> Acp {
         let ui = Updates {
             out: self.out,
             first: session.agent.session_id(),
@@ -1384,6 +1408,7 @@ impl Worker {
             booleans: self.booleans,
             models: Vec::new(),
             shown: Value::Null,
+            servers,
         }
     }
 }
@@ -1406,6 +1431,8 @@ struct Acp {
     models: Vec<ModelOption>,
     /// The config options the client was last given.
     shown: Value,
+    /// The MCP servers the client gave the session.
+    servers: Vec<McpServer>,
 }
 
 /// How a prompt's turns ended.
@@ -1424,6 +1451,30 @@ impl Acp {
         self.ui.flush();
         self.ui.replaying = false;
         (self.ui.asked, self.ui.stopped, self.ui.thinking) = (None, None, false);
+    }
+
+    /// `reload` in this session: the settings and what they name read again, what is wrong in
+    /// them said, and the commands and options listed again.
+    fn reload(&mut self) {
+        self.session.reload(&self.servers);
+        let settings = &self.session.settings;
+        (self.ui.steering, self.ui.follow_up) = (settings.steering_mode, settings.follow_up_mode);
+        let installed = self.session.agent.installed();
+        let problems = (settings.warnings.iter())
+            .map(|warning| format!("settings: {warning}"))
+            .chain(
+                installed
+                    .problems
+                    .iter()
+                    .map(|problem| problem.text.clone()),
+            )
+            .chain(self.session.agent.providers().problems().iter().cloned());
+        for problem in problems.collect::<Vec<_>>() {
+            self.ui.say("warning", &problem);
+        }
+        self.commands();
+        self.models.clear();
+        self.options_changed();
     }
 
     /// Lists the command sets' commands and the skills for the client.

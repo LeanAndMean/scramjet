@@ -7,7 +7,7 @@ use super::interactive::{Interactive, completions};
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
 use super::{drive, terminal};
-use scramjet::agent::{Agent, AgentError, McpState, Providers, Remembered, Sandbox, SandboxMode};
+use scramjet::agent::{Agent, AgentError, McpState, Remembered, Sandbox, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -587,35 +587,13 @@ impl Interactive {
     /// start.
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
-        self.session.settings.reload();
-        scramjet::agent::set_shell(
-            self.session.settings.shell_path.clone(),
-            self.session.settings.shell_command_prefix.clone(),
-        );
-        scramjet::agent::set_user_shell(self.session.settings.default_shell);
-        scramjet::agent::set_images(
-            self.session.settings.resize_images,
-            self.session.settings.block_images,
-        );
+        self.session.reload(&[]);
         self.discover_themes();
         self.use_theme();
         self.keybindings = keymap::load(self.session.settings.path());
         let settings = &self.session.settings;
         (self.hide_thinking).store(settings.hide_thinking_block, Ordering::Relaxed);
         self.ui.markdown_reads = settings.markdown_reads;
-        self.session.agent.reload(
-            settings.tools.clone(),
-            settings.command_sets.clone(),
-            settings.skills.clone(),
-            settings.mcp_servers.clone(),
-            settings.disabled_mcp_servers.clone(),
-        );
-        self.session.agent.set_retries(settings.retries());
-        self.session.agent.set_compacting(settings.compacting);
-        self.session.agent.set_providers(Providers::read(
-            settings.models_files(),
-            scramjet::agent::login::Logins::user(),
-        ));
         if let Some(screen) = &mut self.screen {
             (screen.link).reloaded(completions(&self.session.agent), &self.session.settings);
             (screen.link).models(self.session.agent.models().unwrap_or_default());
