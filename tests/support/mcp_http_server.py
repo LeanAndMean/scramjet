@@ -8,7 +8,8 @@ as the TypeScript SDK's servers do. It answers `tools/list` in JSON and `tools/c
 Each request is appended to the file `MCP_TEST_LOG` names: its method, path, JSON-RPC method,
 session and protocol version. `MCP_TEST_TOKEN` is the bearer token it asks for (HTTP 401
 without it). `/old` redirects to `/mcp` with a 307 and its URL, `/moved` with a 308 and its
-path, `/away` with a 307 to localhost, `/gone` with a 301, each keeping the query."""
+path, `/away` with a 307 to localhost, `/gone` with a 301, each keeping the query. A POST to
+`/forget` drops every session, unlogged, as a restarted server would."""
 import http.server
 import json
 import os
@@ -128,6 +129,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if self.redirected():
             return
+        if self.path == "/forget":
+            sessions.clear()
+            return self.reply(200)
         message = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         method = message.get("method", "reply")
         self.logged(method)

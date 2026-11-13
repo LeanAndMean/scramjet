@@ -998,6 +998,16 @@ impl Remote {
     }
 }
 
+/// Has the test server at `port` drop its sessions, as one restarted would.
+fn forget(port: u16) {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    (stream.write_all(b"POST /forget HTTP/1.0\r\nContent-Length: 0\r\n\r\n")).unwrap();
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).unwrap();
+    assert!(answer.starts_with("HTTP/1.0 200"), "{answer}");
+}
+
 impl Drop for Remote {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -1185,10 +1195,8 @@ fn a_session_the_server_forgot_is_started_again() {
     }
     let scratch = scratch("http-restart");
     let log = scratch.0.join("log");
-    let mut env = vec![("MCP_TEST_LOG", log.display().to_string())];
-    let remote = Remote::start(&env);
+    let remote = Remote::start(&[("MCP_TEST_LOG", log.display().to_string())]);
     let port = remote.1;
-    env.push(("MCP_TEST_PORT", port.to_string()));
     let url = format!("http://127.0.0.1:{port}/mcp");
     let servers = started(
         &[Server::http("test", &url, Vec::new()).unwrap()],
@@ -1198,8 +1206,7 @@ fn a_session_the_server_forgot_is_started_again() {
         call(&servers, "echo", json!({"text": "one"})).unwrap().text,
         "echo: one"
     );
-    drop(remote);
-    let _remote = Remote::start(&env);
+    forget(port);
     assert_eq!(
         call(&servers, "echo", json!({"text": "two"})).unwrap().text,
         "echo: two"

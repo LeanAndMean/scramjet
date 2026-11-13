@@ -1909,14 +1909,14 @@ sed.\n- Be concise";
         let question = json!({"type":"confirm","message":"Go on?"});
         let (endpoint, server) = serve(vec![
             tool_calls(&[
-                ("bash", json!({"command":"sleep 30"})),
+                ("bash", json!({"command":"touch started; sleep 30"})),
                 (question::NAME, question),
             ]),
             stream(&fixture::text_events("ok", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "stopped-calls");
         let mut ui = Recorder::default();
-        let cancel = stop_after(Duration::from_millis(300));
+        let cancel = stop_once_written(agent.root().join("started"));
         let stopped = agent.turn("go", &mut ui, &cancel);
         assert!(matches!(stopped, Err(AgentError::Cancelled)), "{stopped:?}");
         let not_run = "Error: the turn was stopped before this tool call ran; it did not run.";
@@ -1934,17 +1934,6 @@ sed.\n- Be concise";
         assert_eq!(outputs.len(), 2);
         assert_eq!(outputs[0].0, "call_0");
         assert_eq!(outputs[1], ("call_1".into(), not_run.into()));
-    }
-
-    /// A flag set after `delay`, as when the user stops the turn then.
-    fn stop_after(delay: Duration) -> Arc<AtomicBool> {
-        let cancel = Arc::new(AtomicBool::new(false));
-        let setter = cancel.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(delay);
-            setter.store(true, Ordering::Relaxed);
-        });
-        cancel
     }
 
     /// A stop set once `path` exists, or after 10 s if it never does.
