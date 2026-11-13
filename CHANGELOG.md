@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.228.0 — ACP offers a fork's next steps again
+
+### Changed
+
+- In `scramjet acp`, a fork or tree move back to a next-step list offers that list again, as the full screen does, rather than naming its steps; the step chosen runs in the session, and the fork's or move's answer comes once the list closes or that step's turn ends.
+
 ## 2.227.0 — ACP names a live turn's entries
 
 ### Added

@@ -8,8 +8,8 @@ use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    Ending, McpServer, McpTransport, ModelOption, Navigated, Purpose, SessionChoice, Shell,
-    StreamProgress, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
+    Ending, McpServer, McpTransport, ModelOption, Navigated, Purpose, Reopened, SessionChoice,
+    Shell, StreamProgress, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -752,7 +752,7 @@ impl Connection {
         let Some(line) = params["entryId"].as_u64() else {
             return self.out.error(id, INVALID_PARAMS, "entryId is required");
         };
-        self.between_turns(id, params, Job::Fork(id.clone(), line as usize));
+        self.busy(id, params, Job::Fork(id.clone(), line as usize));
     }
 
     /// Continues in a new session with the whole conversation, as `/branch` does; refused during
@@ -1073,19 +1073,19 @@ impl Connection {
                     }
                 };
                 if let Some(why) = front.session.agent.login_needed() {
-                    front.end_turn(&id, Err((AUTH_REQUIRED, &auth_required(&why))));
+                    front.end_turn((&id, json!({})), Err((AUTH_REQUIRED, &auth_required(&why))));
                     continue;
                 }
                 if !images.is_empty() {
                     match Attached::images(&images) {
                         Ok(attached) => front.session.agent.attach(attached),
                         Err(error) => {
-                            front.end_turn(&id, Err((INVALID_PARAMS, &error)));
+                            front.end_turn((&id, json!({})), Err((INVALID_PARAMS, &error)));
                             continue;
                         }
                     }
                 }
-                front.run(id, Some(text));
+                front.run((id, json!({})), Some(text), Start::Typed);
             }
         });
         match starts.recv() {
@@ -1906,10 +1906,11 @@ impl Acp {
 
     /// Runs `prompt`, or with none goes on with the turn the session holds, and the next steps
     /// that follow on their own, then the prompts sent meanwhile that the agent did not take;
-    /// answers request `id` and theirs when it ends.
-    fn run(&mut self, id: Value, prompt: Option<String>) {
+    /// answers request `id`, with `result`'s fields beside the stop reason, and theirs when it
+    /// ends.
+    fn run(&mut self, (id, result): (Value, Value), prompt: Option<String>, start: Start) {
         self.configure();
-        let (mut prompt, mut start) = (prompt, Start::Typed);
+        let (mut prompt, mut start) = (prompt, start);
         let stopped = loop {
             let next = drive::run_turn(self, prompt.as_deref(), start);
             let stopped = self.ui.stopped.take();
@@ -1939,14 +1940,14 @@ impl Acp {
             (prompt, start) = (Some(queued.join("\n\n")), Start::Typed);
         };
         match stopped {
-            Ended::Reason(reason) => self.end_turn(&id, Ok(reason)),
+            Ended::Reason(reason) => self.end_turn((&id, result), Ok(reason)),
             Ended::Failed(error) => {
                 // Signed out since the turn began, or the login's renewal was refused.
                 let code = match self.session.agent.login_needed() {
                     Some(_) => AUTH_REQUIRED,
                     None => INTERNAL_ERROR,
                 };
-                self.end_turn(&id, Err((code, &error)));
+                self.end_turn((&id, result), Err((code, &error)));
             }
         }
     }
@@ -1986,7 +1987,7 @@ impl Acp {
     /// Moves the conversation to the entry on `line` for request `id`, with the branch left
     /// summarized when `focus` is given, as `/tree` does. Answered with whether it moved and the
     /// prompt gone back to, to edit; a question gone back to is asked again, and the answer
-    /// comes when its turn ends, as a prompt's. A next-step list offered there is named.
+    /// comes when its turn ends, as a prompt's. A next-step list offered there is offered again.
     fn navigate(&mut self, id: Value, line: usize, focus: Option<&str>) {
         let agent = &mut self.session.agent;
         let navigated = agent.navigate(line, focus, &mut self.ui, &self.cancel);
@@ -2009,14 +2010,11 @@ impl Acp {
                 }
                 self.session_changed("✓ Navigated to selected point", Change::Kept);
                 self.switched();
-                if question {
-                    return self.run(id, None);
-                }
                 let result = json!({"moved": true, "prompt": prompt});
-                self.ui.out.respond(&id, result);
-                if let Some(offer) = offer {
-                    self.ui.tell(&drive::offered_here(&offer));
+                if question {
+                    return self.run((id, result), None, Start::Typed);
                 }
+                return self.reopen(&id, result, offer);
             }
             Err(AgentError::Cancelled) => {
                 if summarizing {
@@ -2077,7 +2075,7 @@ impl Acp {
         }
         let first = turn.waiting.remove(0);
         drop(turn);
-        self.run(first, Some(queued.join("\n\n")));
+        self.run((first, json!({})), Some(queued.join("\n\n")), Start::Typed);
     }
 
     /// Names the session for request `id`, as `/rename`, answered with `result`, and tells the
@@ -2108,7 +2106,7 @@ impl Acp {
     }
 
     /// Continues in a new session before the prompt at `line`, for request `id`, answered with
-    /// the session's id and that prompt to edit; a next-step list offered there is named.
+    /// the session's id and that prompt to edit; a next-step list offered there is offered again.
     fn fork(&mut self, id: &Value, line: usize) {
         let agent = &mut self.session.agent;
         let forked = match agent.fork_index(line) {
@@ -2121,10 +2119,7 @@ impl Acp {
                 drive::changed(self, "Forked to new session", Change::Kept);
                 self.switched();
                 let result = json!({"sessionId": self.ui.session, "prompt": prompt});
-                self.ui.out.respond(id, result);
-                if let Some(offer) = offer {
-                    self.ui.tell(&drive::offered_here(&offer));
-                }
+                return self.reopen(id, result, offer);
             }
             Ok(None) => {
                 let message = format!("no prompt at entry {line}");
@@ -2132,6 +2127,22 @@ impl Acp {
             }
             Err(error) => self.ui.out.error(id, INTERNAL_ERROR, &error.to_string()),
         }
+        self.after_job();
+    }
+
+    /// After a fork or a move: the next-step list `offer` gone back to offered again, and
+    /// request `id` answered with `result` once it closes; a step chosen runs first as a turn,
+    /// and `result` then comes with its stop reason, as a prompt's.
+    fn reopen(&mut self, id: &Value, result: Value, offer: Option<Reopened>) {
+        if let Some(offer) = offer {
+            drive::reopen(self, offer, None);
+            if let Some((step, start)) = self.session.chosen.take() {
+                self.ui.user_message(&step);
+                return self.run((id.clone(), result), Some(step), start);
+            }
+        }
+        self.ui.out.respond(id, result);
+        self.after_job();
     }
 
     /// Continues in a new session with the whole conversation for request `id`, named `name`
@@ -2359,9 +2370,10 @@ impl Acp {
         })
     }
 
-    /// Answers request `id` and those of the prompts sent during its turn, the turn having
-    /// ended for `ended`'s stop reason or failed with its error; cancelled, it says so.
-    fn end_turn(&mut self, id: &Value, ended: Result<&str, (i64, &str)>) {
+    /// Answers request `id` with its result's fields beside the stop reason, and those
+    /// of the prompts sent during its turn, the turn having ended for `ended`'s stop reason or
+    /// failed with its error; cancelled, it says so.
+    fn end_turn(&mut self, id: (&Value, Value), ended: Result<&str, (i64, &str)>) {
         let mut turn = lock(&self.turn);
         turn.running = false;
         let waiting = std::mem::take(&mut turn.waiting);
@@ -2381,10 +2393,15 @@ impl Acp {
             log.notify(&self.ui.out, QUESTION, params);
         }
         drop(log);
-        for id in Some(id).into_iter().chain(&waiting) {
+        let empty = || json!({});
+        let answered = std::iter::once(id).chain(waiting.iter().map(|id| (id, empty())));
+        for (id, mut result) in answered {
             match ended {
                 Err((code, error)) => self.ui.out.error(id, code, error),
-                Ok(reason) => self.ui.out.respond(id, json!({"stopReason": reason})),
+                Ok(reason) => {
+                    result["stopReason"] = json!(reason);
+                    self.ui.out.respond(id, result);
+                }
             }
         }
     }

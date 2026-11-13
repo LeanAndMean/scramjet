@@ -4999,6 +4999,147 @@ fn acp_offers_next_steps_with_the_extension_or_as_text_and_counts_down_under_aut
 
 #[test]
 #[cfg(unix)]
+fn acp_offers_again_the_next_step_list_a_fork_or_move_goes_back_to() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-reopen-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    let flow = project.join(".scramjet/flow/commands");
+    std::fs::create_dir_all(&flow).unwrap();
+    let step = "---\nnext:\n  mode: closed\n  candidates:\n    - name: flow:done\n---\nStep.\n";
+    std::fs::write(flow.join("flow:step.md"), step).unwrap();
+    std::fs::write(flow.join("flow:done.md"), "Finish.\n").unwrap();
+    let stepped = report_events(
+        "Stepped.",
+        serde_json::json!({"status": "completed", "summary": "Stepped.",
+            "next_steps": [{"message": "/flow:done", "fresh_session": false, "reason": "Finish."}],
+            "recommended_next_step": 0}),
+    );
+    let done = report_events(
+        "All done.",
+        serde_json::json!({"status": "completed", "summary": "Done."}),
+    );
+    let other = [
+        r#"{"type":"message_start","message":{"id":"msg_2","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Other."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let (port, bodies) = serve_events(vec![stepped, other, done]);
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1,
+                "clientCapabilities": {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let first = next(&messages)["result"]["sessionId"].clone();
+    let prompt = |id: u64, text: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+            "params": {"sessionId": first, "prompt": [{"type": "text", "text": text}]}})
+    };
+    let extension = |id: u64, method: &str, params: serde_json::Value| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": format!("_io.github.leanandmean.scramjet/{method}"), "params": params})
+    };
+    let is_list = |message: &serde_json::Value| {
+        message["method"] == "_io.github.leanandmean.scramjet/next_step"
+    };
+    let cancelled = |list: &serde_json::Value| serde_json::json!({"jsonrpc": "2.0", "id": list["id"], "result": {"cancelled": true}});
+    send(&mut stdin, prompt(3, "/flow:step"));
+    let (list, _) = until(&messages, is_list);
+    send(&mut stdin, cancelled(&list));
+    let (ended, _) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    send(&mut stdin, prompt(4, "other"));
+    let (ended, _) = until(&messages, |message| message["id"] == 4);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    send(
+        &mut stdin,
+        extension(5, "tree", serde_json::json!({"sessionId": first})),
+    );
+    let (tree, _) = until(&messages, |message| message["id"] == 5);
+    let entry = (tree["result"]["entries"].as_array().unwrap().iter())
+        .find(|entry| entry["kind"] == "prompt" && entry["text"] == "other")
+        .unwrap_or_else(|| panic!("{tree}"))["entryId"]
+        .clone();
+
+    // A move back there offers the list again; cancelled, the session is left idle.
+    send(
+        &mut stdin,
+        extension(
+            6,
+            "navigate_tree",
+            serde_json::json!({"sessionId": first, "entryId": entry}),
+        ),
+    );
+    let (list, _) = until(&messages, is_list);
+    assert_eq!(
+        list["params"]["steps"][0]["message"], "/flow:done",
+        "{list}"
+    );
+    send(&mut stdin, cancelled(&list));
+    let (moved, _) = until(&messages, |message| message["id"] == 6);
+    assert_eq!(moved["result"]["moved"], true, "{moved}");
+    assert_eq!(moved["result"]["prompt"], "other", "{moved}");
+    assert_eq!(moved["result"].get("stopReason"), None, "{moved}");
+
+    // A fork there offers it again too, and the step chosen runs in the fork.
+    send(
+        &mut stdin,
+        extension(
+            7,
+            "fork",
+            serde_json::json!({"sessionId": first, "entryId": entry}),
+        ),
+    );
+    let (list, _) = until(&messages, is_list);
+    let fork = list["params"]["sessionId"].clone();
+    assert_ne!(fork, first, "{list}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": list["id"], "result": {"index": 0}}),
+    );
+    let (forked, during) = until(&messages, |message| message["id"] == 7);
+    assert_eq!(forked["result"]["sessionId"], fork, "{forked}");
+    assert_eq!(forked["result"]["prompt"], "other", "{forked}");
+    assert_eq!(forked["result"]["stopReason"], "end_turn", "{forked}");
+    let shown = |text: &str| {
+        (during.iter()).any(|message| message["params"]["update"]["content"]["text"] == text)
+    };
+    assert!(shown("/flow:done") && shown("All done."), "{during:?}");
+    send(
+        &mut stdin,
+        extension(8, "tree", serde_json::json!({"sessionId": fork})),
+    );
+    let (tree, _) = until(&messages, |message| message["id"] == 8);
+    let texts: Vec<_> = (tree["result"]["entries"].as_array().unwrap().iter())
+        .filter_map(|entry| entry["text"].as_str())
+        .collect();
+    assert!(!texts.contains(&"other"), "{tree}");
+    assert_eq!(texts.last(), Some(&"All done."), "{tree}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let bodies: Vec<String> = bodies.try_iter().collect();
+    assert_eq!(bodies.len(), 3);
+    assert!(bodies[2].contains("→ /flow:done"), "{}", bodies[2]);
+    assert!(!bodies[2].contains(r#""text":"other""#), "{}", bodies[2]);
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-config-{}", std::process::id())),
