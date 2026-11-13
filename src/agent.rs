@@ -1306,6 +1306,12 @@ impl Agent {
         Ok(self.session.fork_prompts()?)
     }
 
+    /// The index `fork` takes of the prompt at line `line` of the session file, as `tree` lists
+    /// its entries; `None`: no prompt there.
+    pub fn fork_index(&self, line: usize) -> Result<Option<usize>, AgentError> {
+        Ok(self.session.fork_index(line)?)
+    }
+
     /// Continues in a new session saved next to the current one, with the conversation before
     /// the current session's prompt `index` (0-based, as `fork_prompts` lists them) and the model
     /// it used then, as Scramjet's `/fork` does; the current session stays as it is. Returns the

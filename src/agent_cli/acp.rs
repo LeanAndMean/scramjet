@@ -9,7 +9,7 @@ use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
     McpServer, McpTransport, ModelOption, Purpose, SessionChoice, StreamProgress, Tokens,
-    ToolDetail, UserCommand,
+    ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -39,8 +39,11 @@ const COMPACT: &str = "_io.github.leanandmean.scramjet/compact";
 const RENAME: &str = "_io.github.leanandmean.scramjet/rename";
 const EXPORT: &str = "_io.github.leanandmean.scramjet/export_html";
 const SPENT: &str = "_io.github.leanandmean.scramjet/usage";
+const FORK: &str = "_io.github.leanandmean.scramjet/fork";
+const BRANCH: &str = "_io.github.leanandmean.scramjet/branch";
+const TREE: &str = "_io.github.leanandmean.scramjet/tree";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 5] = [HOLD, COMPACT, RENAME, EXPORT, SPENT];
+const EXTENSIONS: [&str; 8] = [HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
 /// How often a wait looks again at what may end it.
@@ -323,6 +326,10 @@ enum Job {
     Configure(Configure),
     /// Request `id`'s compaction, with its instructions.
     Compact(Value, String),
+    /// Request `id`'s fork before the prompt at that line of the session file.
+    Fork(Value, usize),
+    /// Request `id`'s branch, with the name it is given, if any.
+    Branch(Value, String),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -339,6 +346,7 @@ enum Setting {
     Rename(String),
     /// `export_html`'s path, if given.
     Export(Option<String>),
+    Tree,
 }
 
 impl Connection {
@@ -379,6 +387,12 @@ impl Connection {
             RENAME => self.rename(&id, &params),
             EXPORT => self.export(&id, &params),
             SPENT => self.usage(id),
+            FORK => self.fork(&id, &params),
+            BRANCH => self.branch(&id, &params),
+            TREE => match self.handle(&params) {
+                Some(handle) => Self::settle(handle, &id, Setting::Tree),
+                None => self.out.error(&id, INVALID_PARAMS, "no such session"),
+            },
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
     }
@@ -495,6 +509,33 @@ impl Connection {
         let _ = handle.jobs.send(Job::Compact(id, instructions.to_owned()));
     }
 
+    /// Continues in a new session before the prompt at `entryId`, as `/fork` does; refused
+    /// during a turn, as the full screen refuses it.
+    fn fork(&self, id: &Value, params: &Value) {
+        let Some(line) = params["entryId"].as_u64() else {
+            return self.out.error(id, INVALID_PARAMS, "entryId is required");
+        };
+        self.between_turns(id, params, Job::Fork(id.clone(), line as usize));
+    }
+
+    /// Continues in a new session with the whole conversation, as `/branch` does; refused during
+    /// a turn.
+    fn branch(&self, id: &Value, params: &Value) {
+        let name = params["name"].as_str().unwrap_or_default().trim();
+        self.between_turns(id, params, Job::Branch(id.clone(), name.to_owned()));
+    }
+
+    /// Hands `job` to the session `params` names unless a turn runs there.
+    fn between_turns(&self, id: &Value, params: &Value, job: Job) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
+        if lock(&handle.turn).running {
+            return self.out.error(id, INVALID_PARAMS, "a turn is running");
+        }
+        let _ = handle.jobs.send(job);
+    }
+
     /// The session `params` names, by any id it had.
     fn handle(&self, params: &Value) -> Option<&Handle> {
         let id = params["sessionId"].as_str()?;
@@ -594,6 +635,14 @@ impl Connection {
                     }
                     Job::Compact(id, instructions) => {
                         front.compact(&id, &instructions);
+                        continue;
+                    }
+                    Job::Fork(id, line) => {
+                        front.fork(&id, line);
+                        continue;
+                    }
+                    Job::Branch(id, name) => {
+                        front.branch(&id, &name);
                         continue;
                     }
                 };
@@ -816,6 +865,9 @@ impl Connection {
                 Builtin::Rename(_) => format!("; {RENAME} renames"),
                 Builtin::Export(_) => format!("; {EXPORT} exports"),
                 Builtin::Usage(_) => format!("; {SPENT} gives the usage"),
+                Builtin::Fork(_) => format!("; {FORK} forks"),
+                Builtin::Branch(_) => format!("; {BRANCH} branches"),
+                Builtin::Tree(_) => format!("; {TREE} lists the entries"),
                 _ => String::new(),
             };
             let message =
@@ -856,6 +908,35 @@ impl Connection {
             let _ = thread.join();
         }
     }
+}
+
+/// An entry of the session tree as `tree` gives it: `entryId` its line in the session file, which
+/// `fork` takes, `parentId` the listed entry it continues, `kind` and what that kind shows.
+fn tree_entry(entry: &TreeEntry) -> Value {
+    let mut listed = match &entry.item {
+        TreeItem::Prompt(text) => json!({"kind": "prompt", "text": text}),
+        TreeItem::Command(text) => json!({"kind": "command", "text": text}),
+        TreeItem::Reply(text) => json!({"kind": "reply", "text": text}),
+        TreeItem::Stopped(error) => json!({"kind": "stopped", "error": error}),
+        TreeItem::Tool(name, summary) => {
+            json!({"kind": "toolResult", "name": name, "summary": summary})
+        }
+        TreeItem::Call(name, summary) => {
+            json!({"kind": "toolCall", "name": name, "summary": summary})
+        }
+        TreeItem::Compaction(tokens) => json!({"kind": "compaction", "tokensBefore": tokens}),
+        TreeItem::BranchSummary(text) => json!({"kind": "branchSummary", "text": text}),
+        TreeItem::Reasoning => json!({"kind": "reasoning"}),
+        TreeItem::Model(model) => json!({"kind": "model", "model": model}),
+        TreeItem::Effort(level) => json!({"kind": "thoughtLevel", "level": level}),
+    };
+    listed["entryId"] = json!(entry.line);
+    listed["parentId"] = json!(entry.parent);
+    listed["active"] = json!(entry.active);
+    if let Some(label) = &entry.label {
+        listed["label"] = json!(label.text);
+    }
+    listed
 }
 
 /// A saved session as `session/list` shows it: its title its name, else its first prompt's
@@ -1397,12 +1478,13 @@ impl Acp {
         self.run(first, queued.join("\n\n"));
     }
 
-    /// Names the session for request `id`, as `/rename`, and tells the client its new title.
-    fn rename(&mut self, id: &Value, name: &str) {
+    /// Names the session for request `id`, as `/rename`, answered with `result`, and tells the
+    /// client its new title.
+    fn rename(&mut self, id: &Value, name: &str, result: Value) {
         if let Err(error) = self.session.agent.set_session_name(name) {
             return self.ui.out.error(id, INTERNAL_ERROR, &error.to_string());
         }
-        self.ui.out.respond(id, json!({}));
+        self.ui.out.respond(id, result);
         let now = utc_time(std::time::SystemTime::now());
         self.ui.update(
             json!({"sessionUpdate": "session_info_update", "title": name,
@@ -1423,13 +1505,84 @@ impl Acp {
         }
     }
 
+    /// Continues in a new session before the prompt at `line`, for request `id`, answered with
+    /// the session's id and that prompt to edit; a next-step list offered there is named.
+    fn fork(&mut self, id: &Value, line: usize) {
+        let agent = &mut self.session.agent;
+        let forked = match agent.fork_index(line) {
+            Ok(Some(index)) => agent.fork(index),
+            Ok(None) => Ok(None),
+            Err(error) => Err(error),
+        };
+        match forked {
+            Ok(Some((prompt, offer))) => {
+                drive::changed(self, "Forked to new session", Change::Kept);
+                self.switched();
+                let result = json!({"sessionId": self.ui.session, "prompt": prompt});
+                self.ui.out.respond(id, result);
+                if let Some(offer) = offer {
+                    self.ui.tell(&drive::offered_here(&offer));
+                }
+            }
+            Ok(None) => {
+                let message = format!("no prompt at entry {line}");
+                self.ui.out.error(id, INVALID_PARAMS, &message);
+            }
+            Err(error) => self.ui.out.error(id, INTERNAL_ERROR, &error.to_string()),
+        }
+    }
+
+    /// Continues in a new session with the whole conversation for request `id`, named `name`
+    /// when given; answered with the session's id.
+    fn branch(&mut self, id: &Value, name: &str) {
+        match self.session.agent.clone_session() {
+            Ok(true) => {
+                drive::changed(self, "Cloned to new session", Change::Kept);
+                self.switched();
+                if !name.is_empty() {
+                    return self.rename(id, name, json!({"sessionId": self.ui.session}));
+                }
+                self.ui
+                    .out
+                    .respond(id, json!({"sessionId": self.ui.session}));
+            }
+            Ok(false) => self
+                .ui
+                .out
+                .error(id, INVALID_PARAMS, "nothing to branch yet"),
+            Err(error) => self.ui.out.error(id, INTERNAL_ERROR, &error.to_string()),
+        }
+    }
+
+    /// Tells the client what changed with the session: its config options and usage.
+    fn switched(&mut self) {
+        self.options_changed();
+        let agent = &self.session.agent;
+        self.ui.window = agent.context_window();
+        let (context, cost) = (agent.context_tokens(), agent.session_tokens().cost);
+        self.ui.usage_update(context, cost);
+    }
+
+    /// The session's entries as `/tree` lists them, for request `id`.
+    fn tree(&mut self, id: &Value) {
+        match self.session.agent.tree() {
+            Ok(tree) => {
+                let entries: Vec<Value> = tree.entries.iter().map(tree_entry).collect();
+                let result = json!({"entries": entries, "currentId": tree.current});
+                self.ui.out.respond(id, result);
+            }
+            Err(error) => self.ui.out.error(id, INTERNAL_ERROR, &error.to_string()),
+        }
+    }
+
     /// Sets what `configure` names and answers its request, or says why it was not set.
     fn configure_with(&mut self, configure: Configure) {
         let Configure { id, setting } = configure;
         let (option, value) = match setting {
             Setting::Option { option, value } => (option, value),
-            Setting::Rename(name) => return self.rename(&id, &name),
+            Setting::Rename(name) => return self.rename(&id, &name, json!({})),
             Setting::Export(path) => return self.export(&id, path.as_deref()),
+            Setting::Tree => return self.tree(&id),
         };
         match self.set_option(&option, &value) {
             Ok(()) => {

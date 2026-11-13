@@ -134,8 +134,10 @@ Methods named `_io.github.leanandmean.scramjet/<name>`, following ACP's reverse-
 |---|---|
 | `next_step` (agent → client), `hold` | Section 5. |
 | `set_api_key` | Section 6. No `sessionId`. |
-| `fork`, `branch` `{entryId?}` | `/fork` and `/branch`; the result has the new `sessionId`. |
-| `tree`, `navigate_tree` `{entryId, summarize?}`, `set_label` | `/tree`: its entries with `entryId`, labels and the current leaf. Navigating gives back the prompt to edit; a list or question that was open there is asked again. |
+| `fork` `{entryId}` | `/fork` before the prompt at `entryId`: the result `{sessionId, prompt}` has the new session's id and the prompt to edit; a next-step list offered there is named in a notice. |
+| `branch` `{name?}` | `/branch`: the whole conversation in a new session, named `name` when given; the result `{sessionId}`. |
+| `tree` | `/tree`'s entries: `{entries, currentId}`, each entry with `entryId`, `parentId`, `active` (on the current path), `label` when given, and its `kind` with what it shows: `prompt`, `command`, `reply` and `branchSummary` with `text`, `toolCall` and `toolResult` with `name` and `summary`, `stopped` with `error`, `compaction` with `tokensBefore`, `model` with `model`, `thoughtLevel` with `level`, `reasoning`. During a turn it waits for the turn's next pause, as `rename` does. |
+| `navigate_tree` `{entryId, summarize?}`, `set_label` | `/tree`'s moves and labels. Navigating gives back the prompt to edit; a list or question that was open there is asked again. |
 | `compact` `{instructions?}` | `/compact`: shown as `compaction_update`s; the result `{compacted}` says whether anything was old enough to compact. `session/cancel` stops it (`-32800`); prompts sent meanwhile run after it. |
 | `bash` `{command, exclude?}`, `abort_bash` | `!` and `!!`: the output goes into the conversation with the next prompt. |
 | `rename` `{name}` | `/rename`, then `session_info_update` with the title. During a turn it waits for the turn's next pause, as a config option does. |
@@ -166,7 +168,7 @@ No credential, token or auth header in any update, response, request or error:
 ## 11. While a turn runs
 
 A thread reads stdin, so a session answers while its turn runs:
-- Queries (`session/list`, `state`, `events`, `tree`, `usage`) and the other sessions' methods are answered at once.
+- Queries (`session/list`, `state`, `events`, `usage`) and the other sessions' methods are answered at once; `tree` at the turn's next pause, as it reads the session's own state.
 - `session/cancel`, the answers to requests, `hold`, `abort_bash` and a prompt (queued, section 4) apply at once.
 - `session/set_config_option` waits for the turn's next pause (section 7).
 - `bash` runs alongside, as a `!` typed meanwhile does.

@@ -205,16 +205,7 @@ pub(super) fn ask_again(front: &mut dyn Front) {
 /// starts the next prompt if none is chosen.
 pub(super) fn reopen(front: &mut dyn Front, offer: Reopened, prompt: Option<String>) {
     if !front.chooses() {
-        let steps: Vec<_> = (offer.steps.iter().enumerate())
-            .map(|(at, step)| {
-                let recommended = match offer.recommended == Some(at) {
-                    true => " (recommended)",
-                    false => "",
-                };
-                format!("{}{}{recommended}", step.label(), step.fresh_mark())
-            })
-            .collect();
-        front.say(&format!("Next steps offered here: {}", steps.join(", ")));
+        front.say(&offered_here(&offer));
     } else {
         let title = match offer.command {
             Some(_) => "Select next step",
@@ -231,6 +222,20 @@ pub(super) fn reopen(front: &mut dyn Front, offer: Reopened, prompt: Option<Stri
     if let Some(prompt) = prompt {
         front.edit(prompt);
     }
+}
+
+/// Names the steps of the next-step list `offer`, for a front that does not offer it again.
+pub(super) fn offered_here(offer: &Reopened) -> String {
+    let steps: Vec<_> = (offer.steps.iter().enumerate())
+        .map(|(at, step)| {
+            let recommended = match offer.recommended == Some(at) {
+                true => " (recommended)",
+                false => "",
+            };
+            format!("{}{}{recommended}", step.label(), step.fresh_mark())
+        })
+        .collect();
+    format!("Next steps offered here: {}", steps.join(", "))
 }
 
 /// The next step of a completed command, as Scramjet routes it: an edge set to `chain` or a
@@ -492,7 +497,7 @@ pub(super) fn navigated(front: &mut dyn Front, navigated: Navigated) {
 }
 
 /// Shows the session `done` changed to, with its model and where it is saved.
-fn changed(front: &mut dyn Front, done: &str, change: Change) {
+pub(super) fn changed(front: &mut dyn Front, done: &str, change: Change) {
     let agent = &mut front.session().agent;
     agent.load_model_info();
     let message = format!(

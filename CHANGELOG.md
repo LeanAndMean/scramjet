@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.217.0 — ACP forks, branches and lists the tree
+
+### Added
+
+- `scramjet acp` forks a session before one of its prompts (`_io.github.leanandmean.scramjet/fork`), as `/fork` does, and answers with the new session and the prompt to edit; it branches the whole conversation into a new session (`…/branch`, optionally named), as `/branch` does. Both are refused while a turn runs.
+- `scramjet acp` lists a session's entries as `/tree` does (`…/tree`), with the ids `fork` takes, labels and the current entry.
+
 ## 2.216.0 — ACP exports sessions and gives the usage
 
 ### Added

@@ -3181,6 +3181,177 @@ fn acp_compacts_and_renames_sessions_through_the_extensions() {
 
 #[test]
 #[cfg(unix)]
+fn acp_forks_branches_and_lists_the_tree_through_the_extensions() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-fork-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = |text: &str| {
+        [
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}})
+            .to_string(),
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]
+        .to_vec()
+    };
+    // The third reply is held, so that a branch comes during its turn.
+    let replies = vec![reply("One."), reply("Two."), reply("Three.")];
+    let (port, bodies) = serve_events_after(replies, |n| match n {
+        2 => Duration::from_millis(500),
+        _ => Duration::ZERO,
+    });
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1,
+                "clientCapabilities": {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    let offered = &next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    let methods = offered["methods"].as_array().unwrap();
+    for method in ["fork", "branch", "tree"] {
+        let method = format!("_io.github.leanandmean.scramjet/{method}");
+        assert!(methods.iter().any(|m| *m == method), "{offered}");
+    }
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let first = next(&messages)["result"]["sessionId"].clone();
+    let answer = |messages: &std::sync::mpsc::Receiver<serde_json::Value>| {
+        until(messages, |message| message.get("id").is_some())
+    };
+    let prompt = |id: u64, session: &serde_json::Value, text: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}})
+    };
+    let extension = |id: u64, method: &str, params: serde_json::Value| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": format!("_io.github.leanandmean.scramjet/{method}"), "params": params})
+    };
+    for (id, text) in [(3, "first"), (4, "second")] {
+        send(&mut stdin, prompt(id, &first, text));
+        assert_eq!(answer(&messages).0["result"]["stopReason"], "end_turn");
+    }
+    send(
+        &mut stdin,
+        extension(5, "tree", serde_json::json!({"sessionId": first})),
+    );
+    let tree = answer(&messages).0["result"].clone();
+    let all = tree["entries"].as_array().unwrap();
+    assert_eq!(all[0]["kind"], "model", "{tree}");
+    assert_eq!(all[0]["model"], "test/claude-test", "{tree}");
+    let entries: Vec<_> = (all.iter())
+        .filter(|entry| entry["kind"] != "model" && entry["kind"] != "thoughtLevel")
+        .collect();
+    let shown: Vec<_> = (entries.iter())
+        .map(|entry| (entry["kind"].as_str().unwrap(), entry["text"].as_str()))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("prompt", Some("first")),
+            ("reply", Some("One.")),
+            ("prompt", Some("second")),
+            ("reply", Some("Two.")),
+        ],
+        "{tree}"
+    );
+    assert!(all.iter().all(|entry| entry["active"] == true), "{tree}");
+    assert_eq!(tree["currentId"], entries[3]["entryId"], "{tree}");
+    assert_eq!(entries[2]["parentId"], entries[1]["entryId"], "{tree}");
+
+    let at = |entry: &&serde_json::Value| {
+        serde_json::json!({"sessionId": first,
+        "entryId": entry["entryId"]})
+    };
+    send(&mut stdin, extension(6, "fork", at(&entries[1])));
+    let refused = answer(&messages).0;
+    let line = &entries[1]["entryId"];
+    assert_eq!(
+        refused["error"]["message"],
+        format!("no prompt at entry {line}"),
+        "{refused}"
+    );
+    send(&mut stdin, extension(7, "fork", at(&entries[2])));
+    let (forked, before) = answer(&messages);
+    let changed = (before.iter())
+        .find(|message| message["method"] == "_io.github.leanandmean.scramjet/session_changed")
+        .unwrap_or_else(|| panic!("{before:?}"));
+    let fork = forked["result"]["sessionId"].clone();
+    assert_eq!(changed["params"]["sessionId"], first, "{changed}");
+    assert_eq!(changed["params"]["newSessionId"], fork, "{changed}");
+    assert_ne!(fork, first);
+    assert_eq!(forked["result"]["prompt"], "second", "{forked}");
+    send(
+        &mut stdin,
+        extension(8, "tree", serde_json::json!({"sessionId": fork})),
+    );
+    let tree = answer(&messages).0;
+    let prompts: Vec<_> = (tree["result"]["entries"].as_array().unwrap().iter())
+        .filter_map(|entry| entry["text"].as_str())
+        .collect();
+    assert_eq!(prompts, ["first", "One."], "{tree}");
+
+    send(&mut stdin, prompt(9, &fork, "/fork 1"));
+    let refused = answer(&messages).0;
+    let message = refused["error"]["message"].as_str().unwrap();
+    assert!(message.ends_with("scramjet/fork forks"), "{refused}");
+    send(&mut stdin, prompt(10, &fork, "third"));
+    send(
+        &mut stdin,
+        extension(11, "branch", serde_json::json!({"sessionId": fork})),
+    );
+    let refused = answer(&messages).0;
+    assert_eq!(refused["id"], 11, "{refused}");
+    assert_eq!(refused["error"]["message"], "a turn is running");
+    assert_eq!(answer(&messages).0["result"]["stopReason"], "end_turn");
+    let bodies: Vec<String> =
+        std::iter::from_fn(|| bodies.recv_timeout(Duration::from_secs(2)).ok()).collect();
+    let last = bodies.last().unwrap();
+    assert!(
+        last.contains("first") && last.contains("third") && !last.contains("second"),
+        "{last}"
+    );
+
+    send(
+        &mut stdin,
+        extension(
+            12,
+            "branch",
+            serde_json::json!({"sessionId": fork, "name": "Copy"}),
+        ),
+    );
+    let (branched, _) = answer(&messages);
+    let branch = branched["result"]["sessionId"].clone();
+    assert!(branch.is_string() && branch != fork, "{branched}");
+    let info = &next(&messages)["params"]["update"];
+    assert_eq!(info["sessionUpdate"], "session_info_update", "{info}");
+    assert_eq!(info["title"], "Copy");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 13, "method": "session/list",
+            "params": {"cwd": project}}),
+    );
+    let listed = answer(&messages).0;
+    let sessions = listed["result"]["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 3, "{listed}");
+    assert_eq!(sessions[0]["sessionId"], branch, "{listed}");
+    assert_eq!(sessions[0]["title"], "Copy", "{listed}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_exports_sessions_and_gives_the_usage_through_the_extensions() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-export-{}", std::process::id())),

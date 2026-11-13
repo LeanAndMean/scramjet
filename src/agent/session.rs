@@ -1072,6 +1072,14 @@ impl Session {
             .collect())
     }
 
+    /// The index `fork` takes of the prompt at line `line` of the file; `None`: no prompt there.
+    pub fn fork_index(&self, line: usize) -> io::Result<Option<usize>> {
+        Ok(self
+            .read()?
+            .fork_points()
+            .position(|entry| entry.line == line))
+    }
+
     /// Starts a session for the project `root` next to this one with the entries on the path to
     /// its prompt `index` (0-based, as `fork_prompts` lists them), that prompt left out, as
     /// Scramjet's `/fork` copies a session's path, or on the path to the entry `leaf` gives for
