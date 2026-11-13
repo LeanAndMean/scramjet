@@ -251,6 +251,12 @@ impl Out {
         let error = json!({"code": code, "message": message, "data": {"details": message}});
         self.send(&json!({"jsonrpc": "2.0", "id": id, "error": error}));
     }
+    /// ACP's error for a session not known, naming it in `data` as ACP's error page asks.
+    fn unknown(&self, id: &Value, session: &str, message: &str) {
+        let data = json!({"details": message, "sessionId": session});
+        let error = json!({"code": UNKNOWN_SESSION, "message": message, "data": data});
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "error": error}));
+    }
     /// Sends request `method`; its response comes through the receiver, unless `forget` drops
     /// it first.
     fn request(&self, method: &str, params: Value) -> (Value, mpsc::Receiver<Value>) {
@@ -505,6 +511,8 @@ enum Job {
     Shell(Shell),
     /// A login or an API key saved or removed for that provider: its models are read again.
     Credentials(String),
+    /// Request `id`'s `session/load` (true) or `resume` of the session open already.
+    Reopen(Value, bool),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -558,7 +566,7 @@ impl Connection {
             "session/set_config_option" => self.set_config_option(&id, &params),
             HOLD => match self.hold(&params) {
                 true => self.out.respond(&id, json!({})),
-                false => self.out.error(&id, INVALID_PARAMS, "no such session"),
+                false => self.unknown(&id, &params),
             },
             COMPACT => self.compact(id, &params),
             RENAME => self.rename(&id, &params),
@@ -568,7 +576,7 @@ impl Connection {
             BRANCH => self.branch(&id, &params),
             TREE => match self.handle(&params) {
                 Some(handle) => Self::settle(handle, &id, Setting::Tree),
-                None => self.out.error(&id, INVALID_PARAMS, "no such session"),
+                None => self.unknown(&id, &params),
             },
             NAVIGATE => self.navigate(id, &params),
             LABEL => self.label(&id, &params),
@@ -581,7 +589,7 @@ impl Connection {
             EVENTS => self.events(&id, &params),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
-                false => self.out.error(&id, INVALID_PARAMS, "no such session"),
+                false => self.unknown(&id, &params),
             },
             _ => self.out.error(&id, METHOD_NOT_FOUND, "Method not found"),
         }
@@ -624,7 +632,7 @@ impl Connection {
     /// turn's next pause, as the full screen takes `/model` typed during a turn, and answers.
     fn set_config_option(&self, id: &Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         let Some(option) = params["configId"].as_str() else {
             return self.out.error(id, INVALID_PARAMS, "configId is required");
@@ -640,7 +648,7 @@ impl Connection {
     /// pause.
     fn rename(&self, id: &Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         let name = params["name"].as_str().unwrap_or_default().trim();
         if name.is_empty() {
@@ -653,7 +661,7 @@ impl Connection {
     /// turn's next pause.
     fn export(&self, id: &Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         let path = params["path"].as_str().filter(|path| !path.is_empty());
         Self::settle(handle, id, Setting::Export(path.map(str::to_owned)));
@@ -720,7 +728,7 @@ impl Connection {
             return self.out.error(id, INVALID_PARAMS, "entryId is required");
         };
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         let label = (params["label"].as_str().map(str::trim))
             .filter(|label| !label.is_empty())
@@ -732,7 +740,7 @@ impl Connection {
     /// `session/cancel` stops it, and prompts sent meanwhile wait for it.
     fn busy(&self, id: &Value, params: &Value, job: Job) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         let mut turn = lock(&handle.turn);
         if turn.running {
@@ -828,7 +836,7 @@ impl Connection {
     /// ends, with its output, exit code and whether it was aborted; one at a time per session.
     fn bash(&self, id: Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(&id, INVALID_PARAMS, "no such session");
+            return self.unknown(&id, params);
         };
         let command = params["command"]
             .as_str()
@@ -890,7 +898,7 @@ impl Connection {
     /// What the session shows now, for a client that comes back.
     fn state(&self, id: &Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         let turn = lock(&handle.turn);
         let log = lock(&handle.log);
@@ -914,7 +922,7 @@ impl Connection {
     /// The messages the session sent after `since` that are held, since its turn began.
     fn events(&self, id: &Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         let Some(since) = params["since"].as_u64() else {
             return self.out.error(id, INVALID_PARAMS, "since is required");
@@ -926,12 +934,18 @@ impl Connection {
     /// Hands `job` to the session `params` names unless a turn runs there.
     fn between_turns(&self, id: &Value, params: &Value, job: Job) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(id, INVALID_PARAMS, "no such session");
+            return self.unknown(id, params);
         };
         if lock(&handle.turn).running {
             return self.out.error(id, INVALID_PARAMS, "a turn is running");
         }
         let _ = handle.jobs.send(job);
+    }
+
+    /// The error for the session `params` names, which this connection does not have open.
+    fn unknown(&self, id: &Value, params: &Value) {
+        let session = params["sessionId"].as_str().unwrap_or_default();
+        self.out.unknown(id, session, "no such session");
     }
 
     /// The session `params` names, by any id it had.
@@ -986,10 +1000,19 @@ impl Connection {
             Ok(servers) => servers,
             Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
         };
+        if opening != Opening::New
+            && let Some(handle) = self.handle(params)
+        {
+            return self.reopen(id, handle, &cwd, opening == Opening::Load);
+        }
         let file = match opening {
             Opening::New => None,
             Opening::Resume | Opening::Load => match self.resumable(params, &cwd) {
                 Ok(file) => Some(file),
+                Err((UNKNOWN_SESSION, message)) => {
+                    let session = params["sessionId"].as_str().unwrap_or_default();
+                    return self.out.unknown(id, session, &message);
+                }
                 Err((code, message)) => return self.out.error(id, code, &message),
             },
         };
@@ -1071,6 +1094,17 @@ impl Connection {
                         front.credentials_changed(&provider);
                         continue;
                     }
+                    Job::Reopen(id, load) => {
+                        if load {
+                            front.replay();
+                        }
+                        let shown = front.options();
+                        front.show(shown);
+                        let result =
+                            json!({"sessionId": front.ui.session, "configOptions": front.shown});
+                        out.respond(&id, result);
+                        continue;
+                    }
                 };
                 if let Some(why) = front.session.agent.login_needed() {
                     front.end_turn((&id, json!({})), Err((AUTH_REQUIRED, &auth_required(&why))));
@@ -1107,6 +1141,24 @@ impl Connection {
         }
     }
 
+    /// `session/load` or `resume` of a session open on this connection: between turns it goes on
+    /// as it is, its branch shown again when loaded; its MCP servers stay those it has.
+    fn reopen(&self, id: &Value, handle: &Handle, cwd: &Path, load: bool) {
+        let root = super::project_root(Some(cwd.to_owned())).unwrap_or_else(|_| cwd.to_owned());
+        if root != handle.root {
+            let message = format!(
+                "the session is in {}, not {}",
+                handle.root.display(),
+                root.display()
+            );
+            return self.out.error(id, INVALID_PARAMS, &message);
+        }
+        if lock(&handle.turn).running {
+            return self.out.error(id, INVALID_PARAMS, "a turn is running");
+        }
+        let _ = handle.jobs.send(Job::Reopen(id.clone(), load));
+    }
+
     /// The file of the saved session `params` names, to resume in `cwd`: one of its project's
     /// sessions with a conversation, not open on this connection.
     fn resumable(&self, params: &Value, cwd: &Path) -> Result<PathBuf, (i64, String)> {
@@ -1115,10 +1167,7 @@ impl Connection {
         // An id names a file, so it never holds a path.
         let valid = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
         if wanted.is_empty() || !wanted.chars().all(valid) {
-            return Err(invalid(format!("no session {wanted:?}")));
-        }
-        if self.handle(params).is_some() {
-            return Err(invalid(format!("session {wanted} is open already")));
+            return Err((UNKNOWN_SESSION, format!("no session {wanted:?}")));
         }
         let unknown = || (UNKNOWN_SESSION, format!("no saved session {wanted}"));
         let root = super::project_root(Some(cwd.to_owned())).map_err(invalid)?;
@@ -1280,7 +1329,7 @@ impl Connection {
 
     fn prompt(&mut self, id: Value, params: &Value) {
         let Some(handle) = self.handle(params) else {
-            return self.out.error(&id, INVALID_PARAMS, "no such session");
+            return self.unknown(&id, params);
         };
         let prompt = match prompt_content(&params["prompt"]) {
             Ok(prompt) => prompt,
@@ -1484,25 +1533,30 @@ fn config_options(agent: &Agent, models: &[ModelOption], booleans: bool) -> Valu
         "currentValue": current,
         "options": groups,
     })];
+    // A model with no levels keeps the option, with the model's own only: a client keeps every
+    // option a session showed (ACP's "complete" state, as ACP's TCK reads it).
     let levels = agent.effort_levels();
-    if agent.reasons() && !levels.is_empty() {
-        let effort = agent.effort().unwrap_or(DEFAULT_LEVEL);
-        let mut values: Vec<&str> = levels.iter().map(String::as_str).collect();
-        if !values.contains(&effort) {
-            values.insert(0, effort);
-        }
-        let values: Vec<Value> = (values.into_iter())
-            .map(|level| json!({"value": level, "name": level_name(level)}))
-            .collect();
-        options.push(json!({
-            "id": "thought_level",
-            "name": "Thinking",
-            "category": "thought_level",
-            "type": "select",
-            "currentValue": effort,
-            "options": values,
-        }));
+    let (effort, mut values) = match agent.reasons() && !levels.is_empty() {
+        true => (
+            agent.effort().unwrap_or(DEFAULT_LEVEL),
+            levels.iter().map(String::as_str).collect(),
+        ),
+        false => (DEFAULT_LEVEL, Vec::new()),
+    };
+    if !values.contains(&effort) {
+        values.insert(0, effort);
     }
+    let values: Vec<Value> = (values.into_iter())
+        .map(|level| json!({"value": level, "name": level_name(level)}))
+        .collect();
+    options.push(json!({
+        "id": "thought_level",
+        "name": "Thinking",
+        "category": "thought_level",
+        "type": "select",
+        "currentValue": effort,
+        "options": values,
+    }));
     let mut option = json!({
         "id": "autopilot",
         "name": "Autopilot",
@@ -2256,7 +2310,9 @@ impl Acp {
             "thought_level" => {
                 let level = value.as_str().ok_or("thought_level is a level's name")?;
                 let current = agent.effort().unwrap_or(DEFAULT_LEVEL);
-                if level == current {
+                let levels = agent.effort_levels();
+                let leveled = agent.reasons() && !levels.is_empty();
+                if level == current || (!leveled && level == DEFAULT_LEVEL) {
                     return Ok(());
                 }
                 if !agent.reasons() || !agent.effort_levels().iter().any(|known| known == level) {

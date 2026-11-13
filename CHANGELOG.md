@@ -4,6 +4,14 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.230.0 — ACP passes ACP's test kit
+
+### Changed
+
+- In `scramjet acp`, `session/load` and `session/resume` of a session the connection has open go on with it between turns (load shows its branch again) rather than being refused; during a turn they are still refused.
+- A session the connection does not know gets ACP's `-32002` with its `sessionId` in `data` from every method, not `-32602`.
+- A model with no thinking levels keeps the `thought_level` option, offering the model's own only, so a client's options stay the same when the model changes.
+
 ## 2.229.0 — ACP titles a session by its first prompt
 
 ### Added

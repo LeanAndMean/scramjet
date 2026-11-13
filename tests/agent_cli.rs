@@ -5157,6 +5157,7 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
     let models = serde_json::json!([
         {"id": "claude-test", "contextWindow": 1000, "reasoning": true},
         {"id": "claude-other", "name": "Other", "contextWindow": 2000, "reasoning": true},
+        {"id": "claude-plain", "contextWindow": 2000},
     ]);
     let booleans = serde_json::json!({"session": {"configOptions": {"boolean": {}}}});
     // A session with the provider at `port`: the process, its stdin and messages, the session's
@@ -5225,7 +5226,8 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
         names,
         [
             ("test/claude-test".into(), "claude-test".into()),
-            ("test/claude-other".into(), "Other".into())
+            ("test/claude-other".into(), "Other".into()),
+            ("test/claude-plain".into(), "claude-plain".into())
         ]
     );
     let level = option(&options, "thought_level");
@@ -5298,10 +5300,11 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
     drop(stdin);
     assert!(child.wait().unwrap().success());
 
-    // The agent's own switch is told in a `config_option_update`.
+    // The agent's own switch is told in a `config_option_update`. A model with no levels keeps
+    // the level's option, with the model's own only.
     let (port, _bodies) = serve_call(
         "switch_scramjet_model",
-        serde_json::json!({"provider": "test", "model": "claude-other"}),
+        serde_json::json!({"provider": "test", "model": "claude-plain"}),
     );
     let (mut child, mut stdin, messages, session, _) = start(port);
     send(
@@ -5318,9 +5321,20 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
     let options = &update["configOptions"];
     assert_eq!(
         option(options, "model")["currentValue"],
-        "test/claude-other",
+        "test/claude-plain",
         "{update}"
     );
+    let level = option(options, "thought_level");
+    assert_eq!(level["currentValue"], "default", "{update}");
+    assert_eq!(
+        level["options"],
+        serde_json::json!([{"value": "default", "name": "Model's default"}])
+    );
+    for (id, value, code) in [(4, "default", None), (5, "high", Some(-32602))] {
+        set(&mut stdin, id, &session, "thought_level", value.into());
+        let (answer, _) = until(&messages, |message| message["id"] == id);
+        assert_eq!(answer["error"]["code"].as_i64(), code, "{answer}");
+    }
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }
@@ -5446,19 +5460,54 @@ fn acp_lists_resumes_closes_and_deletes_saved_sessions() {
     let prompt = serde_json::json!([{"type": "text", "text": "again"}]);
     let params = serde_json::json!({"sessionId": started[0], "prompt": prompt});
     let (answer, _) = request(&mut stdin, "session/prompt", params);
-    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    assert_eq!(answer["error"]["code"], -32002, "{answer}");
+    assert_eq!(answer["error"]["data"]["sessionId"], started[0], "{answer}");
 
-    // Resumed in another folder, unknown, not an id, or open already: refused.
+    // Resumed in another folder, unknown or not an id: refused, an unknown one named.
     let resume = |session: &serde_json::Value, cwd: &std::path::Path| serde_json::json!({"sessionId": session, "cwd": cwd, "mcpServers": []});
     for (params, code) in [
         (resume(&started[0], &other), -32602),
         (resume(&"1-2".into(), &project), -32002),
-        (resume(&"../other".into(), &project), -32602),
-        (resume(&started[2], &project), -32602),
+        (resume(&"../other".into(), &project), -32002),
+        (resume(&started[2], &other), -32602),
     ] {
-        let (answer, _) = request(&mut stdin, "session/resume", params.clone());
-        assert_eq!(answer["error"]["code"], code, "{params}: {answer}");
+        for method in ["session/resume", "session/load"] {
+            let (answer, _) = request(&mut stdin, method, params.clone());
+            assert_eq!(answer["error"]["code"], code, "{params}: {answer}");
+            if code == -32002 {
+                assert_eq!(answer["error"]["data"]["sessionId"], params["sessionId"]);
+            }
+        }
     }
+    // One open already goes on: resumed it shows nothing, loaded its branch again.
+    let (answer, before) = request(&mut stdin, "session/resume", resume(&started[2], &project));
+    assert_eq!(answer["result"]["sessionId"], started[2], "{answer}");
+    assert!(answer["result"]["configOptions"].is_array(), "{answer}");
+    assert!(before.is_empty(), "{before:?}");
+    let (answer, before) = request(&mut stdin, "session/load", resume(&started[2], &project));
+    assert_eq!(answer["result"]["sessionId"], started[2], "{answer}");
+    let shown: Vec<_> = (before.iter())
+        .map(|message| &message["params"]["update"])
+        .filter(|update| {
+            update["sessionUpdate"]
+                .as_str()
+                .is_some_and(|kind| kind.ends_with("message_chunk"))
+        })
+        .map(|update| {
+            (
+                update["sessionUpdate"].as_str().unwrap(),
+                update["content"]["text"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("user_message_chunk", "second"),
+            ("agent_message_chunk", "Done.")
+        ],
+        "{before:?}"
+    );
     // Resumed, it replays nothing and goes on from its conversation.
     let (answer, before) = request(&mut stdin, "session/resume", resume(&started[0], &project));
     assert!(answer["result"]["configOptions"].is_array(), "{answer}");
@@ -5665,9 +5714,14 @@ fn acp_loads_a_saved_session_replaying_its_branch() {
         .find(|update| update["sessionUpdate"] == "tool_call")
         .unwrap();
     assert_eq!(live_call["rawInput"], call["rawInput"]);
-    // Loaded, it goes on from its conversation; loading it again while open is refused.
-    let (answer, _) = request(&mut stdin, "session/load", load(&project));
-    assert_eq!(answer["error"]["code"], -32602, "{answer}");
+    // Loaded again while open, it shows the same entries again, then goes on from its
+    // conversation.
+    let (answer, again) = request(&mut stdin, "session/load", load(&project));
+    assert_eq!(answer["result"]["sessionId"], session, "{answer}");
+    let again: Vec<_> = (again.iter())
+        .map(|message| entry(&message["params"]["update"]))
+        .collect();
+    assert_eq!(again, updates.iter().map(entry).collect::<Vec<_>>());
     let prompt = serde_json::json!([{"type": "text", "text": "and then"}]);
     let params = serde_json::json!({"sessionId": session, "prompt": prompt});
     let (ended, _) = request(&mut stdin, "session/prompt", params);
