@@ -14,7 +14,7 @@ use scramjet::agent::{
 use serde_json::{Value, json};
 use std::{
     cell::Cell,
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     ffi::OsString,
     io::{BufRead, Read, Write},
     path::{Path, PathBuf},
@@ -51,8 +51,10 @@ const BASH: &str = "_io.github.leanandmean.scramjet/bash";
 const ABORT_BASH: &str = "_io.github.leanandmean.scramjet/abort_bash";
 const USER_COMMAND: &str = "_io.github.leanandmean.scramjet/user_command";
 const SET_API_KEY: &str = "_io.github.leanandmean.scramjet/set_api_key";
+const STATE: &str = "_io.github.leanandmean.scramjet/state";
+const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 14] = [
+const EXTENSIONS: [&str; 16] = [
     HOLD,
     COMPACT,
     RENAME,
@@ -67,6 +69,8 @@ const EXTENSIONS: [&str; 14] = [
     BASH,
     ABORT_BASH,
     SET_API_KEY,
+    STATE,
+    EVENTS,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -222,11 +226,16 @@ struct Out {
 
 impl Out {
     fn send(&self, message: &Value) {
+        self.write(&Self::line(message));
+    }
+    fn line(message: &Value) -> String {
         // Inside JSON these appear only in strings, where escaping them is the same text; some
         // readers split lines at them.
-        let line = (message.to_string())
+        (message.to_string())
             .replace('\u{2028}', "\\u2028")
-            .replace('\u{2029}', "\\u2029");
+            .replace('\u{2029}', "\\u2029")
+    }
+    fn write(&self, line: &str) {
         let _held = lock(&self.written);
         let mut stdout = std::io::stdout().lock();
         let _ = writeln!(stdout, "{line}").and_then(|()| stdout.flush());
@@ -242,10 +251,15 @@ impl Out {
     /// Sends request `method`; its response comes through the receiver, unless `forget` drops
     /// it first.
     fn request(&self, method: &str, params: Value) -> (Value, mpsc::Receiver<Value>) {
+        let (id, answered) = self.register();
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        (id, answered)
+    }
+    /// A new request's id, and where its response will come.
+    fn register(&self) -> (Value, mpsc::Receiver<Value>) {
         let id = json!(self.ids.fetch_add(1, Ordering::Relaxed) + 1);
         let (sent, answered) = mpsc::channel();
         lock(&self.pending).insert(id.to_string(), sent);
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
         (id, answered)
     }
     /// Hands a response to the request it answers; one nothing waits for any more is dropped.
@@ -257,16 +271,124 @@ impl Out {
     fn forget(&self, id: &Value) {
         lock(&self.pending).remove(&id.to_string());
     }
-    /// Withdraws request `id`, whose answer is no longer waited for.
-    fn withdraw(&self, id: &Value) {
-        self.forget(id);
-        let params = json!({"requestId": id});
-        self.send(&json!({"jsonrpc": "2.0", "method": "$/cancel_request", "params": params}));
+}
+
+/// How much of what a session sent is held for `events`.
+const HELD: usize = 8 << 20;
+
+/// What a session sent the client since its turn began, numbered for a client that comes back
+/// (`state`, `events`), and what `state` says of it.
+struct Log {
+    /// The client knows Scramjet's extensions, so each message carries its `seq`.
+    numbered: bool,
+    /// The last message's number.
+    seq: u64,
+    /// The messages held, each with its number and size on the wire, at most `limit` bytes.
+    held: VecDeque<(u64, Value, usize)>,
+    bytes: usize,
+    limit: usize,
+    /// The request waiting for the client's answer, as it was sent.
+    open: Option<Value>,
+    /// What a question asked that nothing asked the client since: the next prompt answers it.
+    question: Option<String>,
+    /// The config options and usage the client was last given.
+    options: Value,
+    usage: Value,
+    /// `--ask`, and the sandbox's mode.
+    asks: bool,
+    sandbox: &'static str,
+}
+
+type Shared = Arc<Mutex<Log>>;
+
+impl Log {
+    fn new(numbered: bool) -> Self {
+        Self {
+            numbered,
+            seq: 0,
+            held: VecDeque::new(),
+            bytes: 0,
+            limit: HELD,
+            open: None,
+            question: None,
+            options: Value::Null,
+            usage: Value::Null,
+            asks: false,
+            sandbox: "danger-full-access",
+        }
     }
-    fn update(&self, session: &str, update: Value) {
+    fn number(&mut self, message: &mut Value) {
+        self.seq += 1;
+        if self.numbered {
+            add_meta(&mut message["params"], json!({"seq": self.seq}));
+        }
+    }
+    fn hold(&mut self, out: &Out, message: Value) {
+        let line = Out::line(&message);
+        // Written while held, so that the numbers go out in order.
+        out.write(&line);
+        self.bytes += line.len();
+        self.held.push_back((self.seq, message, line.len()));
+        while self.bytes > self.limit
+            && let Some((.., size)) = self.held.pop_front()
+        {
+            self.bytes -= size;
+        }
+    }
+    fn send(&mut self, out: &Out, mut message: Value) {
+        self.number(&mut message);
+        self.hold(out, message);
+    }
+    fn update(&mut self, out: &Out, session: &str, update: Value) {
         let params = json!({"sessionId": session, "update": update});
-        let notification = json!({"jsonrpc": "2.0", "method": "session/update", "params": params});
-        self.send(&notification);
+        self.send(
+            out,
+            json!({"jsonrpc": "2.0", "method": "session/update", "params": params}),
+        );
+    }
+    fn notify(&mut self, out: &Out, method: &str, params: Value) {
+        self.send(
+            out,
+            json!({"jsonrpc": "2.0", "method": method, "params": params}),
+        );
+    }
+    /// Sends request `method`, open until `settled` or `withdraw`.
+    fn request(
+        &mut self,
+        out: &Out,
+        method: &str,
+        params: Value,
+    ) -> (Value, mpsc::Receiver<Value>) {
+        let (id, answered) = out.register();
+        let mut message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        self.number(&mut message);
+        self.open = Some(message.clone());
+        self.hold(out, message);
+        (id, answered)
+    }
+    fn settled(&mut self) {
+        self.open = None;
+    }
+    /// Withdraws request `id`, whose answer is no longer waited for.
+    fn withdraw(&mut self, out: &Out, id: &Value) {
+        out.forget(id);
+        self.open = None;
+        self.notify(out, "$/cancel_request", json!({"requestId": id}));
+    }
+    /// A turn begins: what was held before it goes.
+    fn turn_starts(&mut self) {
+        self.held.clear();
+        self.bytes = 0;
+        self.question = None;
+    }
+    /// `events`' result: the messages after `since`, and whether none of them was dropped.
+    fn events(&self, since: u64) -> Value {
+        let earliest = self.held.front().map_or(self.seq + 1, |(seq, ..)| *seq);
+        let events: Vec<&Value> = (self.held.iter())
+            .filter(|(seq, ..)| *seq > since)
+            .map(|(_, message, _)| message)
+            .collect();
+        json!({"events": events, "complete": since + 1 >= earliest, "seq": self.seq})
     }
 }
 
@@ -328,6 +450,7 @@ struct Handle {
     thread: JoinHandle<()>,
     /// The project, where `bash` runs its commands.
     root: PathBuf,
+    log: Shared,
 }
 
 /// A session's turn, as both threads see it.
@@ -451,6 +574,8 @@ impl Connection {
             "authenticate" => (self.sign_in).authenticate(&self.out, id, &params, self.jobs()),
             "logout" => (self.sign_in).logout(&self.out, &id, &params, self.jobs()),
             BASH => self.bash(id, &params),
+            STATE => self.state(&id, &params),
+            EVENTS => self.events(&id, &params),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
                 false => self.out.error(&id, INVALID_PARAMS, "no such session"),
@@ -612,6 +737,7 @@ impl Connection {
             return self.out.error(id, INVALID_PARAMS, "a turn is running");
         }
         turn.running = true;
+        lock(&handle.log).turn_starts();
         handle.cancel.store(false, Ordering::Relaxed);
         drop(turn);
         let _ = handle.jobs.send(job);
@@ -720,13 +846,12 @@ impl Connection {
         drop(turn);
         let (out, turn, jobs) = (self.out.clone(), handle.turn.clone(), handle.jobs.clone());
         let (root, scramjet, session) = (handle.root.clone(), self.scramjet, &params["sessionId"]);
+        let log = handle.log.clone();
         let mut said = json!({"sessionId": session, "command": command, "include": include});
         std::thread::spawn(move || {
             let tell = |params: &Value| {
                 if scramjet {
-                    let notification =
-                        json!({"jsonrpc": "2.0", "method": USER_COMMAND, "params": params});
-                    out.send(&notification);
+                    lock(&log).notify(&out, USER_COMMAND, params.clone());
                 }
             };
             tell(&said);
@@ -757,6 +882,42 @@ impl Connection {
             cancel.store(true, Ordering::Relaxed);
         }
         true
+    }
+
+    /// What the session shows now, for a client that comes back.
+    fn state(&self, id: &Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
+        let turn = lock(&handle.turn);
+        let log = lock(&handle.log);
+        let question = log.question.as_ref().filter(|_| !turn.running);
+        let result = json!({
+            "running": turn.running,
+            "request": log.open,
+            "question": question,
+            "queue": {"steering": turn.messages.steering, "followUp": turn.messages.follow_ups},
+            "bash": turn.bash.is_some(),
+            "configOptions": log.options,
+            "ask": log.asks,
+            "sandbox": log.sandbox,
+            "usage": log.usage,
+            "seq": log.seq,
+        });
+        drop((log, turn));
+        self.out.respond(id, result);
+    }
+
+    /// The messages the session sent after `since` that are held, since its turn began.
+    fn events(&self, id: &Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.out.error(id, INVALID_PARAMS, "no such session");
+        };
+        let Some(since) = params["since"].as_u64() else {
+            return self.out.error(id, INVALID_PARAMS, "since is required");
+        };
+        let result = lock(&handle.log).events(since);
+        self.out.respond(id, result);
     }
 
     /// Hands `job` to the session `params` names unless a turn runs there.
@@ -832,6 +993,7 @@ impl Connection {
         let (started, starts) = mpsc::channel::<Result<(String, PathBuf), (i64, String)>>();
         let (jobs, given) = mpsc::channel();
         let (cancel, turn) = (Arc::<AtomicBool>::default(), Arc::<Mutex<Turn>>::default());
+        let log = Arc::new(Mutex::new(Log::new(self.scramjet)));
         let worker = Worker {
             out: self.out.clone(),
             notices: self.notices,
@@ -842,6 +1004,7 @@ impl Connection {
             renamed: self.renamed.clone(),
             cancel: cancel.clone(),
             turn: turn.clone(),
+            log: log.clone(),
         };
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
         let thread = std::thread::spawn(move || {
@@ -862,7 +1025,8 @@ impl Connection {
             if opening == Opening::Load {
                 front.replay();
             }
-            front.shown = front.options();
+            let shown = front.options();
+            front.show(shown);
             // Answered here, so that the commands' update follows it.
             let result = json!({"sessionId": front.ui.session, "configOptions": front.shown});
             out.respond(&answered, result);
@@ -929,6 +1093,7 @@ impl Connection {
                     turn,
                     thread,
                     root,
+                    log,
                 };
                 self.sessions.insert(session, handle);
             }
@@ -1156,6 +1321,7 @@ impl Connection {
             return;
         }
         turn.running = true;
+        lock(&handle.log).turn_starts();
         handle.cancel.store(false, Ordering::Relaxed);
         drop(turn);
         let _ = handle.jobs.send(Job::Prompt(id, prompt));
@@ -1569,12 +1735,20 @@ struct Worker {
     renamed: Renamed,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
+    log: Shared,
 }
 
 impl Worker {
     fn front(self, session: Session, servers: Vec<McpServer>) -> Acp {
+        let mut log = lock(&self.log);
+        log.asks = session.agent.asks();
+        if let Some(sandbox) = session.agent.sandbox() {
+            log.sandbox = sandbox.mode.name();
+        }
+        drop(log);
         let ui = Updates {
             out: self.out,
+            log: self.log,
             first: session.agent.session_id(),
             session: session.agent.session_id(),
             notices: self.notices,
@@ -1656,6 +1830,7 @@ impl Acp {
         self.ui.flush();
         (self.ui.replaying, self.ui.entry) = (false, None);
         (self.ui.asked, self.ui.stopped, self.ui.thinking) = (None, None, false);
+        lock(&self.ui.log).question = None;
     }
 
     /// `reload` in this session: the settings and what they name read again, what is wrong in
@@ -1719,7 +1894,7 @@ impl Acp {
         let listed: Vec<Value> = commands.chain(skills).collect();
         let update =
             json!({"sessionUpdate": "available_commands_update", "availableCommands": listed});
-        self.ui.out.update(&self.ui.session, update);
+        self.ui.update(update);
     }
 
     /// Runs `prompt`, or with none goes on with the turn the session holds, and the next steps
@@ -2019,7 +2194,8 @@ impl Acp {
         };
         match self.set_option(&option, &value) {
             Ok(()) => {
-                self.shown = self.options();
+                let shown = self.options();
+                self.show(shown);
                 self.ui
                     .out
                     .respond(&id, json!({"configOptions": self.shown}));
@@ -2096,11 +2272,17 @@ impl Acp {
     fn options_changed(&mut self) {
         let options = self.options();
         if options != self.shown {
-            self.shown = options;
+            self.show(options);
             let update =
                 json!({"sessionUpdate": "config_option_update", "configOptions": self.shown});
             self.ui.update(update);
         }
+    }
+
+    /// Keeps `options` as those the client was given.
+    fn show(&mut self, options: Value) {
+        lock(&self.ui.log).options = options.clone();
+        self.shown = options;
     }
 
     /// The `next_step` request's parameters for `offer`.
@@ -2240,11 +2422,10 @@ impl Front for Acp {
         lock(&self.turn).held = false;
         let mut deadline = offer.autoselect.map(|wait| Instant::now() + wait);
         let request = match self.scramjet {
-            true => Some(
-                self.ui
-                    .out
-                    .request(NEXT_STEP, self.next_step_params(&offer)),
-            ),
+            true => {
+                let params = self.next_step_params(&offer);
+                Some(lock(&self.ui.log).request(&self.ui.out, NEXT_STEP, params))
+            }
             false => {
                 self.ui.message(&listed(&offer));
                 deadline?;
@@ -2278,9 +2459,12 @@ impl Front for Acp {
                 None => std::thread::sleep(POLL),
             }
         };
-        if let (Some((id, _)), None | Some(None)) = (&request, &answer) {
-            self.ui.out.withdraw(id);
+        let mut log = lock(&self.ui.log);
+        match (&request, &answer) {
+            (Some((id, _)), None | Some(None)) => log.withdraw(&self.ui.out, id),
+            _ => log.settled(),
         }
+        drop(log);
         match answer? {
             Some(message) => self.picked(&offer, message),
             None => Some(Picked {
@@ -2314,8 +2498,8 @@ impl Front for Acp {
         let id = self.session.agent.session_id();
         if self.scramjet && id != self.ui.session {
             let params = json!({"sessionId": self.ui.session, "newSessionId": id});
-            self.ui.out.send(&json!({"jsonrpc": "2.0",
-                "method": "_io.github.leanandmean.scramjet/session_changed", "params": params}));
+            let method = "_io.github.leanandmean.scramjet/session_changed";
+            lock(&self.ui.log).notify(&self.ui.out, method, params);
             lock(&self.renamed).insert(id.clone(), self.ui.first.clone());
             self.ui.session = id;
         }
@@ -2326,6 +2510,8 @@ impl Front for Acp {
 /// The agent's interface in a session: `session/update` notifications to the client.
 struct Updates {
     out: Out,
+    /// What the session sent, numbered and held for `state` and `events`.
+    log: Shared,
     /// The session's id at its start, and the one its updates carry.
     first: String,
     session: String,
@@ -2389,7 +2575,7 @@ impl Updates {
     fn update(&self, mut update: Value) {
         self.flush();
         self.stamp(&mut update);
-        self.out.update(&self.session, update);
+        lock(&self.log).update(&self.out, &self.session, update);
     }
     /// A replayed message, reasoning, tool call or compaction carries its entry's line.
     fn stamp(&self, update: &mut Value) {
@@ -2409,7 +2595,7 @@ impl Updates {
     /// Sends the replayed tool call held, if any.
     fn flush(&self) {
         if let Some(held) = self.held.take() {
-            self.out.update(&self.session, held);
+            lock(&self.log).update(&self.out, &self.session, held);
         }
     }
     /// Replayed, a message or reasoning starts a response of its own unless it follows the
@@ -2496,6 +2682,7 @@ impl Updates {
             return;
         }
         let cost = json!({"amount": cost, "currency": "USD"});
+        lock(&self.log).usage = json!({"used": used, "size": size, "cost": cost});
         self.update(
             json!({"sessionUpdate": "usage_update", "used": used, "size": size, "cost": cost}),
         );
@@ -2568,12 +2755,27 @@ impl Updates {
     /// The client's result for request `method`; `None` once `cancel` is set, or when the
     /// client answered with an error, which a notice says.
     fn ask(&self, method: &str, params: Value, cancel: &AtomicBool) -> Option<Value> {
-        let (id, answered) = self.out.request(method, params);
+        let (id, answered) = lock(&self.log).request(&self.out, method, params);
+        let answer = self.answer(method, &id, &answered, cancel);
+        if answer.is_some() {
+            lock(&self.log).settled();
+        }
+        answer
+    }
+    /// `ask`'s wait for the answer to request `id`.
+    fn answer(
+        &self,
+        method: &str,
+        id: &Value,
+        answered: &mpsc::Receiver<Value>,
+        cancel: &AtomicBool,
+    ) -> Option<Value> {
         loop {
             match answered.recv_timeout(POLL) {
                 Ok(mut message) => match message.get_mut("result") {
                     Some(result) => return Some(result.take()),
                     None => {
+                        lock(&self.log).settled();
                         let error = message["error"]["message"].as_str().unwrap_or("no reason");
                         self.say("warning", &format!("The client failed {method}: {error}"));
                         return None;
@@ -2581,7 +2783,7 @@ impl Updates {
                 },
                 Err(mpsc::RecvTimeoutError::Timeout) if !cancel.load(Ordering::Relaxed) => {}
                 Err(_) => {
-                    self.out.withdraw(&id);
+                    lock(&self.log).withdraw(&self.out, id);
                     return None;
                 }
             }
@@ -2625,6 +2827,7 @@ impl Updates {
     /// The text a request about the tool call announced last shows: what `question` showed
     /// with `title` above it, else `title`.
     fn asking(&mut self, title: &str) -> String {
+        lock(&self.log).question = None;
         match self.asked.take() {
             Some(shown) => format!("{title}\n\n{shown}"),
             None => title.to_owned(),
@@ -2633,6 +2836,7 @@ impl Updates {
     /// The answer the client's form gives for `property`, asked with what `question` showed;
     /// `None` when declined or cancelled.
     fn elicit(&mut self, title: &str, property: Value) -> Option<Value> {
+        lock(&self.log).question = None;
         let message = self.asked.take().unwrap_or_else(|| title.to_owned());
         let schema = json!({"type": "object", "properties": {"answer": property},
             "required": ["answer"]});
@@ -2945,6 +3149,7 @@ impl AgentUi for Updates {
     /// What a question asks, which the next prompt answers.
     fn question(&mut self, message: &str) {
         self.asked = Some(message.to_owned());
+        lock(&self.log).question = Some(message.to_owned());
         self.agent_message(message);
     }
     fn notice(&mut self, text: &str) {
@@ -3043,5 +3248,32 @@ impl AgentUi for Updates {
     /// A config option set during the turn, which its pause takes (`Acp::paused`).
     fn pause(&mut self) -> bool {
         !lock(&self.turn).configuring.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_log_drops_its_oldest_messages_past_its_limit_and_says_so() {
+        let (out, mut log) = (Out::default(), Log::new(true));
+        for n in 0..5 {
+            log.notify(&out, "test", json!({"text": "x".repeat(100), "n": n}));
+            // Room for two messages.
+            log.limit = 2 * log.held[0].2;
+        }
+        let held: Vec<u64> = log.held.iter().map(|(seq, ..)| *seq).collect();
+        assert_eq!(held, [4, 5]);
+        assert_eq!(
+            log.held[0].1["params"]["_meta"]["io.github.leanandmean.scramjet"]["seq"],
+            4
+        );
+        assert_eq!(log.events(3)["complete"], true);
+        assert_eq!(log.events(2)["complete"], false);
+        assert_eq!(log.events(4)["events"].as_array().unwrap().len(), 1);
+        log.turn_starts();
+        assert_eq!(log.events(5)["complete"], true);
+        assert_eq!(log.events(4)["complete"], false);
     }
 }

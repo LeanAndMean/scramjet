@@ -1799,6 +1799,11 @@ impl Agent {
         self.config.sandbox.as_ref()
     }
 
+    /// Whether calls ask the user first (`--ask`).
+    pub fn asks(&self) -> bool {
+        self.config.ask
+    }
+
     /// The window automatic compaction checks; `None` skips the check.
     pub fn set_context_window(&mut self, window: Option<u64>) {
         self.info.window = window;

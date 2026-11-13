@@ -2061,6 +2061,7 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
         commands["params"]["update"]["sessionUpdate"], "available_commands_update",
         "{commands}"
     );
+    assert!(commands["params"]["_meta"].is_null(), "{commands}");
     let prompt = |id: u64, text: &str| {
         serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
             "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}})
@@ -2237,6 +2238,117 @@ fn acp_asks_the_client_before_calls_under_ask() {
     assert!(asked_again.is_none(), "{asked_again:?}");
     assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
     assert!(output(&after).unwrap().contains("ran-it"));
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_numbers_what_it_sends_and_gives_the_state_and_events_to_a_client_that_comes_back() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-events-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (port, _bodies) = serve_bash_call("echo ran-it");
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings, &["--ask"]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities":
+                {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    let methods =
+        next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"]["methods"].to_string();
+    assert!(
+        methods.contains("/state") && methods.contains("/events"),
+        "{methods}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let seq = |message: &serde_json::Value| {
+        message["params"]["_meta"]["io.github.leanandmean.scramjet"]["seq"].as_u64()
+    };
+    let commands = next(&messages);
+    assert_eq!(seq(&commands), Some(1), "{commands}");
+    let call = |id: u64, method: &str, params: serde_json::Value| {
+        let mut params = params;
+        params["sessionId"] = session.clone();
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": format!("_io.github.leanandmean.scramjet/{method}"), "params": params})
+    };
+    send(&mut stdin, call(3, "state", serde_json::json!({})));
+    let idle = next(&messages)["result"].clone();
+    assert_eq!(idle["running"], false, "{idle}");
+    assert_eq!(idle["seq"], 1, "{idle}");
+    assert_eq!(idle["ask"], true, "{idle}");
+    assert_eq!(idle["sandbox"], "danger-full-access", "{idle}");
+    assert_eq!(idle["configOptions"][0]["id"], "model", "{idle}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let asked = |message: &serde_json::Value| message["method"] == "session/request_permission";
+    let (request, before) = until(&messages, asked);
+    // Every update and request is numbered on from the last, in the order written.
+    let sent: Vec<serde_json::Value> = before.into_iter().chain([request.clone()]).collect();
+    let numbers: Vec<Option<u64>> = sent.iter().map(seq).collect();
+    let expected: Vec<Option<u64>> = (2..2 + sent.len() as u64).map(Some).collect();
+    assert_eq!(numbers, expected, "{sent:?}");
+    // Coming back during the turn: what is open, and what was sent since a number.
+    send(&mut stdin, call(5, "state", serde_json::json!({})));
+    let running = next(&messages)["result"].clone();
+    assert_eq!(running["running"], true, "{running}");
+    assert_eq!(running["request"], request, "{running}");
+    assert_eq!(running["seq"], seq(&request).unwrap(), "{running}");
+    assert!(running["question"].is_null(), "{running}");
+    send(
+        &mut stdin,
+        call(6, "events", serde_json::json!({"since": 1})),
+    );
+    let events = next(&messages)["result"].clone();
+    assert_eq!(events["complete"], true, "{events}");
+    assert_eq!(events["events"], serde_json::json!(sent), "{events}");
+    send(
+        &mut stdin,
+        call(7, "events", serde_json::json!({"since": 3})),
+    );
+    let later = next(&messages)["result"].clone();
+    assert_eq!(later["events"], serde_json::json!(sent[2..]), "{later}");
+    // What was sent before the turn began is no longer held.
+    send(
+        &mut stdin,
+        call(8, "events", serde_json::json!({"since": 0})),
+    );
+    let missed = next(&messages)["result"].clone();
+    assert_eq!(missed["complete"], false, "{missed}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": request["id"],
+            "result": {"outcome": {"outcome": "selected", "optionId": "allow_once"}}}),
+    );
+    let (ended, after) = until(&messages, |message| message["id"] == 4);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let last = after.iter().filter_map(seq).max().unwrap();
+    send(&mut stdin, call(9, "state", serde_json::json!({})));
+    let done = next(&messages)["result"].clone();
+    assert_eq!(done["running"], false, "{done}");
+    assert!(done["request"].is_null(), "{done}");
+    assert_eq!(done["seq"], last, "{done}");
+    assert_eq!(done["usage"]["size"], 1000, "{done}");
+    send(
+        &mut stdin,
+        call(10, "events", serde_json::json!({"since": last})),
+    );
+    let none = next(&messages)["result"].clone();
+    assert_eq!(none["events"], serde_json::json!([]), "{none}");
+    assert_eq!(none["complete"], true, "{none}");
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }

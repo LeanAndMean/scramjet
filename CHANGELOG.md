@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.225.0 — ACP catches a client up
+
+### Added
+
+- `scramjet acp` numbers each update, notification and request it sends a session's client that knows Scramjet's extensions (`seq` in `_meta`), and answers two new extension methods: `state`, what the session shows now (a turn running, the request waiting, a question, the queue, the model, autopilot, `--ask`, the sandbox, usage), and `events`, what it sent since a number during the current turn, so a front end that lost its client can catch it up.
+
 ## 2.224.0 — ACP asks for a sign-in
 
 ### Added
