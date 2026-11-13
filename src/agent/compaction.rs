@@ -3,7 +3,7 @@
 //! fills.
 use super::client::Protocol;
 use super::{
-    Agent, AgentError, AgentUi, Compacting, PRODUCER, Purpose, USAGE, message_text, tools,
+    Agent, AgentError, AgentUi, Compacting, PRODUCER, Purpose, Saved, USAGE, message_text, tools,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
@@ -714,6 +714,9 @@ impl Agent {
                 "read_files":files.read, "modified_files":files.modified,
                 "tokens_before":tokens_before}),
         )?;
+        if let Some(line) = self.session.leaf() {
+            ui.saved(Saved::Compaction, line);
+        }
         let kept = self.conversation.split_off(cut);
         self.conversation = vec![summary_message(&summary)];
         self.conversation.extend(kept);

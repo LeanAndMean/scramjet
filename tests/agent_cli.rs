@@ -2654,6 +2654,110 @@ content-length: 2\r\nconnection: close\r\n\r\n{}";
 
 #[test]
 #[cfg(unix)]
+fn acp_names_the_entries_a_live_turn_saves_by_the_updates_that_showed_them() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-entries-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("a.txt"), "alpha\n").unwrap();
+    let mut replies = call_events("read", serde_json::json!({"path": "a.txt"}));
+    replies.extend(std::iter::repeat_n(replies[1].clone(), 4));
+    let (port, _bodies) = serve_events(replies);
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never",
+        "compaction": {"reserveTokens": 100, "keepRecentTokens": 1}});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities":
+                {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (ended, seen) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let ours = |name: &str| format!("_io.github.leanandmean.scramjet/{name}");
+    let entries: Vec<&serde_json::Value> = (seen.iter())
+        .filter(|message| message["method"] == ours("entry"))
+        .map(|message| &message["params"])
+        .collect();
+    let kinds: Vec<&str> = (entries.iter())
+        .map(|entry| entry["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["prompt", "toolResult", "reply"], "{entries:?}");
+    // The client's own prompt showed in no update; the others name theirs.
+    assert!(entries[0].get("messageId").is_none(), "{entries:?}");
+    let update = |kind: &str| {
+        (seen.iter())
+            .find(|message| message["params"]["update"]["sessionUpdate"] == kind)
+            .map(|message| &message["params"]["update"])
+            .unwrap()
+    };
+    assert_eq!(entries[1]["toolCallId"], update("tool_call")["toolCallId"]);
+    assert_eq!(
+        entries[2]["messageId"],
+        update("agent_message_chunk")["messageId"]
+    );
+    // Without `session.compaction` a compaction is said in a message, which its entry names.
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "again"}]}}),
+    );
+    until(&messages, |message| message["id"] == 4);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": ours("compact"),
+            "params": {"sessionId": session}}),
+    );
+    let (compacted, said) = until(&messages, |message| message["id"] == 5);
+    assert_eq!(compacted["result"]["compacted"], true, "{compacted}");
+    let compaction = (said.iter())
+        .find(|message| message["method"] == ours("entry"))
+        .map(|message| &message["params"])
+        .unwrap();
+    assert_eq!(compaction["kind"], "compaction", "{compaction}");
+    let message = (said.iter())
+        .find(|message| message["params"]["update"]["sessionUpdate"] == "agent_message_chunk")
+        .unwrap();
+    assert_eq!(
+        compaction["messageId"],
+        message["params"]["update"]["messageId"]
+    );
+    let mut entries = entries;
+    entries.push(compaction);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": ours("tree"),
+            "params": {"sessionId": session}}),
+    );
+    let (tree, _) = until(&messages, |message| message["id"] == 6);
+    let listed = tree["result"]["entries"].as_array().unwrap();
+    for entry in &entries {
+        let found = (listed.iter())
+            .find(|listed| listed["entryId"] == entry["entryId"])
+            .unwrap_or_else(|| panic!("{entry} not in {listed:?}"));
+        assert_eq!(found["kind"], entry["kind"], "{found}");
+        assert_eq!(entry["sessionId"], session);
+    }
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_on_sigterm_cancels_turns_and_their_commands_then_exits() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-term-{}", std::process::id())));

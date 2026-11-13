@@ -52,6 +52,7 @@ const ABORT_BASH: &str = "_io.github.leanandmean.scramjet/abort_bash";
 const USER_COMMAND: &str = "_io.github.leanandmean.scramjet/user_command";
 const STATUS: &str = "_io.github.leanandmean.scramjet/status";
 const QUESTION: &str = "_io.github.leanandmean.scramjet/question";
+const ENTRY: &str = "_io.github.leanandmean.scramjet/entry";
 const SET_API_KEY: &str = "_io.github.leanandmean.scramjet/set_api_key";
 const STATE: &str = "_io.github.leanandmean.scramjet/state";
 const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
@@ -1778,6 +1779,9 @@ impl Worker {
             held: Cell::new(None),
             thinking: false,
             entry: None,
+            input_id: String::new(),
+            call_ids: HashMap::new(),
+            prompt_shown: None,
         };
         Acp {
             session,
@@ -2570,6 +2574,12 @@ struct Updates {
     thinking: bool,
     /// The session file's line of the item replayed now, which its updates carry as `entryId`.
     entry: Option<usize>,
+    /// The model's id of the tool call announced next, then the ids given to the calls whose
+    /// results are not saved yet, by the model's.
+    input_id: String,
+    call_ids: HashMap<String, String>,
+    /// The message that showed the prompt saved next, if one did.
+    prompt_shown: Option<String>,
 }
 
 /// Puts `fields` into `update`'s `_meta["io.github.leanandmean.scramjet"]`, beside what is there.
@@ -2631,11 +2641,13 @@ impl Updates {
     }
     fn user_message(&mut self, text: &str) {
         self.responses += 1;
+        self.prompt_shown = Some(format!("response-{}", self.responses));
         self.chunk("user_message_chunk", text);
     }
     /// What the command or skill `typed` sent in its place, as a message of its own.
     fn expansion(&mut self, typed: &str, sent: &str) {
         self.responses += 1;
+        self.prompt_shown = Some(format!("response-{}", self.responses));
         let mut update = self.chunked("user_message_chunk", sent);
         update["_meta"] = json!({"io.github.leanandmean.scramjet": {"expands": typed}});
         self.update(update);
@@ -3007,6 +3019,10 @@ impl AgentUi for Updates {
     }
     fn tool_call(&mut self, name: &str, summary: &str, _compact: Option<&CompactRead>) {
         self.calls += 1;
+        let model_id = std::mem::take(&mut self.input_id);
+        if !self.replaying && !model_id.is_empty() {
+            self.call_ids.insert(model_id, self.call_id());
+        }
         self.asked = None;
         self.call = (name.to_owned(), std::mem::take(&mut self.input));
         let title = match summary.trim() {
@@ -3041,11 +3057,41 @@ impl AgentUi for Updates {
             && (self.call.1["path"].as_str()).is_some_and(|path| !self.path(path).exists());
         self.update(update);
     }
-    fn tool_input(&mut self, arguments: &Value) {
+    fn tool_input(&mut self, call_id: &str, arguments: &Value) {
+        self.input_id = call_id.to_owned();
         self.input = arguments.clone();
     }
     fn entry(&mut self, line: Option<usize>) {
         self.entry = line;
+    }
+    /// Names the update that showed what was saved, for a client that knows the extension.
+    fn saved(&mut self, saved: scramjet::agent::Saved, line: usize) {
+        use scramjet::agent::Saved as Kept;
+        let prompt = self.prompt_shown.take();
+        if !self.scramjet || self.replaying {
+            return;
+        }
+        let response = format!("response-{}", self.responses);
+        let compaction = format!("compaction-{}", self.compactions);
+        let (kind, shown) = match saved {
+            Kept::Prompt => ("prompt", prompt.map(|id| ("messageId", id))),
+            Kept::Command => ("command", prompt.map(|id| ("messageId", id))),
+            Kept::Reply => ("reply", Some(("messageId", response))),
+            Kept::Reasoning => ("reasoning", Some(("messageId", response))),
+            Kept::ToolResult(id) => {
+                let shown = self.call_ids.remove(id);
+                ("toolResult", shown.map(|id| ("toolCallId", id)))
+            }
+            Kept::Compaction if self.compaction => {
+                ("compaction", Some(("compactionId", compaction)))
+            }
+            Kept::Compaction => ("compaction", Some(("messageId", compaction))),
+        };
+        let mut params = json!({"sessionId": self.session, "entryId": line, "kind": kind});
+        if let Some((field, id)) = shown {
+            params[field] = json!(id);
+        }
+        lock(&self.log).notify(&self.out, ENTRY, params);
     }
     fn tool_running(&mut self, _since: Instant) {
         self.call_update(json!({"status": "in_progress"}));

@@ -61,7 +61,7 @@ impl Agent {
         if message.get(TYPED).is_some() {
             ui.command_sent(prompt, message["content"].as_str().unwrap_or_default());
         }
-        self.add(message)?;
+        self.add_shown(message, ui)?;
         self.save_command()?;
         self.say_saving(ui);
         self.prompts.push(typed);
@@ -425,7 +425,7 @@ to a larger-context model)"
                     Some("function_call") => calls.push(item.clone()),
                     _ => {}
                 }
-                self.add(item)?;
+                self.add_shown(item, ui)?;
             }
             self.say_saving(ui);
             ui.usage(
@@ -501,7 +501,7 @@ to a larger-context model)"
                 }
                 None => ui.user_prompt(&prompt),
             }
-            self.add(message)?;
+            self.add_shown(message, ui)?;
             self.prompts.push(prompt);
         }
         self.save_command()

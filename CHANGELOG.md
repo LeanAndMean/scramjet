@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.227.0 — ACP names a live turn's entries
+
+### Added
+
+- `scramjet acp` tells a client that knows Scramjet's extensions each entry a turn saves (`entry`: its `entryId`, its kind and the message, tool call or compaction that showed it), so the client can fork, move or label there without asking for the whole `tree`.
+
 ## 2.226.0 — ACP tells the working status
 
 ### Added

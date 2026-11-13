@@ -96,7 +96,8 @@ impl Batch {
                 };
                 let parsed = Call::parse(&calls[index]);
                 if let (true, Ok(call)) = (announce, &parsed) {
-                    relay.tool_input(&call.arguments);
+                    let id = calls[index]["call_id"].as_str().unwrap_or_default();
+                    relay.tool_input(id, &call.arguments);
                     relay.tool_call(call.name, &call.summary(), call.compact(&root).as_ref());
                 }
                 let (ended, changed) = &*done;
@@ -324,9 +325,9 @@ impl AgentUi for Relay {
         let (name, summary, compact) = (name.to_owned(), summary.to_owned(), compact.cloned());
         self.show(move |ui| ui.tool_call(&name, &summary, compact.as_ref()));
     }
-    fn tool_input(&mut self, arguments: &Value) {
-        let arguments = arguments.clone();
-        self.show(move |ui| ui.tool_input(&arguments));
+    fn tool_input(&mut self, call_id: &str, arguments: &Value) {
+        let (call_id, arguments) = (call_id.to_owned(), arguments.clone());
+        self.show(move |ui| ui.tool_input(&call_id, &arguments));
     }
     fn tool_running(&mut self, since: Instant) {
         self.show(move |ui| ui.tool_running(since));

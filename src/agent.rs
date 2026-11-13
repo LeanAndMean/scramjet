@@ -90,7 +90,7 @@ pub use tools::{
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{
     AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, CompactRead,
-    Delegation, Ending, Purpose, ToolDetail, UserCommand, publication_choices, show_items,
+    Delegation, Ending, Purpose, Saved, ToolDetail, UserCommand, publication_choices, show_items,
 };
 
 use providers::ModelInfo;
@@ -2063,6 +2063,16 @@ impl Agent {
 
     fn add(&mut self, item: Value) -> Result<(), AgentError> {
         self.session.append(&item)?;
+        self.conversation.push(item);
+        Ok(())
+    }
+
+    /// `add`, telling `ui` the line of what it shows.
+    fn add_shown(&mut self, item: Value, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
+        self.session.append(&item)?;
+        if let (Some(saved), Some(line)) = (ui::Saved::of(&item), self.session.leaf()) {
+            ui.saved(saved, line);
+        }
         self.conversation.push(item);
         Ok(())
     }

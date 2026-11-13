@@ -213,7 +213,7 @@ impl Agent {
                         super::show_items(&[item.clone(), output.clone()], Some(self.root()), ui);
                         ends &= ended(item, &output);
                         self.replay(item, &output);
-                        self.add(output)?;
+                        self.add_shown(output, ui)?;
                         next += 1;
                         continue;
                     }
@@ -314,7 +314,7 @@ impl Agent {
             _ => {}
         }
         let spent = result.get(SUBAGENTS).is_some();
-        self.add(result)?;
+        self.add_shown(result, ui)?;
         if spent {
             ui.usage(
                 self.session_tokens(),
@@ -330,12 +330,19 @@ impl Agent {
         let name = item["name"].as_str().unwrap_or_default();
         let call = Call::parse(item).ok();
         let summary = call.as_ref().map(Call::summary).unwrap_or_default();
+        if let Some(call) = &call {
+            ui.tool_input(
+                item["call_id"].as_str().unwrap_or_default(),
+                &call.arguments,
+            );
+        }
         let compact = call.and_then(|call| call.compact(&self.config.root));
         ui.tool_call(name, &summary, compact.as_ref());
         ui.tool_result(name, NOT_RUN, None, true);
-        self.add(
+        self.add_shown(
             json!({"type":"function_call_output","call_id":item["call_id"],
             "output":NOT_RUN,FAILED:true}),
+            ui,
         )
     }
 
@@ -371,7 +378,10 @@ impl Agent {
         if together {
             ui.of_call(Some(0));
         }
-        ui.tool_input(&call.arguments);
+        ui.tool_input(
+            item["call_id"].as_str().unwrap_or_default(),
+            &call.arguments,
+        );
         ui.tool_call(call.name, &call.summary(), compact.as_ref());
         if !self.offers(call.name) {
             let output = tools::not_found(call.name, &self.offered());

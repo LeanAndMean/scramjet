@@ -24,6 +24,37 @@ pub enum Purpose {
     BranchSummary,
 }
 
+/// What a turn wrote to its session file, of what it showed.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Saved<'a> {
+    Prompt,
+    /// A command's or skill's expansion of the prompt typed.
+    Command,
+    Reply,
+    Reasoning,
+    /// The result of the call with this id.
+    ToolResult(&'a str),
+    Compaction,
+}
+
+impl<'a> Saved<'a> {
+    /// What `item` is, if a turn shows it.
+    pub(super) fn of(item: &'a Value) -> Option<Self> {
+        match item["type"].as_str() {
+            None if item["role"] == "user" && item.get(PROBE).is_none() => {
+                Some(match item.get(TYPED) {
+                    Some(_) => Self::Command,
+                    None => Self::Prompt,
+                })
+            }
+            Some("message") => Some(Self::Reply),
+            Some("reasoning") => Some(Self::Reasoning),
+            Some("function_call_output") => item["call_id"].as_str().map(Self::ToolResult),
+            _ => None,
+        }
+    }
+}
+
 /// How the agent presents progress and asks for approval.
 pub trait AgentUi {
     /// A model request is sent.
@@ -38,9 +69,9 @@ pub trait AgentUi {
     fn assistant(&mut self, text: &str);
     /// `compact`: the call is a read Scramjet shows in one line until expanded.
     fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>);
-    /// The arguments the model gave the tool call `tool_call` announces next, for an interface
-    /// that shows them; not called for calls shown again from a session.
-    fn tool_input(&mut self, _arguments: &Value) {}
+    /// The id and arguments the model gave the tool call `tool_call` announces next, for an
+    /// interface that shows them.
+    fn tool_input(&mut self, _call_id: &str, _arguments: &Value) {}
     /// The tool call announced last started running at `since`, after any approval: before it
     /// was announced when it ran beside the calls before it.
     fn tool_running(&mut self, since: Instant);
@@ -55,6 +86,8 @@ pub trait AgentUi {
     /// The line in the session file of the stored item shown next, for an interface that names
     /// entries; called only when showing a resumed conversation's items with their lines.
     fn entry(&mut self, _line: Option<usize>) {}
+    /// The running turn wrote what it showed as `saved` on `line` of the session file.
+    fn saved(&mut self, _saved: Saved, _line: usize) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// `tool_result` for a result that came `at`, shown later.
@@ -415,12 +448,12 @@ pub fn show_entries(
     let mut calls: Vec<(&str, &str, Option<Call>, Option<usize>)> = Vec::new();
     let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>, Option<usize>)>,
                       ui: &mut dyn AgentUi| {
-        for (_, _, call, line) in calls.drain(..) {
+        for (id, _, call, line) in calls.drain(..) {
             if let Some(call) = call {
                 if named {
                     ui.entry(line);
                 }
-                ui.tool_input(&call.arguments);
+                ui.tool_input(id, &call.arguments);
                 ui.tool_call(call.name, &call.summary(), compact(&call).as_ref());
             }
         }
@@ -471,7 +504,7 @@ pub fn show_entries(
                 }
                 // A call whose arguments do not parse had no call line, only its error.
                 if let Some(call) = &call {
-                    ui.tool_input(&call.arguments);
+                    ui.tool_input(id, &call.arguments);
                     ui.tool_call(call.name, &call.summary(), compact(call).as_ref());
                 }
                 let asked = call
