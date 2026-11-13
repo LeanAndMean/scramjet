@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.231.2 — GitHub Copilot's sign-in described plainly
+
+### Fixed
+
+- In `scramjet acp`, GitHub Copilot's sign-in no longer tells the people choosing it about a protocol field; it reads "Sign in to GitHub with a device code".
+
 ## 2.231.1 — A prompt with images is not shown again
 
 ### Fixed

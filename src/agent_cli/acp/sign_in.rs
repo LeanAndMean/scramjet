@@ -48,9 +48,7 @@ impl Method {
     fn advertised(&self) -> Value {
         let description = match self {
             Self::ChatGpt => "Sign in with your ChatGPT account by a device code".to_owned(),
-            Self::Copilot => "Sign in to GitHub with a device code (an Enterprise server through \
-                              _meta's enterprise)"
-                .to_owned(),
+            Self::Copilot => "Sign in to GitHub with a device code".to_owned(),
             Self::Program(program) => format!("Sign in through {}'s package", program.name),
         };
         json!({"id": self.id(), "name": self.name(), "description": description})
