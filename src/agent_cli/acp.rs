@@ -8,8 +8,8 @@ use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    Ending, McpServer, McpTransport, ModelOption, Navigated, Purpose, Reopened, SessionChoice,
-    Shell, StreamProgress, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
+    Ending, KeyFrom, McpServer, McpTransport, ModelOption, Navigated, Purpose, Reopened,
+    SessionChoice, Shell, StreamProgress, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -55,10 +55,11 @@ const QUESTION: &str = "_io.github.leanandmean.scramjet/question";
 const ENTRY: &str = "_io.github.leanandmean.scramjet/entry";
 const QUEUED: &str = "_io.github.leanandmean.scramjet/queued";
 const SET_API_KEY: &str = "_io.github.leanandmean.scramjet/set_api_key";
+const API_KEYS: &str = "_io.github.leanandmean.scramjet/api_keys";
 const STATE: &str = "_io.github.leanandmean.scramjet/state";
 const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 16] = [
+const EXTENSIONS: [&str; 17] = [
     HOLD,
     COMPACT,
     RENAME,
@@ -73,6 +74,7 @@ const EXTENSIONS: [&str; 16] = [
     BASH,
     ABORT_BASH,
     SET_API_KEY,
+    API_KEYS,
     STATE,
     EVENTS,
 ];
@@ -444,6 +446,25 @@ const PAGE: usize = 50;
 
 /// ACP's error for a session the agent does not know.
 const UNKNOWN_SESSION: i64 = -32002;
+/// The user's logins and the providers their settings' `models.json` files give, as
+/// `set_api_key` and `api_keys` read them; else request `id` is answered with why not.
+fn keyed_providers(
+    out: &Out,
+    id: &Value,
+) -> Option<(scramjet::agent::login::Logins, scramjet::agent::Providers)> {
+    let Some(logins) = scramjet::agent::login::Logins::user() else {
+        out.error(
+            id,
+            INTERNAL_ERROR,
+            "neither XDG_CONFIG_HOME nor HOME is set",
+        );
+        return None;
+    };
+    let providers =
+        scramjet::agent::Providers::read(Settings::load().models_files(), Some(logins.clone()));
+    Some((logins, providers))
+}
+
 /// ACP's error for a request that needs a sign-in first, which `authMethods` offer.
 const AUTH_REQUIRED: i64 = -32000;
 
@@ -594,6 +615,7 @@ impl Connection {
             LABEL => self.label(&id, &params),
             RELOAD => self.reload(id),
             SET_API_KEY => self.set_api_key(id, &params),
+            API_KEYS => self.api_keys(id),
             "authenticate" => (self.sign_in).authenticate(&self.out, id, &params, self.jobs()),
             "logout" => (self.sign_in).logout(&self.out, &id, &params, self.jobs()),
             BASH => self.bash(id, &params),
@@ -816,14 +838,9 @@ impl Connection {
         let out = self.out.clone();
         // Reading the providers may run their programs.
         std::thread::spawn(move || {
-            let Some(logins) = scramjet::agent::login::Logins::user() else {
-                let message = "neither XDG_CONFIG_HOME nor HOME is set";
-                return out.error(&id, INTERNAL_ERROR, message);
+            let Some((logins, providers)) = keyed_providers(&out, &id) else {
+                return;
             };
-            let providers = scramjet::agent::Providers::read(
-                Settings::load().models_files(),
-                Some(logins.clone()),
-            );
             if !(providers.keyed().iter()).any(|(name, _)| *name == provider) {
                 let message = format!("no provider {provider:?} takes an API key");
                 return out.error(&id, INVALID_PARAMS, &message);
@@ -839,6 +856,34 @@ impl Connection {
                 let _ = jobs.send(Job::Credentials(provider.clone()));
             }
             out.respond(&id, json!({}));
+        });
+    }
+
+    /// Lists the providers `set_api_key` takes a key for, as `/login`'s API keys rows, each
+    /// with where its key comes from now, never the key.
+    fn api_keys(&self, id: Value) {
+        let out = self.out.clone();
+        std::thread::spawn(move || {
+            let Some((_, providers)) = keyed_providers(&out, &id) else {
+                return;
+            };
+            let listed: Vec<Value> = (providers.keyed().iter())
+                .map(|(provider, from)| {
+                    let (key, variable) = match from {
+                        KeyFrom::Saved => (json!("saved"), None),
+                        KeyFrom::Variable(variable) => (json!("variable"), Some(variable)),
+                        KeyFrom::Entry => (json!("models.json"), None),
+                        KeyFrom::Given => (json!("given"), None),
+                        KeyFrom::Nowhere => (Value::Null, None),
+                    };
+                    let mut entry = json!({"provider": provider, "key": key});
+                    if let Some(variable) = variable {
+                        entry["variable"] = json!(variable);
+                    }
+                    entry
+                })
+                .collect();
+            out.respond(&id, json!({"providers": listed}));
         });
     }
 

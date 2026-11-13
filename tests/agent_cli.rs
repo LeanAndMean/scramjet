@@ -3817,6 +3817,21 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
             "method": "_io.github.leanandmean.scramjet/set_api_key",
             "params": {"provider": provider, "key": key}})
     };
+    assert!(
+        (offered.as_array().unwrap().iter())
+            .any(|method| method == "_io.github.leanandmean.scramjet/api_keys"),
+        "{offered}"
+    );
+    let list = |id: u64| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": "_io.github.leanandmean.scramjet/api_keys", "params": {}})
+    };
+    let listed = answer(&mut stdin, list(20));
+    assert_eq!(
+        listed["result"],
+        serde_json::json!({"providers": [{"provider": "test", "key": null}]}),
+        "{listed}"
+    );
     let unknown = answer(&mut stdin, set(2, "nowhere", "sk-unknown"));
     let said = unknown["error"]["message"].as_str().unwrap();
     assert!(said.contains("no provider \"nowhere\""), "{unknown}");
@@ -3836,6 +3851,12 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     )
     .unwrap();
     assert_eq!(auth["test"]["key"], "sk-acp-secret", "{auth}");
+    let listed = answer(&mut stdin, list(21));
+    assert_eq!(
+        listed["result"]["providers"],
+        serde_json::json!([{"provider": "test", "key": "saved"}]),
+        "{listed}"
+    );
     assert_eq!(
         auth["test"]["origins"],
         serde_json::json!([format!("http://127.0.0.1:{port}")])

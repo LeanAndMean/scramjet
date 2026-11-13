@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.235.0 — ACP lists the providers that take an API key
+
+### Added
+
+- `scramjet acp` lists the providers it takes an API key for (`api_keys`), each with where its key comes from now and never the key, so a front end such as Flightdeck can offer `/login`'s key entry.
+
 ## 2.234.0 — ACP says when a queued prompt goes in
 
 ### Changed
