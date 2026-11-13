@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.239.1 — A clearer edit error
+
+### Fixed
+
+- An edit whose `edits` came as a string that is not valid JSON says so, with the parse error, instead of that it held no replacement.
+- Building for Windows no longer warns `unused dependency x11rb`: it is a dependency on Unix only.
+
 ## 2.239.0 — The sandbox changed over ACP
 
 ### Added

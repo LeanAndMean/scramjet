@@ -1251,10 +1251,13 @@ fn edit(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<
     // As Scramjet's `prepareEditArguments`: `edits` may come as a JSON string, and one edit's
     // fields beside it.
     let parsed: Option<Value>;
+    let mut unreadable = None;
     let mut edits: Vec<&Value> = match &call.arguments["edits"] {
         Value::Array(edits) => edits.iter().collect(),
         Value::String(text) => {
-            parsed = serde_json::from_str(text).ok();
+            parsed = serde_json::from_str(text)
+                .map_err(|error| unreadable = Some(error.to_string()))
+                .ok();
             parsed
                 .as_ref()
                 .and_then(Value::as_array)
@@ -1264,6 +1267,12 @@ fn edit(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<
     };
     if call.arguments["oldText"].is_string() && call.arguments["newText"].is_string() {
         edits.push(&call.arguments);
+    }
+    if let (true, Some(error)) = (edits.is_empty(), unreadable) {
+        return Err(format!(
+            "Edit tool input is invalid. edits came as a string that is not valid JSON \
+             ({error}); send edits as an array of {{oldText, newText}} objects."
+        ));
     }
     if edits.is_empty() {
         return Err(
@@ -3598,6 +3607,12 @@ might indicate an issue with special characters or the text not existing as expe
         assert_eq!(
             run(json!({"path":"f.txt","edits":[]})).unwrap_err(),
             "Edit tool input is invalid. edits must contain at least one replacement."
+        );
+        // A string that is not JSON says so, rather than that it held no replacement.
+        assert_eq!(
+            run(json!({"path":"f.txt","edits":"[{\"oldText\">x\"}]"})).unwrap_err(),
+            "Edit tool input is invalid. edits came as a string that is not valid JSON (expected \
+`:` at line 1 column 12); send edits as an array of {oldText, newText} objects."
         );
         // As in Scramjet, `edits` as a JSON string, and one edit's fields beside it, are taken.
         run(
