@@ -3576,7 +3576,9 @@ fn acp_lists_reconnects_enables_and_disables_mcp_servers_as_slash_mcp() {
     let mut mcp = |params: serde_json::Value| {
         id += 1;
         let mut params = params;
-        params["sessionId"] = session.clone();
+        if params.get("sessionId").is_none() {
+            params["sessionId"] = session.clone();
+        }
         send(
             &mut stdin,
             serde_json::json!({"jsonrpc": "2.0", "id": id,
@@ -5070,6 +5072,80 @@ fn acp_exports_sessions_and_gives_the_usage_through_the_extensions() {
         said.contains("_io.github.leanandmean.scramjet/usage"),
         "{refused}"
     );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_finds_the_projects_files_for_at_mentions_through_the_extension() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-files-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    for directory in [".git", "src/agent", "target"] {
+        std::fs::create_dir_all(project.join(directory)).unwrap();
+    }
+    for file in [
+        "src/agent/tools.rs",
+        "my tools.md",
+        "target/tools.rs",
+        ".git/tools",
+    ] {
+        std::fs::write(project.join(file), "").unwrap();
+    }
+    std::fs::write(project.join(".gitignore"), "target/\n").unwrap();
+    let (mut child, mut stdin, messages) = acp(&scratch.0, 1);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let offered = &next(&messages)["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    let files = "_io.github.leanandmean.scramjet/files";
+    assert!(
+        offered["methods"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == files),
+        "{offered}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let mut ask = |id: u64, params: serde_json::Value| {
+        let mut params = params;
+        if params.get("sessionId").is_none() {
+            params["sessionId"] = session.clone();
+        }
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": files, "params": params}),
+        );
+        until(&messages, |message| message["id"] == id).0
+    };
+    let found = ask(3, serde_json::json!({"query": "tools"}));
+    assert_eq!(
+        found["result"]["entries"],
+        serde_json::json!([
+            {"value": "@src/agent/tools.rs", "label": "tools.rs", "path": "src/agent/tools.rs"},
+            {"value": "@\"my tools.md\"", "label": "my tools.md", "path": "my tools.md"},
+        ]),
+        "{found}"
+    );
+    let found = ask(4, serde_json::json!({"query": "src/ag", "quoted": true}));
+    assert_eq!(
+        found["result"]["entries"],
+        serde_json::json!([{"value": "@\"src/agent/\"", "label": "agent/", "path": "src/agent"}]),
+        "{found}"
+    );
+    assert_eq!(ask(5, serde_json::json!({}))["error"]["code"], -32602);
+    let unknown = ask(6, serde_json::json!({"query": "x", "sessionId": "nope"}));
+    assert!(unknown.get("error").is_some(), "{unknown}");
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }

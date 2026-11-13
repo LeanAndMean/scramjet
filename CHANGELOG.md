@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.238.0 — `@` file completion over ACP
+
+### Added
+
+- `scramjet acp` finds the project's files for an `@` reference (`_io.github.leanandmean.scramjet/files`), as the full screen's editor completes them, so a front end such as Flightdeck can offer them.
+
 ## 2.237.2 — Windows builds start again
 
 ### Fixed

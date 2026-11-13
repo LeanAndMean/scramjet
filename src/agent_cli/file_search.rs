@@ -87,20 +87,7 @@ impl Search {
     /// Starts looking in `root`, or in the directory the mention's query names, as Scramjet's
     /// `getFuzzyFileSuggestions` runs `fd`.
     pub(super) fn start(root: &Path, mention: Mention) -> Self {
-        let typed = mention.query.replace('\\', "/");
-        let scoped = typed.rfind('/').and_then(|slash| {
-            let (shown, query) = typed.split_at(slash + 1);
-            let base = match shown.strip_prefix("~/") {
-                Some(rest) => std::env::home_dir()?.join(rest),
-                None => root.join(shown),
-            };
-            base.is_dir()
-                .then(|| (base, query.to_owned(), shown.to_owned()))
-        });
-        let (base, query, directory) = match scoped {
-            Some((base, query, shown)) => (base, query, Some(shown)),
-            None => (root.to_path_buf(), typed.clone(), None),
-        };
+        let (base, query, directory) = scope(root, &mention.query);
         let stop = Arc::new(AtomicBool::new(false));
         let (send, output) = mpsc::channel();
         let (walking, wanted) = (stop.clone(), query.clone());
@@ -135,6 +122,33 @@ impl Search {
 impl Drop for Search {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// The entries offered for what follows an `@` (and the quote it may open), found as the
+/// editor finds them, waiting for the walk.
+pub(super) fn lookup(root: &Path, query: &str, quoted: bool) -> Vec<Suggestion> {
+    let (base, query, directory) = scope(root, query);
+    let output = entries(&base, &query, &AtomicBool::new(false));
+    offered(&output, &query, directory.as_deref(), quoted)
+}
+
+/// Where a query looks: `root`, or the directory its part up to a last `/` names (`~/` the home
+/// directory), with what is left to match and that directory as typed.
+fn scope(root: &Path, query: &str) -> (PathBuf, String, Option<String>) {
+    let typed = query.replace('\\', "/");
+    let scoped = typed.rfind('/').and_then(|slash| {
+        let (shown, query) = typed.split_at(slash + 1);
+        let base = match shown.strip_prefix("~/") {
+            Some(rest) => std::env::home_dir()?.join(rest),
+            None => root.join(shown),
+        };
+        base.is_dir()
+            .then(|| (base, query.to_owned(), shown.to_owned()))
+    });
+    match scoped {
+        Some((base, query, shown)) => (base, query, Some(shown)),
+        None => (root.to_path_buf(), typed, None),
     }
 }
 

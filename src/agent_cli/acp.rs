@@ -59,8 +59,9 @@ const API_KEYS: &str = "_io.github.leanandmean.scramjet/api_keys";
 const STATE: &str = "_io.github.leanandmean.scramjet/state";
 const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
 const MCP: &str = "_io.github.leanandmean.scramjet/mcp";
+const FILES: &str = "_io.github.leanandmean.scramjet/files";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 18] = [
+const EXTENSIONS: [&str; 19] = [
     HOLD,
     COMPACT,
     RENAME,
@@ -79,6 +80,7 @@ const EXTENSIONS: [&str; 18] = [
     STATE,
     EVENTS,
     MCP,
+    FILES,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -644,6 +646,7 @@ impl Connection {
             STATE => self.state(&id, &params),
             EVENTS => self.events(&id, &params),
             MCP => self.mcp(id, &params),
+            FILES => self.files(id, &params),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
                 false => self.unknown(&id, &params),
@@ -737,6 +740,28 @@ impl Connection {
             let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
                 .map_or(0, |since| since.as_millis() as u64);
             out.respond(&id, super::usage::data(&history, now));
+        });
+    }
+
+    /// The project's files and directories an `@` with `query` after it names, as the editor
+    /// offers them, from a thread of its own, as the walk may take a while.
+    fn files(&self, id: Value, params: &Value) {
+        let Some(handle) = self.handle(params) else {
+            return self.unknown(&id, params);
+        };
+        let Some(query) = params["query"].as_str().map(str::to_owned) else {
+            return self.out.error(&id, INVALID_PARAMS, "query is required");
+        };
+        let quoted = params["quoted"].as_bool().unwrap_or(false);
+        let (out, root) = (self.out.clone(), handle.root.clone());
+        std::thread::spawn(move || {
+            let entries: Vec<Value> = super::file_search::lookup(&root, &query, quoted)
+                .into_iter()
+                .map(|entry| {
+                    json!({"value": entry.value, "label": entry.label, "path": entry.description})
+                })
+                .collect();
+            out.respond(&id, json!({"entries": entries}));
         });
     }
 
