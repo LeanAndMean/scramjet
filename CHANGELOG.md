@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.231.1 — A prompt with images is not shown again
+
+### Fixed
+
+- In `scramjet acp`, a prompt carrying images no longer comes back as an empty user message, as if it were a command's expansion.
+
 ## 2.231.0 — ChatGPT's sign-in over ACP by a device code
 
 ### Changed

@@ -56,11 +56,14 @@ impl Agent {
                 self.lifecycle.prompted(status::Prompt::Reply);
                 (files.message(prompt), files.typed(prompt))
             }
-            None => (self.user_message(prompt, ui), prompt.to_owned()),
+            None => {
+                let message = self.user_message(prompt, ui);
+                if message.get(TYPED).is_some() {
+                    ui.command_sent(prompt, message["content"].as_str().unwrap_or_default());
+                }
+                (message, prompt.to_owned())
+            }
         };
-        if message.get(TYPED).is_some() {
-            ui.command_sent(prompt, message["content"].as_str().unwrap_or_default());
-        }
         self.add_shown(message, ui)?;
         self.save_command()?;
         self.say_saving(ui);

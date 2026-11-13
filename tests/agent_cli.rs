@@ -2978,10 +2978,17 @@ fn acp_prompts_carry_images() {
     let refused = next(&messages);
     assert_eq!(refused["error"]["code"], -32602, "{refused}");
     // With an image, a `/` starts no command: the text and the image go to the model.
+    // The client shows its own prompt: no `user_message_chunk` comes back for it.
     send(&mut stdin, prompt(4, &encoded(&png)));
-    until(&messages, |message| {
+    let (_, before) = until(&messages, |message| {
         message["params"]["update"]["status"] == "in_progress"
     });
+    assert!(
+        (before.iter()).all(|message| {
+            message["params"]["update"]["sessionUpdate"] != "user_message_chunk"
+        }),
+        "{before:?}"
+    );
     // During the turn, one that is not an image is refused; one that is goes as a file's path
     // before the text, as the full screen pastes it.
     send(&mut stdin, prompt_with(5, "and this", &encoded(b"plain")));
