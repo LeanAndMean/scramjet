@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.233.0 — ACP shows calls running together as they run
+
+### Changed
+
+- `scramjet acp` shows the tool calls of a reply that run at the same time as they run, each under its own id, rather than holding a call back until the calls before it end.
+
+### Fixed
+
+- `scramjet acp` showed a write that made a new file without its diff when it ran beside an earlier call of the same reply.
+
 ## 2.232.0 — ChatGPT and GitHub Copilot hear from Scramjet
 
 ### Changed

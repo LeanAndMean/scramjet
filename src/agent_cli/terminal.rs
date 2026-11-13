@@ -437,7 +437,7 @@ impl Terminal {
                 diff::rows(diff, width, self.color, marked, limit, &hint)
             }
             // As in Scramjet, trailing blank lines of a written file are not counted.
-            (_, Some(ToolDetail::Written { path, content })) => {
+            (_, Some(ToolDetail::Written { path, content, .. })) => {
                 let content = content.trim_end_matches(['\n', '\r']);
                 let limited = Shown::First(WRITE_LINES);
                 (code(content, path, content, limited))
@@ -2094,7 +2094,11 @@ to expand\n(exit 2)"
         );
         let content: String = (1..=12).map(|n| format!("print('{n}')\n")).collect();
         let path = "b.py".to_owned();
-        let written = ToolDetail::Written { path, content };
+        let written = ToolDetail::Written {
+            path,
+            content,
+            created: true,
+        };
         ui.tool_result("write", "Wrote", Some(&written), false);
         let plain = ToolDetail::Read("notes.txt".into());
         ui.tool_result("read", "fn a() {}", Some(&plain), false);

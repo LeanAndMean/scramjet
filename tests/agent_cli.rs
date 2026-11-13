@@ -2921,6 +2921,90 @@ fn acp_call(
 
 #[test]
 #[cfg(unix)]
+fn acp_shows_calls_running_together_as_they_run() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-together-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(project).unwrap();
+    let calls = [
+        ("bash", serde_json::json!({"command": "sleep 1; echo slow"})),
+        (
+            "write",
+            serde_json::json!({"path": "b.txt", "content": "new\n"}),
+        ),
+    ];
+    let mut reply = vec![
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+    ];
+    for (index, (name, input)) in calls.iter().enumerate() {
+        reply.extend([
+            serde_json::json!({"type": "content_block_start", "index": index, "content_block":
+                {"type": "tool_use", "id": format!("toolu_{index}"), "name": name, "input": {}}})
+            .to_string(),
+            serde_json::json!({"type": "content_block_delta", "index": index,
+                "delta": {"type": "input_json_delta", "partial_json": input.to_string()}})
+            .to_string(),
+            serde_json::json!({"type": "content_block_stop", "index": index}).to_string(),
+        ]);
+    }
+    reply.extend([
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ]);
+    let mut replies = call_events("read", serde_json::json!({}));
+    replies[0] = reply;
+    let (port, _bodies) = serve_events(replies);
+    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (answer, updates) = until(&messages, |message| message.get("id").is_some());
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let updates: Vec<_> = (updates.iter())
+        .map(|message| message["params"]["update"].clone())
+        .filter(|update| update["toolCallId"].is_string())
+        .collect();
+    let announced = |id: &str| {
+        (updates.iter()).position(|u| u["sessionUpdate"] == "tool_call" && u["toolCallId"] == id)
+    };
+    let completed = |id: &str| {
+        (updates.iter()).position(|u| u["status"] == "completed" && u["toolCallId"] == id)
+    };
+    // The write is shown while the command it waits for runs, and as making its file.
+    let (bash, write) = (announced("call-1").unwrap(), announced("call-2").unwrap());
+    assert_eq!(updates[bash]["name"], "bash", "{updates:?}");
+    assert_eq!(updates[write]["name"], "write", "{updates:?}");
+    let bash_done = completed("call-1").unwrap();
+    assert!(write < bash_done, "{updates:?}");
+    let text = &updates[bash_done]["content"][0]["content"]["text"];
+    assert!(text.as_str().unwrap().contains("slow"), "{text}");
+    assert_eq!(
+        updates[completed("call-2").unwrap()]["content"][1],
+        serde_json::json!({"type": "diff", "path": project.join("b.txt"), "oldText": null,
+            "newText": "new\n"})
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_prompts_carry_images() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-image-{}", std::process::id())),

@@ -231,8 +231,13 @@ pub enum ToolDetail {
     /// The lines an edit changed, each marked ` ` (unchanged), `-` or `+` and numbered, with
     /// `...` for skipped lines.
     Diff(String),
-    /// The content a write put in the file, and the path it was given.
-    Written { path: String, content: String },
+    /// The content a write put in the file, the path it was given, and whether the file was
+    /// not there before (not known of a write shown again).
+    Written {
+        path: String,
+        content: String,
+        created: bool,
+    },
     /// The path a read was given, whose name says the language of the text it returned.
     Read(String),
     /// What the user answered a question, as Scramjet's result row shows it.
@@ -526,6 +531,7 @@ pub fn show_entries(
                             Some(ToolDetail::Written {
                                 path: call.arguments["path"].as_str()?.to_owned(),
                                 content: call.arguments["content"].as_str()?.to_owned(),
+                                created: false,
                             })
                         })
                     }
@@ -640,7 +646,7 @@ mod tests {
                 "call edit a.rs",
                 "result edit Edited Diff(\"-1 a\")",
                 "call write b.rs",
-                "result write Wrote Written { path: \"b.rs\", content: \"b\\n\" }",
+                "result write Wrote Written { path: \"b.rs\", content: \"b\\n\", created: false }",
                 "!ls \"a.rs\" Exited(2)",
                 "result bash Error: invalid failed",
                 "call write /",

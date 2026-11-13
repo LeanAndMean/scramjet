@@ -1821,10 +1821,9 @@ impl Worker {
             streamed: false,
             calls: 0,
             root: session.agent.root().to_path_buf(),
-            input: Value::Null,
-            call: (String::new(), Value::Null),
-            call_shown: Value::Null,
-            new_file: false,
+            call: Call::default(),
+            together: Vec::new(),
+            of: None,
             window: None,
             used: None,
             stopped: None,
@@ -1834,7 +1833,6 @@ impl Worker {
             held: Cell::new(None),
             thinking: false,
             entry: None,
-            input_id: String::new(),
             call_ids: HashMap::new(),
             prompt_shown: None,
             title: None,
@@ -2629,14 +2627,11 @@ struct Updates {
     calls: usize,
     /// The project directory, which relative paths in tool calls are in.
     root: PathBuf,
-    /// The arguments of the tool call announced next, then its name and them.
-    input: Value,
-    call: (String, Value),
-    /// What the call announced last showed (`title`, `kind`, `rawInput`, `locations`), which a
-    /// permission request about it repeats.
-    call_shown: Value,
-    /// The write announced last makes its file.
-    new_file: bool,
+    /// The call shown now, and those of the calls running together (`running_calls`) that
+    /// are not, by their index, with the one shown now's (`of`).
+    call: Call,
+    together: Vec<Option<Call>>,
+    of: Option<usize>,
     window: Option<u64>,
     /// The usage last sent, which is not sent again.
     used: Option<Value>,
@@ -2655,14 +2650,26 @@ struct Updates {
     thinking: bool,
     /// The session file's line of the item replayed now, which its updates carry as `entryId`.
     entry: Option<usize>,
-    /// The model's id of the tool call announced next, then the ids given to the calls whose
-    /// results are not saved yet, by the model's.
-    input_id: String,
+    /// The ids given to the calls whose results are not saved yet, by the model's.
     call_ids: HashMap<String, String>,
     /// The message that showed the prompt saved next, if one did.
     prompt_shown: Option<String>,
     /// The title the prompt saved next gives a session with no name and no prompt yet.
     title: Option<String>,
+}
+
+/// A tool call as ACP shows it.
+#[derive(Default)]
+struct Call {
+    /// Its number among the session's calls, which its id carries.
+    number: usize,
+    name: String,
+    /// Its arguments, and the model's id of it until it is announced; given before (`tool_input`).
+    arguments: Value,
+    model_id: String,
+    /// What it was announced with (`title`, `kind`, `rawInput`, `locations`), which a
+    /// permission request about it repeats.
+    shown: Value,
 }
 
 /// Puts `fields` into `update`'s `_meta["io.github.leanandmean.scramjet"]`, beside what is there.
@@ -2760,7 +2767,7 @@ impl Updates {
         self.update(update);
     }
     fn call_id(&self) -> String {
-        format!("call-{}", self.calls)
+        format!("call-{}", self.call.number)
     }
     fn call_update(&self, fields: Value) {
         let mut held = self.held.take();
@@ -2815,7 +2822,9 @@ impl Updates {
     }
     /// Where the tool call announced last reads or changes files, as absolute paths.
     fn locations(&self) -> Vec<Value> {
-        let (name, arguments) = &self.call;
+        let Call {
+            name, arguments, ..
+        } = &self.call;
         let path = match (name.as_str(), arguments["path"].as_str()) {
             ("read" | "edit" | "write", Some(path)) => self.path(path),
             _ => return Vec::new(),
@@ -2834,16 +2843,25 @@ impl Updates {
             None => self.root.join(path),
         }
     }
-    /// What the edit or write announced last changed, as ACP's diffs: for an edit the text each
-    /// replacement replaced, for a write to a new file its content.
-    fn diffs(&self, new_file: bool) -> Vec<Value> {
-        let (name, arguments) = &self.call;
+    /// What the edit or write shown now changed, as ACP's diffs: for an edit the text each
+    /// replacement replaced, for a write that made its file (`detail`) its content.
+    fn diffs(&self, detail: Option<&ToolDetail>) -> Vec<Value> {
+        let Call {
+            name, arguments, ..
+        } = &self.call;
         let Some(path) = arguments["path"].as_str().map(|path| self.path(path)) else {
             return Vec::new();
         };
-        match (name.as_str(), arguments["content"].as_str()) {
+        match (name.as_str(), detail) {
             ("edit", _) => {}
-            ("write", Some(content)) if new_file => {
+            (
+                "write",
+                Some(ToolDetail::Written {
+                    content,
+                    created: true,
+                    ..
+                }),
+            ) => {
                 return vec![
                     json!({"type": "diff", "path": path, "oldText": null, "newText": content}),
                 ];
@@ -2928,8 +2946,8 @@ impl Updates {
         let offered: Vec<Value> = (options.iter())
             .map(|(id, name, kind)| json!({"optionId": id, "name": name, "kind": kind}))
             .collect();
-        let mut call = match &self.call_shown {
-            Value::Object(_) => self.call_shown.clone(),
+        let mut call = match &self.call.shown {
+            Value::Object(_) => self.call.shown.clone(),
             _ => json!({}),
         };
         call["toolCallId"] = json!(self.call_id());
@@ -3123,12 +3141,17 @@ impl AgentUi for Updates {
     }
     fn tool_call(&mut self, name: &str, summary: &str, _compact: Option<&CompactRead>) {
         self.calls += 1;
-        let model_id = std::mem::take(&mut self.input_id);
+        self.asked = None;
+        let model_id = std::mem::take(&mut self.call.model_id);
+        self.call = Call {
+            number: self.calls,
+            name: name.to_owned(),
+            arguments: std::mem::take(&mut self.call.arguments),
+            ..Call::default()
+        };
         if !self.replaying && !model_id.is_empty() {
             self.call_ids.insert(model_id, self.call_id());
         }
-        self.asked = None;
-        self.call = (name.to_owned(), std::mem::take(&mut self.input));
         let title = match summary.trim() {
             "" => name,
             summary => summary,
@@ -3141,35 +3164,44 @@ impl AgentUi for Updates {
             "kind": kind(name),
             "status": "pending",
         });
-        if !self.call.1.is_null() {
-            update["rawInput"] = self.call.1.clone();
+        if !self.call.arguments.is_null() {
+            update["rawInput"] = self.call.arguments.clone();
         }
         let locations = self.locations();
         if !locations.is_empty() {
             update["locations"] = json!(locations);
         }
-        self.call_shown = json!({});
+        self.call.shown = json!({});
         for key in ["title", "kind", "rawInput", "locations"] {
             if let Some(value) = update.get(key) {
-                self.call_shown[key] = value.clone();
+                self.call.shown[key] = value.clone();
             }
         }
         if self.replaying {
-            // Whether a replayed write made its file is not known.
-            self.new_file = false;
             self.thinking = false;
             self.flush();
             self.stamp(&mut update);
             return self.held.set(Some(update));
         }
-        // Whether a write makes its file is known only before it runs.
-        self.new_file = name == "write"
-            && (self.call.1["path"].as_str()).is_some_and(|path| !self.path(path).exists());
         self.update(update);
     }
+    fn running_calls(&mut self, count: usize) -> bool {
+        self.together = (0..count).map(|_| None).collect();
+        self.of = None;
+        true
+    }
+    fn of_call(&mut self, index: Option<usize>) {
+        if let Some(shown) = self.of.take() {
+            self.together[shown] = Some(std::mem::take(&mut self.call));
+        }
+        if let Some(index) = index {
+            self.call = self.together[index].take().unwrap_or_default();
+            self.of = Some(index);
+        }
+    }
     fn tool_input(&mut self, call_id: &str, arguments: &Value) {
-        self.input_id = call_id.to_owned();
-        self.input = arguments.clone();
+        self.call.model_id = call_id.to_owned();
+        self.call.arguments = arguments.clone();
     }
     fn entry(&mut self, line: Option<usize>) {
         self.entry = line;
@@ -3237,7 +3269,7 @@ impl AgentUi for Updates {
         let mut content =
             vec![json!({"type": "content", "content": {"type": "text", "text": text}})];
         if !failed {
-            content.extend(self.diffs(self.new_file));
+            content.extend(self.diffs(detail));
         }
         let status = match failed {
             true => "failed",

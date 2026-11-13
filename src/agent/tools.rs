@@ -1217,12 +1217,14 @@ fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
     let given = call.str("path")?;
     let path = resolve(root, given);
     let content = call.str("content")?;
+    let created = std::fs::symlink_metadata(&path).is_err();
     put(&path, content)?;
     Ok(Output {
         text: format!("Wrote {} bytes to {}", content.len(), path.display()),
         detail: Some(ToolDetail::Written {
             path: given.to_owned(),
             content: content.to_owned(),
+            created,
         }),
         failed: false,
         image: None,
@@ -2435,7 +2437,8 @@ disjoint regions."
             written.detail,
             Some(ToolDetail::Written {
                 path: "new/g.txt".into(),
-                content: "é\nx\n".into()
+                content: "é\nx\n".into(),
+                created: true,
             })
         );
         assert_eq!(
