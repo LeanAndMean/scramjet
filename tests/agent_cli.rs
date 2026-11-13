@@ -3716,11 +3716,13 @@ fn acp_compacts_and_renames_sessions_through_the_extensions() {
     send(&mut stdin, compact(5));
     send(&mut stdin, compact(6));
     send(&mut stdin, prompt(7, "after it"));
-    let (refused, _) = until(&messages, |message| message.get("id").is_some());
+    // The compaction may begin before or after the refusal goes out.
+    let (refused, mut updates) = until(&messages, |message| message.get("id").is_some());
     assert_eq!(refused["id"], 6, "{refused}");
     assert_eq!(refused["error"]["code"], -32602);
     assert_eq!(refused["error"]["message"], "a turn is running");
-    let (compacted, updates) = until(&messages, |message| message.get("id").is_some());
+    let (compacted, more) = until(&messages, |message| message.get("id").is_some());
+    updates.extend(more);
     assert_eq!(compacted["id"], 5, "{compacted}");
     assert_eq!(compacted["result"]["compacted"], true, "{compacted}");
     let statuses: Vec<_> = (updates.iter())
