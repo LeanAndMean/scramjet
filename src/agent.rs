@@ -1601,6 +1601,15 @@ impl Agent {
         &self.config.model
     }
 
+    /// Why the current model cannot be asked until a sign-in, if it cannot
+    /// (`Providers::login_needed`).
+    pub fn login_needed(&self) -> Option<String> {
+        let route = self.info.route.as_ref();
+        self.config
+            .providers
+            .login_needed(&self.config.model, route)
+    }
+
     /// The id the current model's requests name it by.
     pub fn model_id(&self) -> &str {
         &self.info.id

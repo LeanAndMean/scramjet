@@ -235,7 +235,8 @@ impl Out {
         self.send(&json!({"jsonrpc": "2.0", "id": id, "result": result}));
     }
     fn error(&self, id: &Value, code: i64, message: &str) {
-        let error = json!({"code": code, "message": message});
+        // Again in `data`, where clients such as Toad 0.6.20 look for what to show.
+        let error = json!({"code": code, "message": message, "data": {"details": message}});
         self.send(&json!({"jsonrpc": "2.0", "id": id, "error": error}));
     }
     /// Sends request `method`; its response comes through the receiver, unless `forget` drops
@@ -311,6 +312,13 @@ const PAGE: usize = 50;
 
 /// ACP's error for a session the agent does not know.
 const UNKNOWN_SESSION: i64 = -32002;
+/// ACP's error for a request that needs a sign-in first, which `authMethods` offer.
+const AUTH_REQUIRED: i64 = -32000;
+
+/// `AUTH_REQUIRED`'s message, saying why.
+fn auth_required(why: &str) -> String {
+    format!("authentication required: {why}")
+}
 
 /// What this thread holds of a session that runs on its own.
 struct Handle {
@@ -821,7 +829,7 @@ impl Connection {
                 Err((code, message)) => return self.out.error(id, code, &message),
             },
         };
-        let (started, starts) = mpsc::channel::<Result<(String, PathBuf), String>>();
+        let (started, starts) = mpsc::channel::<Result<(String, PathBuf), (i64, String)>>();
         let (jobs, given) = mpsc::channel();
         let (cancel, turn) = (Arc::<AtomicBool>::default(), Arc::<Mutex<Turn>>::default());
         let worker = Worker {
@@ -840,10 +848,16 @@ impl Connection {
             let session = match start_session(&arguments, &cwd, &servers, file) {
                 Ok(session) => session,
                 Err(error) => {
-                    let _ = started.send(Err(error));
+                    let _ = started.send(Err((INTERNAL_ERROR, error)));
                     return;
                 }
             };
+            if opening == Opening::New
+                && let Some(why) = session.agent.login_needed()
+            {
+                let _ = started.send(Err((AUTH_REQUIRED, auth_required(&why))));
+                return;
+            }
             let mut front = worker.front(session, servers);
             if opening == Opening::Load {
                 front.replay();
@@ -891,6 +905,10 @@ impl Connection {
                         continue;
                     }
                 };
+                if let Some(why) = front.session.agent.login_needed() {
+                    front.end_turn(&id, Err((AUTH_REQUIRED, &auth_required(&why))));
+                    continue;
+                }
                 if !images.is_empty() {
                     match Attached::images(&images) {
                         Ok(attached) => front.session.agent.attach(attached),
@@ -914,7 +932,7 @@ impl Connection {
                 };
                 self.sessions.insert(session, handle);
             }
-            Ok(Err(error)) => self.out.error(id, INTERNAL_ERROR, &error),
+            Ok(Err((code, error))) => self.out.error(id, code, &error),
             Err(_) => self
                 .out
                 .error(id, INTERNAL_ERROR, "the session failed to start"),
@@ -1740,7 +1758,14 @@ impl Acp {
         };
         match stopped {
             Ended::Reason(reason) => self.end_turn(&id, Ok(reason)),
-            Ended::Failed(error) => self.end_turn(&id, Err((INTERNAL_ERROR, &error))),
+            Ended::Failed(error) => {
+                // Signed out since the turn began, or the login's renewal was refused.
+                let code = match self.session.agent.login_needed() {
+                    Some(_) => AUTH_REQUIRED,
+                    None => INTERNAL_ERROR,
+                };
+                self.end_turn(&id, Err((code, &error)));
+            }
         }
     }
 

@@ -402,6 +402,36 @@ impl Providers {
         &self.programs
     }
 
+    /// Why the model `name`, whose requests go by `route`, cannot be asked until a sign-in: its
+    /// provider's login has saved no credential, or none offers it and it names a provider
+    /// `/login` signs in to, or no provider offers any model.
+    pub(super) fn login_needed(&self, name: &str, route: Option<&Route>) -> Option<String> {
+        let logins = self.logins.as_ref()?;
+        let (provider, file) = match route {
+            Some(route) => {
+                let login = route.login.as_ref()?;
+                (login.provider.as_str(), &login.file)
+            }
+            None if self.models.is_empty() => {
+                return Some("no provider offers any model (/login)".to_owned());
+            }
+            None => {
+                let (provider, _) = name.split_once('/')?;
+                (provider, &logins.auth)
+            }
+        };
+        let program = self.programs.iter().find(|p| p.provider == provider);
+        if program.is_none() && !super::login::LOGINS.iter().any(|(p, _)| *p == provider) {
+            return None;
+        }
+        let saved = super::login::saved(file).unwrap_or_default();
+        if saved.get(provider).is_some_and(|c| c["type"] == "oauth") {
+            return None;
+        }
+        let shown = program.map_or(super::login::shown_name(provider), |p| &p.name);
+        Some(format!("not logged in to {shown} (/login)"))
+    }
+
     /// The model `name` names: the one whose reference (`provider/id`) it is, else the first
     /// with that id, as sessions and settings written before references name it.
     pub(super) fn find(&self, name: &str) -> Option<&Model> {

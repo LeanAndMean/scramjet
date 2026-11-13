@@ -3367,6 +3367,124 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
 
 #[test]
 #[cfg(unix)]
+fn acp_requires_authentication_for_a_model_whose_login_is_not_made() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-unauth-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    let set = scratch.0.join("acme");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&set).unwrap();
+    let (port, requests) = serve_refusals();
+    let declared = serde_json::json!({
+        "logins": {"acme": {"name": "Acme", "command": ["./login"]}},
+        "providers": {"acme": {"baseUrl": format!("http://127.0.0.1:{port}"),
+            "api": "anthropic-messages", "models": [{"id": "acme-model"}]}},
+    });
+    std::fs::write(set.join("models.json"), declared.to_string()).unwrap();
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"commandSets": [set], "hideCredentials": "never"});
+    let state = scratch.0.join("sessions");
+    let state = state.to_str().unwrap();
+    let given = ["--model", "acme/acme-model", "--session-dir", state];
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &given);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    let open = |id: u64| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}})
+    };
+    let prompt = |id: u64, session: &serde_json::Value| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]}})
+    };
+    send(&mut stdin, open(2));
+    let refused = until(&messages, |message| message["id"] == 2).0;
+    assert_eq!(refused["error"]["code"], -32000, "{refused}");
+    assert_eq!(
+        refused["error"]["data"]["details"],
+        refused["error"]["message"]
+    );
+    assert_eq!(
+        refused["error"]["message"],
+        "authentication required: not logged in to Acme (/login)"
+    );
+    assert!(
+        !std::path::Path::new(state).exists() || std::fs::read_dir(state).unwrap().count() == 0
+    );
+
+    // Signed in, a session opens; signed out again, its prompt is refused unsent.
+    let auth_file = scratch.0.join("config/scramjet/auth.json");
+    let saved = serde_json::json!({"acme": {"type": "oauth", "access": "acme-token",
+        "expires": 99_999_999_999_999_u64}});
+    std::fs::write(&auth_file, saved.to_string()).unwrap();
+    std::fs::set_permissions(
+        &auth_file,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    send(&mut stdin, open(3));
+    let opened = until(&messages, |message| message["id"] == 3).0;
+    let session = opened["result"]["sessionId"].clone();
+    assert!(session.is_string(), "{opened}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "logout", "params": {}}),
+    );
+    until(&messages, |message| message["id"] == 4);
+    send(&mut stdin, prompt(5, &session));
+    let refused = until(&messages, |message| message["id"] == 5).0;
+    assert_eq!(refused["error"]["code"], -32000, "{refused}");
+    assert!(requests.try_recv().is_err(), "a request was sent");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+
+    // A model of a provider that needs no login is asked as before.
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let given = ["--no-session"];
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &given);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(&mut stdin, open(2));
+    let opened = until(&messages, |message| message["id"] == 2).0;
+    send(&mut stdin, prompt(3, &opened["result"]["sessionId"]));
+    let failed = until(&messages, |message| message["id"] == 3).0;
+    assert_eq!(failed["error"]["code"], -32603, "{failed}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+
+    // With no model offered at all, a sign-in is what is missing.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let closed_port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let models = serde_json::json!([]);
+    let (mut child, mut stdin, messages) =
+        acp_models(&scratch.0, closed_port, models, settings, &given);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(&mut stdin, open(2));
+    let refused = until(&messages, |message| message["id"] == 2).0;
+    assert_eq!(refused["error"]["code"], -32000, "{refused}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_signs_in_through_url_elicitations_and_logs_out() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-auth-{}", std::process::id())));

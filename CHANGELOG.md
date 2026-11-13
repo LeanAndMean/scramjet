@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.224.0 — ACP asks for a sign-in
+
+### Added
+
+- `scramjet acp` answers `session/new`, or a prompt, with ACP's "authentication required" error (`-32000`) when the session's model needs a login not made yet, or no provider offers any model, so a client such as Zed can offer the sign-ins; nothing is sent to the provider.
+
+### Fixed
+
+- `scramjet acp`'s errors repeat their message under `data.details`, so Toad shows why a prompt failed instead of only "returned an error".
+
 ## 2.223.0 — ACP signs in
 
 ### Added
