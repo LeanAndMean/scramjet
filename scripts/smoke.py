@@ -78,6 +78,11 @@ def main():
     if not found:
         sys.exit('%s is not named as scripts/package.sh names archives' % archive)
     version, system = found.groups()
+    if os.name == 'nt':
+        # A program that fails to load (a missing DLL or entry point) exits rather than opening
+        # a dialog and waiting: SEM_FAILCRITICALERRORS, inherited by the programs started here.
+        import ctypes
+        ctypes.windll.kernel32.SetErrorMode(0x0001)
     name = 'scramjet.exe' if system == 'windows' else 'scramjet'
     failed = []
 
@@ -102,7 +107,7 @@ def main():
         env.update(HOME=home, USERPROFILE=home, XDG_CONFIG_HOME=os.path.join(home, '.config'),
                    XDG_STATE_HOME=os.path.join(home, '.local', 'state'),
                    XDG_DATA_HOME=os.path.join(home, '.local', 'share'))
-        ran = subprocess.run([binary, '--version'], capture_output=True, text=True, timeout=30, env=env)
+        ran = subprocess.run([binary, '--version'], capture_output=True, encoding='utf-8', timeout=30, env=env)
         check('--version says %s' % version, ran.returncode == 0 and ran.stdout.split() == [version],
               ran.stdout + ran.stderr)
 
@@ -124,7 +129,7 @@ def main():
             with open(os.path.join(config, 'settings.json'), 'w') as file:
                 json.dump({'hideCredentials': 'never'}, file)
         ran = subprocess.run([binary, '--model', 'smoke/smoke', '--no-session', '-p', 'Run the check.'],
-                             cwd=project, env=env, capture_output=True, text=True, timeout=120)
+                             cwd=project, env=env, capture_output=True, encoding='utf-8', timeout=120)
         said = ran.stdout + ran.stderr
         check('the -p turn ends well', ran.returncode == 0, said)
         check('both requests reach the server', len(bodies) == 2, said)

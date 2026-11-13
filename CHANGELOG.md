@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.237.2 — Windows builds start again
+
+### Fixed
+
+- The Windows program starts again: 2.236.1's failed at once with "The procedure entry point WaitOnAddress could not be located", from a change in how Rust 1.100 links it. Each release's Windows archive is now run on Windows before it is published.
+
 ## 2.237.1 — An edit shows once in Zed
 
 ### Fixed

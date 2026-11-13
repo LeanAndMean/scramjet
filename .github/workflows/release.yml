@@ -83,6 +83,22 @@ jobs:
           path: dist/*.tar.gz
           retention-days: 1
 
+  # The archive the windows job made, run on Windows: the tests there are built by another
+  # toolchain (MSVC), so only this runs the program users download.
+  windows-smoke:
+    needs: windows
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: x86_64-windows
+          path: dist
+      - name: Smoke-test
+        shell: bash
+        run: python scripts/smoke.py dist/scramjet-*-x86_64-windows.tar.gz
+
   windows-tests:
     if: github.event_name == 'workflow_dispatch' && inputs.windows-tests
     runs-on: windows-latest
@@ -130,7 +146,7 @@ jobs:
   # npm's packages, as Scramjet 1's `scramjet update` would install them: made and tried
   # against a scripted registry, kept a day, not published.
   npm:
-    needs: [linux, windows, macos]
+    needs: [linux, windows, windows-smoke, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -151,7 +167,7 @@ jobs:
 
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, macos]
+    needs: [linux, windows, windows-smoke, macos]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
