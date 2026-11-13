@@ -3367,6 +3367,205 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
 
 #[test]
 #[cfg(unix)]
+fn acp_signs_in_through_url_elicitations_and_logs_out() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-auth-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    let set = scratch.0.join("acme");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&set).unwrap();
+    // The login waits for `go` once its page is open, so that the test sees it waiting.
+    let login = set.join("login");
+    std::fs::write(
+        &login,
+        r#"#!/bin/sh
+read -r request
+case "$request" in
+*'"action":"login"'*) echo '{"say":"Waiting for Acme."}'; echo '{"open":"https://sign-in.example/start"}'
+  while [ ! -f go ]; do sleep 0.05; done; rm go
+  echo '{"credential":{"access":"acme-secret-token","expires":99999999999999}}' ;;
+*'"action":"models"'*) echo '{"provider":{"baseUrl":"http://127.0.0.1:9","api":"anthropic-messages","models":[{"id":"acme-model"}]}}' ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&login, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let declared =
+        serde_json::json!({"logins": {"acme": {"name": "Acme", "command": ["./login"]}}});
+    std::fs::write(set.join("models.json"), declared.to_string()).unwrap();
+    let (port, _requests) = serve_refusals();
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"commandSets": [set], "hideCredentials": "never"});
+    let given = ["--no-session"];
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &given);
+    let mut seen = Vec::new();
+    let mut wait = |found: &dyn Fn(&serde_json::Value) -> bool| {
+        let (answer, before) = until(&messages, found);
+        seen.extend(before);
+        seen.push(answer.clone());
+        answer
+    };
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities":
+                {"elicitation": {"url": {}}}}}),
+    );
+    let initialized = wait(&|message| message["id"] == 1);
+    let result = &initialized["result"];
+    assert_eq!(
+        result["agentCapabilities"]["auth"]["logout"],
+        serde_json::json!({})
+    );
+    let ids: Vec<&str> = (result["authMethods"].as_array().unwrap().iter())
+        .map(|method| method["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["chatgpt", "copilot", "acme"], "{result}");
+    assert_eq!(result["authMethods"][2]["name"], "Acme");
+    let authenticate = |id: u64, method: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "authenticate",
+            "params": {"methodId": method}})
+    };
+    send(&mut stdin, authenticate(2, "nowhere"));
+    let unknown = wait(&|message| message["id"] == 2);
+    assert!(
+        unknown["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("nowhere"),
+        "{unknown}"
+    );
+
+    // The page goes to the client, with what the program said before it.
+    send(&mut stdin, authenticate(3, "acme"));
+    let asked = wait(&|message| message["method"] == "elicitation/create");
+    let params = &asked["params"];
+    assert_eq!(
+        (
+            &params["requestId"],
+            &params["mode"],
+            &params["url"],
+            &params["message"]
+        ),
+        (
+            &serde_json::json!(3),
+            &serde_json::json!("url"),
+            &serde_json::json!("https://sign-in.example/start"),
+            &serde_json::json!("Waiting for Acme.")
+        ),
+        "{asked}"
+    );
+    let elicitation = params["elicitationId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": asked["id"], "result": {"action": "accept"}}),
+    );
+    std::fs::write(set.join("go"), "").unwrap();
+    let completed = wait(&|message| message["method"] == "elicitation/complete");
+    assert_eq!(completed["params"]["elicitationId"], elicitation);
+    let signed_in = wait(&|message| message["id"] == 3);
+    assert_eq!(signed_in["result"], serde_json::json!({}), "{signed_in}");
+    let auth_file = scratch.0.join("config/scramjet/auth.json");
+    let auth: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&auth_file).unwrap()).unwrap();
+    assert_eq!(auth["acme"]["access"], "acme-secret-token", "{auth}");
+    // A session started now offers the login's models.
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let opened = wait(&|message| message["id"] == 4);
+    assert!(
+        opened["result"].to_string().contains("acme/acme-model"),
+        "{opened}"
+    );
+
+    // Declining the page, or cancelling the request, stops the sign-in.
+    send(&mut stdin, authenticate(5, "acme"));
+    let asked = wait(&|message| message["method"] == "elicitation/create");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": asked["id"], "result": {"action": "decline"}}),
+    );
+    let declined = wait(&|message| message["id"] == 5);
+    assert_eq!(declined["error"]["code"], -32800, "{declined}");
+    send(&mut stdin, authenticate(6, "acme"));
+    wait(&|message| message["method"] == "elicitation/create");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "method": "$/cancel_request",
+            "params": {"requestId": 6}}),
+    );
+    let cancelled = wait(&|message| message["id"] == 6);
+    assert_eq!(cancelled["error"]["code"], -32800, "{cancelled}");
+
+    // Logging out of one method removes its login only.
+    let mut saved =
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&auth_file).unwrap()).unwrap();
+    saved["github-copilot"] = serde_json::json!({"type": "oauth", "access": "gh", "expires": 1});
+    std::fs::write(&auth_file, saved.to_string()).unwrap();
+    let meta =
+        |method: &str| serde_json::json!({"io.github.leanandmean.scramjet": {"methodId": method}});
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 7, "method": "logout",
+            "params": {"_meta": meta("acme")}}),
+    );
+    assert_eq!(
+        wait(&|message| message["id"] == 7)["result"],
+        serde_json::json!({})
+    );
+    let auth: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&auth_file).unwrap()).unwrap();
+    assert!(
+        auth.get("acme").is_none() && auth.get("github-copilot").is_some(),
+        "{auth}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 8, "method": "logout", "params": {}}),
+    );
+    assert_eq!(
+        wait(&|message| message["id"] == 8)["result"],
+        serde_json::json!({})
+    );
+    let auth: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&auth_file).unwrap()).unwrap();
+    assert!(auth.get("github-copilot").is_none(), "{auth}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    seen.extend(messages.try_iter());
+    for message in &seen {
+        assert!(!message.to_string().contains("acme-secret"), "{message}");
+    }
+
+    // A client that opens no pages is told to sign in from a terminal.
+    let given = ["--no-session"];
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &given);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {"elicitation": {"form": {}}}}}),
+    );
+    next(&messages);
+    send(&mut stdin, authenticate(2, "copilot"));
+    let refused = next(&messages);
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("/login"),
+        "{refused}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_runs_bang_commands_between_and_during_turns_through_the_extension() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-bash-{}", std::process::id())));

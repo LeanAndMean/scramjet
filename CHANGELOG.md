@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.223.0 — ACP signs in
+
+### Added
+
+- `scramjet acp` offers `/login`'s sign-ins as `authMethods` (ChatGPT, GitHub Copilot and each package's login program): `authenticate` runs one, sending each page it opens to the client as a URL-mode elicitation, and `logout` signs out of all of them or one. Tokens stay in `auth.json`; open sessions read their providers again.
+
 ## 2.222.0 — ACP names replayed entries
 
 ### Added

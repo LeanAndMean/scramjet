@@ -27,6 +27,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod sign_in;
+
 const PROTOCOL_VERSION: u64 = 1;
 const PARSE_ERROR: i64 = -32700;
 const INVALID_REQUEST: i64 = -32600;
@@ -109,6 +111,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         forms: false,
         booleans: false,
         scramjet: false,
+        sign_in: sign_in::SignIn::default(),
         sessions: HashMap::new(),
         renamed: Arc::default(),
     };
@@ -284,6 +287,7 @@ struct Connection {
     booleans: bool,
     /// The client knows Scramjet's extensions (`_meta["io.github.leanandmean.scramjet"]`).
     scramjet: bool,
+    sign_in: sign_in::SignIn,
     sessions: HashMap<String, Handle>,
     /// The ids sessions took later (a next step's fresh session), each with the one `sessions`
     /// holds it under.
@@ -365,8 +369,8 @@ enum Job {
     Reload(mpsc::Sender<()>),
     /// A `bash` command that ended between turns, to add to the conversation.
     Shell(Shell),
-    /// An API key saved for that provider: its models are read again.
-    Keyed(String),
+    /// A login or an API key saved or removed for that provider: its models are read again.
+    Credentials(String),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -436,6 +440,8 @@ impl Connection {
             LABEL => self.label(&id, &params),
             RELOAD => self.reload(id),
             SET_API_KEY => self.set_api_key(id, &params),
+            "authenticate" => (self.sign_in).authenticate(&self.out, id, &params, self.jobs()),
+            "logout" => (self.sign_in).logout(&self.out, &id, &params, self.jobs()),
             BASH => self.bash(id, &params),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
@@ -458,7 +464,14 @@ impl Connection {
             self.hold(params);
         } else if method == ABORT_BASH {
             self.abort_bash(params);
+        } else if method == "$/cancel_request" {
+            self.sign_in.cancel(&params["requestId"]);
         }
+    }
+
+    /// Where each session is sent its jobs.
+    fn jobs(&self) -> Vec<mpsc::Sender<Job>> {
+        self.sessions.values().map(|h| h.jobs.clone()).collect()
     }
 
     /// Stops the countdown of the next-step list open in the session `params` names; whether
@@ -642,7 +655,7 @@ impl Connection {
                 .error(&id, INVALID_PARAMS, "provider and key are required");
         };
         let (provider, key) = (provider.to_owned(), key.to_owned());
-        let sessions: Vec<_> = self.sessions.values().map(|h| h.jobs.clone()).collect();
+        let sessions = self.jobs();
         let out = self.out.clone();
         // Reading the providers may run their programs.
         std::thread::spawn(move || {
@@ -666,7 +679,7 @@ impl Connection {
                 return out.error(&id, INVALID_PARAMS, &message);
             }
             for jobs in sessions {
-                let _ = jobs.send(Job::Keyed(provider.clone()));
+                let _ = jobs.send(Job::Credentials(provider.clone()));
             }
             out.respond(&id, json!({}));
         });
@@ -766,6 +779,7 @@ impl Connection {
         self.forms = capabilities["elicitation"]["form"].is_object();
         self.booleans = capabilities["session"]["configOptions"]["boolean"].is_object();
         self.scramjet = capabilities["_meta"]["io.github.leanandmean.scramjet"].is_object();
+        self.sign_in = sign_in::SignIn::read(capabilities["elicitation"]["url"].is_object());
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
@@ -773,13 +787,14 @@ impl Connection {
                 "sessionCapabilities": {"list": {}, "resume": {}, "close": {}, "delete": {}},
                 "promptCapabilities": {"image": true, "audio": false, "embeddedContext": true},
                 "mcpCapabilities": {"http": true, "sse": false},
+                "auth": {"logout": {}},
             },
             "agentInfo": {
                 "name": "scramjet",
                 "title": "Scramjet",
                 "version": env!("CARGO_PKG_VERSION"),
             },
-            "authMethods": [],
+            "authMethods": self.sign_in.advertised(),
             "_meta": {"io.github.leanandmean.scramjet": {"version": 1, "methods": EXTENSIONS}},
         });
         self.out.respond(id, result);
@@ -871,8 +886,8 @@ impl Connection {
                         front.add_shells(vec![shell]);
                         continue;
                     }
-                    Job::Keyed(provider) => {
-                        front.keyed(&provider);
+                    Job::Credentials(provider) => {
+                        front.credentials_changed(&provider);
                         continue;
                     }
                 };
@@ -1649,8 +1664,9 @@ impl Acp {
         self.options_changed();
     }
 
-    /// Reads the providers again after an API key was saved for `provider`, as `/login` does.
-    fn keyed(&mut self, provider: &str) {
+    /// Reads the providers again after a login or an API key for `provider` was saved or
+    /// removed, as `/login` and `/logout` do.
+    fn credentials_changed(&mut self, provider: &str) {
         self.session.agent.forget_list(provider);
         self.session.agent.load_model_info();
         self.models.clear();
