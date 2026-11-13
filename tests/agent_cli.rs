@@ -4861,6 +4861,25 @@ fn acp_loads_a_saved_session_replaying_its_branch() {
         "{call}"
     );
     assert_eq!(updates[4]["content"]["text"], "It says alpha.");
+    // Each replayed update names its entry, as `tree` lists them.
+    let entry = |update: &serde_json::Value| {
+        update["_meta"]["io.github.leanandmean.scramjet"]["entryId"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("no entryId: {update}"))
+    };
+    let params = serde_json::json!({"sessionId": session});
+    let (tree, _) = request(&mut stdin, "_io.github.leanandmean.scramjet/tree", params);
+    let listed = |kind: &str| {
+        (tree["result"]["entries"].as_array().unwrap().iter())
+            .find(|listed| listed["kind"] == kind)
+            .and_then(|listed| listed["entryId"].as_u64())
+            .unwrap_or_else(|| panic!("no {kind}: {tree}"))
+    };
+    assert_eq!(entry(&updates[0]), listed("prompt"));
+    assert_eq!(entry(&updates[3]), listed("toolResult"));
+    assert_eq!(entry(&updates[4]), listed("reply"));
+    assert_eq!(entry(&updates[1]), entry(&updates[2]));
+    assert!((entry(&updates[0]) + 1..entry(&updates[3])).contains(&entry(&updates[1])));
     // The live turn's call carried the same input.
     let live_call = (live.iter())
         .map(|message| &message["params"]["update"])

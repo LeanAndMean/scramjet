@@ -2741,6 +2741,39 @@ with material responses in this session branch, the imminent one included:\n{}\n
 }
 
 #[test]
+fn a_resumed_conversation_names_the_lines_its_items_are_stored_on() {
+    let scratch = ScratchDir::new(
+        std::env::temp_dir().join(format!("scramjet-agent-lines-of-{}", std::process::id())),
+    );
+    let path = scratch.0.join("branched.jsonl");
+    let say = |text: &str| json!({"role":"user","content":text});
+    let reply = |text: &str| json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]});
+    let lines = [
+        json!({"type":"session","version":1}),
+        say("one"),
+        reply("a"),
+        say("two"),
+        reply("b"),
+        json!({"type":"compaction","summary":"s","first_kept":2}),
+        say("two"),
+        reply("left"),
+        json!({"type":"branch","parent":6}),
+        json!({"type":"branch_summary","summary":"t"}),
+        reply("d"),
+    ];
+    let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+    std::fs::write(&path, text).unwrap();
+    let (session, items, _) = Session::open(&path).unwrap();
+    let lines = session.lines_of(&items).unwrap();
+    assert_eq!(
+        lines,
+        [Some(5), Some(3), Some(4), Some(6), Some(9), Some(10)],
+        "{items:?}"
+    );
+    assert_eq!(session.lines_of(&[reply("left")]).unwrap(), [None]);
+}
+
+#[test]
 fn models_that_replied_before_a_compaction_are_still_on_the_branch() {
     let scratch = ScratchDir::new(std::env::temp_dir().join(format!(
         "scramjet-agent-contributors-{}",

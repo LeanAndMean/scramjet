@@ -1932,18 +1932,33 @@ impl Agent {
     /// Shows the conversation as a resumed session has it, as its turns showed when they ran;
     /// calls left to run again (a question gone back to) show as they run.
     pub fn show_conversation(&self, ui: &mut dyn AgentUi) {
+        self.show(ui, false);
+    }
+
+    /// `show_conversation`, telling `ui` each item's line in the session file (`AgentUi::entry`);
+    /// with the file unreadable, none.
+    pub fn show_conversation_entries(&self, ui: &mut dyn AgentUi) {
+        self.show(ui, true);
+    }
+
+    fn show(&self, ui: &mut dyn AgentUi, entries: bool) {
         let root = Some(self.config.root.as_path());
-        let Some(calls) = &self.calls else {
-            return show_items(&self.conversation, root, ui);
+        let shown: std::borrow::Cow<[Value]> = match &self.calls {
+            None => self.conversation.as_slice().into(),
+            Some(calls) => (self.conversation.iter())
+                .filter(|item| {
+                    item["type"] != "function_call"
+                        || !calls.has(item["call_id"].as_str().unwrap_or(""))
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
         };
-        let pending = |item: &&Value| {
-            item["type"] == "function_call" && calls.has(item["call_id"].as_str().unwrap_or(""))
+        let lines = match entries {
+            true => self.session.lines_of(&shown).unwrap_or_default(),
+            false => Vec::new(),
         };
-        let shown: Vec<Value> = (self.conversation.iter())
-            .filter(|item| !pending(item))
-            .cloned()
-            .collect();
-        show_items(&shown, root, ui);
+        ui::show_entries(&shown, &lines, root, ui);
     }
 
     /// Reads the providers again for what the current model takes, its limits and where its

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.222.0 — ACP names replayed entries
+
+### Added
+
+- `scramjet acp`'s `session/load` replay names each message, reasoning, tool call and compaction's entry (`_meta["io.github.leanandmean.scramjet"].entryId`), the id `fork`, `navigate_tree` and `set_label` take, so a client can offer them on what it shows without asking for the `tree` first.
+
 ## 2.221.0 — ACP saves API keys
 
 ### Added

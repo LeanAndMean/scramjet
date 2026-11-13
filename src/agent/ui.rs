@@ -52,6 +52,9 @@ pub trait AgentUi {
     /// The images, as `data:` URLs, of the stored prompt or tool result shown next, for an
     /// interface that shows them.
     fn images(&mut self, _urls: &[&str]) {}
+    /// The line in the session file of the stored item shown next, for an interface that names
+    /// entries; called only when showing a resumed conversation's items with their lines.
+    fn entry(&mut self, _line: Option<usize>) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// `tool_result` for a result that came `at`, shown later.
@@ -387,6 +390,17 @@ impl ChildRun {
 /// summary and how a turn stopped. Reads are compact by their paths in `root`, the project's;
 /// with `None`, none is.
 pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
+    show_entries(items, &[], root, ui);
+}
+
+/// `show_items`, telling `ui` before each item its line in `lines`, given for each item.
+pub fn show_entries(
+    items: &[Value],
+    lines: &[Option<usize>],
+    root: Option<&Path>,
+    ui: &mut dyn AgentUi,
+) {
+    let named = !lines.is_empty();
     let compact = |call: &Call| root.and_then(|root| call.compact(root));
     let images = |parts: &Value, ui: &mut dyn AgentUi| {
         let urls: Vec<&str> = (parts.as_array().into_iter().flatten())
@@ -398,22 +412,30 @@ pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
         }
     };
     // A reply's calls are stored before their results, but each showed in turn as it ran.
-    let mut calls: Vec<(&str, &str, Option<Call>)> = Vec::new();
-    let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>)>, ui: &mut dyn AgentUi| {
-        for (_, _, call) in calls.drain(..) {
+    let mut calls: Vec<(&str, &str, Option<Call>, Option<usize>)> = Vec::new();
+    let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>, Option<usize>)>,
+                      ui: &mut dyn AgentUi| {
+        for (_, _, call, line) in calls.drain(..) {
             if let Some(call) = call {
+                if named {
+                    ui.entry(line);
+                }
                 ui.tool_input(&call.arguments);
                 ui.tool_call(call.name, &call.summary(), compact(&call).as_ref());
             }
         }
     };
-    for item in items {
+    for (at, item) in items.iter().enumerate() {
         let failed = item[FAILED] == true;
+        let line = lines.get(at).copied().flatten();
         if !matches!(
             item["type"].as_str(),
             Some("function_call" | "function_call_output")
         ) {
             unanswered(&mut calls, ui);
+        }
+        if named {
+            ui.entry(line);
         }
         match item["type"].as_str() {
             Some("message") => ui.assistant(&message_text(item)),
@@ -431,12 +453,13 @@ pub fn show_items(items: &[Value], root: Option<&Path>, ui: &mut dyn AgentUi) {
                 item["call_id"].as_str().unwrap_or_default(),
                 item["name"].as_str().unwrap_or_default(),
                 Call::parse(item).ok(),
+                line,
             )),
             Some("function_call_output") => {
                 let id = item["call_id"].as_str().unwrap_or_default();
                 let (name, call) = match calls.iter().position(|(call_id, ..)| *call_id == id) {
                     Some(index) => {
-                        let (_, name, call) = calls.remove(index);
+                        let (_, name, call, _) = calls.remove(index);
                         (name, call)
                     }
                     None => ("", None),

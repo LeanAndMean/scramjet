@@ -1567,6 +1567,7 @@ impl Worker {
             replaying: false,
             held: Cell::new(None),
             thinking: false,
+            entry: None,
         };
         Acp {
             session,
@@ -1618,9 +1619,9 @@ impl Acp {
     /// session.
     fn replay(&mut self) {
         self.ui.replaying = true;
-        self.session.agent.show_conversation(&mut self.ui);
+        self.session.agent.show_conversation_entries(&mut self.ui);
         self.ui.flush();
-        self.ui.replaying = false;
+        (self.ui.replaying, self.ui.entry) = (false, None);
         (self.ui.asked, self.ui.stopped, self.ui.thinking) = (None, None, false);
     }
 
@@ -2328,12 +2329,41 @@ struct Updates {
     held: Cell<Option<Value>>,
     /// The last replayed update was reasoning, whose response the next message is part of.
     thinking: bool,
+    /// The session file's line of the item replayed now, which its updates carry as `entryId`.
+    entry: Option<usize>,
+}
+
+/// Puts `fields` into `update`'s `_meta["io.github.leanandmean.scramjet"]`, beside what is there.
+fn add_meta(update: &mut Value, fields: Value) {
+    let ours = &mut update["_meta"]["io.github.leanandmean.scramjet"];
+    if !ours.is_object() {
+        *ours = json!({});
+    }
+    if let (Some(ours), Value::Object(fields)) = (ours.as_object_mut(), fields) {
+        ours.extend(fields);
+    }
 }
 
 impl Updates {
-    fn update(&self, update: Value) {
+    fn update(&self, mut update: Value) {
         self.flush();
+        self.stamp(&mut update);
         self.out.update(&self.session, update);
+    }
+    /// A replayed message, reasoning, tool call or compaction carries its entry's line.
+    fn stamp(&self, update: &mut Value) {
+        let kinds = [
+            "user_message_chunk",
+            "agent_message_chunk",
+            "agent_thought_chunk",
+            "tool_call",
+            "compaction_update",
+        ];
+        if let (true, Some(line)) = (self.replaying, self.entry)
+            && kinds.contains(&update["sessionUpdate"].as_str().unwrap_or(""))
+        {
+            add_meta(update, json!({"entryId": line}));
+        }
     }
     /// Sends the replayed tool call held, if any.
     fn flush(&self) {
@@ -2400,8 +2430,13 @@ impl Updates {
     }
     fn call_update(&self, fields: Value) {
         let mut held = self.held.take();
-        if let (Some(Value::Object(held)), Value::Object(fields)) = (&mut held, &fields) {
-            held.extend(fields.clone());
+        if let (Some(held), Value::Object(fields)) = (&mut held, &fields) {
+            for (key, value) in fields {
+                match key.as_str() {
+                    "_meta" => add_meta(held, value["io.github.leanandmean.scramjet"].clone()),
+                    _ => held[key] = value.clone(),
+                }
+            }
         }
         if held.is_some() {
             return self.held.set(held);
@@ -2716,6 +2751,7 @@ impl AgentUi for Updates {
             self.new_file = false;
             self.thinking = false;
             self.flush();
+            self.stamp(&mut update);
             return self.held.set(Some(update));
         }
         // Whether a write makes its file is known only before it runs.
@@ -2725,6 +2761,9 @@ impl AgentUi for Updates {
     }
     fn tool_input(&mut self, arguments: &Value) {
         self.input = arguments.clone();
+    }
+    fn entry(&mut self, line: Option<usize>) {
+        self.entry = line;
     }
     fn tool_running(&mut self, _since: Instant) {
         self.call_update(json!({"status": "in_progress"}));
