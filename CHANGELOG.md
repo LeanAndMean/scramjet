@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.236.1 — Calls run together keep the reply's order
+
+### Fixed
+
+- Calls of one reply that run together are announced in the reply's order, so `scramjet acp`'s `call-N` ids follow it; under load a later call could take an earlier one's number.
+
 ## 2.236.0 — ACP lists and manages the MCP servers
 
 ### Added

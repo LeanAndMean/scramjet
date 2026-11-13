@@ -80,13 +80,26 @@ impl Batch {
     ) -> Self {
         let parsed: Vec<_> = calls.iter().map(|item| Call::parse(item).ok()).collect();
         let waits = waits(&parsed, root);
-        let calls = Arc::new(calls);
         let cancel = Arc::new(AtomicBool::new(false));
-        let done = Arc::new((Mutex::new(vec![false; calls.len()]), Condvar::new()));
         let (to, from) = mpsc::channel();
+        // Announced here, before any call starts, so that they are shown in the reply's order.
+        for (index, parsed) in parsed.iter().enumerate() {
+            if let (true, Some(call)) = (announce, parsed) {
+                let mut relay = Relay {
+                    index,
+                    to: to.clone(),
+                    cancel: cancel.clone(),
+                };
+                let id = calls[index]["call_id"].as_str().unwrap_or_default();
+                relay.tool_input(id, &call.arguments);
+                relay.tool_call(call.name, &call.summary(), call.compact(root).as_ref());
+            }
+        }
+        let calls = Arc::new(calls);
+        let done = Arc::new((Mutex::new(vec![false; calls.len()]), Condvar::new()));
         for (index, waits) in waits.into_iter().enumerate() {
             let (to, calls, run, cancel) = (to.clone(), calls.clone(), run.clone(), cancel.clone());
-            let (done, root) = (done.clone(), root.to_owned());
+            let done = done.clone();
             std::thread::spawn(move || {
                 let _ended = Ended(index, done.clone());
                 let mut relay = Relay {
@@ -95,11 +108,6 @@ impl Batch {
                     cancel: cancel.clone(),
                 };
                 let parsed = Call::parse(&calls[index]);
-                if let (true, Ok(call)) = (announce, &parsed) {
-                    let id = calls[index]["call_id"].as_str().unwrap_or_default();
-                    relay.tool_input(id, &call.arguments);
-                    relay.tool_call(call.name, &call.summary(), call.compact(&root).as_ref());
-                }
                 let (ended, changed) = &*done;
                 let mut ended = ended.lock().unwrap_or_else(|e| e.into_inner());
                 while !waits.iter().all(|&before| ended[before]) {
