@@ -2125,10 +2125,18 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
         })
         .collect();
     assert_eq!(reply, "Done.");
-    assert!((before.iter().chain(&updates)).any(|message| {
-        message["params"]["update"]["sessionUpdate"] == "usage_update"
-            && message["params"]["update"]["size"] == 1000
-    }));
+    let usage = (before.iter().chain(&updates))
+        .find(|message| message["params"]["update"]["sessionUpdate"] == "usage_update")
+        .unwrap();
+    assert_eq!(usage["params"]["update"]["size"], 1000, "{usage}");
+    let meta = &usage["params"]["update"]["_meta"]["io.github.leanandmean.scramjet"];
+    assert!(meta["tokens"]["output"].is_u64(), "{usage}");
+    // The first prompt titles the session, once.
+    let titles: Vec<_> = (before.iter().chain(&updates))
+        .filter(|message| message["params"]["update"]["sessionUpdate"] == "session_info_update")
+        .collect();
+    assert_eq!(titles.len(), 1, "{titles:?}");
+    assert_eq!(titles[0]["params"]["update"]["title"], "hi", "{titles:?}");
     let _first = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
     let steered = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
     assert!(steered.contains("and also this"), "{steered}");

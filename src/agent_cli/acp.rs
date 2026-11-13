@@ -1782,6 +1782,7 @@ impl Worker {
             input_id: String::new(),
             call_ids: HashMap::new(),
             prompt_shown: None,
+            title: None,
         };
         Acp {
             session,
@@ -1912,6 +1913,7 @@ impl Acp {
         self.configure();
         let (mut prompt, mut start) = (prompt, start);
         let stopped = loop {
+            self.ui.title = prompt.as_deref().and_then(|prompt| self.titles(prompt));
             let next = drive::run_turn(self, prompt.as_deref(), start);
             let stopped = self.ui.stopped.take();
             if let Some(reason) = self.reason.take() {
@@ -1950,6 +1952,17 @@ impl Acp {
                 self.end_turn((&id, result), Err((code, &error)));
             }
         }
+    }
+
+    /// The title `prompt` gives the session, as `session/list` shows it, if the session has no
+    /// name and no prompt yet.
+    fn titles(&self, prompt: &str) -> Option<String> {
+        let agent = &self.session.agent;
+        if agent.session_name().is_some() || !agent.fork_prompts().ok()?.is_empty() {
+            return None;
+        }
+        let title = prompt.lines().next()?.trim();
+        (!title.is_empty()).then(|| title.to_owned())
     }
 
     /// Takes the config options the client set during the turn.
@@ -2051,10 +2064,7 @@ impl Acp {
     /// After a compaction or a move the client waited for: the usage, then the prompts sent
     /// meanwhile as a turn, or the session left idle.
     fn after_job(&mut self) {
-        let agent = &self.session.agent;
-        self.ui.window = agent.context_window();
-        let (context, cost) = (agent.context_tokens(), agent.session_tokens().cost);
-        self.ui.usage_update(context, cost);
+        self.ui.usage_of(&self.session.agent);
         let mut turn = lock(&self.turn);
         let queued = match self.cancel.load(Ordering::Relaxed) {
             true => Vec::new(),
@@ -2170,10 +2180,7 @@ impl Acp {
     /// Tells the client what changed with the session: its config options and usage.
     fn switched(&mut self) {
         self.options_changed();
-        let agent = &self.session.agent;
-        self.ui.window = agent.context_window();
-        let (context, cost) = (agent.context_tokens(), agent.session_tokens().cost);
-        self.ui.usage_update(context, cost);
+        self.ui.usage_of(&self.session.agent);
     }
 
     /// Labels the entry on `line` for request `id`, or takes its label away; answered with the
@@ -2436,10 +2443,7 @@ impl Front for Acp {
     }
     fn turn_stops(&mut self) {}
     fn turn_ended(&mut self) {
-        let agent = &self.session.agent;
-        let (context, cost) = (agent.context_tokens(), agent.session_tokens().cost);
-        self.ui.window = agent.context_window();
-        self.ui.usage_update(context, cost);
+        self.ui.usage_of(&self.session.agent);
         self.configure();
         self.options_changed();
     }
@@ -2575,7 +2579,7 @@ struct Updates {
     new_file: bool,
     window: Option<u64>,
     /// The usage last sent, which is not sent again.
-    used: Option<(u64, u64, f64)>,
+    used: Option<Value>,
     /// How the last turn stopped before its end: cancelled (`None`), or failed with an error.
     stopped: Option<Option<String>>,
     /// What `question` showed since the last tool call, which a permission request repeats.
@@ -2597,6 +2601,8 @@ struct Updates {
     call_ids: HashMap<String, String>,
     /// The message that showed the prompt saved next, if one did.
     prompt_shown: Option<String>,
+    /// The title the prompt saved next gives a session with no name and no prompt yet.
+    title: Option<String>,
 }
 
 /// Puts `fields` into `update`'s `_meta["io.github.leanandmean.scramjet"]`, beside what is there.
@@ -2715,18 +2721,37 @@ impl Updates {
         }
         self.update(update);
     }
-    fn usage_update(&mut self, context: Option<u64>, cost: f64) {
+    /// `agent`'s window and usage, as `usage_update` sends it.
+    fn usage_of(&mut self, agent: &scramjet::agent::Agent) {
+        self.window = agent.context_window();
+        let usage = (
+            agent.session_tokens(),
+            agent.context_tokens(),
+            agent.output_rate(),
+        );
+        self.usage_update(usage);
+    }
+    /// The session's tokens, its context and the model's output rate, with the tokens and the
+    /// rate in `_meta`; not sent again unchanged.
+    fn usage_update(&mut self, (tokens, context, rate): (Tokens, Option<u64>, Option<f64>)) {
         let (Some(used), Some(size)) = (context, self.window) else {
             return;
         };
-        if self.used.replace((used, size, cost)) == Some((used, size, cost)) {
+        let cost = json!({"amount": tokens.cost, "currency": "USD"});
+        let mut update =
+            json!({"sessionUpdate": "usage_update", "used": used, "size": size, "cost": cost});
+        let mut meta = json!({"tokens": {"input": tokens.input, "output": tokens.output,
+            "cacheRead": tokens.cache_read, "cacheWrite": tokens.cache_write}});
+        if let Some(rate) = rate {
+            meta["outputRate"] = json!(rate);
+        }
+        add_meta(&mut update, meta);
+        if self.used.as_ref() == Some(&update) {
             return;
         }
-        let cost = json!({"amount": cost, "currency": "USD"});
-        lock(&self.log).usage = json!({"used": used, "size": size, "cost": cost});
-        self.update(
-            json!({"sessionUpdate": "usage_update", "used": used, "size": size, "cost": cost}),
-        );
+        self.used = Some(update.clone());
+        lock(&self.log).usage = json!({"used": used, "size": size, "cost": update["cost"]});
+        self.update(update);
     }
     /// Where the tool call announced last reads or changes files, as absolute paths.
     fn locations(&self) -> Vec<Value> {
@@ -3085,6 +3110,12 @@ impl AgentUi for Updates {
     fn saved(&mut self, saved: scramjet::agent::Saved, line: usize) {
         use scramjet::agent::Saved as Kept;
         let prompt = self.prompt_shown.take();
+        if let (Kept::Prompt | Kept::Command, Some(title)) = (&saved, self.title.take()) {
+            let now = utc_time(std::time::SystemTime::now());
+            self.update(
+                json!({"sessionUpdate": "session_info_update", "title": title, "updatedAt": now}),
+            );
+        }
         if !self.scramjet || self.replaying {
             return;
         }
@@ -3264,8 +3295,8 @@ impl AgentUi for Updates {
     fn follow_up(&mut self) -> Vec<String> {
         lock(&self.turn).messages.follow_up(self.follow_up)
     }
-    fn usage(&mut self, tokens: Tokens, context: Option<u64>, _rate: Option<f64>) {
-        self.usage_update(context, tokens.cost);
+    fn usage(&mut self, tokens: Tokens, context: Option<u64>, rate: Option<f64>) {
+        self.usage_update((tokens, context, rate));
     }
     /// A form with one of `options`, each by its value, the recommended one the default.
     fn choose(

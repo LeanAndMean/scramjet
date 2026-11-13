@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.229.0 — ACP titles a session by its first prompt
+
+### Added
+
+- `scramjet acp` titles a new, unnamed session by its first prompt's first line (`session_info_update`), as `session/list` already showed it, so a client's thread list names it at once.
+- Its `usage_update`s carry the session's tokens (input, output, cache reads and writes) and the model's output rate in `_meta`.
+
 ## 2.228.0 — ACP offers a fork's next steps again
 
 ### Changed
