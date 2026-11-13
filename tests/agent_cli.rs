@@ -3286,6 +3286,87 @@ fn acp_reloads_the_settings_commands_and_models_through_the_extension() {
 
 #[test]
 #[cfg(unix)]
+fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-key-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let (port, requests) = serve_refusals();
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let given = ["--no-session"];
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &given);
+    let mut seen = Vec::new();
+    let mut answer = |stdin: &mut std::process::ChildStdin, message: serde_json::Value| {
+        let id = message["id"].clone();
+        send(stdin, message);
+        let (answer, before) = until(&messages, |message| message["id"] == id);
+        seen.extend(before);
+        seen.push(answer.clone());
+        answer
+    };
+    let initialized = answer(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    let offered = &initialized["result"]["_meta"]["io.github.leanandmean.scramjet"]["methods"];
+    assert!(
+        (offered.as_array().unwrap().iter())
+            .any(|method| method == "_io.github.leanandmean.scramjet/set_api_key"),
+        "{offered}"
+    );
+    let set = |id: u64, provider: &str, key: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id,
+            "method": "_io.github.leanandmean.scramjet/set_api_key",
+            "params": {"provider": provider, "key": key}})
+    };
+    let unknown = answer(&mut stdin, set(2, "nowhere", "sk-unknown"));
+    let said = unknown["error"]["message"].as_str().unwrap();
+    assert!(said.contains("no provider \"nowhere\""), "{unknown}");
+    let spaced = answer(&mut stdin, set(3, "test", "sk two words"));
+    let said = spaced["error"]["message"].as_str().unwrap();
+    assert!(said.contains("without spaces"), "{spaced}");
+    let opened = answer(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = opened["result"]["sessionId"].clone();
+    let saved = answer(&mut stdin, set(5, "test", " sk-acp-secret\n"));
+    assert_eq!(saved["result"], serde_json::json!({}), "{saved}");
+    let auth: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(scratch.0.join("config/scramjet/auth.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(auth["test"]["key"], "sk-acp-secret", "{auth}");
+    assert_eq!(
+        auth["test"]["origins"],
+        serde_json::json!([format!("http://127.0.0.1:{port}")])
+    );
+    // The open session reads the key before its next request.
+    answer(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]}}),
+    );
+    let (head, _) = requests.recv_timeout(Duration::from_secs(20)).unwrap();
+    let key = (head.lines()).find_map(|line| line.strip_prefix("x-api-key: "));
+    assert_eq!(key, Some("sk-acp-secret"), "{head}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    seen.extend(messages.try_iter());
+    for message in &seen {
+        let text = message.to_string();
+        assert!(
+            !text.contains("sk-acp") && !text.contains("sk-unknown") && !text.contains("two"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_runs_bang_commands_between_and_during_turns_through_the_extension() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-bash-{}", std::process::id())));

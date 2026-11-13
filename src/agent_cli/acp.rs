@@ -48,10 +48,23 @@ const RELOAD: &str = "_io.github.leanandmean.scramjet/reload";
 const BASH: &str = "_io.github.leanandmean.scramjet/bash";
 const ABORT_BASH: &str = "_io.github.leanandmean.scramjet/abort_bash";
 const USER_COMMAND: &str = "_io.github.leanandmean.scramjet/user_command";
+const SET_API_KEY: &str = "_io.github.leanandmean.scramjet/set_api_key";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 13] = [
-    HOLD, COMPACT, RENAME, EXPORT, SPENT, FORK, BRANCH, TREE, NAVIGATE, LABEL, RELOAD, BASH,
+const EXTENSIONS: [&str; 14] = [
+    HOLD,
+    COMPACT,
+    RENAME,
+    EXPORT,
+    SPENT,
+    FORK,
+    BRANCH,
+    TREE,
+    NAVIGATE,
+    LABEL,
+    RELOAD,
+    BASH,
     ABORT_BASH,
+    SET_API_KEY,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -352,6 +365,8 @@ enum Job {
     Reload(mpsc::Sender<()>),
     /// A `bash` command that ended between turns, to add to the conversation.
     Shell(Shell),
+    /// An API key saved for that provider: its models are read again.
+    Keyed(String),
 }
 
 /// A `session/set_config_option` or `rename` request, answered once the session takes it.
@@ -420,6 +435,7 @@ impl Connection {
             NAVIGATE => self.navigate(id, &params),
             LABEL => self.label(&id, &params),
             RELOAD => self.reload(id),
+            SET_API_KEY => self.set_api_key(id, &params),
             BASH => self.bash(id, &params),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
@@ -611,6 +627,47 @@ impl Connection {
         let out = self.out.clone();
         std::thread::spawn(move || {
             while finished.recv().is_ok() {}
+            out.respond(&id, json!({}));
+        });
+    }
+
+    /// Saves the API key `params` gives in `auth.json` for its provider, one `/login` takes a key
+    /// for, as `/login`'s key entry does; every session then reads its providers again, after
+    /// its turn if one runs. The key is never echoed.
+    fn set_api_key(&self, id: Value, params: &Value) {
+        let (Some(provider), Some(key)) = (params["provider"].as_str(), params["key"].as_str())
+        else {
+            return self
+                .out
+                .error(&id, INVALID_PARAMS, "provider and key are required");
+        };
+        let (provider, key) = (provider.to_owned(), key.to_owned());
+        let sessions: Vec<_> = self.sessions.values().map(|h| h.jobs.clone()).collect();
+        let out = self.out.clone();
+        // Reading the providers may run their programs.
+        std::thread::spawn(move || {
+            let Some(logins) = scramjet::agent::login::Logins::user() else {
+                let message = "neither XDG_CONFIG_HOME nor HOME is set";
+                return out.error(&id, INTERNAL_ERROR, message);
+            };
+            let providers = scramjet::agent::Providers::read(
+                Settings::load().models_files(),
+                Some(logins.clone()),
+            );
+            if !(providers.keyed().iter()).any(|(name, _)| *name == provider) {
+                let message = format!("no provider {provider:?} takes an API key");
+                return out.error(&id, INVALID_PARAMS, &message);
+            }
+            let origins = providers.origins(&provider);
+            if let Err(error) =
+                scramjet::agent::login::save_key(&logins.auth, &provider, &key, origins)
+            {
+                let message = format!("the API key for {provider} was not saved: {error}");
+                return out.error(&id, INVALID_PARAMS, &message);
+            }
+            for jobs in sessions {
+                let _ = jobs.send(Job::Keyed(provider.clone()));
+            }
             out.respond(&id, json!({}));
         });
     }
@@ -812,6 +869,10 @@ impl Connection {
                     }
                     Job::Shell(shell) => {
                         front.add_shells(vec![shell]);
+                        continue;
+                    }
+                    Job::Keyed(provider) => {
+                        front.keyed(&provider);
                         continue;
                     }
                 };
@@ -1583,6 +1644,14 @@ impl Acp {
             self.ui.say("warning", &problem);
         }
         self.commands();
+        self.models.clear();
+        self.options_changed();
+    }
+
+    /// Reads the providers again after an API key was saved for `provider`, as `/login` does.
+    fn keyed(&mut self, provider: &str) {
+        self.session.agent.forget_list(provider);
+        self.session.agent.load_model_info();
         self.models.clear();
         self.options_changed();
     }

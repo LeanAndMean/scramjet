@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.221.0 — ACP saves API keys
+
+### Added
+
+- `scramjet acp` saves an API key the client gives for a provider (`_io.github.leanandmean.scramjet/set_api_key` `{provider, key}`) in `auth.json`, as `/login`'s key entry does, for the servers its entry names; open sessions read their providers again, after the turn when one runs. The key is never sent back.
+
 ## 2.220.0 — ACP runs ! commands
 
 ### Added
