@@ -21,7 +21,7 @@ Checked against version 1.24.12741: its `defaults.json` and the settings file it
 
 Checked against tmux 3.0a and its manual page, 2026-11-04.
 
-- Its default `set-clipboard external` ignores the OSC 52 sequence a program sends, so a copy through the terminal does not arrive. scramjet-rs copies through the desktop where it can (PowerShell under WSL, the X server, `wl-copy`), and only a remote session inside tmux relies on OSC 52: there, `set -s set-clipboard on` lets it through.
+- Its default `set-clipboard external` ignores the OSC 52 sequence a program sends, so a copy through the terminal does not arrive. scramjet-rs copies through the desktop where it can (PowerShell under WSL, the X server, the Wayland compositor or `wl-copy`), and only a remote session inside tmux relies on OSC 52: there, `set -s set-clipboard on` lets it through.
 - The outer terminal's paste key still works: a bracketed paste sent to tmux 3.0a reached the program inside it unchanged (checked 2026-11-04).
 - Shift+arrows, Shift+Home and End, and Ctrl+Shift+arrows, Home and End reach the program inside unchanged (xterm's `CSI 1;2` and `CSI 1;6` forms, sent to tmux 3.0a in a pty with an empty configuration; checked 2026-11-08).
 - It leaves the questions about the terminal's colors unanswered, and shows nothing of them: a program in a tmux 3.0a pane got nothing back in 0.5 s for OSC 11 and in 1 s for OSC 11, 10 and 4 (checked 2026-11-06). scramjet-rs then goes by `COLORFGBG`, which tmux does not set, else takes the background as unknown, and the theme editor offers only its own dark and light ones and no new theme from terminal-colors.
@@ -41,7 +41,7 @@ Checked against its manual page (xterm patch #412, 2026-10-11, at man.openbsd.or
 VTE is the terminal library of GNOME Terminal and others, among them LXTerminal, Raspberry Pi OS's terminal (its repository, github.com/lxde/lxterminal). Checked against GNOME Terminal's help (help.gnome.org, Keyboard shortcuts) and VTE's issue tracker on 2026-11-04, not by use.
 
 - **Paste and copy:** Shift+Ctrl+V and Shift+Ctrl+C in GNOME Terminal.
-- **OSC 52:** VTE ignores it: its issue "Add support for OSC 52" (GNOME/vte#2495, opened 2018) is still open. scramjet-rs copies through the X server or `wl-copy` instead, so only a copy in a remote session is lost.
+- **OSC 52:** VTE ignores it: its issue "Add support for OSC 52" (GNOME/vte#2495, opened 2018) is still open. scramjet-rs copies through the X server, the Wayland compositor or `wl-copy` instead, so only a copy in a remote session is lost.
 - **Mouse:** others report that Shift overrides mouse reporting, for the terminal's own selection (not checked).
 
 ## Apple's Terminal

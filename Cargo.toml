@@ -1,6 +1,6 @@
 [package]
 name = "scramjet"
-version = "2.239.1"
+version = "2.240.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "An independent Rust terminal coding harness"
@@ -13,7 +13,7 @@ getrandom = { version = "=0.2.17", default-features = false }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 sha2 = { version = "=0.10.9", default-features = false }
 semver = { version = "=1.0.28", default-features = false, features = ["std"] }
-rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "termios", "process", "event", "time"] }
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "termios", "process", "event", "time", "pipe"] }
 signal-hook = { version = "=0.3.18", default-features = false }
 libc = { version = "=0.2.190", default-features = false }
 unicode-segmentation = { version = "=1.13.3", default-features = false }
@@ -44,6 +44,11 @@ rmcp = { version = "=3.9.0", default-features = false, features = ["client", "tr
 
 [target.'cfg(unix)'.dependencies]
 x11rb = { version = "=0.13.2", default-features = false }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+wayland-client = { version = "=0.31.15", default-features = false }
+wayland-protocols = { version = "=0.32.13", default-features = false, features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "=0.3.12", default-features = false, features = ["client"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_SystemServices", "Win32_System_Threading"] }

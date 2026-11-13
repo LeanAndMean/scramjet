@@ -1,8 +1,9 @@
 //! The desktop's clipboard as Scramjet uses it. Copying: with `pbcopy` on macOS, else with a
 //! PowerShell kept running on Windows and under WSL (`powershell.rs`) outside a remote session,
-//! then `wl-copy` under Wayland, then the X server itself (`x11.rs`), `xclip` or `xsel`; else, and
-//! also in a remote session, through the terminal with OSC 52. Pasting: with that PowerShell,
-//! `pbpaste` on macOS, else from the X server itself, then with `wl-paste`, `xclip` or `xsel`;
+//! then the Wayland compositor itself (`wayland.rs`) or `wl-copy` under Wayland, then the X server
+//! itself (`x11.rs`), `xclip` or `xsel`; else, and also in a remote session, through the terminal
+//! with OSC 52. Pasting: with that PowerShell, `pbpaste` on macOS, else from the Wayland compositor
+//! itself, then from the X server itself, then with `wl-paste`, `xclip` or `xsel`;
 //! never in a remote session, whose clipboard is the terminal's. When no route reads it, the first
 //! failure names the key that pastes through the terminal itself.
 //! An image is pasted as Scramjet pastes it, as the path of a file it is saved to; on macOS as PNG
@@ -22,6 +23,26 @@ use std::{
 };
 
 mod powershell;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod wayland;
+/// Wayland is looked for on Linux and the BSDs only.
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+mod wayland {
+    pub(super) const SERVE: &str = "__wayland-selection-owner";
+    const NONE: &str = "no Wayland clipboard here";
+    pub(super) fn copy(_text: &str) -> Result<(), String> {
+        Err(NONE.into())
+    }
+    pub(super) fn serve() -> Result<(), String> {
+        Err(NONE.into())
+    }
+    pub(super) fn text(_max: usize) -> Result<Option<String>, String> {
+        Err(NONE.into())
+    }
+    pub(super) fn image(_max: usize) -> Result<Option<(Vec<u8>, &'static str)>, String> {
+        Err(NONE.into())
+    }
+}
 #[cfg(unix)]
 mod x11;
 /// No X server is looked for on Windows.
@@ -64,10 +85,11 @@ const IMAGE_TYPES: [(&str, &str); 4] = [
 static KEY_NAMED: AtomicBool = AtomicBool::new(false);
 
 /// Runs the command line's `command` if it is the clipboard's own: scramjet-rs started again to
-/// own a copy (`x11::copy`).
+/// own a copy (`x11::copy`, `wayland::copy`).
 pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), String>> {
     match (command, arguments) {
         (x11::SERVE, [selection]) => Some(x11::serve(selection)),
+        (wayland::SERVE, []) => Some(wayland::serve()),
         _ => None,
     }
 }
@@ -109,19 +131,41 @@ pub(super) fn paste() -> Result<String, String> {
             Err(error) => Err(failed(format!("Cannot read clipboard text ({error})"))),
         };
     }
-    let built_in = x11(set).then(|| x11::text(PASTE_MAX));
-    if let Some(Ok(Some(text))) = built_in {
-        return Ok(text);
-    }
+    let built_in = [
+        (wayland(set), wayland::text as fn(usize) -> _),
+        (x11(set), x11::text),
+    ];
+    let built_in = match first(built_in.map(|(on, read)| (on, move || read(PASTE_MAX)))) {
+        Ok(text) => return Ok(text),
+        Err(outcome) => outcome,
+    };
     let mut tools = readers(set).into_iter();
     if let Some(text) = tools.find_map(|(program, arguments)| read(program, arguments)) {
         return Ok(text);
     }
     Err(match built_in {
-        Some(Ok(_)) => "No text on the clipboard".to_owned(),
+        Some(Ok(())) => "No text on the clipboard".to_owned(),
         Some(Err(error)) => failed(format!("Cannot read clipboard text ({error})")),
         None => failed("Cannot read clipboard text".to_owned()),
     })
+}
+
+/// What the first of the built-in `routes` that is on and reads something read; else whether one
+/// found the clipboard empty (`Some(Ok(()))`), else the first one's error.
+fn first<T, F: FnOnce() -> Result<Option<T>, String>>(
+    routes: impl IntoIterator<Item = (bool, F)>,
+) -> Result<T, Option<Result<(), String>>> {
+    let mut outcome = None;
+    for (_, read) in routes.into_iter().filter(|(on, _)| *on) {
+        match read() {
+            Ok(Some(read)) => return Ok(read),
+            Ok(None) => outcome = Some(Ok(())),
+            Err(error) => {
+                outcome.get_or_insert(Err(error));
+            }
+        }
+    }
+    Err(outcome)
 }
 
 /// `why` no route read the clipboard's text, followed the first time (`named`) by the key that
@@ -224,7 +268,7 @@ fn image(set: impl Fn(&str) -> bool) -> Result<Option<(Vec<u8>, &'static str)>, 
             program, arguments, PASTE_MAX,
         )?))
     };
-    let wayland = || {
+    let wl_paste = || {
         let (kind, extension) = listed("wl-paste", &["--list-types"])?;
         let bytes = output("wl-paste", &["--type", kind, "--no-newline"], IMAGE_MAX)?;
         Some((bytes, extension))
@@ -239,11 +283,16 @@ fn image(set: impl Fn(&str) -> bool) -> Result<Option<(Vec<u8>, &'static str)>, 
         )?;
         Some((bytes, extension))
     };
-    let built_in = x11(&set).then(|| x11::image(IMAGE_MAX).map(nonempty));
-    if let Some(Ok(Some(image))) = built_in {
-        return Ok(Some(image));
-    }
-    let tools = nonempty(set("WAYLAND_DISPLAY").then(wayland).flatten())
+    let built_in = [
+        (wayland(&set), wayland::image as fn(usize) -> _),
+        (x11(&set), x11::image),
+    ];
+    let built_in = built_in.map(|(on, read)| (on, move || read(IMAGE_MAX).map(nonempty)));
+    let built_in = match first(built_in) {
+        Ok(image) => return Ok(Some(image)),
+        Err(outcome) => outcome,
+    };
+    let tools = nonempty(set("WAYLAND_DISPLAY").then(wl_paste).flatten())
         .or_else(|| nonempty(set("DISPLAY").then(xclip).flatten()));
     match (tools, built_in) {
         (None, Some(Err(error))) => Err(format!("Cannot read the clipboard's image ({error})")),
@@ -296,6 +345,12 @@ fn set(name: &str) -> bool {
 /// Whether the clipboard is Windows', used through PowerShell: on Windows, and under WSL.
 fn windows(set: impl Fn(&str) -> bool) -> bool {
     cfg!(windows) || set("WSL_DISTRO_NAME") || set("WSL_INTEROP")
+}
+
+/// Whether the clipboard is read from a Wayland compositor: on Linux, outside WSL, with a
+/// `WAYLAND_DISPLAY`.
+fn wayland(set: impl Fn(&str) -> bool) -> bool {
+    !cfg!(target_os = "macos") && !windows(&set) && set("WAYLAND_DISPLAY")
 }
 
 /// Whether the clipboard is read from an X server: on Linux, outside WSL, with a `DISPLAY`.
@@ -362,6 +417,7 @@ fn directly(text: &str) -> bool {
         return give("pbcopy", &[], text);
     }
     (windows(set) && !remote() && powershell::write(text).is_ok())
+        || (wayland(set) && wayland::copy(text).is_ok())
         || (set("WAYLAND_DISPLAY") && give("wl-copy", &[], text))
         || x11(set) && x11::copy(text).is_ok()
         || set("DISPLAY")
@@ -431,6 +487,24 @@ fn base64(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn the_first_route_on_that_reads_wins_and_an_empty_clipboard_outranks_an_error() {
+        type Route = (bool, Box<dyn FnOnce() -> Result<Option<u8>, String>>);
+        let route = |on, read: Result<Option<u8>, &'static str>| -> Route {
+            (on, Box::new(move || read.map_err(str::to_owned)))
+        };
+        let first = |routes: Vec<Route>| first(routes);
+        assert_eq!(
+            first(vec![route(false, Ok(Some(1))), route(true, Ok(Some(2)))]),
+            Ok(2)
+        );
+        let failed = vec![route(true, Err("no data-control")), route(true, Ok(None))];
+        assert_eq!(first(failed), Err(Some(Ok(()))));
+        let failed = vec![route(true, Err("one")), route(true, Err("two"))];
+        assert_eq!(first(failed), Err(Some(Err("one".to_owned()))));
+        assert_eq!(first(vec![route(false, Ok(Some(1)))]), Err(None));
+    }
+
     struct Scratch(std::path::PathBuf);
 
     impl Drop for Scratch {
@@ -458,6 +532,9 @@ mod tests {
         let x11 = |variables: &[&str]| x11(|name: &str| variables.contains(&name));
         assert!(x11(&["DISPLAY"]) && x11(&["WAYLAND_DISPLAY", "DISPLAY"]));
         assert!(!x11(&["WAYLAND_DISPLAY"]) && !x11(&["WSL_INTEROP", "DISPLAY"]));
+        let wayland = |variables: &[&str]| wayland(|name: &str| variables.contains(&name));
+        assert!(wayland(&["WAYLAND_DISPLAY"]) && wayland(&["WAYLAND_DISPLAY", "DISPLAY"]));
+        assert!(!wayland(&["DISPLAY"]) && !wayland(&["WSL_DISTRO_NAME", "WAYLAND_DISPLAY"]));
         assert_eq!(
             names(&["WAYLAND_DISPLAY", "DISPLAY"]),
             ["wl-paste", "xclip", "xsel"]

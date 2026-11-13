@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.240.0 — The Wayland clipboard built in
+
+### Added
+
+- Under Wayland, copying and pasting text and images talk to the compositor itself (`ext-data-control-v1`, else wlroots' `wlr-data-control`, as sway, Hyprland, KDE and others offer), so `wl-clipboard` no longer needs installing; a copy stays pasteable after scramjet exits. Where the compositor offers neither (GNOME), `wl-paste`, `wl-copy` and XWayland are used as before.
+
 ## 2.239.1 — A clearer edit error
 
 ### Fixed

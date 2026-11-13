@@ -59,7 +59,7 @@ pub(super) fn copy(text: &str) -> Result<(), String> {
 
 /// Starts `owner` in a session of its own, out of reach of the terminal's Ctrl-C and hangup,
 /// gives it `text`, and waits at most `timeout` for it to say that it owns the selection.
-fn start_owner(mut owner: Command, text: &str, timeout: Duration) -> Result<(), String> {
+pub(super) fn start_owner(mut owner: Command, text: &str, timeout: Duration) -> Result<(), String> {
     owner.current_dir("/");
     owner
         .stdin(Stdio::piped())

@@ -4971,15 +4971,18 @@ def fullscreen_copy_on_select(read, until, send, output):
     # The selection goes once the screen sees the copy end, after the stand-in has written it;
     # a right click before then does nothing.
     read(.3)
-    # Then a right click pastes, here from no clipboard. The first failure names the terminal's
-    # own paste key, later ones only the cause.
+    # Then a right click pastes, here from no clipboard: the compositor named is not there. The
+    # first failure names the terminal's own paste key, later ones only the cause.
     send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
     rows = on_screen('Ctrl+Shift+V')
-    assert rows[-4:-2] == ['Paste failed: Cannot read clipboard text; Windows Terminal',
-                           'pastes with Ctrl+Shift+V'], rows
+    said = ' '.join(row.strip() for row in rows[-7:-2])
+    assert said.endswith('Paste failed: Cannot read clipboard text (cannot reach ' + env['XDG_RUNTIME_DIR']
+                         + '/wayland-test: No such file or directory (os error 2)); Windows Terminal'
+                         ' pastes with Ctrl+Shift+V'), rows
     send(b'\x1b[<2;5;5M\x1b[<2;5;5m')
     rows = on_screen('Ctrl+Shift+V', gone=True)
-    assert rows[-3] == 'Paste failed: Cannot read clipboard text', rows
+    said = ' '.join(row.strip() for row in rows[-7:-2])
+    assert said.endswith('(os error 2))') and 'Windows Terminal' not in said, rows
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     rows = select_row(read, shown, send, 'Copy on select', b'\x1b[B')
