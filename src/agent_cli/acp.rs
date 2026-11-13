@@ -123,6 +123,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         forms: false,
         booleans: false,
         scramjet: false,
+        terminals: false,
         sign_in: sign_in::SignIn::default(),
         sessions: HashMap::new(),
         renamed: Arc::default(),
@@ -430,6 +431,8 @@ struct Connection {
     booleans: bool,
     /// The client knows Scramjet's extensions (`_meta["io.github.leanandmean.scramjet"]`).
     scramjet: bool,
+    /// The client shows a command's output as a terminal from `_meta.terminal_output` (Zed).
+    terminals: bool,
     sign_in: sign_in::SignIn,
     sessions: HashMap<String, Handle>,
     /// The ids sessions took later (a next step's fresh session), each with the one `sessions`
@@ -1068,6 +1071,7 @@ impl Connection {
         self.forms = capabilities["elicitation"]["form"].is_object();
         self.booleans = capabilities["session"]["configOptions"]["boolean"].is_object();
         self.scramjet = capabilities["_meta"]["io.github.leanandmean.scramjet"].is_object();
+        self.terminals = capabilities["_meta"]["terminal_output"] == true;
         self.sign_in = sign_in::SignIn::read(capabilities["elicitation"]["url"].is_object());
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
@@ -1130,6 +1134,7 @@ impl Connection {
             forms: self.forms,
             booleans: self.booleans,
             scramjet: self.scramjet,
+            terminals: self.terminals,
             renamed: self.renamed.clone(),
             cancel: cancel.clone(),
             turn: turn.clone(),
@@ -1945,6 +1950,7 @@ struct Worker {
     forms: bool,
     booleans: bool,
     scramjet: bool,
+    terminals: bool,
     renamed: Renamed,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
@@ -1966,6 +1972,7 @@ impl Worker {
             session: session.agent.session_id(),
             notices: self.notices,
             scramjet: self.scramjet,
+            terminals: self.terminals,
             compaction: self.compaction,
             forms: self.forms,
             compactions: 0,
@@ -2847,6 +2854,8 @@ struct Updates {
     notices: bool,
     /// The client knows Scramjet's extensions.
     scramjet: bool,
+    /// The client shows a command's output as a terminal (`_meta.terminal_output`).
+    terminals: bool,
     /// The client offered `session.compaction`.
     compaction: bool,
     /// The client offered `elicitation.form`.
@@ -3035,6 +3044,16 @@ impl Updates {
     fn call_id(&self) -> String {
         format!("call-{}", self.call.number)
     }
+    /// The call shown now runs a command, which this client shows as a terminal.
+    fn terminal(&self) -> bool {
+        self.terminals && kind(&self.call.name) == "execute"
+    }
+    /// The terminal's whole text as `output`: the progress is the end of the output so far,
+    /// so each one clears the screen and its scrollback first.
+    fn terminal_output(&self, output: &str) -> Value {
+        let data = format!("\x1b[H\x1b[2J\x1b[3J{output}");
+        json!({"_meta": {"terminal_output": {"terminal_id": self.call_id(), "data": data}}})
+    }
     fn call_update(&self, fields: Value) {
         let mut held = self.held.take();
         if let (Some(held), Value::Object(fields)) = (&mut held, &fields) {
@@ -3208,7 +3227,12 @@ impl Updates {
         options: &[(&str, &str, &str)],
         cancel: &AtomicBool,
     ) -> Option<usize> {
-        let content = json!([{"type": "content", "content": {"type": "text", "text": text}}]);
+        let mut content =
+            vec![json!({"type": "content", "content": {"type": "text", "text": text}})];
+        // The request's content replaces the call's, which holds its terminal.
+        if self.terminal() {
+            content.insert(0, json!({"type": "terminal", "terminalId": self.call_id()}));
+        }
         let offered: Vec<Value> = (options.iter())
             .map(|(id, name, kind)| json!({"optionId": id, "name": name, "kind": kind}))
             .collect();
@@ -3217,7 +3241,7 @@ impl Updates {
             _ => json!({}),
         };
         call["toolCallId"] = json!(self.call_id());
-        call["content"] = content;
+        call["content"] = json!(content);
         let params = json!({"sessionId": self.session, "toolCall": call, "options": offered});
         let outcome = self.ask("session/request_permission", params, cancel)?;
         let outcome = &outcome["outcome"];
@@ -3437,6 +3461,11 @@ impl AgentUi for Updates {
         if !locations.is_empty() {
             update["locations"] = json!(locations);
         }
+        if self.terminal() {
+            let id = self.call_id();
+            update["content"] = json!([{"type": "terminal", "terminalId": id}]);
+            update["_meta"] = json!({"terminal_info": {"terminal_id": id, "cwd": self.root}});
+        }
         self.call.shown = json!({});
         for key in ["title", "kind", "rawInput", "locations"] {
             if let Some(value) = update.get(key) {
@@ -3447,7 +3476,9 @@ impl AgentUi for Updates {
             self.thinking = false;
             self.flush();
             self.stamp(&mut update);
-            return self.held.set(Some(update));
+            if !self.terminal() {
+                return self.held.set(Some(update));
+            }
         }
         self.update(update);
     }
@@ -3511,6 +3542,9 @@ impl AgentUi for Updates {
         self.call_update(json!({"status": "in_progress"}));
     }
     fn tool_output(&mut self, output: &str) {
+        if self.terminal() {
+            return self.call_update(self.terminal_output(output));
+        }
         let content = json!([{"type": "content", "content": {"type": "text", "text": output}}]);
         self.call_update(json!({"content": content}));
     }
@@ -3528,6 +3562,13 @@ impl AgentUi for Updates {
         detail: Option<&ToolDetail>,
         failed: bool,
     ) {
+        if self.terminal() {
+            let mut update = self.terminal_output(output);
+            update["status"] = json!(if failed { "failed" } else { "completed" });
+            update["_meta"]["terminal_exit"] =
+                json!({"terminal_id": self.call_id(), "exit_code": null, "signal": null});
+            return self.call_update(update);
+        }
         let text = match detail {
             Some(ToolDetail::Diff(diff)) if !failed => format!("```diff\n{diff}\n```"),
             _ => output.to_owned(),

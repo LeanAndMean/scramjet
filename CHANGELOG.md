@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.237.0 — Commands' output shows in Zed
+
+### Changed
+
+- In Zed, `scramjet acp` shows a command's output as a terminal, live as it runs and when a session is reopened; Zed showed only the command before. Other clients are unchanged.
+
 ## 2.236.1 — Calls run together keep the reply's order
 
 ### Fixed

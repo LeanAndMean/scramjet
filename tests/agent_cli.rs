@@ -3224,6 +3224,115 @@ fn acp_tool_calls_carry_their_input_locations_and_diffs() {
 
 #[test]
 #[cfg(unix)]
+fn acp_shows_commands_as_terminals_to_a_client_that_takes_their_output() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-terminal-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(project).unwrap();
+    let (port, _bodies) = serve_bash_call("echo ran-it");
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) =
+        acp_models(&scratch.0, port, models, settings, &["--ask"]);
+    let mut ids = 0;
+    let mut request = |stdin: &mut std::process::ChildStdin, method: &str, params| {
+        ids += 1;
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": ids, "method": method, "params": params}),
+        );
+        ids
+    };
+    // Zed's capability.
+    let capabilities = serde_json::json!({"_meta": {"terminal_output": true}});
+    let id = request(
+        &mut stdin,
+        "initialize",
+        serde_json::json!({"protocolVersion": 1, "clientCapabilities": capabilities}),
+    );
+    until(&messages, |message| message["id"] == id);
+    let params = serde_json::json!({"cwd": project, "mcpServers": []});
+    let id = request(&mut stdin, "session/new", params);
+    let session = until(&messages, |message| message["id"] == id).0["result"]["sessionId"].clone();
+    let prompt = serde_json::json!([{"type": "text", "text": "go"}]);
+    let id = request(
+        &mut stdin,
+        "session/prompt",
+        serde_json::json!({"sessionId": session, "prompt": prompt}),
+    );
+    let (asked, before) = until(&messages, |message| {
+        message["method"] == "session/request_permission"
+    });
+    let updates = |messages: &[serde_json::Value]| -> Vec<serde_json::Value> {
+        (messages.iter())
+            .map(|message| message["params"]["update"].clone())
+            .filter(|update| update["toolCallId"] == "call-1")
+            .collect()
+    };
+    let terminal = serde_json::json!({"type": "terminal", "terminalId": "call-1"});
+    let call = &updates(&before)[0];
+    assert_eq!(call["sessionUpdate"], "tool_call", "{call}");
+    assert_eq!(call["kind"], "execute");
+    assert_eq!(call["content"], serde_json::json!([terminal]));
+    assert_eq!(
+        call["_meta"]["terminal_info"],
+        serde_json::json!({"terminal_id": "call-1", "cwd": project})
+    );
+    // The request's content replaces the call's: it keeps the terminal.
+    let content = &asked["params"]["toolCall"]["content"];
+    assert_eq!(content[0], terminal, "{asked}");
+    assert!(content[1].to_string().contains("Run in"), "{asked}");
+    let outcome = serde_json::json!({"outcome": "selected", "optionId": "allow_once"});
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": asked["id"], "result": {"outcome": outcome}}),
+    );
+    let (ended, after) = until(&messages, |message| message["id"] == id);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let ran = |updates: &[serde_json::Value]| {
+        let done = (updates.iter())
+            .find(|update| update["status"] == "completed")
+            .unwrap()
+            .clone();
+        assert_eq!(done["sessionUpdate"], "tool_call_update", "{done}");
+        assert!(done.get("content").is_none(), "{done}");
+        let output = &done["_meta"]["terminal_output"];
+        assert_eq!(output["terminal_id"], "call-1");
+        assert_eq!(
+            output["data"], "\u{1b}[H\u{1b}[2J\u{1b}[3Jran-it\n",
+            "{done}"
+        );
+        assert_eq!(
+            done["_meta"]["terminal_exit"],
+            serde_json::json!({"terminal_id": "call-1", "exit_code": null, "signal": null})
+        );
+    };
+    ran(&updates(&after));
+    let id = request(
+        &mut stdin,
+        "session/close",
+        serde_json::json!({"sessionId": session}),
+    );
+    until(&messages, |message| message["id"] == id);
+    // Replayed, the call is not one `tool_call` with its result: Zed takes a terminal's
+    // output only from the updates after it.
+    let params = serde_json::json!({"sessionId": session, "cwd": project, "mcpServers": []});
+    let id = request(&mut stdin, "session/load", params);
+    let (loaded, replayed) = until(&messages, |message| message["id"] == id);
+    assert!(loaded.get("error").is_none(), "{loaded}");
+    let replayed = updates(&replayed);
+    assert_eq!(replayed[0]["sessionUpdate"], "tool_call", "{replayed:?}");
+    assert_eq!(replayed[0]["content"], serde_json::json!([terminal]));
+    assert!(replayed[0]["_meta"]["terminal_output"].is_null());
+    ran(&replayed);
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_subagent_calls_carry_their_children() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-child-{}", std::process::id())),
