@@ -58,6 +58,85 @@ struct Part {
     version: usize,
     lines: Vec<Line>,
     rendered: Option<(Look, usize)>,
+    /// The rows of the part's first events, which `lines` starts with, kept while those events
+    /// and the look stay: a long turn renders again only from its latest response.
+    settled: Option<Settled>,
+    /// The first event changed since the part last rendered.
+    changed: usize,
+}
+
+struct Settled {
+    look: Look,
+    /// How many of the part's events it holds, and the rows they take before `pad`.
+    events: usize,
+    rows: usize,
+    /// The blank rows it ends with, which show only when rows follow.
+    pad: Vec<Line>,
+}
+
+impl Part {
+    /// Event `from` or a later one is about to change or be added.
+    fn touch(&mut self, from: usize) {
+        self.version += 1;
+        self.changed = self.changed.min(from);
+    }
+
+    fn render(&mut self, look: Look, hide_thinking: &Arc<AtomicBool>) {
+        if self.rendered == Some((look, self.version)) {
+            return;
+        }
+        let kept = (self.settled.take())
+            .filter(|settled| settled.look == look && settled.events <= self.changed);
+        let Settled {
+            mut events,
+            mut rows,
+            mut pad,
+            ..
+        } = kept.unwrap_or(Settled {
+            look,
+            events: 0,
+            rows: 0,
+            pad: Vec::new(),
+        });
+        self.lines.truncate(rows);
+        let cut = cut(&self.events, events);
+        if cut > events {
+            let text = captured(&self.events[events..cut], look, hide_thinking.clone());
+            if let Some((more, count)) = selection::settled(&text) {
+                if count > 0 {
+                    self.lines.append(&mut pad);
+                }
+                let mut more = more.into_iter();
+                self.lines.extend(more.by_ref().take(count));
+                pad.extend(more);
+                (events, rows) = (cut, self.lines.len());
+            }
+        }
+        let text = captured(&self.events[events..], look, hide_thinking.clone());
+        let shown = selection::lines(&text);
+        if !shown.is_empty() {
+            self.lines.extend(pad.iter().cloned());
+            self.lines.extend(shown);
+        }
+        // Each block ends with a blank line, which separates it from the next part.
+        if !self.lines.is_empty() {
+            self.lines.push(Line::default());
+        }
+        self.settled = (events > 0).then_some(Settled {
+            look,
+            events,
+            rows,
+            pad,
+        });
+        self.rendered = Some((look, self.version));
+        self.changed = usize::MAX;
+        #[cfg(test)]
+        assert_eq!(
+            self.lines,
+            render(&self.events, look, hide_thinking.clone()),
+            "a part rendered from its settled rows differs from one rendered whole"
+        );
+    }
 }
 
 impl Transcript {
@@ -76,7 +155,7 @@ impl Transcript {
         let replying = matches!(event, Event::Waiting(Purpose::Reply));
         let index = self.parts.len() - 1;
         let part = &mut self.parts[index];
-        part.version += 1;
+        part.touch(part.events.len().saturating_sub(1));
         add(&mut part.events, event);
         if calls {
             self.calls = Some((index, part.events.len() - 1));
@@ -93,13 +172,13 @@ impl Transcript {
 
     /// Adds `event` after event `at` of part `part`, the reply's latest.
     fn insert(&mut self, part: usize, at: usize, event: Event) {
+        self.parts[part].touch(at);
         let events = &mut self.parts[part].events;
         let (before, after) = (events.len(), events.split_off(at + 1));
         add(events, event);
         let added = events.len() + after.len() - before;
         self.reply = Some((part, events.len() - 1));
         events.extend(after);
-        self.parts[part].version += 1;
         if let Some((calls, index)) = &mut self.calls
             && *calls == part
             && *index > at
@@ -114,8 +193,8 @@ impl Transcript {
             Some(events) => add(events, event),
             None => return self.push(event),
         }
-        let (part, _) = self.calls.expect("has the calls");
-        self.parts[part].version += 1;
+        let (part, at) = self.calls.expect("has the calls");
+        self.parts[part].touch(at);
     }
 
     /// The calls running at the same time last.
@@ -157,8 +236,8 @@ impl Transcript {
     ) {
         self.tail.0 = serials;
         self.tail.1 = running;
+        self.tail.2.touch(0);
         self.tail.2.events = events;
-        self.tail.2.version += 1;
     }
 
     fn all(&self) -> impl Iterator<Item = &Part> {
@@ -167,10 +246,7 @@ impl Transcript {
 
     pub(super) fn render(&mut self, look: Look, hide_thinking: &Arc<AtomicBool>) {
         for part in self.parts.iter_mut().chain([&mut self.tail.2]) {
-            if part.rendered != Some((look, part.version)) {
-                part.lines = render(&part.events, look, hide_thinking.clone());
-                part.rendered = Some((look, part.version));
-            }
+            part.render(look, hide_thinking);
         }
     }
 
@@ -235,8 +311,35 @@ fn add(events: &mut Vec<Event>, event: Event) {
     }
 }
 
+/// Where the events from `from` can be cut, rendered apart from those after: the latest
+/// response's start after calls that all ended, or `from`.
+fn cut(events: &[Event], from: usize) -> usize {
+    let ended = |event: &Event| match event {
+        Event::ToolResult(..) => true,
+        Event::Calls(calls) => calls
+            .iter()
+            .all(|call| call.is_empty() || record::ended(call)),
+        _ => false,
+    };
+    (from + 1..events.len())
+        .rev()
+        .find(|&at| matches!(events[at], Event::Waiting(Purpose::Reply)) && ended(&events[at - 1]))
+        .unwrap_or(from)
+}
+
 /// The lines of `events` as `Terminal` renders them at the look's width.
+#[cfg(test)]
 fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<Line> {
+    let mut lines = selection::lines(&captured(events, look, hide_thinking));
+    // Each block ends with a blank line, which separates it from the next part.
+    if !lines.is_empty() {
+        lines.push(Line::default());
+    }
+    lines
+}
+
+/// `events` as `Terminal` renders them at the look's width.
+fn captured(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> String {
     let mut ui = Terminal::capture_shown(look.width, hide_thinking, look.whole);
     ui.markdown_reads = look.markdown_reads;
     ui.design = look.design;
@@ -254,12 +357,7 @@ fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<L
         }
     }
     record::running(events.last(), &mut ui);
-    let mut lines = selection::lines(&ui.captured());
-    // Each block ends with a blank line, which separates it from the next part.
-    if !lines.is_empty() {
-        lines.push(Line::default());
-    }
-    lines
+    ui.captured()
 }
 
 #[cfg(test)]
@@ -793,5 +891,84 @@ mod tests {
                 (Outcome::Running, None),
             ]
         );
+    }
+
+    #[test]
+    fn a_long_turn_renders_again_only_from_its_latest_response_as_it_would_whole() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let result = |output: &str, failed| {
+            let output = output.into();
+            Event::ToolResult("bash".into(), output, None, failed, started)
+        };
+        for design in Design::ALL {
+            for whole in [false, true] {
+                let look = Look {
+                    design,
+                    ..look(40, whole)
+                };
+                let mut transcript = Transcript::default();
+                let push = |transcript: &mut Transcript, event| {
+                    transcript.push(event);
+                    // `render` checks each time that it shows what rendering it whole would.
+                    transcript.render(look, &hide);
+                };
+                push(&mut transcript, Event::UserPrompt("go".into()));
+                for step in 0..4 {
+                    push(&mut transcript, Event::Waiting(Purpose::Reply));
+                    let thought = StreamProgress::Reasoning("Thinking **hard**".into());
+                    push(&mut transcript, Event::Progress(thought));
+                    let text = format!("Step {step}: `code` and *more*\n\n- a list");
+                    push(
+                        &mut transcript,
+                        Event::Progress(StreamProgress::Text(text.clone())),
+                    );
+                    push(&mut transcript, Event::Assistant(text));
+                    let command = format!("seq 1 {}", 9 * step);
+                    push(
+                        &mut transcript,
+                        Event::ToolCall("bash".into(), command, None),
+                    );
+                    push(&mut transcript, Event::ToolRunning(started));
+                    push(&mut transcript, Event::ToolOutput("1\n2".into()));
+                    if step == 1 {
+                        push(&mut transcript, Event::Question("Go on?".into()));
+                        push(&mut transcript, Event::Notice("Autopilot is on".into()));
+                    }
+                    let output: Vec<_> = (1..=9 * step).map(|n| n.to_string()).collect();
+                    push(&mut transcript, result(&output.join("\n"), step == 2));
+                }
+                push(&mut transcript, Event::Waiting(Purpose::Reply));
+                push(&mut transcript, Event::Calls(vec![Vec::new(), Vec::new()]));
+                for index in 0..2 {
+                    let call = Event::ToolCall("bash".into(), format!("make {index}"), None);
+                    transcript.push_call(index, call);
+                    transcript.push_call(index, Event::ToolRunning(started));
+                    transcript.render(look, &hide);
+                }
+                transcript.push_call(0, result("made", false));
+                transcript.render(look, &hide);
+                transcript.push_call(1, result("failed", true));
+                push(&mut transcript, Event::Waiting(Purpose::Reply));
+                for word in ["Done", " with **it**", "\n\n| a | b |\n|-|-|\n| 1 | 2 |"] {
+                    push(
+                        &mut transcript,
+                        Event::Progress(StreamProgress::Text(word.into())),
+                    );
+                }
+                let settled = transcript.parts[0]
+                    .settled
+                    .as_ref()
+                    .map(|settled| settled.events);
+                assert!(settled > Some(30), "{design:?} {whole}: {settled:?}");
+                // Shown whole or cut again, it renders from the start, the same.
+                let other = Look {
+                    whole: !whole,
+                    ..look
+                };
+                transcript.render(other, &hide);
+                transcript.render(look, &hide);
+            }
+        }
     }
 }

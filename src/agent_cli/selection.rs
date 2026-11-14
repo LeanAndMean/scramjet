@@ -57,7 +57,30 @@ pub(super) fn row(shown: &str) -> Line {
     split(std::iter::once(shown)).pop().unwrap_or_default()
 }
 
+/// As `lines`, for `text` that what follows can be split apart from: it ends a row and leaves no
+/// style on. Also the blank rows it ends with, which `lines` leaves out, as a count of the
+/// lines `lines` gives.
+pub(super) fn settled(text: &str) -> Option<(Vec<Line>, usize)> {
+    let rows = match text.strip_suffix('\n') {
+        Some(rows) => rows,
+        None if text.is_empty() => return Some((Vec::new(), 0)),
+        None => return None,
+    };
+    let (lines, active) = split_open(rows.split('\n'));
+    let trimmed = text.trim_end_matches('\n');
+    let count = match trimmed.is_empty() {
+        true => 0,
+        false => trimmed.split('\n').count(),
+    };
+    active.is_empty().then_some((lines, count))
+}
+
 fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
+    split_open(rows).0
+}
+
+/// As `split`, with the style sequences still on after the last row.
+fn split_open<'a>(rows: impl Iterator<Item = &'a str>) -> (Vec<Line>, String) {
     let mut active = String::new();
     let mut lines: Vec<Line> = Vec::new();
     for line in rows {
@@ -120,7 +143,7 @@ fn split<'a>(rows: impl Iterator<Item = &'a str>) -> Vec<Line> {
             band,
         });
     }
-    lines
+    (lines, active)
 }
 
 enum Piece<'a> {

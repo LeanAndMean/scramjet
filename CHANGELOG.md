@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.241.1 — A long turn streams smoothly with Ctrl+O
+
+### Fixed
+
+- The full screen no longer redraws a whole turn at each streamed word: a long turn's earlier responses are kept as drawn, so a reply streaming after many calls stays smooth with their outputs shown whole (Ctrl+O), where a turn of 150 calls with 400-line outputs took about 150 ms a frame.
+
 ## 2.241.0 — A running `!` command expands with Ctrl+O during a turn
 
 ### Changed
