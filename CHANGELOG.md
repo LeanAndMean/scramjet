@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.241.4 — The Windows installer leaves PowerShell as it was
+
+### Fixed
+
+- Installing on Windows with `irm … | iex` no longer changes the PowerShell it ran in: the installer kept `$ErrorActionPreference` at `Stop` there, which turned later commands' ordinary errors into stops, and left its progress setting, variables and functions behind.
+
 ## 2.241.3 — Every image of an MCP tool's result
 
 ### Fixed
