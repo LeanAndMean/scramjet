@@ -292,8 +292,6 @@ pub(super) struct Terminal {
     compact: bool,
     /// The command the user runs with `!` (true) or `!!`, while it runs.
     command: Option<(String, bool)>,
-    /// How many of the last lines of a command the user ran its block shows.
-    command_lines: usize,
     pub(super) hide_thinking: Arc<AtomicBool>,
     pub(super) markdown_reads: MarkdownReads,
     /// The reasoning streamed in the current block, and whether only its marker is shown.
@@ -593,14 +591,6 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         terminal.marked = true;
         terminal
     }
-    /// As `capture_shown`, cut, for the dock under the conversation, where a command the user
-    /// runs shows at most `lines` lines and Ctrl+O does not expand it.
-    pub(super) fn capture_dock(width: usize, hide_thinking: Arc<AtomicBool>, lines: usize) -> Self {
-        let mut terminal = Self::capture_shown(width, hide_thinking, false);
-        terminal.expandable = false;
-        terminal.command_lines = lines;
-        terminal
-    }
     /// What was rendered into the buffer, after ending any streamed block.
     pub(super) fn captured(mut self) -> String {
         self.clear();
@@ -724,7 +714,6 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             tool_started: None,
             compact: false,
             command: None,
-            command_lines: COMMAND_LINES,
             hide_thinking,
             markdown_reads: MarkdownReads::Rendered,
             reasoning: String::new(),
@@ -1471,7 +1460,7 @@ impl Terminal {
         let lines: Vec<&str> = output.lines().collect();
         let earlier = match self.full {
             true => 0,
-            false => lines.len().saturating_sub(self.command_lines),
+            false => lines.len().saturating_sub(COMMAND_LINES),
         };
         if !lines.is_empty() {
             rows.push(String::new());

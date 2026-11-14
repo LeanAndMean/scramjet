@@ -6,15 +6,13 @@ use super::transcript::Look;
 use super::{ALLOW, App, Open, Shown};
 use crate::agent_cli::editor::{Draft, Note, terminal_size};
 use crate::agent_cli::keymap::{self, Binding};
-use crate::agent_cli::record::{self, Event};
+use crate::agent_cli::record::Event;
 use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::settings::{Layout, scramjet_level};
 use crate::agent_cli::style::{self, Band};
-use crate::agent_cli::terminal::{
-    COMMAND_LINES, COOLING, Terminal, elapsed, retrying, spinner, waiting_for,
-};
+use crate::agent_cli::terminal::{COOLING, elapsed, retrying, spinner, waiting_for};
 use crate::agent_cli::text::{Wrap, clip, columns, one_line, plain, visible};
-use scramjet::agent::{Purpose, Shell, StreamProgress};
+use scramjet::agent::{Purpose, StreamProgress};
 use std::{
     fmt::Write as _,
     io::{self, Write},
@@ -270,22 +268,6 @@ impl App {
     fn dock(&self, (width, height): (usize, usize)) -> (Vec<Line>, Option<(usize, usize)>) {
         let mut rows = Vec::new();
         let queue = self.queue();
-        // Above the status line, as Scramjet shows them, each in at most about half the screen
-        // (Scramjet's view scrolls instead, and its editor stays).
-        let lines = (height / 2).saturating_sub(6).clamp(1, COMMAND_LINES);
-        for side in queue.shells.iter().filter(|side| side.ended.is_none()) {
-            let events = [
-                Event::CommandStarted(side.command.clone(), side.include),
-                Event::ToolOutput(side.output.clone()),
-            ];
-            let content = width.saturating_sub(1).max(1);
-            let mut ui = Terminal::capture_dock(content, self.hide_thinking.clone(), lines);
-            for event in &events {
-                record::replay(event, &mut ui);
-            }
-            record::running(events.last(), &mut ui);
-            rows.extend(selection::lines(&ui.captured()));
-        }
         rows.extend(selection::rows(&self.status(width)));
         let queued = [
             ("Steering", &queue.messages.steering),
@@ -437,18 +419,29 @@ impl App {
     /// How the conversation looks on a screen `width` columns wide. As Scramjet's, the last
     /// column is the scrollbar's, whether it shows or not, so that the conversation does not
     /// wrap again when it grows taller than the screen.
-    /// Shows the `!` commands that ended during the turn at the conversation's end, where the
-    /// session adds them once it ends, so that they scroll and Ctrl+O expands them meanwhile.
-    fn show_ended(&mut self) {
+    /// Shows the `!` commands run during the turn at the conversation's end, where the session
+    /// adds them once they and the turn end, so that they scroll and Ctrl+O expands them
+    /// meanwhile, running or ended. At most one runs, the last.
+    fn show_shells(&mut self) {
         let queue = self.queue.clone();
         let queue = queue.lock().unwrap_or_else(PoisonError::into_inner);
-        let ended = (queue.shells.iter())
-            .filter(|side| side.ended.is_some() && self.conversation.is_none());
-        let serials: Vec<usize> = ended.clone().map(|side| side.serial).collect();
-        if serials != self.transcript.tailed() {
-            let shown = ended.filter_map(|side| side.ended.as_ref().map(Shell::shown));
-            let events = shown.map(Event::CommandResult).collect();
-            self.transcript.tail(serials, events);
+        let shown = (queue.shells.iter()).filter(|_| self.conversation.is_none());
+        let serials: Vec<usize> = shown.clone().map(|side| side.serial).collect();
+        let running =
+            (shown.clone().find(|side| side.ended.is_none())).map(|side| side.output.as_str());
+        if (serials.as_slice(), running) != self.transcript.tailed() {
+            let mut events = Vec::new();
+            for side in shown {
+                match &side.ended {
+                    Some(shell) => events.push(Event::CommandResult(shell.shown())),
+                    None => events.extend([
+                        Event::CommandStarted(side.command.clone(), side.include),
+                        Event::ToolOutput(side.output.clone()),
+                    ]),
+                }
+            }
+            self.transcript
+                .tail(serials, running.map(str::to_owned), events);
         }
     }
 
@@ -469,7 +462,7 @@ impl App {
     /// leaves them.
     pub(super) fn retained(&mut self) -> String {
         self.preview();
-        self.show_ended();
+        self.show_shells();
         let (width, height) = terminal_size();
         let (dock, _) = self.dock((width, height));
         self.transcript
@@ -483,7 +476,7 @@ impl App {
 
     pub(super) fn draw(&mut self) -> io::Result<()> {
         self.preview();
-        self.show_ended();
+        self.show_shells();
         let (width, height) = terminal_size();
         let mut out = String::from("\x1b[?2026h\x1b[?25l");
         // Some terminals move what they show on a resize.

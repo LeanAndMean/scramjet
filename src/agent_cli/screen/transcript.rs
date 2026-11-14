@@ -47,9 +47,9 @@ pub(super) struct Transcript {
     /// Where the turn's latest reply has got to, by part and event: what the session says
     /// while it streams shows under it.
     reply: Option<(usize, usize)>,
-    /// Shown after the parts until the session adds them: the `!` commands that ended during
-    /// the turn, by their serial numbers.
-    tail: (Vec<usize>, Part),
+    /// Shown after the parts until the session adds them: the `!` commands run during the
+    /// turn, by their serial numbers, with the output of the one still running.
+    tail: (Vec<usize>, Option<String>, Part),
 }
 
 #[derive(Default)]
@@ -142,24 +142,31 @@ impl Transcript {
         }
     }
 
-    /// The serial numbers of the `!` commands `tail` shows.
-    pub(super) fn tailed(&self) -> &[usize] {
-        &self.tail.0
+    /// The serial numbers of the `!` commands `tail` shows, and the running one's output.
+    pub(super) fn tailed(&self) -> (&[usize], Option<&str>) {
+        (&self.tail.0, self.tail.1.as_deref())
     }
 
-    /// Shows `events` after the conversation: the `!` commands numbered `serials`.
-    pub(super) fn tail(&mut self, serials: Vec<usize>, events: Vec<Event>) {
+    /// Shows `events` after the conversation: the `!` commands numbered `serials`, the last
+    /// still running with `running` its output so far.
+    pub(super) fn tail(
+        &mut self,
+        serials: Vec<usize>,
+        running: Option<String>,
+        events: Vec<Event>,
+    ) {
         self.tail.0 = serials;
-        self.tail.1.events = events;
-        self.tail.1.version += 1;
+        self.tail.1 = running;
+        self.tail.2.events = events;
+        self.tail.2.version += 1;
     }
 
     fn all(&self) -> impl Iterator<Item = &Part> {
-        self.parts.iter().chain([&self.tail.1])
+        self.parts.iter().chain([&self.tail.2])
     }
 
     pub(super) fn render(&mut self, look: Look, hide_thinking: &Arc<AtomicBool>) {
-        for part in self.parts.iter_mut().chain([&mut self.tail.1]) {
+        for part in self.parts.iter_mut().chain([&mut self.tail.2]) {
             if part.rendered != Some((look, part.version)) {
                 part.lines = render(&part.events, look, hide_thinking.clone());
                 part.rendered = Some((look, part.version));
@@ -342,15 +349,15 @@ mod tests {
                 .collect()
         };
         transcript.push(Event::Text("Before".into()));
-        transcript.tail(vec![1], vec![Event::Text("Ended".into())]);
+        transcript.tail(vec![1], None, vec![Event::Text("Ended".into())]);
         transcript.push(Event::Text("After".into()));
         let all = ["Before", "", "After", "", "Ended", ""];
         assert_eq!(shown(&mut transcript), all);
         let place = transcript.locate(4);
         assert_eq!(transcript.line(place), 4);
-        assert_eq!(transcript.tailed(), [1]);
+        assert_eq!(transcript.tailed(), (&[1][..], None));
         // Taken into the conversation, it shows where it was.
-        transcript.tail(Vec::new(), Vec::new());
+        transcript.tail(Vec::new(), None, Vec::new());
         transcript.push(Event::Text("Ended".into()));
         assert_eq!(shown(&mut transcript), all);
     }

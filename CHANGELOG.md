@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.241.0 — A running `!` command expands with Ctrl+O during a turn
+
+### Changed
+
+- A `!` command typed during a turn shows at the conversation's end while it runs, as it does once ended, rather than in at most 20 lines under it: it scrolls with the conversation and Ctrl+O shows its whole output.
+
 ## 2.240.0 — The Wayland clipboard built in
 
 ### Added

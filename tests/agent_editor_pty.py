@@ -4646,7 +4646,7 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     # Shift+Tab chooses the effort of the turn's next request; the footer says so at once.
     send(b'\x1b[Z')
     footer_shows(read, output, [project, stats('', 'gpt-6-luna \u2022 high')], rows=50)
-    # A `!` command runs at once, under the conversation while it runs.
+    # A `!` command runs at once, at the conversation's end.
     send(b'!echo side$((0+1)); sleep 1; echo side$((1+1))\r')
     rows = on_screen('side2')
     assert 'Replied.' not in '\n'.join(rows), rows
@@ -4665,8 +4665,22 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     assert text.count('side2') == 1, text
     send(b'again\r')
     on_screen('Running 1s')
-    send(b'!sleep 30\r')
-    on_screen(' $ sleep 30')
+    # Running, it shows there too, and Ctrl+O expands it.
+    send(b'!seq 301 325; sleep 30\r')
+    def until_rows(shows):
+        end = time.monotonic() + 10
+        while not shows(Screen(output, 60, 50).rows()):
+            assert time.monotonic() < end, Screen(output, 60, 50).rows()
+            read(.05)
+        return Screen(output, 60, 50).rows()
+    hint = '\u2026 5 earlier lines, Ctrl+O to expand'
+    rows = until_rows(lambda rows: sum(hint in row for row in rows) == 2)
+    assert ' $ seq 301 325; sleep 30' in rows, rows
+    send(b'\x0f')
+    rows = until_rows(lambda rows: ' 301' in rows)
+    assert not any('earlier lines' in row for row in rows), rows
+    send(b'\x0f')
+    until_rows(lambda rows: ' 301' not in rows)
     send(b'!echo no\r')
     ending(read, output, ['A bash command is already running. Press Esc to cancel it', 'first.', '\u2500' * 59,
                           '> !echo no'], rows=50)
@@ -4677,7 +4691,7 @@ def fullscreen_shell_and_effort_during_turn(read, until, send, output):
     send(b'\x1b')
     rows = on_screen(' (cancelled)')
     text = '\n'.join(rows)
-    assert text.index('Second.') < text.index(' $ sleep 30'), text
+    assert text.index('Second.') < text.index(' $ seq 301 325; sleep 30'), text
     # One the session runs with no turn refuses a second too, as Scramjet's.
     send(b'!sleep 31\r')
     on_screen(' $ sleep 31')
@@ -5163,7 +5177,7 @@ said = [item['content'] if item.get('role') == 'user' else item['content'][0]['t
         for item in items if item.get('role') in ('user', 'assistant') or item.get('type') == 'message']
 assert said[:3] == ['go', 'Replied.', 'Ran `echo side$((0+1)); sleep 1; echo side$((1+1))`\n```\nside1\nside2\n```'], said
 assert said[3].startswith('Ran `seq 101 125`') and said[4:6] == ['again', 'Second.'], said
-assert said[6].startswith('Ran `sleep 30`'), said
+assert said[6].startswith('Ran `seq 301 325; sleep 30`'), said
 run([], fullscreen_lists, serve_items([
     [tool_call('call_1', 'get_scramjet_user_input', {
         'type': 'select', 'message': 'Which **one**?', 'recommended': 1,
