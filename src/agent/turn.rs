@@ -868,8 +868,9 @@ mod tests {
             while !outputs.iter().any(|seen| seen == "result bash") {
                 let left = deadline.saturating_duration_since(std::time::Instant::now());
                 match seen.recv_timeout(left) {
-                    // A pause while the call's request streams shows its progress first.
-                    Ok(seen) if seen == "progress" => {}
+                    // A pause while the call's request streams shows its attempt and progress
+                    // first: under load the attempt may start after the pause.
+                    Ok(seen) if seen == "progress" || seen == "waiting" => {}
                     Ok(seen) => outputs.push(seen),
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(timeout) => panic!("{timeout:?}: {outputs:?}"),
