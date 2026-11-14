@@ -3349,6 +3349,89 @@ fn acp_shows_commands_as_terminals_to_a_client_that_takes_their_output() {
 
 #[test]
 #[cfg(unix)]
+fn acp_gives_commands_output_as_raw_output_to_a_client_that_reads_it_there() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-raw-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(project).unwrap();
+    let (port, _bodies) = serve_bash_call("echo ran-it");
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) =
+        acp_models(&scratch.0, port, models, settings, &["--ask"]);
+    let mut ids = 0;
+    let mut request = |stdin: &mut std::process::ChildStdin, method: &str, params| {
+        ids += 1;
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": ids, "method": method, "params": params}),
+        );
+        ids
+    };
+    // JetBrains' capability (PyCharm 2026.3).
+    let capabilities =
+        serde_json::json!({"terminal": false, "_meta": {"terminal_output_delta": true}});
+    let id = request(
+        &mut stdin,
+        "initialize",
+        serde_json::json!({"protocolVersion": 1, "clientCapabilities": capabilities}),
+    );
+    until(&messages, |message| message["id"] == id);
+    let params = serde_json::json!({"cwd": project, "mcpServers": []});
+    let id = request(&mut stdin, "session/new", params);
+    let session = until(&messages, |message| message["id"] == id).0["result"]["sessionId"].clone();
+    let prompt = serde_json::json!([{"type": "text", "text": "go"}]);
+    let id = request(
+        &mut stdin,
+        "session/prompt",
+        serde_json::json!({"sessionId": session, "prompt": prompt}),
+    );
+    let (asked, _) = until(&messages, |message| {
+        message["method"] == "session/request_permission"
+    });
+    let outcome = serde_json::json!({"outcome": "selected", "optionId": "allow_once"});
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": asked["id"], "result": {"outcome": outcome}}),
+    );
+    let (ended, after) = until(&messages, |message| message["id"] == id);
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    let done = |messages: &[serde_json::Value]| {
+        (messages.iter())
+            .map(|message| message["params"]["update"].clone())
+            .find(|update| update["toolCallId"] == "call-1" && update["status"] == "completed")
+            .unwrap()
+    };
+    // Text content would show as the call's summary, in place of the command.
+    let ran = done(&after);
+    assert_eq!(ran["sessionUpdate"], "tool_call_update", "{ran}");
+    assert_eq!(ran["content"], serde_json::json!([]), "{ran}");
+    assert_eq!(
+        ran["rawOutput"],
+        serde_json::json!({"formatted_output": "ran-it\n"})
+    );
+    assert!(ran.get("_meta").is_none(), "{ran}");
+    let id = request(
+        &mut stdin,
+        "session/close",
+        serde_json::json!({"sessionId": session}),
+    );
+    until(&messages, |message| message["id"] == id);
+    let params = serde_json::json!({"sessionId": session, "cwd": project, "mcpServers": []});
+    let id = request(&mut stdin, "session/load", params);
+    let (loaded, replayed) = until(&messages, |message| message["id"] == id);
+    assert!(loaded.get("error").is_none(), "{loaded}");
+    let replayed = done(&replayed);
+    assert_eq!(replayed["sessionUpdate"], "tool_call", "{replayed}");
+    assert_eq!(replayed["title"], "echo ran-it", "{replayed}");
+    assert_eq!(replayed["rawOutput"], ran["rawOutput"], "{replayed}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_subagent_calls_carry_their_children() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-child-{}", std::process::id())),

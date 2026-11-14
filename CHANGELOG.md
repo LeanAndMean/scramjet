@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.242.0 — Commands' output shows in JetBrains IDEs
+
+### Fixed
+
+- In a JetBrains IDE (`scramjet acp` listed in `~/.jetbrains/acp.json`), a command's call keeps the command as its title and shows its output, as it runs and when done, in the IDE's terminal view, where it showed the output squeezed onto the title line and "No output" below.
+
 ## 2.241.4 — The Windows installer leaves PowerShell as it was
 
 ### Fixed

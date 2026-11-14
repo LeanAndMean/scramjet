@@ -130,7 +130,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         forms: false,
         booleans: false,
         scramjet: false,
-        terminals: false,
+        terminals: Terminals::Text,
         sign_in: sign_in::SignIn::default(),
         sessions: HashMap::new(),
         renamed: Arc::default(),
@@ -438,8 +438,7 @@ struct Connection {
     booleans: bool,
     /// The client knows Scramjet's extensions (`_meta["io.github.leanandmean.scramjet"]`).
     scramjet: bool,
-    /// The client shows a command's output as a terminal from `_meta.terminal_output` (Zed).
-    terminals: bool,
+    terminals: Terminals,
     sign_in: sign_in::SignIn,
     sessions: HashMap<String, Handle>,
     /// The ids sessions took later (a next step's fresh session), each with the one `sessions`
@@ -531,6 +530,18 @@ struct Turn {
     bash: Option<Arc<AtomicBool>>,
     /// The `bash` commands that ended while it ran, added to the conversation when it ends.
     shells: Vec<Shell>,
+}
+
+/// How the client shows a command's output.
+#[derive(Clone, Copy, PartialEq)]
+enum Terminals {
+    /// As the call's text content.
+    Text,
+    /// As a terminal, from `_meta.terminal_output` (Zed's `clientCapabilities._meta.terminal_output`).
+    Meta,
+    /// As a terminal, replaced by each update's `rawOutput.formatted_output` (JetBrains, which
+    /// offers `_meta.terminal_output_delta`; its text content would show as the call's summary).
+    Raw,
 }
 
 /// How `session/new`, `resume` and `load` start a session.
@@ -1149,7 +1160,11 @@ impl Connection {
         self.forms = capabilities["elicitation"]["form"].is_object();
         self.booleans = capabilities["session"]["configOptions"]["boolean"].is_object();
         self.scramjet = capabilities["_meta"]["io.github.leanandmean.scramjet"].is_object();
-        self.terminals = capabilities["_meta"]["terminal_output"] == true;
+        self.terminals = match &capabilities["_meta"] {
+            meta if meta["terminal_output"] == true => Terminals::Meta,
+            meta if meta["terminal_output_delta"] == true => Terminals::Raw,
+            _ => Terminals::Text,
+        };
         self.sign_in = sign_in::SignIn::read(capabilities["elicitation"]["url"].is_object());
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
@@ -2031,7 +2046,7 @@ struct Worker {
     forms: bool,
     booleans: bool,
     scramjet: bool,
-    terminals: bool,
+    terminals: Terminals,
     renamed: Renamed,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
@@ -2966,8 +2981,7 @@ struct Updates {
     notices: bool,
     /// The client knows Scramjet's extensions.
     scramjet: bool,
-    /// The client shows a command's output as a terminal (`_meta.terminal_output`).
-    terminals: bool,
+    terminals: Terminals,
     /// The client offered `session.compaction`.
     compaction: bool,
     /// The client offered `elicitation.form`.
@@ -3158,7 +3172,11 @@ impl Updates {
     }
     /// The call shown now runs a command, which this client shows as a terminal.
     fn terminal(&self) -> bool {
-        self.terminals && kind(&self.call.name) == "execute"
+        self.terminals == Terminals::Meta && kind(&self.call.name) == "execute"
+    }
+    /// The call shown now runs a command, whose output this client reads from `rawOutput`.
+    fn raw_terminal(&self) -> bool {
+        self.terminals == Terminals::Raw && kind(&self.call.name) == "execute"
     }
     /// The terminal's whole text as `output`: the progress is the end of the output so far,
     /// so each one clears the screen and its scrollback first.
@@ -3470,6 +3488,12 @@ fn listed(offer: &Offer) -> String {
 }
 
 /// The ACP kind of the tool `name`.
+/// A command's output for a client that shows it from `rawOutput`, without the text content it
+/// would show as the call's summary in place of the command.
+fn raw_output(output: &str) -> Value {
+    json!({"content": [], "rawOutput": {"formatted_output": output}})
+}
+
 fn kind(name: &str) -> &'static str {
     match name {
         "read" => "read",
@@ -3657,6 +3681,9 @@ impl AgentUi for Updates {
         if self.terminal() {
             return self.call_update(self.terminal_output(output));
         }
+        if self.raw_terminal() {
+            return self.call_update(raw_output(output));
+        }
         let content = json!([{"type": "content", "content": {"type": "text", "text": output}}]);
         self.call_update(json!({"content": content}));
     }
@@ -3679,6 +3706,11 @@ impl AgentUi for Updates {
             update["status"] = json!(if failed { "failed" } else { "completed" });
             update["_meta"]["terminal_exit"] =
                 json!({"terminal_id": self.call_id(), "exit_code": null, "signal": null});
+            return self.call_update(update);
+        }
+        if self.raw_terminal() {
+            let mut update = raw_output(output);
+            update["status"] = json!(if failed { "failed" } else { "completed" });
             return self.call_update(update);
         }
         let text = match detail {
