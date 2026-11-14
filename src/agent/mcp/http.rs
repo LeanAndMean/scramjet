@@ -138,8 +138,10 @@ async fn send_to(
         request = request.header(name, value);
     }
     let request = (request.body(Full::new(body))).map_err(|e| failed(e.to_string()))?;
-    (sender.send_request(request).await)
-        .map_err(|e| failed(format!("request to {} failed: {e}", route.authority)))
+    (sender.send_request(request).await).map_err(|e| {
+        let why = crate::http::described(&e);
+        failed(format!("request to {} failed: {why}", route.authority))
+    })
 }
 
 /// The request target a redirect's `location` names, when it is a path or a URL on `route`'s
@@ -206,7 +208,10 @@ async fn read(response: Response<Incoming>, max: usize) -> Result<Vec<u8>, Error
     let mut body = response.into_body();
     let mut bytes = Vec::new();
     while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|e| failed(format!("its answer failed: {e}")))?;
+        let frame = frame.map_err(|e| {
+            let why = crate::http::described(&e);
+            failed(format!("its answer failed: {why}"))
+        })?;
         if let Ok(data) = frame.into_data() {
             if data.len() > max - bytes.len() {
                 return Err(StreamableHttpError::ResponseBodyTooLarge { max_size: max });
@@ -278,7 +283,10 @@ fn events(response: Response<Incoming>, max: usize) -> BoxStream<'static, Result
         let item = match (limit.failed, chunk) {
             (true, _) => None,
             (false, Ok(chunk)) => Some(limit.observe(&chunk).map(|()| chunk)),
-            (false, Err(error)) => Some(Err(Failed(format!("the stream failed: {error}")))),
+            (false, Err(error)) => {
+                let why = crate::http::described(&error);
+                Some(Err(Failed(format!("the stream failed: {why}"))))
+            }
         };
         limit.failed |= matches!(item, Some(Err(_)));
         std::future::ready(item)

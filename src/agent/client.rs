@@ -371,10 +371,11 @@ async fn exchange(
         .header("Content-Length", body.len())
         .body(Full::new(Bytes::from(body)))
         .map_err(|e| Failure::new(e.to_string(), false))?;
-    let response = sender
-        .send_request(request)
-        .await
-        .map_err(|e| Failure::new(format!("request failed: {e}"), true))?;
+    let response = sender.send_request(request).await.map_err(|e| {
+        let why = crate::http::described(&e);
+        let to = format!("{authority} (provider {})", route.provider);
+        Failure::new(format!("request to {to} failed: {why}"), true)
+    })?;
     let headers_at = Some(Instant::now());
     let status = response.status();
     let wait = match crate::http::retry_after::parse(
@@ -567,7 +568,11 @@ pub(super) async fn fetch_within(
         }
         let request = (request.body(Full::new(Bytes::from(body)))).map_err(|e| e.to_string())?;
         let response = (sender.send_request(request).await).map_err(|e| {
-            Failure::new(format!("request to {} failed: {e}", route.authority), true)
+            let why = crate::http::described(&e);
+            Failure::new(
+                format!("request to {} failed: {why}", route.authority),
+                true,
+            )
         })?;
         let status = response.status().as_u16();
         let location = (response.headers().get(hyper::header::LOCATION))
@@ -577,7 +582,8 @@ pub(super) async fn fetch_within(
         let mut bytes = Vec::new();
         while let Some(frame) = body.frame().await {
             let frame = frame.map_err(|e| {
-                Failure::new(format!("{}'s answer failed: {e}", route.authority), true)
+                let why = crate::http::described(&e);
+                Failure::new(format!("{}'s answer failed: {why}", route.authority), true)
             })?;
             if let Ok(data) = frame.into_data() {
                 bytes.extend_from_slice(&data);
@@ -774,9 +780,10 @@ async fn connect_first(
 async fn handshake(
     io: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
 ) -> Result<Connection, Failure> {
-    let (sender, driver) = http1::handshake(TokioIo::new(io))
-        .await
-        .map_err(|e| Failure::new(format!("HTTP handshake failed: {e}"), true))?;
+    let (sender, driver) = http1::handshake(TokioIo::new(io)).await.map_err(|e| {
+        let why = crate::http::described(&e);
+        Failure::new(format!("HTTP handshake failed: {why}"), true)
+    })?;
     Ok((sender, tokio::spawn(driver)))
 }
 
@@ -843,7 +850,10 @@ async fn read_body(
                 ));
             }
             Ok(None) => return Ok(()),
-            Ok(Some(Err(e))) => return Err(Failure::new(format!("stream failed: {e}"), true)),
+            Ok(Some(Err(e))) => {
+                let why = crate::http::described(&e);
+                return Err(Failure::new(format!("stream failed: {why}"), true));
+            }
             Ok(Some(Ok(frame))) => frame,
         };
         let Ok(data) = frame.into_data() else {

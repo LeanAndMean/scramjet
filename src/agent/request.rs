@@ -894,6 +894,33 @@ response is incomplete; retry the request."});
     }
 
     #[test]
+    fn a_reset_connection_says_so_and_names_the_host_and_provider() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (connection, _) = listener.accept().unwrap();
+            connection.peek(&mut [0]).unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            // Closed with the request unread, the connection is reset.
+            drop(connection);
+        });
+        let (mut agent, _scratch) = agent(address, "reset");
+        agent.set_retries(Retries {
+            attempts: 0,
+            delay: Duration::ZERO,
+            max_wait: None,
+        });
+        let message = match agent.turn("hi", &mut Recorder::default(), &AtomicBool::new(false)) {
+            Err(AgentError::Provider(message)) => message,
+            other => panic!("{:?}", other.err()),
+        };
+        server.join().unwrap();
+        let to = format!("request to {address} (provider test) failed: connection error: ");
+        assert!(message.starts_with(&to), "{message}");
+        assert!(message.len() > to.len(), "{message}");
+    }
+
+    #[test]
     fn permanent_failures_and_long_retry_waits_end_the_turn_at_once() {
         let (endpoint, server) = serve(vec![
             b"HTTP/1.1 400 Bad Request\r\ncontent-length: 15\r\n\r\ninvalid request".to_vec(),

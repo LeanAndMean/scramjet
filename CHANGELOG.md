@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.241.2 — Why a connection failed
+
+### Fixed
+
+- A request whose connection failed now says why and to whom, such as `request to api.example.com (provider github-copilot) failed: connection error: Connection reset by peer (os error 104)`, where it said only `request failed: connection error`. MCP servers' HTTP failures say why too.
+
 ## 2.241.1 — A long turn streams smoothly with Ctrl+O
 
 ### Fixed
