@@ -811,7 +811,7 @@ pub(super) fn run(
         text,
         detail: None,
         failed,
-        image: None,
+        images: Vec::new(),
     };
     let given = match arguments(call_arguments) {
         Ok(given) => given,
@@ -1041,7 +1041,7 @@ is added or changed.",
         text,
         detail: Some(ToolDetail::Subagents(shown)),
         failed,
-        image: None,
+        images: Vec::new(),
     };
     (output, usage)
 }

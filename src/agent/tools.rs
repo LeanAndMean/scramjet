@@ -496,7 +496,7 @@ impl<'a> Call<'a> {
             text,
             detail: None,
             failed: false,
-            image: None,
+            images: Vec::new(),
         })
     }
 
@@ -579,7 +579,7 @@ impl<'a> Call<'a> {
             text,
             detail: None,
             failed: false,
-            image: None,
+            images: Vec::new(),
         })
     }
 
@@ -597,12 +597,12 @@ impl<'a> Call<'a> {
 
 #[derive(Debug)]
 pub(super) struct Output {
-    /// What the model receives, with `image`.
+    /// What the model receives, with `images`.
     pub text: String,
     pub detail: Option<ToolDetail>,
     /// The tool ran but reports failure, such as a command's non-zero exit.
     pub failed: bool,
-    pub image: Option<Image>,
+    pub images: Vec<Image>,
 }
 
 impl Output {
@@ -611,16 +611,18 @@ impl Output {
             text,
             detail: None,
             failed: true,
-            image: None,
+            images: Vec::new(),
         }
     }
     /// The result's `output` as the conversation keeps it: the text, or with an image the
     /// Responses content parts.
     pub fn sent(&self) -> Value {
-        match &self.image {
-            None => json!(self.text),
-            Some(image) => json!([{"type":"input_text","text":self.text}, image.part()]),
+        if self.images.is_empty() {
+            return json!(self.text);
         }
+        let text = json!({"type":"input_text","text":self.text});
+        let images = self.images.iter().map(Image::part);
+        Value::Array(std::iter::once(text).chain(images).collect())
     }
 }
 
@@ -783,7 +785,7 @@ fn read(
         text,
         detail: Some(ToolDetail::Read(given.to_owned())),
         failed: false,
-        image,
+        images: image.into_iter().collect(),
     })
 }
 
@@ -1227,7 +1229,7 @@ fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
             created,
         }),
         failed: false,
-        image: None,
+        images: Vec::new(),
     })
 }
 
@@ -1388,7 +1390,7 @@ might indicate an issue with special characters or the text not existing as expe
         },
         detail: Some(ToolDetail::Diff(diff(text, &text_spans))),
         failed: false,
-        image: None,
+        images: Vec::new(),
     })
 }
 
@@ -2219,7 +2221,7 @@ impl Ran {
                     text,
                     detail: None,
                     failed: false,
-                    image: None,
+                    images: Vec::new(),
                 };
             }
             (None, Some(code)) => format!("Command exited with code {code}"),
@@ -2236,7 +2238,7 @@ impl Ran {
             text,
             detail: None,
             failed: true,
-            image: None,
+            images: Vec::new(),
         }
     }
 
@@ -2472,7 +2474,7 @@ disjoint regions."
         };
         let shot = read("shot.png");
         assert_eq!(shot.text, "Read image file [image/png]");
-        let image = shot.image.as_ref().unwrap();
+        let image = &shot.images[0];
         assert_eq!(image.mime, "image/png");
         let output = shot.sent();
         assert_eq!(
@@ -2491,7 +2493,7 @@ disjoint regions."
         );
         let bad = read("bad.jpg");
         assert_eq!(
-            (bad.text.as_str(), bad.image.is_none(), bad.sent()),
+            (bad.text.as_str(), bad.images.is_empty(), bad.sent()),
             (
                 "Read image file [image/jpeg]\n[Image omitted: could not be resized below the \
 inline image size limit.]",

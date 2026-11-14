@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.241.3 — Every image of an MCP tool's result
+
+### Fixed
+
+- An MCP tool's result holding several images sends the model all of them, where it sent only the first and said the others were not shown.
+
 ## 2.241.2 — Why a connection failed
 
 ### Fixed

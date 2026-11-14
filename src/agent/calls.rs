@@ -358,7 +358,7 @@ impl Agent {
             text,
             detail: None,
             failed: true,
-            image: None,
+            images: Vec::new(),
         };
         let call = match Call::parse(item) {
             Ok(call) => call,
@@ -413,7 +413,7 @@ impl Agent {
                 text,
                 detail: None,
                 failed,
-                image: None,
+                images: Vec::new(),
             };
             return Called::Done(output, false);
         }
@@ -430,7 +430,7 @@ impl Agent {
                 text,
                 detail: None,
                 failed,
-                image: None,
+                images: Vec::new(),
             };
             return Called::Done(output, false);
         }
@@ -476,7 +476,7 @@ impl Agent {
                 text,
                 detail: None,
                 failed,
-                image: None,
+                images: Vec::new(),
             };
             return Called::Done(output, ends);
         }
@@ -587,7 +587,7 @@ impl Tools<'_> {
             text: format!("Error: {error}"),
             detail: None,
             failed: true,
-            image: None,
+            images: Vec::new(),
         };
         let (output, usage) = match call.name {
             subagent::NAME => subagent::run(&call.arguments, &self.parent, ui, cancel),
@@ -602,7 +602,7 @@ impl Tools<'_> {
                             text,
                             detail: None,
                             failed: false,
-                            image: None,
+                            images: Vec::new(),
                         }),
                     _ => servers.and_then(|mcp| mcp.call(&call.arguments, cancel)),
                 };
@@ -731,7 +731,7 @@ fn ask(
                 text: error,
                 detail: None,
                 failed: true,
-                image: None,
+                images: Vec::new(),
             };
             return (output, false);
         }
@@ -762,7 +762,7 @@ fn ask(
         text,
         detail,
         failed: false,
-        image: None,
+        images: Vec::new(),
     };
     (output, ends)
 }

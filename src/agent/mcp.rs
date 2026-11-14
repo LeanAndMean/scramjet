@@ -1170,17 +1170,14 @@ fn score(query: &str, words: &[String], server: &str, tool: &Value) -> usize {
 }
 
 /// A tool's result as the model receives it: its text, what other content it holds, its
-/// structured content when it has nothing else, and its first image.
+/// structured content when it has nothing else, and its images.
 fn output(result: Value) -> Output {
     let mut parts: Vec<String> = Vec::new();
-    let mut attached = None;
+    let mut images = Vec::new();
     for block in result["content"].as_array().into_iter().flatten() {
         let mime = block["mimeType"].as_str().unwrap_or("");
         match block["type"].as_str().unwrap_or("") {
             "text" => parts.push(block["text"].as_str().unwrap_or("").to_owned()),
-            "image" if attached.is_some() => parts.push(format!(
-                "[Image [{mime}] not shown: one image is sent per result]"
-            )),
             "image" => {
                 let bytes = block["data"].as_str().and_then(image::decode_base64);
                 let fitted = bytes.as_deref().and_then(|bytes| {
@@ -1194,7 +1191,7 @@ fn output(result: Value) -> Output {
                             text = format!("{text}\n{note}");
                         }
                         parts.push(text);
-                        attached = Some(fitted.image);
+                        images.push(fitted.image);
                     }
                     None => parts.push(format!("[Image [{mime}] not shown: it could not be read]")),
                 }
@@ -1234,7 +1231,7 @@ fn output(result: Value) -> Output {
         text,
         detail: None,
         failed: result["isError"] == json!(true),
-        image: attached,
+        images,
     }
 }
 

@@ -139,7 +139,7 @@ for a city.\nArguments (JSON Schema): {\"properties\":{\"city\":{\"type\":\"stri
     assert_eq!((failed.text.as_str(), failed.failed), ("it failed", true));
     let picture = call(&servers, "picture", json!({})).unwrap();
     assert_eq!(picture.text, "a dot\nImage [image/png]");
-    assert_eq!(picture.image.unwrap().mime, "image/png");
+    assert_eq!(picture.images[0].mime, "image/png");
     let missing = call(&servers, "nothing", json!({})).unwrap_err();
     assert!(
         missing.starts_with("test has no tool named nothing; its tools: echo, add,"),
@@ -419,6 +419,23 @@ fn a_server_that_does_not_answer_is_given_up_and_killed() {
 }
 
 #[test]
+fn outputs_send_every_image() {
+    let png = crate::agent::image::base64(&crate::agent::image::tests::png(3, 2));
+    let image = json!({"type": "image", "data": png, "mimeType": "image/png"});
+    let output = output(json!({"content": [{"type": "text", "text": "two shots"}, image, image]}));
+    assert_eq!(
+        output.text,
+        "two shots\nImage [image/png]\nImage [image/png]"
+    );
+    let sent = output.sent();
+    let types: Vec<&str> = (sent.as_array().unwrap().iter())
+        .map(|part| part["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(types, ["input_text", "input_image", "input_image"]);
+    assert_eq!(crate::agent::tools::result_images(&sent), 2);
+}
+
+#[test]
 fn outputs_keep_text_resources_and_what_they_cannot_show() {
     let result = json!({"content": [
         {"type": "resource_link", "uri": "file:///a.txt", "name": "a.txt"},
@@ -433,7 +450,7 @@ fn outputs_keep_text_resources_and_what_they_cannot_show() {
         "[Resource a.txt: file:///a.txt]\nbee\n[Resource file:///c.bin [application/octet-stream] \
 not shown]\n[Audio [audio/wav] not shown]\n[Image [image/png] not shown: it could not be read]"
     );
-    assert!(output.image.is_none() && !output.failed);
+    assert!(output.images.is_empty() && !output.failed);
     assert_eq!(super::output(json!({"content": []})).text, "(no output)");
     let long = "line\n".repeat(MAX_LINES + 5);
     let cut = super::output(json!({"content": [{"type": "text", "text": long}]})).text;

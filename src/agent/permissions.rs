@@ -110,7 +110,7 @@ impl Agent {
             text,
             detail: None,
             failed,
-            image: None,
+            images: Vec::new(),
         };
         let (write, reason) = match given(arguments) {
             Ok(given) => given,

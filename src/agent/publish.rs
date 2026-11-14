@@ -338,7 +338,7 @@ deliberately. ({reason})"
         text,
         detail: None,
         failed,
-        image: None,
+        images: Vec::new(),
     }
 }
 
@@ -359,7 +359,7 @@ pub(super) fn run(
                 text: error,
                 detail: None,
                 failed: true,
-                image: None,
+                images: Vec::new(),
             };
         }
     };
