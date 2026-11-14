@@ -3939,6 +3939,10 @@ impl AgentUi for Updates {
     fn offers_choices(&mut self) -> bool {
         self.forms
     }
+    /// `Acp::offer` asks a client knowing Scramjet with `next_step` and lists them to others.
+    fn offers_suggestions(&mut self) -> bool {
+        true
+    }
     /// A config option set during the turn, which its pause takes (`Acp::paused`).
     fn pause(&mut self) -> bool {
         !lock(&self.turn).configuring.is_empty()

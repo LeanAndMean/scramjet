@@ -5724,6 +5724,79 @@ fn acp_offers_next_steps_with_the_extension_or_as_text_and_counts_down_under_aut
 
 #[test]
 #[cfg(unix)]
+fn acp_offers_the_agents_suggested_steps_with_the_extension_or_as_text() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-suggest-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let suggested = serde_json::json!({
+        "next_steps": [{"message": "Write the tests", "fresh_session": false, "reason": "Cover it."}],
+        "recommended_next_step": 0});
+    let scramjet = serde_json::json!({"_meta": {"io.github.leanandmean.scramjet": {}}});
+    for capabilities in [scramjet, serde_json::json!({})] {
+        let knows = capabilities != serde_json::json!({});
+        let (port, _bodies) = serve_events(call_events(
+            "suggest_scramjet_next_steps",
+            suggested.clone(),
+        ));
+        let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
+        );
+        next(&messages);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+                "params": {"cwd": project, "mcpServers": []}}),
+        );
+        let session = next(&messages)["result"]["sessionId"].clone();
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+                "params": {"sessionId": session, "prompt": [{"type": "text", "text": "Go"}]}}),
+        );
+        let result = |message: &serde_json::Value| {
+            message["params"]["update"]["sessionUpdate"] == "tool_call_update"
+                && message["params"]["update"]["status"] == "completed"
+        };
+        let (call, _) = until(&messages, result);
+        let output = call["params"]["update"]["content"][0]["content"]["text"].as_str();
+        assert!(output.unwrap().starts_with("Suggestion accepted"), "{call}");
+        if knows {
+            let (list, _) = until(&messages, |message| {
+                message["method"] == "_io.github.leanandmean.scramjet/next_step"
+            });
+            assert_eq!(list["params"]["kind"], "suggestion", "{list}");
+            let offered = serde_json::json!([{"message": "Write the tests", "reason": "Cover it.",
+                "freshSession": false}]);
+            assert_eq!(list["params"]["steps"], offered);
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": list["id"],
+                    "result": {"cancelled": true}}),
+            );
+        } else {
+            let (list, _) = until(&messages, |message| {
+                (message["params"]["update"]["content"]["text"].as_str())
+                    .is_some_and(|text| text.contains("Write the tests (recommended) — Cover it."))
+            });
+            assert_eq!(
+                list["params"]["update"]["sessionUpdate"],
+                "agent_message_chunk"
+            );
+        }
+        let (ended, _) = until(&messages, |message| message["id"] == 3);
+        assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+    }
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_offers_again_the_next_step_list_a_fork_or_move_goes_back_to() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-reopen-{}", std::process::id())),

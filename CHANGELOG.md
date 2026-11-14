@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.242.1 — Suggested next steps in editors
+
+### Fixed
+
+- In editors and other clients of `scramjet acp`, the agent's suggested next steps are offered: as Scramjet's list to a client that knows its extensions, and as a message listing them to others (Zed, JetBrains IDEs), where the agent was told it could not suggest any.
+
 ## 2.242.0 — Commands' output shows in JetBrains IDEs
 
 ### Fixed
