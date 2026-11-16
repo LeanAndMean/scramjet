@@ -186,6 +186,14 @@ User decisions from `/rs:steer` on 2026-11-12, after the work of 2.175–2.191 w
 - **Models are untrusted.** Not malicious, but unreliable: one may delete what it should not or leak information without meaning to. A model the loop has not used before is tried only with the user's approval, under `--sandbox workspace-write` at most, with network only when the task needs it. Approved: Qwen 3.8 27B (2026-11-12).
 - **What stays** of 2.168–2.191: `/login` → Local models with Ollama, llama.cpp, vLLM and LM Studio; thinking levels from the chat template; the runtime's window, read again; compaction within a turn and caps for small windows; the overflow cut and notice; a stopped runtime's hint. **What goes:** gpt-oss's tool-name mapping, the reasoning-only retry, gpt-oss told apart by name, and the token-count correction with Ollama's count probe. Tool changes made to get gpt-oss through tasks are kept only where Claude Code or Codex do the same.
 
+### Providers from a model catalog (2026-11-16)
+
+User decisions from `/rs:steer` on 2026-11-16:
+
+- **Providers from a catalog URL.** A local proxy (or any server) that serves a model catalog gives Scramjet its providers and models, with their windows, output limits, levels, inputs and prices, without an entry in `models.json` and without a package. The catalog's format is an established one, extended rather than invented: models.dev's `api.json` shape (each provider's `npm` naming its protocol), with the fields Anthropic's and OpenRouter's model lists use, which `listed.rs` reads already. Its URL is kept in Scramjet's own settings, added by the user or by a command another program (the proxy's own setup) runs; nothing outside Scramjet writes its files. The models stay current without a restart: the catalog is read again in the background, as the logins' lists are, and its last copy is kept so they still show while the server is down.
+- **A package stays independent of the proxy it may also reach** (the private provider package): it is the check that tells a proxy's bug from a client's.
+- **Keys:** none of the remaining differences from Claude Code's and Codex's keys is adopted (Ctrl+R history search, Ctrl+S stash, Ctrl+B background, and Shift+Tab, Ctrl+L and Ctrl+T keep Scramjet's meanings).
+
 ## Essential responsibilities and invariants
 
 ### Execution and authority
