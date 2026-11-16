@@ -207,6 +207,16 @@ impl Link {
     }
     /// As `ask`, for a question of the agent's, which the turn waits on (`ToScreen::Dialog`).
     fn open(&self, dialog: Dialog, cancel: Option<&AtomicBool>, asks: bool) -> Option<Answer> {
+        if asks {
+            crate::agent_cli::live::waiting();
+        }
+        let answer = self.answer(dialog, cancel, asks);
+        if asks {
+            crate::agent_cli::live::answered();
+        }
+        answer
+    }
+    fn answer(&self, dialog: Dialog, cancel: Option<&AtomicBool>, asks: bool) -> Option<Answer> {
         let (reply, answer) = mpsc::channel();
         self.send(ToScreen::Dialog(dialog, reply, asks));
         loop {

@@ -1237,7 +1237,10 @@ impl AgentUi for Terminal {
         self.err(&format!("{block}\n"));
     }
     fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
-        self.ask(question, cancel)
+        super::live::waiting();
+        let answer = self.ask(question, cancel);
+        super::live::answered();
+        answer
     }
     /// A block of its own, ending with a blank line as a tool block does.
     fn notice(&mut self, text: &str) {

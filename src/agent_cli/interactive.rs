@@ -5,6 +5,7 @@ use super::changelog;
 use super::completion::Completions;
 use super::drive::{self, Change, Front, Offer, Picked, Session, Start};
 use super::editor::Note;
+use super::live;
 use super::record::{self, Event};
 use super::screen::{self, Handle};
 use super::settings::{DoubleEscape, Settings};
@@ -173,6 +174,7 @@ impl Interactive {
             eprintln!("{}", self.ui.dim("No session selected"));
         }
         super::write_held_at_exit(&mut self.session.agent);
+        live::end();
         result.map(drop)
     }
 
@@ -260,6 +262,7 @@ impl Interactive {
 
     /// The next prompt: `dispatched`, a next step to run as if typed, or what the user enters.
     fn read(&mut self, dispatched: Option<String>) -> Result<Read, String> {
+        live::record(&self.session.agent, live::State::Idle);
         if let Some(screen) = &mut self.screen {
             // Those that ended during the turn go before the next prompt, as Scramjet adds them
             // when the turn ends.
@@ -694,6 +697,7 @@ impl Front for Interactive {
     /// A Ctrl-C from before the turn does not cancel it.
     fn turn_starts(&mut self) {
         self.cancel.store(false, Ordering::Relaxed);
+        live::record(&self.session.agent, live::State::Running);
         if self.screen.is_some() {
             self.effort_at_start = self.session.agent.effort().map(str::to_owned);
         }

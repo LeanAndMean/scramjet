@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.244.0 — Terminals' sessions for Flightdeck
+
+### Added
+
+- Each running full screen or line mode records the session it holds and whether a turn runs or waits for the user, in a private directory of `$XDG_RUNTIME_DIR` (`scramjet-live`), removed as it exits; a record a killed process left is removed by the next reader.
+- `scramjet acp` lists those sessions with the extension method `live_sessions`, so Flightdeck can show what runs in terminals beside its own sessions.
+
 ## 2.243.0 — Themes on their own background, and the prompt says what is hidden
 
 ### Changed

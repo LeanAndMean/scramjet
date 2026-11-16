@@ -1984,11 +1984,13 @@ fn acp_models(
     }}});
     std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
     std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    std::fs::create_dir_all(scratch.join("runtime")).unwrap();
     let mut child = program(&binary())
         .args(["acp", "--retries", "0"])
         .args(given)
         .env("XDG_CONFIG_HOME", &config)
         .env("XDG_STATE_HOME", scratch.join("state"))
+        .env("XDG_RUNTIME_DIR", scratch.join("runtime"))
         .env("SCRAMJET_CACHE", scratch.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -6127,6 +6129,100 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
     }
     drop(stdin);
     assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_lists_the_sessions_running_terminals_hold() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-live-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(&project).unwrap();
+    let text = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let (port, bodies) = serve_events_after(vec![text], |_| Duration::from_secs(2));
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+        "params": {"protocolVersion": 1}});
+    send(&mut stdin, initialize);
+    until(&messages, |message| message["id"] == 0);
+    let mut ids = 0;
+    let mut live = |stdin: &mut std::process::ChildStdin| {
+        ids += 1;
+        let method = "_io.github.leanandmean.scramjet/live_sessions";
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": ids, "method": method, "params": {}}),
+        );
+        let answer = until(&messages, |message| message["id"] == ids).0;
+        answer["result"]["sessions"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{answer}"))
+            .clone()
+    };
+    assert!(live(&mut stdin).is_empty());
+    // A terminal's session in line mode, its prompt's reply held for 2 s.
+    let mut terminal = program(&binary())
+        .args(["--model", "test/claude-test", "--retries", "0"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_RUNTIME_DIR", scratch.0.join("runtime"))
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut typed = terminal.stdin.take().unwrap();
+    writeln!(typed, "first prompt").unwrap();
+    let until_state =
+        |live: &mut dyn FnMut(&mut std::process::ChildStdin) -> Vec<serde_json::Value>,
+         stdin: &mut std::process::ChildStdin,
+         state: &str| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let sessions = live(stdin);
+                if sessions.len() == 1 && sessions[0]["state"] == state {
+                    return sessions[0].clone();
+                }
+                assert!(Instant::now() < deadline, "never {state}: {sessions:?}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+    let running = until_state(&mut live, &mut stdin, "running");
+    assert_eq!(running["pid"], terminal.id());
+    assert_eq!(running["cwd"], project.to_str().unwrap());
+    bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+    let idle = until_state(&mut live, &mut stdin, "idle");
+    assert_eq!(idle["sessionId"], running["sessionId"]);
+    assert_eq!(idle["title"], "first prompt");
+    let path = &idle["_meta"]["io.github.leanandmean.scramjet"]["path"];
+    assert!(
+        std::path::Path::new(path.as_str().unwrap()).is_file(),
+        "{idle}"
+    );
+    let since = idle["since"].as_str().unwrap();
+    assert!(since.len() == 20 && since.ends_with('Z'), "{since}");
+    // Killed, it leaves its record, which the next listing removes.
+    terminal.kill().unwrap();
+    terminal.wait().unwrap();
+    assert!(live(&mut stdin).is_empty());
+    let left = std::fs::read_dir(scratch.0.join("runtime/scramjet-live")).unwrap();
+    assert_eq!(left.count(), 0);
+    drop(stdin);
+    child.wait().unwrap();
 }
 
 #[test]

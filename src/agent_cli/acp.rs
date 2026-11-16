@@ -64,8 +64,9 @@ const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
 const MCP: &str = "_io.github.leanandmean.scramjet/mcp";
 const FILES: &str = "_io.github.leanandmean.scramjet/files";
 const SANDBOX: &str = "_io.github.leanandmean.scramjet/sandbox";
+const LIVE_SESSIONS: &str = "_io.github.leanandmean.scramjet/live_sessions";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 20] = [
+const EXTENSIONS: [&str; 21] = [
     HOLD,
     COMPACT,
     RENAME,
@@ -86,6 +87,7 @@ const EXTENSIONS: [&str; 20] = [
     MCP,
     FILES,
     SANDBOX,
+    LIVE_SESSIONS,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -666,6 +668,7 @@ impl Connection {
             MCP => self.mcp(id, &params),
             FILES => self.files(id, &params),
             SANDBOX => self.sandbox(&id, &params),
+            LIVE_SESSIONS => self.out.respond(&id, json!({"sessions": live_sessions()})),
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
                 false => self.unknown(&id, &params),
@@ -1698,6 +1701,31 @@ fn listed_session(session: &scramjet::agent::SessionInfo) -> Option<Value> {
         listed["_meta"]["io.github.leanandmean.scramjet"]["parentSession"] = json!(before);
     }
     Some(listed)
+}
+
+/// The sessions the user's terminals hold now, as `session/list` lists them, each with its
+/// process (`pid`), its `state` (`idle`, `running` or `waiting`) and `since` when.
+fn live_sessions() -> Vec<Value> {
+    let mut sessions: Vec<Value> = (super::live::list().into_iter())
+        .filter_map(|record| {
+            let path = PathBuf::from(record["path"].as_str()?);
+            let info = scramjet::agent::Session::info(&path).ok();
+            let mut listed = info.as_ref().and_then(listed_session).unwrap_or_else(|| {
+                json!({
+                    "sessionId": record["sessionId"],
+                    "cwd": record["cwd"],
+                    "_meta": {"io.github.leanandmean.scramjet": {"path": path}},
+                })
+            });
+            let since = std::time::Duration::from_millis(record["since"].as_u64()?);
+            listed["pid"] = record["pid"].clone();
+            listed["state"] = record["state"].clone();
+            listed["since"] = json!(utc_time(std::time::UNIX_EPOCH + since));
+            Some(listed)
+        })
+        .collect();
+    sessions.sort_by(|a, b| b["since"].as_str().cmp(&a["since"].as_str()));
+    sessions
 }
 
 /// `at` in ISO 8601, in UTC to the second.
