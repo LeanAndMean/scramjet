@@ -18,6 +18,10 @@ use std::time::Duration;
 const WAIT: Duration = Duration::from_secs(5);
 /// How long reading it again in the background may take.
 const RELIST_WAIT: Duration = Duration::from_secs(30);
+/// What a catalog gives beyond models.dev's shape, under each model: `cost_by_header`
+/// (`{header, values: {VALUE: cost}}`, read as `pricing`'s `header` and `byHeader`) and
+/// `unsupported_request_fields` (body fields its server rejects).
+const EXTENSION: &str = "x-gateway";
 /// models.dev's whole catalog is 6.6 MB (2026-11-16).
 const CATALOG_BYTES: usize = 64 << 20;
 
@@ -386,8 +390,32 @@ fn model(key: &str, listed: &Value, protocol: &str) -> Option<Value> {
         let efforts: Vec<&str> = efforts.iter().filter_map(Value::as_str).collect();
         entry["thinkingLevelMap"] = super::providers::level_map(&efforts);
     }
-    if let Some(cost) = cost(&listed["cost"], protocol == "anthropic-messages") {
+    let messages = protocol == "anthropic-messages";
+    if let Some(cost) = cost(&listed["cost"], messages) {
         entry["cost"] = cost;
+    }
+    let extension = &listed[EXTENSION];
+    let by_header = &extension["cost_by_header"];
+    if let Some(header) = by_header["header"]
+        .as_str()
+        .filter(|h| !h.trim().is_empty())
+    {
+        let values = by_header["values"].as_object().into_iter().flatten();
+        let values: Map<String, Value> = values
+            .filter_map(|(value, rates)| Some((value.clone(), cost(rates, messages)?)))
+            .collect();
+        if !values.is_empty() {
+            if !entry["cost"].is_object() {
+                entry["cost"] = json!({});
+            }
+            entry["cost"]["header"] = json!(header);
+            entry["cost"]["byHeader"] = Value::Object(values);
+        }
+    }
+    // Of the fields a server rejects, scramjet-rs sends only this one, and only when allowed.
+    let unsupported = extension["unsupported_request_fields"].as_array();
+    if unsupported.is_some_and(|fields| fields.iter().any(|f| f == "prompt_cache_retention")) {
+        entry["compat"] = json!({"supportsLongCacheRetention": false});
     }
     Some(entry)
 }
@@ -547,6 +575,41 @@ mod tests {
         );
         assert!(super::offered("[]").is_err());
         assert!(super::offered("{\"a\": 1}").unwrap().providers.is_empty());
+    }
+
+    #[test]
+    fn the_gateway_extension_gives_rates_by_header_and_rejected_fields() {
+        let catalog = r#"{"gw": {"npm": "@ai-sdk/anthropic", "models": {
+            "claude": {"id": "claude", "tool_call": true,
+                "cost": {"input": 3, "output": 15},
+                "provider": {"npm": "@ai-sdk/anthropic", "api": "http://127.0.0.1:9/v1"},
+                "x-gateway": {"cost_by_header": {"header": "X-LLM-Backend", "values": {
+                    "a": {"input": 3, "output": 15, "cache_write": 3.75,
+                        "tiers": [{"input": 6, "tier": {"type": "context", "size": 200000}}]},
+                    "b": {"input": 4},
+                    "broken": {"input": "free"}}}}},
+            "gpt": {"id": "gpt", "tool_call": true,
+                "provider": {"npm": "@ai-sdk/openai", "api": "http://127.0.0.1:9/v1"},
+                "x-gateway": {"unsupported_request_fields":
+                    ["prompt_cache_retention", "prompt_cache_options"],
+                    "cost_by_header": {"header": "x", "values": {}}}}}}}"#;
+        let offered = offered(catalog).unwrap();
+        let models = &offered.providers[0].1["models"];
+        assert_eq!(
+            models[0]["cost"],
+            json!({"input": 3.0, "output": 15.0, "header": "X-LLM-Backend", "byHeader": {
+                "a": {"input": 3.0, "output": 15.0, "cacheWrite": 6.0,
+                    "longContext": {"input": 6.0, "above": 200_000}},
+                "b": {"input": 4.0}}})
+        );
+        let prices = super::super::pricing::Prices::of(&models[0]["cost"]);
+        assert_eq!(prices.header(), Some("x-llm-backend"));
+        assert_eq!(models[0].get("compat"), None);
+        assert_eq!(models[1].get("cost"), None);
+        assert_eq!(
+            models[1]["compat"],
+            json!({"supportsLongCacheRetention": false})
+        );
     }
 
     #[test]

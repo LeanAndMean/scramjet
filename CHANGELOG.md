@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.253.0 — A catalog's prices by backend and rejected fields
+
+### Added
+
+- A model catalog's models can price each response by the backend a response header names (`x-gateway.cost_by_header`), and say which request fields their server rejects (`x-gateway.unsupported_request_fields`): a model whose server rejects `prompt_cache_retention` is no longer sent it.
+
 ## 2.252.0 — Providers from a model catalog URL
 
 ### Added
