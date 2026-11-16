@@ -89,8 +89,8 @@ impl Agent {
     /// The conversation as sent to the current model: the items a model is sent (`sent`). As in
     /// Scramjet, items another model produced lose what only that model accepts: encrypted
     /// reasoning, and `fc_` ids paired with it. The same id from another provider is another
-    /// model. A next-step record's result says that the harness made its call, which models
-    /// otherwise take for their own.
+    /// model. A next-step record goes as a note on the user's side: sent as a call, it read as
+    /// the model's own after each suggestion, and models made it themselves.
     fn replay_conversation(&self) -> Vec<Value> {
         let mut records = std::collections::HashSet::new();
         self.conversation
@@ -100,11 +100,12 @@ impl Agent {
                 let mut item = item.clone();
                 if item["type"] == "function_call" && item["name"] == status::RECORD {
                     records.insert(item["call_id"].clone());
+                    return Value::Null;
                 } else if item["type"] == "function_call_output"
                     && records.contains(&item["call_id"])
-                    && let Some(output) = item["output"].as_str()
                 {
-                    item["output"] = json!(format!("{}\n{output}", status::RECORD_NOTE));
+                    let output = item["output"].as_str().unwrap_or_default();
+                    return json!({"role":"user","content":status::record_note(output)});
                 }
                 let producer = item.as_object_mut().and_then(|object| {
                     let producer = object.remove(PRODUCER);

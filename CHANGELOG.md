@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.251.2 — Next-step records the model does not copy
+
+### Fixed
+
+- The record of which next step the user chose now reaches the model as a note beside the user's message rather than as a tool call in the model's own turn. Models had copied that call right after suggesting next steps, wasting a request on "Tool not found" and once taking a choice the user had not made yet. Sessions keep the record as before.
+
 ## 2.251.1 — Hard-linked files on Windows
 
 ### Fixed

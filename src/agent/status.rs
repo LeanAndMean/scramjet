@@ -17,9 +17,14 @@ pub const NAME: &str = "report_scramjet_command_status";
 /// a next-step choice in the conversation, which the model sees.
 pub(super) const RECORD: &str = "scramjet_next_step_selection";
 
-/// The first line of a `RECORD` result as models are sent it.
-pub(super) const RECORD_NOTE: &str = "The harness added this record; the model did not call this \
-tool. It shows the next steps offered and which one was chosen.";
+/// A `RECORD` result as models are sent it, from the user's side.
+pub(super) fn record_note(record: &str) -> String {
+    format!(
+        "<system-reminder>\nThe harness showed the user this list of next steps after the turn \
+         and recorded their answer; it is not a tool and cannot be called.\n{record}\n\
+         </system-reminder>"
+    )
+}
 
 /// Listed under the available tools.
 pub(super) const SNIPPET: &str = "You have access to `report_scramjet_command_status` for ending \

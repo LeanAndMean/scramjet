@@ -1618,37 +1618,39 @@ auto-dispatches it only when its message is a slash command."
             .turn("go on", &mut ui, &AtomicBool::new(false))
             .unwrap();
 
-        // The model sees each record as a call it did not make, and its result, which says so.
+        // The model sees each record as a note on the user's side, never as a call of its own.
         let input = server.join().unwrap()[0]["input"].clone();
         let input = input.as_array().unwrap();
-        assert_eq!(input.len(), 5, "{input:#?}");
-        assert_eq!(input[0]["name"], status::RECORD);
+        assert_eq!(input.len(), 3, "{input:#?}");
+        assert_eq!(
+            input[0],
+            json!({"role":"user","content":status::record_note(&shown)})
+        );
+        assert!(
+            input[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("cannot be called")
+        );
+        assert_eq!(input[1]["content"], status::record_note(&dismissed));
+        assert_eq!(input[2]["content"], "go on");
+
+        // The session keeps Scramjet's call and result.
+        let saved = agent.conversation();
+        let call = saved.iter().find(|item| item["name"] == status::RECORD);
         let arguments: Value =
-            serde_json::from_str(input[0]["arguments"].as_str().unwrap()).unwrap();
+            serde_json::from_str(call.unwrap()["arguments"].as_str().unwrap()).unwrap();
         assert_eq!(
             arguments,
             json!({"outcome":"selected","options":[{"message":"/rs:review","reason":"risky"},
                 {"message":"/rs:loop","index":2}],"selectedIndex":1,"sourceCommand":"rs:loop",
                 "source":"completion"})
         );
-        assert_eq!(input[1]["call_id"], input[0]["call_id"]);
-        let sent = format!("{}\n{shown}", status::RECORD_NOTE);
-        assert_eq!(input[1]["output"].as_str(), Some(sent.as_str()));
-        assert_eq!(
-            input[3]["output"].as_str(),
-            Some(format!("{}\n{dismissed}", status::RECORD_NOTE).as_str())
-        );
-        let saved = agent.conversation().iter().find(|item| {
-            item["call_id"] == input[1]["call_id"] && item["type"] == "function_call_output"
+        let output = saved.iter().find(|item| {
+            item["call_id"] == call.unwrap()["call_id"] && item["type"] == "function_call_output"
         });
-        assert_eq!(saved.unwrap()["output"].as_str(), Some(shown.as_str()));
-        assert_ne!(input[2]["call_id"], input[0]["call_id"]);
-        assert_eq!(
-            serde_json::from_str::<Value>(input[2]["arguments"].as_str().unwrap()).unwrap()["outcome"],
-            "dismissed"
-        );
-        assert_eq!(input[4]["content"], "go on");
-        // Claude's Messages: a tool use for each record, answered first in the next message.
+        assert_eq!(output.unwrap()["output"].as_str(), Some(shown.as_str()));
+        // Claude's Messages: the notes and the prompt share one user message.
         let request = json!({"model":"claude-x","instructions":"i","input":input});
         let messages = messages::request(&request, 1000, false, None).unwrap()["messages"].clone();
         let shapes: Vec<_> = (messages.as_array().unwrap().iter())
@@ -1660,15 +1662,7 @@ auto-dispatches it only when its message is a slash command."
                 format!("{} {}", message["role"].as_str().unwrap(), types.join(" "))
             })
             .collect();
-        assert_eq!(
-            shapes,
-            [
-                "assistant tool_use",
-                "user tool_result",
-                "assistant tool_use",
-                "user tool_result text"
-            ]
-        );
+        assert_eq!(shapes, ["user text text text"]);
 
         // A resume shows each record as it showed, and `/tree` lists it with the step chosen.
         let (_, resumed, _) = Session::open(agent.session_path()).unwrap();

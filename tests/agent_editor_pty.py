@@ -4194,9 +4194,12 @@ assert links == [os.path.abspath(second)], (links, second)
 header = json.loads(open(second).readline())
 assert header['parentSession'] == os.path.abspath(first) and header['nextStep'] is True, header
 assert 'parentSession' not in json.loads(open(first).readline())
-# The chained command's model sees the record before the command's prompt.
+# The chained command's model sees the record as a note before the command's prompt, not as a call.
 kinds = [item.get('name') or item.get('type') or item.get('role') for item in bodies[3]['input']]
-assert kinds[-3:] == ['scramjet_next_step_selection', 'function_call_output', 'user'], kinds
+assert kinds[-3:] == ['function_call_output', 'user', 'user'], kinds
+assert 'scramjet_next_step_selection' not in kinds, kinds
+note = bodies[3]['input'][-2]['content']
+assert note.startswith('<system-reminder>') and '→ /flow:done' in note, note
 run(['--continue'], next_steps_resumed, rows=50)
 suggest = lambda call_id, steps, recommended: tool_call(call_id, 'suggest_scramjet_next_steps', {
     'next_steps': [{'message': text, 'fresh_session': False, 'reason': reason} for text, reason in steps],
