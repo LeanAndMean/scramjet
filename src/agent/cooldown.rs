@@ -195,26 +195,30 @@ mod tests {
         }
     }
 
+    /// Whether `start`, a wait left, is `millis` after the hold made at `since` less the time
+    /// passed since, measured now, so a loaded machine's delays do not fail a test. Timestamps
+    /// are whole milliseconds, hence the slack.
+    fn near(start: Duration, millis: u64, since: std::time::Instant) -> bool {
+        let (expected, slack) = (Duration::from_millis(millis), Duration::from_millis(2));
+        start <= expected + slack && start + since.elapsed() + slack >= expected
+    }
+
     #[test]
     fn requests_held_by_one_wait_start_a_gap_apart_after_the_refused_one() {
         let (route, long) = (route(), Duration::from_secs(60));
+        let held = std::time::Instant::now();
         hold(&route, "spaced", Duration::from_secs(1), true);
-        let starts: Vec<Duration> = (0..3)
-            .map(|_| take(&route, "spaced", long).unwrap())
-            .collect();
-        let near = |start: Duration, millis: u64| {
-            let expected = Duration::from_millis(millis);
-            start <= expected && expected - start < Duration::from_millis(100)
-        };
-        assert!(near(starts[0], 1250), "{starts:?}");
-        assert!(near(starts[1], 1500), "{starts:?}");
-        assert!(near(starts[2], 1750), "{starts:?}");
+        for millis in [1250, 1500, 1750] {
+            let start = take(&route, "spaced", long).unwrap();
+            assert!(near(start, millis, held), "{start:?} for {millis}");
+        }
         // One that will not retry leaves the first start to the others.
+        let held = std::time::Instant::now();
         hold(&route, "unclaimed", Duration::from_secs(1), false);
-        assert!(near(take(&route, "unclaimed", long).unwrap(), 1000));
+        assert!(near(take(&route, "unclaimed", long).unwrap(), 1000, held));
         // A wait over the settings' limit is not waited for, and takes no start.
         assert_eq!(take(&route, "unclaimed", Duration::from_millis(500)), None);
-        assert!(near(take(&route, "unclaimed", long).unwrap(), 1250));
+        assert!(near(take(&route, "unclaimed", long).unwrap(), 1250, held));
         assert_eq!(take(&route, "never held", long), None);
     }
 
@@ -222,12 +226,12 @@ mod tests {
     fn a_longer_wait_given_meanwhile_moves_the_starts_after_it() {
         let (route, long) = (route(), Duration::from_secs(60));
         hold(&route, "extended", Duration::from_secs(1), false);
+        let held = std::time::Instant::now();
         hold(&route, "extended", Duration::from_secs(3), true);
-        let start = take(&route, "extended", long).unwrap();
-        assert!(start > Duration::from_millis(3150) && start <= Duration::from_millis(3250));
+        assert!(near(take(&route, "extended", long).unwrap(), 3250, held));
         // A shorter one does not shorten it.
         hold(&route, "extended", Duration::from_secs(1), false);
-        assert!(take(&route, "extended", long).unwrap() > Duration::from_millis(3400));
+        assert!(near(take(&route, "extended", long).unwrap(), 3500, held));
     }
 
     #[test]
@@ -239,30 +243,38 @@ mod tests {
         let directory = scratch.0.join("cooldown");
         let (route, long) = (route(), Duration::from_secs(60));
         // Each thread names its own directory, as another process finds it.
-        let shared = |directory: Option<PathBuf>, f: fn(&super::super::providers::Route)| {
-            let route = route.clone();
-            std::thread::spawn(move || {
-                TEST_DIRECTORY.with(|named| *named.borrow_mut() = directory);
-                f(&route);
-            })
-            .join()
-            .unwrap();
-        };
-        shared(Some(directory.clone()), |route| {
-            hold(route, "filed", Duration::from_secs(2), true)
-        });
+        let shared =
+            |directory: Option<PathBuf>,
+             f: Box<dyn FnOnce(&super::super::providers::Route) + Send>| {
+                let route = route.clone();
+                std::thread::spawn(move || {
+                    TEST_DIRECTORY.with(|named| *named.borrow_mut() = directory);
+                    f(&route);
+                })
+                .join()
+                .unwrap();
+            };
+        let held = std::time::Instant::now();
+        shared(
+            Some(directory.clone()),
+            Box::new(|route| hold(route, "filed", Duration::from_secs(2), true)),
+        );
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
-        shared(Some(directory.clone()), |route| {
-            let start = take(route, "filed", Duration::from_secs(60)).unwrap();
-            assert!(start > Duration::from_millis(2100) && start <= Duration::from_millis(2250));
-            let after = take(route, "filed", Duration::from_secs(60)).unwrap();
-            assert!(after > Duration::from_millis(2350) && after <= Duration::from_millis(2500));
-            assert_eq!(take(route, "unheld", Duration::from_secs(60)), None);
-        });
+        shared(
+            Some(directory.clone()),
+            Box::new(move |route| {
+                let start = take(route, "filed", Duration::from_secs(60)).unwrap();
+                assert!(near(start, 2250, held), "{start:?}");
+                let after = take(route, "filed", Duration::from_secs(60)).unwrap();
+                assert!(near(after, 2500, held), "{after:?}");
+                assert_eq!(take(route, "unheld", Duration::from_secs(60)), None);
+            }),
+        );
         // A process without the directory keeps its own.
-        shared(None, |route| {
-            assert_eq!(take(route, "filed", Duration::from_secs(60)), None)
-        });
+        shared(
+            None,
+            Box::new(|route| assert_eq!(take(route, "filed", Duration::from_secs(60)), None)),
+        );
         assert_eq!(take(&route, "filed", long), None);
         #[cfg(unix)]
         {
