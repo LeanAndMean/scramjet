@@ -994,6 +994,38 @@ fn servers_ended_as_they_start_leave_no_process() {
     assert!(left.is_empty(), "{} of {} left", left.len(), started.len());
 }
 
+#[test]
+fn a_process_a_server_started_ends_with_it_after_its_parent_ended() {
+    let scratch = scratch("orphan");
+    let log = scratch.0.join("log");
+    // `taskkill /T` follows parents, so on Windows only the job reaches this one.
+    let server = if cfg!(windows) {
+        if crate::agent::tests::missing("python3") {
+            return;
+        }
+        let script = format!(
+            "import subprocess\np = subprocess.Popen(['ping', '-n', '30', '127.0.0.1'], \
+             stdout=subprocess.DEVNULL)\nopen(r'{}', 'a').write('pid %d\\n' % p.pid)",
+            log.display()
+        );
+        program("starter", "python3", vec!["-c".to_owned(), script], &[])
+    } else {
+        let script = format!("sleep 30 & echo pid $! >> '{}'", log.display());
+        program("starter", "sh", vec!["-c".to_owned(), script], &[])
+    };
+    let servers = Servers::start(std::slice::from_ref(&server), &scratch.0);
+    until(|| !pids(&log).is_empty());
+    let started = pids(&log);
+    assert_eq!(started.len(), 1);
+    drop(servers);
+    until(|| !alive(started[0]));
+    let left = alive(started[0]);
+    if left {
+        kill(started[0]);
+    }
+    assert!(!left, "{} still runs", started[0]);
+}
+
 /// The test server over HTTP, run with `env`, and the port it listens on; killed on drop.
 struct Remote(std::process::Child, u16);
 

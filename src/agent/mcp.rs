@@ -903,6 +903,7 @@ async fn run(
     crate::os::own_group_async(&mut command);
     let (mut child, group) = Group::started(|| {
         let child = command.spawn()?;
+        crate::os::hold_group_async(&child);
         let id = child
             .id()
             .ok_or_else(|| std::io::Error::other("it ended at once"))?;

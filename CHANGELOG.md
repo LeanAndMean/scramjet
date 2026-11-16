@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.255.3 — MCP servers' processes end with them on Windows
+
+### Fixed
+
+- On Windows an MCP server is held in a job, as bash's commands are, so a process it started ends with it even after its parent ended, as a launcher's (`uvx`, `npx`, a Python shim) can; before, `taskkill /T` reached only those whose parent still ran.
+
 ## 2.255.2 — A failed git command names git's version
 
 ### Fixed

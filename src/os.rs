@@ -531,7 +531,20 @@ pub fn own_group_async(command: &mut tokio::process::Command) -> &mut tokio::pro
 /// processes whose parent has ended, as Git Bash's often have; a process group does on Unix.
 pub fn hold_group(child: &std::process::Child) {
     #[cfg(windows)]
-    windows::hold(child);
+    windows::hold(
+        child.id(),
+        std::os::windows::io::AsRawHandle::as_raw_handle(child),
+    );
+    #[cfg(unix)]
+    let _ = child;
+}
+
+/// `hold_group` for tokio's children, started by `own_group_async`.
+pub fn hold_group_async(child: &tokio::process::Child) {
+    #[cfg(windows)]
+    if let (Some(id), Some(handle)) = (child.id(), child.raw_handle()) {
+        windows::hold(id, handle);
+    }
     #[cfg(unix)]
     let _ = child;
 }
@@ -776,7 +789,8 @@ mod windows {
 
     /// Puts `child` in a job of its own. A process it started before this escapes it; a shell
     /// takes far longer to start one. A job that cannot be made leaves `kill_tree` alone.
-    pub(super) fn hold(child: &std::process::Child) {
+    /// `process` is `id`'s handle, open for the call.
+    pub(super) fn hold(id: u32, process: std::os::windows::io::RawHandle) {
         use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
         // SAFETY: no attributes nor name; the handle is checked, and owned by `Job` once made.
         let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
@@ -785,8 +799,8 @@ mod windows {
         }
         let job = Job(job);
         // SAFETY: both handles are open for the call.
-        if unsafe { AssignProcessToJobObject(job.0, child.as_raw_handle()) } != 0 {
-            jobs().push((child.id(), job));
+        if unsafe { AssignProcessToJobObject(job.0, process) } != 0 {
+            jobs().push((id, job));
         }
     }
 
