@@ -83,8 +83,12 @@ enum ToScreen {
     /// The session was replaced: the conversation shown starts again.
     Clear,
     /// A turn, `/compact`, a branch summary or a `!` command starts, Shift+Tab cycling the
-    /// effort from where it is, or ends (`None`).
-    Turn(Option<EffortCycle>),
+    /// effort from where it is.
+    Turn(EffortCycle),
+    /// What `Turn` started ended, `finished` unless cancelled or failed.
+    Ended {
+        finished: bool,
+    },
     /// The session waits for what the user enters next.
     Ready,
     SetText(String),
@@ -459,20 +463,7 @@ impl App {
                     Err(TryRecvError::Empty) => break,
                 }
             }
-            if self.ready && (self.queue().shells.first()).is_some_and(|side| side.ended.is_some())
-            {
-                self.ready = false;
-                let _ = self.inputs.send(Input::Shells);
-            }
-            // Typed as the turn ended, after the session took those typed during it.
-            if self.ready && !self.queue().commands.is_empty() {
-                self.ready = false;
-                let _ = self.inputs.send(Input::Commands);
-            }
-            if self.ready && self.queue().relisted.is_some() {
-                self.ready = false;
-                let _ = self.inputs.send(Input::Relisted);
-            }
+            self.send_waiting();
             self.editor.poll(&mut self.draft);
             if let Some(Open {
                 shown: Shown::Text(text),
@@ -616,21 +607,23 @@ impl App {
                 }
             },
             ToScreen::Turn(efforts) => {
-                let running = efforts.is_some();
                 self.conversation_mut().split();
                 // A turn going on after a pause still does what it did.
                 let doing = self.activity.take();
-                self.activity = running.then(|| doing.unwrap_or_else(|| Activity::new("Working")));
-                if let Some(efforts) = efforts {
-                    self.efforts = efforts;
-                }
-                // What the turn did not take is not sent unasked.
-                if !running {
-                    self.conversation_mut().turn_ended();
+                self.activity = Some(doing.unwrap_or_else(|| Activity::new("Working")));
+                self.efforts = efforts;
+                self.handed = None;
+            }
+            ToScreen::Ended { finished } => {
+                self.conversation_mut().split();
+                self.activity = None;
+                self.conversation_mut().turn_ended();
+                // Those a finished turn did not take, sent as it ended, go once the session
+                // waits; those of a stopped turn are not sent unasked.
+                if !finished {
                     self.restore();
                 }
-                self.handed =
-                    (!running).then(|| (Activity::asking(), self.draft.text().to_owned()));
+                self.handed = Some((Activity::asking(), self.draft.text().to_owned()));
             }
             ToScreen::Ready => {
                 self.ready = true;
@@ -919,6 +912,34 @@ impl App {
 
     fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
         self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Once the session is ready, sends it the first of what waits for it.
+    fn send_waiting(&mut self) {
+        if self.ready && (self.queue().shells.first()).is_some_and(|side| side.ended.is_some()) {
+            self.ready = false;
+            let _ = self.inputs.send(Input::Shells);
+        }
+        // Typed as the turn ended, after the session took those typed during it.
+        if self.ready && !self.queue().commands.is_empty() {
+            self.ready = false;
+            let _ = self.inputs.send(Input::Commands);
+        }
+        if self.ready && self.queue().relisted.is_some() {
+            self.ready = false;
+            let _ = self.inputs.send(Input::Relisted);
+        }
+        // Sent as the turn ended: the first goes as typed, and its turn takes the others.
+        let first = match self.ready {
+            true => self.queue().messages.first(),
+            false => None,
+        };
+        if let Some(text) = first {
+            self.ready = false;
+            self.top = None;
+            self.handed = None;
+            let _ = self.inputs.send(Input::Prompt(text));
+        }
     }
 
     /// Puts the queued messages back in the editor, before its text, as Scramjet does.
@@ -1216,4 +1237,79 @@ fn report_shown(view: &ReportView) -> Transcript {
 pub(super) fn leave_on_exit() -> Option<String> {
     (SHOWN.load(Ordering::SeqCst))
         .then(|| format!("\x1b[?2026l\x1b[?2004l{}{LEAVE}", progress_cleared()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent_cli::keys::tests::keys;
+
+    fn app() -> (App, mpsc::Receiver<Input>) {
+        let (inputs, from) = mpsc::channel();
+        let (_, wake) = io::pipe().unwrap();
+        let sides = Sides {
+            root: PathBuf::new(),
+            wake,
+            threads: Vec::new(),
+            started: 0,
+        };
+        let editor = Editor::new(
+            Vec::new(),
+            Arc::default(),
+            PathBuf::new(),
+            Completions::default(),
+            Vec::new(),
+            false,
+        );
+        let queue = Arc::new(Mutex::new(Queue::default()));
+        (
+            App::new(editor, Arc::default(), Arc::default(), inputs, queue, sides),
+            from,
+        )
+    }
+
+    fn typed(app: &mut App, text: &[u8]) {
+        for key in keys(text) {
+            app.key(key, false);
+        }
+    }
+
+    fn prompts(from: &mpsc::Receiver<Input>) -> Vec<String> {
+        (from.try_iter())
+            .filter_map(|input| match input {
+                Input::Prompt(text) => Some(text),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_message_sent_as_a_turn_finishes_goes_when_the_session_waits() {
+        let (mut app, from) = app();
+        app.message(ToScreen::Turn(EffortCycle::default()));
+        typed(&mut app, b"one\r");
+        // The turn took nothing more, and ended before the screen knew.
+        app.message(ToScreen::Ended { finished: true });
+        typed(&mut app, b"two\r");
+        assert_eq!(app.draft.text(), "");
+        app.send_waiting();
+        assert!(prompts(&from).is_empty());
+        app.message(ToScreen::Ready);
+        app.send_waiting();
+        assert_eq!(prompts(&from), ["one"]);
+        // Its turn takes the other.
+        assert_eq!(app.queue().messages.take(), ["two"]);
+    }
+
+    #[test]
+    fn a_stopped_turn_puts_what_it_did_not_take_back_in_the_editor() {
+        let (mut app, from) = app();
+        app.message(ToScreen::Turn(EffortCycle::default()));
+        typed(&mut app, b"kept\r");
+        app.message(ToScreen::Ended { finished: false });
+        assert_eq!(app.draft.text(), "kept");
+        app.message(ToScreen::Ready);
+        app.send_waiting();
+        assert!(prompts(&from).is_empty());
+    }
 }

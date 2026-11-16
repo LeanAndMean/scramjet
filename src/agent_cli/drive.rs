@@ -193,6 +193,13 @@ impl<T> Messages<T> {
         all.append(&mut self.follow_ups);
         all
     }
+    /// The message sent first, taken from the others.
+    pub(super) fn first(&mut self) -> Option<T> {
+        match self.steering.is_empty() {
+            false => Some(self.steering.remove(0)),
+            true => (!self.follow_ups.is_empty()).then(|| self.follow_ups.remove(0)),
+        }
+    }
 }
 
 fn deliver<T>(queued: &mut Vec<T>, delivery: Delivery) -> Vec<T> {
@@ -254,8 +261,8 @@ pub(super) trait Front {
     fn turn(&mut self, prompt: Option<&str>) -> Result<(), AgentError>;
     /// Does what the user asked for while the turn ran, which paused it to go on after.
     fn paused(&mut self);
-    /// Shows that the turn stopped, before what it stopped with.
-    fn turn_stops(&mut self);
+    /// Shows that the turn stopped, `finished` unless it failed, before what it stopped with.
+    fn turn_stops(&mut self, finished: bool);
     /// Shows what a turn ended with, once its stop is shown.
     fn turn_ended(&mut self);
     /// Whether the user can choose from lists and answer questions as they show.
@@ -309,7 +316,7 @@ pub(super) fn run_turn(
         front.paused();
         result = front.turn(None);
     }
-    front.turn_stops();
+    front.turn_stops(result.is_ok());
     // The agent's `switch_scramjet_model`, remembered as the user's choices are.
     if front.session().agent.model() != model {
         remember_model(front);

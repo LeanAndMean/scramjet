@@ -364,7 +364,7 @@ impl Interactive {
         match &mut self.screen {
             Some(screen) => {
                 screen.footer(footer::Shown::of(&self.session.agent));
-                screen.turn(Some(self.session.agent.effort_cycle()));
+                screen.turn(self.session.agent.effort_cycle());
                 run(&mut self.session.agent, &mut screen.link, &self.cancel)
             }
             None => run(&mut self.session.agent, &mut self.ui, &self.cancel),
@@ -374,12 +374,12 @@ impl Interactive {
     /// Shows on the full screen that what `on_screen` ran has ended. Sets an effort Shift+Tab
     /// chose meanwhile that no request took, and saves the effort as the settings' default if
     /// it changed from the one it started with.
-    fn ended_on_screen(&mut self) {
+    fn ended_on_screen(&mut self, finished: bool) {
         let effort = self.effort_at_start.take();
         let Some(screen) = &self.screen else {
             return;
         };
-        screen.turn(None);
+        screen.ended(finished && !self.cancel.load(Ordering::Relaxed));
         self.cancel.store(false, Ordering::Relaxed);
         let unset =
             (screen.take_effort()).and_then(|level| self.session.agent.set_effort(level).err());
@@ -447,7 +447,7 @@ impl Interactive {
         let outer = self.effort_at_start.take();
         self.turn_starts();
         let result = self.on_screen(run);
-        self.turn_stops();
+        self.turn_stops(true);
         self.effort_at_start = outer;
         result
     }
@@ -714,9 +714,9 @@ impl Front for Interactive {
         self.typed_during_turn(true);
     }
 
-    fn turn_stops(&mut self) {
+    fn turn_stops(&mut self, finished: bool) {
         match self.screen.is_some() {
-            true => self.ended_on_screen(),
+            true => self.ended_on_screen(finished),
             false => {
                 self.ui.clear();
                 self.cancel.store(false, Ordering::Relaxed);

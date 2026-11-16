@@ -250,9 +250,7 @@ impl App {
         }
         match self.editor.key(&mut self.draft, key, pending) {
             Action::Edited(_) => {}
-            // The draft holds the text sent.
-            Action::Submit(_) if running => self.enqueue(false),
-            Action::Submit(text) if self.ready => {
+            Action::Submit(text) if self.ready && !running => {
                 // As in Scramjet, Up does not recall built-in commands.
                 if Builtin::parse(&text).is_none() {
                     self.editor.remember(&text);
@@ -263,7 +261,8 @@ impl App {
                 let _ = self.inputs.send(Input::Prompt(text));
                 self.draft = self.editor.draft(String::new());
             }
-            Action::Submit(_) => self.draft.set_note(Note::Info(BUSY.to_owned())),
+            // The draft holds the text sent; until the session is ready, it waits as queued.
+            Action::Submit(_) => self.enqueue(false),
             Action::Exit => self.exit(),
             Action::DoubleEscape if self.ready => {
                 self.handed = None;

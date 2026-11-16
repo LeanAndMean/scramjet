@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.251.0 — A message sent as a turn ends is not lost
+
+### Fixed
+
+- In the full screen, a message sent with Enter just as a turn finished was put back in the prompt to send again, and Enter while the session got ready said "Busy" and did nothing. Both now go as the next prompt; Escape, `/new` and a failed turn still put queued messages back in the prompt.
+
 ## 2.250.0 — A watched session's running tool calls show as they run
 
 ### Changed

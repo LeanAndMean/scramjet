@@ -112,8 +112,11 @@ impl Link {
     pub(in crate::agent_cli) fn clear(&self) {
         self.send(ToScreen::Clear);
     }
-    pub(in crate::agent_cli) fn turn(&self, efforts: Option<EffortCycle>) {
+    pub(in crate::agent_cli) fn turn(&self, efforts: EffortCycle) {
         self.send(ToScreen::Turn(efforts));
+    }
+    pub(in crate::agent_cli) fn ended(&self, finished: bool) {
+        self.send(ToScreen::Ended { finished });
     }
     /// The `!` commands run during a turn that have ended, in the order typed.
     pub(in crate::agent_cli) fn take_shells(&self) -> Vec<Shell> {

@@ -2939,7 +2939,7 @@ impl Front for Acp {
     fn paused(&mut self) {
         self.configure();
     }
-    fn turn_stops(&mut self) {}
+    fn turn_stops(&mut self, _finished: bool) {}
     fn turn_ended(&mut self) {
         self.ui.usage_of(&self.session.agent);
         self.configure();
