@@ -559,6 +559,29 @@ impl Entries {
         self.entries.iter().filter(|entry| is_prompt(&entry.value))
     }
 
+    /// The line each of `items`, a conversation on the path to `leaf`, is stored on (as
+    /// `Session::lines_of`).
+    fn lines_of(&self, leaf: Option<usize>, items: &[Value]) -> Vec<Option<usize>> {
+        let mut stored: HashMap<String, std::collections::VecDeque<usize>> = HashMap::new();
+        for entry in self.path(leaf) {
+            let value = &entry.value;
+            let summary = value["summary"].as_str();
+            let key = match (value["type"].as_str(), summary) {
+                (Some("compaction"), Some(summary)) => {
+                    super::compaction::summary_message(summary).to_string()
+                }
+                (Some("branch_summary"), Some(summary)) => {
+                    super::compaction::branch_summary_message(summary).to_string()
+                }
+                _ => value.to_string(),
+            };
+            stored.entry(key).or_default().push_back(entry.line);
+        }
+        (items.iter())
+            .map(|item| stored.get_mut(&item.to_string())?.pop_front())
+            .collect()
+    }
+
     fn branch(&self, leaf: Option<usize>) -> Branch {
         Branch {
             header: self.header.clone(),
@@ -672,6 +695,15 @@ fn create_file(path: &Path) -> io::Result<File> {
 pub fn read_branch(path: &Path) -> io::Result<Branch> {
     let entries = read(path)?;
     Ok(entries.branch(entries.tail))
+}
+
+/// The conversation of the session saved at `path` as a resume would show it, read without
+/// opening it: the items after its latest compaction, and each one's line in the file.
+pub fn read_conversation(path: &Path) -> io::Result<(Vec<Value>, Vec<Option<usize>>)> {
+    let entries = read(path)?;
+    let items = entries.context(path, entries.tail)?.items;
+    let lines = entries.lines_of(entries.tail, &items);
+    Ok((items, lines))
 }
 
 /// A session read to be shown before a later one of its chain, without opening it.
@@ -1219,25 +1251,7 @@ impl Session {
     /// a compaction's or branch summary's message on its compaction's or summary's line; `None`
     /// for one not found there (held in memory only, or not of this branch).
     pub fn lines_of(&self, items: &[Value]) -> io::Result<Vec<Option<usize>>> {
-        let entries = self.read()?;
-        let mut stored: HashMap<String, std::collections::VecDeque<usize>> = HashMap::new();
-        for entry in entries.path(self.leaf) {
-            let value = &entry.value;
-            let summary = value["summary"].as_str();
-            let key = match (value["type"].as_str(), summary) {
-                (Some("compaction"), Some(summary)) => {
-                    super::compaction::summary_message(summary).to_string()
-                }
-                (Some("branch_summary"), Some(summary)) => {
-                    super::compaction::branch_summary_message(summary).to_string()
-                }
-                _ => value.to_string(),
-            };
-            stored.entry(key).or_default().push_back(entry.line);
-        }
-        Ok((items.iter())
-            .map(|item| stored.get_mut(&item.to_string())?.pop_front())
-            .collect())
+        Ok(self.read()?.lines_of(self.leaf, items))
     }
 
     /// Every entry of the session, in file order.

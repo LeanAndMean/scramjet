@@ -6227,6 +6227,164 @@ fn acp_lists_the_sessions_running_terminals_hold() {
 
 #[test]
 #[cfg(unix)]
+fn acp_follows_a_terminals_session_read_only() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-watch-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(&project).unwrap();
+    let reply = |text: &str| {
+        [
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+            serde_json::json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": text}}).to_string(),
+            r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+            r#"{"type":"message_stop"}"#.to_owned(),
+        ]
+        .to_vec()
+    };
+    let (port, bodies) = serve_events_after(
+        vec![reply("Done."), reply("Again."), reply("Summary.")],
+        |_| Duration::ZERO,
+    );
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    // Little kept, so that `/compact` has something to summarize.
+    let settings =
+        serde_json::json!({"hideCredentials": "never", "compaction": {"keepRecentTokens": 1}});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    let initialize = serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+        "params": {"protocolVersion": 1}});
+    send(&mut stdin, initialize);
+    until(&messages, |message| message["id"] == 0);
+    let watch = "_io.github.leanandmean.scramjet/watch";
+    let watch_request = |id: u64, session: &str| {
+        serde_json::json!({"jsonrpc": "2.0", "id": id, "method": watch,
+            "params": {"sessionId": session}})
+    };
+    send(&mut stdin, watch_request(1, "nobody"));
+    let refused = until(&messages, |message| message["id"] == 1).0;
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    let mut terminal = program(&binary())
+        .args(["--model", "test/claude-test", "--retries", "0"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_RUNTIME_DIR", scratch.0.join("runtime"))
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut typed = terminal.stdin.take().unwrap();
+    writeln!(typed, "first prompt").unwrap();
+    bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+    let live = "_io.github.leanandmean.scramjet/live_sessions";
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut ids = 1;
+    let session = loop {
+        ids += 1;
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": ids, "method": live, "params": {}}),
+        );
+        let answer = until(&messages, |message| message["id"] == ids).0;
+        let sessions = answer["result"]["sessions"].as_array().unwrap().clone();
+        if let [session] = &sessions[..]
+            && session["state"] == "idle"
+            && session["title"] == "first prompt"
+        {
+            break session["sessionId"].as_str().unwrap().to_owned();
+        }
+        assert!(Instant::now() < deadline, "never idle: {sessions:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    // Watched, its branch replays before the answer, each update carrying its entry's line.
+    send(&mut stdin, watch_request(100, &session));
+    let (answer, replayed) = until(&messages, |message| message["id"] == 100);
+    assert_eq!(answer["result"], serde_json::json!({}), "{answer}");
+    let shown = |updates: &[serde_json::Value]| -> Vec<(String, String)> {
+        (updates.iter())
+            .filter(|message| message["params"]["sessionId"] == session.as_str())
+            .map(|message| &message["params"]["update"])
+            .filter(|update| update["content"]["text"].is_string())
+            .map(|update| {
+                let line = &update["_meta"]["io.github.leanandmean.scramjet"]["entryId"];
+                assert!(line.is_u64(), "{update}");
+                let kind = update["sessionUpdate"].as_str().unwrap().to_owned();
+                (kind, update["content"]["text"].as_str().unwrap().to_owned())
+            })
+            .collect()
+    };
+    let pair = |kind: &str, text: &str| (kind.to_owned(), text.to_owned());
+    assert_eq!(
+        shown(&replayed),
+        [
+            pair("user_message_chunk", "first prompt"),
+            pair("agent_message_chunk", "Done.")
+        ]
+    );
+    // Loading or resuming it would write to the terminal's file.
+    let cwd = project.to_str().unwrap();
+    for (id, method) in [(101, "session/load"), (102, "session/resume")] {
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method,
+                "params": {"sessionId": session, "cwd": cwd, "mcpServers": []}}),
+        );
+        let refused = until(&messages, |message| message["id"] == id).0;
+        let message = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(message.contains("open in a terminal"), "{refused}");
+    }
+    // What the terminal does next follows as its file takes it.
+    writeln!(typed, "second prompt").unwrap();
+    bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+    let (_, followed) = until(&messages, |message| {
+        message["params"]["update"]["content"]["text"] == "Again."
+    });
+    assert_eq!(
+        shown(&followed),
+        [pair("user_message_chunk", "second prompt")]
+    );
+    // A compaction makes another branch of it: it is shown again from its start.
+    writeln!(typed, "/compact").unwrap();
+    bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+    let reset = until(&messages, |message| {
+        message["method"] == "_io.github.leanandmean.scramjet/watch_reset"
+    })
+    .0;
+    assert_eq!(reset["params"]["sessionId"], session.as_str(), "{reset}");
+    let (_, replayed) = until(&messages, |message| {
+        message["params"]["update"]["content"]["text"] == "Again."
+    });
+    assert_eq!(
+        shown(&replayed),
+        [pair("agent_message_chunk", "Context compacted.")]
+    );
+    // Its terminal gone, the watch ends; `unwatch` after it is answered all the same.
+    drop(typed);
+    terminal.wait().unwrap();
+    let ended = until(&messages, |message| {
+        message["method"] == "_io.github.leanandmean.scramjet/watch_ended"
+    })
+    .0;
+    assert_eq!(ended["params"]["sessionId"], session.as_str(), "{ended}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 103,
+            "method": "_io.github.leanandmean.scramjet/unwatch",
+            "params": {"sessionId": session}}),
+    );
+    until(&messages, |message| message["id"] == 103);
+    drop(stdin);
+    child.wait().unwrap();
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_lists_resumes_closes_and_deletes_saved_sessions() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-sessions-{}", std::process::id())),

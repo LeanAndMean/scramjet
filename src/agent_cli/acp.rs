@@ -31,6 +31,7 @@ use std::{
 };
 
 mod sign_in;
+mod watch;
 
 const PROTOCOL_VERSION: u64 = 1;
 const PARSE_ERROR: i64 = -32700;
@@ -66,7 +67,7 @@ const FILES: &str = "_io.github.leanandmean.scramjet/files";
 const SANDBOX: &str = "_io.github.leanandmean.scramjet/sandbox";
 const LIVE_SESSIONS: &str = "_io.github.leanandmean.scramjet/live_sessions";
 /// The extension methods the client may call, as `initialize` lists them.
-const EXTENSIONS: [&str; 21] = [
+const EXTENSIONS: [&str; 23] = [
     HOLD,
     COMPACT,
     RENAME,
@@ -88,6 +89,8 @@ const EXTENSIONS: [&str; 21] = [
     FILES,
     SANDBOX,
     LIVE_SESSIONS,
+    watch::WATCH,
+    watch::UNWATCH,
 ];
 /// JSON-RPC's error for a request the client cancelled, as ACP's `$/cancel_request` answers.
 const REQUEST_CANCELLED: i64 = -32800;
@@ -136,6 +139,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         sign_in: sign_in::SignIn::default(),
         sessions: HashMap::new(),
         renamed: Arc::default(),
+        watches: HashMap::new(),
     };
     let (sent, inputs) = mpsc::channel();
     on_sigterm(sent.clone()).map_err(|e| format!("acp: SIGTERM: {e}"))?;
@@ -446,6 +450,8 @@ struct Connection {
     /// The ids sessions took later (a next step's fresh session), each with the one `sessions`
     /// holds it under.
     renamed: Renamed,
+    /// The sessions terminals hold that the client follows (`watch`), by id.
+    watches: HashMap<String, watch::Watch>,
 }
 
 type Renamed = Arc<Mutex<HashMap<String, String>>>;
@@ -669,6 +675,14 @@ impl Connection {
             FILES => self.files(id, &params),
             SANDBOX => self.sandbox(&id, &params),
             LIVE_SESSIONS => self.out.respond(&id, json!({"sessions": live_sessions()})),
+            watch::WATCH => self.watch(&id, &params),
+            watch::UNWATCH => {
+                let wanted = params["sessionId"].as_str().unwrap_or_default();
+                if let Some(watch) = self.watches.remove(wanted) {
+                    watch.stop();
+                }
+                self.out.respond(&id, json!({}));
+            }
             ABORT_BASH => match self.abort_bash(&params) {
                 true => self.out.respond(&id, json!({})),
                 false => self.unknown(&id, &params),
@@ -692,6 +706,22 @@ impl Connection {
             self.abort_bash(params);
         } else if method == "$/cancel_request" {
             self.sign_in.cancel(&params["requestId"]);
+        }
+    }
+
+    /// Follows the session a terminal holds that `params` names, read-only, in place of any
+    /// earlier watch of it.
+    fn watch(&mut self, id: &Value, params: &Value) {
+        let wanted = params["sessionId"].as_str().unwrap_or_default().to_owned();
+        if let Some(watch) = self.watches.remove(&wanted) {
+            watch.stop();
+        }
+        let shown = watch::Shown {
+            scramjet: self.scramjet,
+            terminals: self.terminals,
+        };
+        if let Some(watch) = watch::start(&self.out, id, &wanted, shown) {
+            self.watches.insert(wanted, watch);
         }
     }
 
@@ -1404,6 +1434,11 @@ impl Connection {
         if info.item_count == 0 {
             return Err(unknown());
         }
+        if let Some(pid) = watch::holder(&file) {
+            return Err(invalid(format!(
+                "session {wanted} is open in a terminal (process {pid}): follow it with watch"
+            )));
+        }
         match info.root {
             Some(found) if found != root => Err(invalid(format!(
                 "session {wanted} is in {}, not {}",
@@ -1604,6 +1639,9 @@ impl Connection {
     /// At the end of input or SIGTERM: every turn cancelled, and each session's thread waited for, which
     /// writes its session file as it goes.
     fn end(self) {
+        for (_, watch) in self.watches {
+            watch.stop();
+        }
         for handle in self.sessions.values() {
             handle.cancel.store(true, Ordering::Relaxed);
             if let Some(bash) = &lock(&handle.turn).bash {
@@ -2090,40 +2128,21 @@ impl Worker {
         }
         drop(log);
         let ui = Updates {
-            out: self.out,
-            log: self.log,
-            first: session.agent.session_id(),
-            session: session.agent.session_id(),
             notices: self.notices,
             scramjet: self.scramjet,
             terminals: self.terminals,
             compaction: self.compaction,
             forms: self.forms,
-            compactions: 0,
-            compacting: false,
             turn: self.turn.clone(),
             steering: session.settings.steering_mode,
             follow_up: session.settings.follow_up_mode,
-            responses: 0,
-            streamed: false,
-            calls: 0,
-            root: session.agent.root().to_path_buf(),
-            call: Call::default(),
-            together: Vec::new(),
-            of: None,
-            window: None,
-            used: None,
-            stopped: None,
-            asked: None,
             cancel: self.cancel.clone(),
-            replaying: false,
-            held: Cell::new(None),
-            thinking: false,
-            entry: None,
-            call_ids: HashMap::new(),
-            prompt_shown: None,
-            taken_ids: Default::default(),
-            title: None,
+            ..Updates::new(
+                self.out,
+                self.log,
+                session.agent.session_id(),
+                session.agent.root(),
+            )
         };
         Acp {
             session,
@@ -3088,6 +3107,47 @@ fn add_meta(update: &mut Value, fields: Value) {
 }
 
 impl Updates {
+    /// Updates of session `session`, in the project `root`, before what the client offered is
+    /// known.
+    fn new(out: Out, log: Shared, session: String, root: &Path) -> Self {
+        Updates {
+            out,
+            log,
+            first: session.clone(),
+            session,
+            notices: false,
+            scramjet: false,
+            terminals: Terminals::Text,
+            compaction: false,
+            forms: false,
+            compactions: 0,
+            compacting: false,
+            turn: Arc::default(),
+            steering: super::settings::Delivery::OneAtATime,
+            follow_up: super::settings::Delivery::OneAtATime,
+            responses: 0,
+            streamed: false,
+            calls: 0,
+            root: root.to_path_buf(),
+            call: Call::default(),
+            together: Vec::new(),
+            of: None,
+            window: None,
+            used: None,
+            stopped: None,
+            asked: None,
+            cancel: Arc::default(),
+            replaying: false,
+            held: Cell::new(None),
+            thinking: false,
+            entry: None,
+            call_ids: HashMap::new(),
+            prompt_shown: None,
+            taken_ids: Default::default(),
+            title: None,
+        }
+    }
+
     fn update(&self, mut update: Value) {
         self.flush();
         self.stamp(&mut update);

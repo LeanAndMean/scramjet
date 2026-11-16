@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.245.0 — Terminals' sessions followed read-only
+
+### Added
+
+- `scramjet acp` follows a session a running terminal holds, read-only, with the extension method `watch`: its conversation replayed from its file, then what the terminal saves as it goes, without opening the session; `watch_reset` when a compaction or a move in `/tree` changes its branch, `watch_ended` when the terminal quits or moves on. Flightdeck 0.29.0 shows it.
+
+### Changed
+
+- `session/load` and `session/resume` over ACP refuse a session a running terminal holds, as both would write to its file under it.
+
 ## 2.244.0 — Terminals' sessions for Flightdeck
 
 ### Added

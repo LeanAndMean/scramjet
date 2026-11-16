@@ -76,7 +76,7 @@ pub use request::{CacheRetention, set_cache_retention};
 pub use sandbox::{Remembered, Sandbox, SandboxMode};
 pub use session::{
     Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,
-    projects_directory, read_branch, state_directory,
+    projects_directory, read_branch, read_conversation, state_directory,
 };
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};
@@ -90,7 +90,8 @@ pub use tools::{
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{
     AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, CompactRead,
-    Delegation, Ending, Purpose, Saved, ToolDetail, UserCommand, publication_choices, show_items,
+    Delegation, Ending, Purpose, Saved, ToolDetail, UserCommand, publication_choices, show_entries,
+    show_items,
 };
 
 use providers::ModelInfo;
