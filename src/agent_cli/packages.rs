@@ -225,7 +225,8 @@ fn prune(directory: &Path, root: &Path) {
     }
 }
 
-/// `git`, run in `directory`, with the terminal for prompts and messages.
+/// `git`, run in `directory`, with the terminal for prompts and messages: Git for Windows
+/// prompts through a script reading `/dev/tty` when its stderr is not the console.
 fn git(directory: Option<&Path>) -> Command {
     let mut command = Command::new("git");
     if let Some(directory) = directory {
@@ -235,14 +236,17 @@ fn git(directory: Option<&Path>) -> Command {
     command
 }
 
-/// What `command` printed, trimmed; `git <what>` failing when it does.
+/// What `command` printed, trimmed; `git <what>` failing when it does, with git's exit status,
+/// which tells a git that printed nothing, interrupted or crashed, from one that refused.
 fn run(command: &mut Command, what: &str) -> Result<String, String> {
     match command.stdout(Stdio::piped()).output() {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             Err("git is not installed; packages from git need it".into())
         }
         Err(error) => Err(format!("git: {error}")),
-        Ok(output) if !output.status.success() => Err(format!("git {what} failed")),
+        Ok(output) if !output.status.success() => {
+            Err(format!("git {what} failed ({})", output.status))
+        }
         Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned()),
     }
 }

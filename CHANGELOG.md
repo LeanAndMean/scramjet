@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.254.1 — A failed git clone says how git ended
+
+### Fixed
+
+- When installing, updating or checking out a package from git fails, the error gives git's exit status (`git clone failed (exit code: 128)`), so a git that ended without printing anything, interrupted or stopped by something else, can be told from one that refused.
+
 ## 2.254.0 — `/model` reads model catalogs again
 
 ### Changed

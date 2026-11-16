@@ -1545,7 +1545,17 @@ mach12 ({kit}): 1 command, 0 agents\n  providers (providers): 0 commands, \
     let missing = url(&scratch.0.join("missing.git"));
     let (ok, _, err) = run(&["install", &missing]);
     assert!(!ok);
-    assert!(err.ends_with("scramjet: git clone failed\n"), "{err}");
+    // Git's own message shows above the failure, which gives git's exit status.
+    assert!(
+        err.contains("does not appear to be a git repository"),
+        "{err}"
+    );
+    let last = err.lines().last().unwrap();
+    assert!(
+        last.starts_with("scramjet: git clone failed (exit "),
+        "{err}"
+    );
+    assert!(last.ends_with(": 128)"), "{err}");
     assert_eq!(std::fs::read_dir(&clones).unwrap().count(), 0);
     assert_eq!(packages(), serde_json::json!([]));
 
