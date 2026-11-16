@@ -14,7 +14,9 @@
     "toolPendingBg": "#d4d4e0",
     "toolSuccessBg": "#ccdccc",
     "toolErrorBg": "#dccece",
-    "customMsgBg": "#d4cce4"
+    "customMsgBg": "#d4cce4",
+    "fg": "#1e1e1e",
+    "bg": "#f7f7f7"
   },
   "colors": {
     "accent": "teal",
@@ -26,18 +28,18 @@
     "warning": "yellow",
     "muted": "mediumGray",
     "dim": "dimGray",
-    "text": "",
+    "text": "fg",
     "thinkingText": "mediumGray",
     "selectedBg": "selectedBg",
     "userMessageBg": "userMsgBg",
-    "userMessageText": "",
+    "userMessageText": "fg",
     "customMessageBg": "customMsgBg",
-    "customMessageText": "",
+    "customMessageText": "fg",
     "customMessageLabel": "#5a2d8f",
     "toolPendingBg": "toolPendingBg",
     "toolSuccessBg": "toolSuccessBg",
     "toolErrorBg": "toolErrorBg",
-    "toolTitle": "",
+    "toolTitle": "fg",
     "toolOutput": "mediumGray",
     "mdHeading": "yellow",
     "mdLink": "blue",
@@ -68,6 +70,7 @@
     "thinkingHigh": "#6b3a6b",
     "thinkingXhigh": "#6b006b",
     "bashMode": "green",
-    "spellcheckError": ""
+    "spellcheckError": "fg",
+    "background": "bg"
   }
 }

@@ -1958,7 +1958,13 @@ mod tests {
     #[test]
     fn a_theme_the_editor_did_not_make_starts_a_new_one_showing_its_colors() {
         let campbell = (12, 12, 12);
-        let dark = Theme::built_in("scramjet-dark").unwrap();
+        // The built-in themes as they were before they painted their own background and text.
+        let on_the_terminals = |text: &str| {
+            let text =
+                (text.replace(r#": "fg""#, r#": """#)).replace(",\n    \"background\": \"bg\"", "");
+            Theme::parse(&text).unwrap()
+        };
+        let dark = on_the_terminals(include_str!("themes/scramjet-dark.json"));
         let editor = ThemeEditor::from_theme("scramjet-dark", &dark, 1, Some(campbell)).unwrap();
         // Its accent, border, heading, variable and string colors are the main colors, each
         // lit as it is, on the terminal's background, which it leaves to the terminal.
@@ -2004,7 +2010,7 @@ mod tests {
             "{shown:?}"
         );
         // Without the terminal's background, a light one for a theme with dark secondary text.
-        let light = Theme::built_in("pi-light").unwrap();
+        let light = on_the_terminals(include_str!("themes/pi-light.json"));
         let editor = ThemeEditor::from_theme("pi-light", &light, 1, None).unwrap();
         assert_eq!(editor.draft().background, Background::Light);
         assert_eq!(
@@ -2180,10 +2186,8 @@ mod tests {
     #[test]
     fn a_background_of_a_themes_own_is_kept_and_offered_beside_the_others() {
         let campbell = (12, 12, 12);
-        let text = include_str!("themes/scramjet-dark.json").replace(
-            r#""text": "","#,
-            r##""text": "", "background": "#10141c","##,
-        );
+        let text = include_str!("themes/scramjet-dark.json")
+            .replace(r#""background": "bg""#, r##""background": "#10141c""##);
         let own = Theme::parse(&text).unwrap();
         let mut editor = ThemeEditor::from_theme("own", &own, 1, Some(campbell)).unwrap();
         assert_eq!(editor.draft().background, Background::Own((16, 20, 28)));

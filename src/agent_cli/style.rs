@@ -407,7 +407,6 @@ pub(super) fn generation() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cli::theme::BUILT_IN;
 
     #[test]
     fn the_terminal_colors_are_the_16_colors_shown_before_themes() {
@@ -447,17 +446,16 @@ mod tests {
         assert_eq!(shown(&exact, SPINNER), "\x1b[38;2;56;225;255m");
         assert_eq!(shown(&indexed, SPINNER), "\x1b[38;5;81m");
         assert_eq!(shown(&exact, TITLE), "\x1b[1;4;38;2;255;158;90m");
-        assert_eq!(shown(&exact, SUBAGENT_NAME), "\x1b[1m");
-        assert_eq!(shown(&exact, CODE_BLOCK), "");
+        assert_eq!(shown(&exact, SUBAGENT_NAME), "\x1b[1;38;2;204;204;204m");
+        assert_eq!(shown(&exact, CODE_BLOCK), "\x1b[38;2;204;204;204m");
     }
 
     #[test]
     fn a_theme_with_a_background_paints_it_under_its_text_color() {
         let base = |text: &str, mode| {
-            let theme = include_str!("themes/scramjet-dark.json").replace(
-                r#""text": "","#,
-                &format!(r##""text": {text}, "background": "#10141c","##),
-            );
+            let theme = include_str!("themes/scramjet-dark.json")
+                .replace(r#""text": "fg","#, &format!(r#""text": {text},"#))
+                .replace(r#""background": "bg""#, r##""background": "#10141c""##);
             let theme = Theme::parse(&theme).unwrap();
             table(&theme, mode).swap_remove(SPECS.len())
         };
@@ -467,17 +465,26 @@ mod tests {
         );
         assert_eq!(base(r#""""#, Mode::TrueColor), "\x1b[48;2;16;20;28m");
         assert_eq!(base("15", Mode::Indexed), "\x1b[97;48;5;16m");
-        for name in BUILT_IN {
-            let theme = Theme::built_in(name).unwrap();
-            assert_eq!(table(&theme, Mode::TrueColor)[SPECS.len()], "");
-        }
+        let built_in = |name| table(&Theme::built_in(name).unwrap(), Mode::TrueColor);
+        assert_eq!(built_in(TERMINAL_COLORS)[SPECS.len()], "");
+        assert_eq!(
+            built_in("scramjet-dark")[SPECS.len()],
+            "\x1b[38;2;204;204;204;48;2;12;12;12m"
+        );
+        assert_eq!(
+            built_in("pi-light")[SPECS.len()],
+            "\x1b[38;2;30;30;30;48;2;247;247;247m"
+        );
         // A selected row on the theme's selectedBg, or on the base where it has none.
         let selected = |name| {
             let theme = Theme::built_in(name).unwrap();
             table(&theme, Mode::TrueColor).swap_remove(SPECS.len() + 1 + Band::Selected as usize)
         };
-        assert_eq!(selected("scramjet-dark"), "\x1b[48;2;31;39;54m");
-        assert_eq!(selected("pi-light"), "\x1b[48;2;212;212;224m");
+        assert_eq!(
+            selected("scramjet-dark"),
+            "\x1b[38;2;204;204;204;48;2;31;39;54m"
+        );
+        assert_eq!(selected("pi-light"), "\x1b[38;2;30;30;30;48;2;212;212;224m");
         assert_eq!(selected(TERMINAL_COLORS), "");
 
         let row = "plain \x1b[1mbold\x1b[0m end\x1b[0m";

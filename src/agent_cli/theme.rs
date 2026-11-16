@@ -695,7 +695,7 @@ mod tests {
         }
         let dark = Theme::built_in("scramjet-dark").unwrap();
         assert_eq!(dark.color(Token::Accent), Color::Rgb(0x38, 0xe1, 0xff));
-        assert_eq!(dark.color(Token::Text), Color::Default);
+        assert_eq!(dark.color(Token::Text), Color::Rgb(0xcc, 0xcc, 0xcc));
         assert_eq!(
             dark.color(Token::SyntaxKeyword),
             Color::Rgb(0x56, 0x9c, 0xd6)
@@ -769,8 +769,16 @@ mod tests {
             background(&with(r#", "background": "day""#)),
             Err("background: day is not in vars".into())
         );
-        for name in BUILT_IN {
-            assert_eq!(Theme::built_in(name).unwrap().background(), Color::Default);
+        let own = |name| Theme::built_in(name).unwrap().background();
+        assert_eq!(own(TERMINAL_COLORS), Color::Default);
+        assert_eq!(own("scramjet-dark"), Color::Rgb(0x0c, 0x0c, 0x0c));
+        assert_eq!(own("pi-light"), Color::Rgb(0xf7, 0xf7, 0xf7));
+        for name in ["scramjet-dark", "pi-light"] {
+            let theme = Theme::built_in(name).unwrap();
+            assert!(
+                theme.colors.iter().all(|color| *color != Color::Default),
+                "{name}"
+            );
         }
         assert_eq!(Color::Index(4).background(Mode::Indexed), Some("44".into()));
         assert_eq!(

@@ -19,7 +19,9 @@
     "bgSuccess": "#12241b",
     "bgError": "#26141a",
     "bgCustom": "#1a1628",
-    "bgSelected": "#1f2736"
+    "bgSelected": "#1f2736",
+    "fg": "#cccccc",
+    "bg": "#0c0c0c"
   },
   "colors": {
     "accent": "plasmaCyan",
@@ -31,24 +33,24 @@
     "warning": "gold",
     "muted": "steel",
     "dim": "slate",
-    "text": "",
+    "text": "fg",
     "thinkingText": "steel",
     "selectedBg": "bgSelected",
     "userMessageBg": "bgUser",
-    "userMessageText": "",
+    "userMessageText": "fg",
     "customMessageBg": "bgCustom",
-    "customMessageText": "",
+    "customMessageText": "fg",
     "customMessageLabel": "plasmaCyan",
     "toolPendingBg": "bgTool",
     "toolSuccessBg": "bgSuccess",
     "toolErrorBg": "bgError",
-    "toolTitle": "",
+    "toolTitle": "fg",
     "toolOutput": "steel",
     "mdHeading": "afterAmber",
     "mdLink": "shockBlue",
     "mdLinkUrl": "slate",
     "mdCode": "plasmaCyan",
-    "mdCodeBlock": "",
+    "mdCodeBlock": "fg",
     "mdCodeBlockBorder": "graphite",
     "mdQuote": "steel",
     "mdQuoteBorder": "shockBlue",
@@ -73,6 +75,7 @@
     "thinkingHigh": "violet",
     "thinkingXhigh": "afterAmber",
     "bashMode": "emerald",
-    "spellcheckError": "crimson"
+    "spellcheckError": "crimson",
+    "background": "bg"
   }
 }

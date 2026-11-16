@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.243.0 — Themes on their own background, and the prompt says what is hidden
+
+### Changed
+
+- The built-in `scramjet-dark` and `pi-light` themes paint their own background and text color in the full screen, so they look the same in every terminal; `terminal-colors` keeps the terminal's.
+
+### Added
+
+- Once a prompt's text is taller than its rows, its top rule says how many rows are above (`─── ↑ 6 more`) and its bottom rule how many are below (`─── ↓ 12 more`), as in Scramjet 1.
+
 ## 2.242.1 — Suggested next steps in editors
 
 ### Fixed

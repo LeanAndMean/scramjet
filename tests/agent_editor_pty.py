@@ -4486,7 +4486,7 @@ def fullscreen_turn_resumed(read, until, send, output):
     for expected in [' bash  echo checked; exit 2', '\n checked\n', 'Command exited with code 2']:
         assert expected in text, (expected, text)
     # scramjet-dark's toolErrorBg behind its toolOutput.
-    assert b'\x1b[48;2;38;20;26m \x1b[38;2;139;149;167mchecked' in output, \
+    assert b'\x1b[38;2;204;204;204;48;2;38;20;26m \x1b[38;2;139;149;167mchecked' in output, \
         'the failed command is not on the failure\'s background'
     send(b'\x1b[5~')
     rows = on_screen(' \u203a go')

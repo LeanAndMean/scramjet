@@ -131,7 +131,7 @@ fn prompt_rows(
     (width, room): (usize, usize),
     layout: Layout,
     spelled: bool,
-) -> Option<(usize, usize)> {
+) -> (Option<(usize, usize)>, (usize, usize)) {
     let (text, row, column) = draft.rows(width, spelled);
     let shown = (room * layout.editor_share / 100).max(1).min(text.len());
     let top = (row + 1).saturating_sub(shown).min(text.len() - shown);
@@ -140,7 +140,21 @@ fn prompt_rows(
     rows.extend(selection::rows(
         &draft.completion_rows(width, layout.completion_rows),
     ));
-    Some((start + row - top, column))
+    let hidden = (top, text.len() - top - shown);
+    (Some((start + row - top, column)), hidden)
+}
+
+/// The prompt's rule, `width` columns of it, saying how many of the draft's rows are hidden
+/// past it (`↑` above, `↓` below) as Scramjet's editor border does.
+fn prompt_rule(border: style::Style, width: usize, hidden: Option<(char, usize)>) -> Line {
+    let width = width.saturating_sub(1);
+    let indicator = match hidden {
+        Some((arrow, count)) if count > 0 => format!("─── {arrow} {count} more "),
+        _ => String::new(),
+    };
+    let indicator = clip(&indicator, width);
+    let rest = "─".repeat(width.saturating_sub(columns(&indicator)));
+    Line::rule(&format!("{border}{indicator}{rest}{}", style::RESET))
 }
 
 /// The style of the prompt's rules, as Scramjet's editor border: the bash-mode color while
@@ -349,7 +363,7 @@ impl App {
                     style::RESET
                 );
                 rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
-                prompt_rows(&text.draft, &mut rows, (width, room), self.layout, false)
+                prompt_rows(&text.draft, &mut rows, (width, room), self.layout, false).0
             }
             Some(Open {
                 shown: Shown::Press(title, note) | Shown::Wait(title, note),
@@ -381,22 +395,21 @@ impl App {
             }
             None => {
                 let border = prompt_border(self.footer.shown.effort.as_deref(), &self.draft);
-                let rule = Line::rule(&format!(
-                    "{border}{}{}",
-                    "─".repeat(width.saturating_sub(1)),
-                    style::RESET
-                ));
-                rows.push(rule.clone());
-                let cursor = prompt_rows(&self.draft, &mut rows, (width, room), self.layout, true);
-                rows.push(rule);
+                let top = rows.len();
+                rows.push(prompt_rule(border, width, None));
+                let (cursor, (above, below)) =
+                    prompt_rows(&self.draft, &mut rows, (width, room), self.layout, true);
+                rows[top] = prompt_rule(border, width, Some(('↑', above)));
+                rows.push(prompt_rule(border, width, Some(('↓', below))));
                 cursor
             }
         };
         // As Scramjet's editor and its lists end with a rule over the footer.
-        let ruled = (rows.last()).is_some_and(|row| {
-            let text = plain(&row.shown);
-            !text.is_empty() && text.chars().all(|c| c == '─')
-        });
+        let ruled = self.dialog.is_none()
+            || (rows.last()).is_some_and(|row| {
+                let text = plain(&row.shown);
+                !text.is_empty() && text.chars().all(|c| c == '─')
+            });
         if !ruled {
             let color = match &self.dialog {
                 Some(Open {
@@ -654,6 +667,27 @@ mod tests {
         }
         let mentioned = editor.draft("Why did !cargo test fail?".into());
         assert_eq!(prompt_border(Some("high"), &mentioned), style::PROMPT_HIGH);
+    }
+
+    #[test]
+    fn the_prompts_rules_say_how_many_of_its_rows_are_hidden_above_and_below() {
+        use crate::agent_cli::editor::Editor;
+        use std::sync::{Arc, atomic::AtomicBool};
+        let editor = Editor::dialog(Arc::new(AtomicBool::new(false)));
+        let lines: Vec<String> = (1..=10).map(|n| format!("line {n}")).collect();
+        let draft = editor.draft(lines.join("\n"));
+        let mut rows = Vec::new();
+        let (_, hidden) = prompt_rows(&draft, &mut rows, (40, 10), Layout::default(), false);
+        assert_eq!(hidden, (7, 0));
+        assert_eq!(plain(&rows[0].shown).trim(), "line 8");
+        let rule = |hidden, width| plain(&prompt_rule(style::PROMPT_OFF, width, hidden).shown);
+        assert_eq!(
+            rule(Some(('↑', 7)), 20),
+            format!("─── ↑ 7 more {}", "─".repeat(6))
+        );
+        assert_eq!(rule(Some(('↓', 0)), 20), "─".repeat(19));
+        assert_eq!(rule(None, 20), "─".repeat(19));
+        assert_eq!(rule(Some(('↓', 1234)), 12), "─── ↓ 1234…");
     }
 
     #[test]
