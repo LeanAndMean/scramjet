@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.249.0 — Ctrl+C clears what you typed during a turn without stopping it
+
+### Changed
+
+- While the agent works, Ctrl+C clears text typed in the prompt and leaves the turn running, as in Claude Code and Codex; on an empty prompt it still interrupts the turn, as Escape does. Before, clearing a half-typed message also stopped whatever command was running.
+
 ## 2.248.0 — Requests outlast a few minutes of a provider's outage
 
 ### Changed

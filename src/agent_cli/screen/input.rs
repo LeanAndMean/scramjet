@@ -216,7 +216,8 @@ impl App {
                 return Flow::Go;
             }
         }
-        if key.is(Binding::Clear) && running {
+        // As in Claude Code and Codex, Ctrl-C clears text typed during a turn before it stops it.
+        if key.is(Binding::Clear) && running && self.draft.text().is_empty() {
             self.cancel.store(true, Ordering::Relaxed);
         }
         if key.is(Binding::Dequeue) {

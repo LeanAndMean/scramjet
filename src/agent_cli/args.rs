@@ -156,8 +156,9 @@ to the conversation for the next prompt; `!!command` runs it without adding it.
 The prompt stays while a turn runs: Enter then queues a message for the model's next request,
 Alt+Enter one for when the turn would end (steeringMode and followUpMode: all or one-at-a-time
 at once); Escape interrupts the turn and puts them back in the editor, as Alt+Up does.
-Ctrl-C clears the prompt, and interrupts a turn; on an empty prompt press it twice, or Ctrl-D, or
-type /exit, to quit. Dragging selects text, a double click a word, a triple click the line;
+Ctrl-C clears the prompt, or on an empty one interrupts a turn; on an empty prompt press it
+twice, or Ctrl-D, or type /exit, to quit. Dragging selects text, a double click a word, a triple
+click the line;
 Ctrl+C or a right click copies it, and a right click without a selection pastes the clipboard
 into the prompt. Ctrl+V or Alt+V saves the clipboard's image to a file in the temporary directory
 and pastes its path, for the model to read. Ctrl+O shows tool results whole, or cut again. Ctrl+T
