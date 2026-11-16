@@ -94,7 +94,7 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 **RPC mode (user decisions, 2026-11-09 and 2026-11-12):** headless over stdio on the Agent Client Protocol (ACP), with Scramjet's extras as extensions and sign-in through the protocol, for front ends built in other repositories ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)), before what is left of S3's parallel work and S5, now the lowest priority. Signed off on 2026-11-12 and built (2.199.0–2.230.0; ACP's test kit passes). No network surface and no daemon in this repository.
 
-**Next (steer of 2026-11-13):** a browser dashboard for several machines, in a repository of its own on top of `scramjet acp` ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)); ChatGPT's device-code sign-in over ACP; the live Copilot and ChatGPT checks now approved.
+**Next (steer of 2026-11-13):** a browser dashboard for several machines, in a repository of its own on top of `scramjet acp` ([design](DESIGN.md#rpc-mode-and-off-device-front-ends-2026-11-09)); ChatGPT's device-code sign-in over ACP; the live Copilot and ChatGPT checks now approved. Steer of 2026-11-16: the built-in themes' own backgrounds and the editor's ↑/↓ more indicators, then Flightdeck refined and an overview of active sessions on every machine, terminal sessions read-only.
 
 ## S5 — Capacity and admission hardening
 
