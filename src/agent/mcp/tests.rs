@@ -1003,6 +1003,7 @@ impl Remote {
         let mut child = std::process::Command::new("python3")
             .arg(support("mcp_http_server.py"))
             .envs(env.iter().map(|(key, value)| (key, value)))
+            .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .spawn()
             .unwrap();

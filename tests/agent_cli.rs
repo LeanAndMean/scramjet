@@ -3573,6 +3573,7 @@ fn acp_sessions_start_the_clients_mcp_servers() {
     let mut web = Command::new("python3")
         .arg(repository().join("tests/support/mcp_http_server.py"))
         .env("MCP_TEST_TOKEN", "client-token")
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();

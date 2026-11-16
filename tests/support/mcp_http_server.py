@@ -9,11 +9,14 @@ Each request is appended to the file `MCP_TEST_LOG` names: its method, path, JSO
 session and protocol version. `MCP_TEST_TOKEN` is the bearer token it asks for (HTTP 401
 without it). `/old` redirects to `/mcp` with a 307 and its URL, `/moved` with a 308 and its
 path, `/away` with a 307 to localhost, `/gone` with a 301, each keeping the query. A POST to
-`/forget` drops every session, unlogged, as a restarted server would."""
+`/forget` drops every session, unlogged, as a restarted server would. When its stdin is a pipe,
+it exits once the pipe closes, so a test that panics or is killed does not leave it running."""
 import http.server
 import json
 import os
 import ssl
+import stat
+import sys
 import threading
 import time
 import uuid
@@ -184,5 +187,7 @@ if tls:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(os.path.join(tls, "localhost.pem"), os.path.join(tls, "localhost.key"))
     server.socket = context.wrap_socket(server.socket, server_side=True)
+if stat.S_ISFIFO(os.fstat(0).st_mode):
+    threading.Thread(target=lambda: (sys.stdin.buffer.read(), os._exit(0)), daemon=True).start()
 print(server.server_address[1], flush=True)
 server.serve_forever()
