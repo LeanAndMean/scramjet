@@ -524,6 +524,8 @@ pub(super) struct Settings {
     pub(super) mcp_servers: Vec<McpServer>,
     /// `disabledMcpServers`: the names of those not started, as Claude Code's (`/mcp disable`).
     pub(super) disabled_mcp_servers: Vec<String>,
+    /// `modelCatalogs`: the URLs of the model catalogs providers come from (`agent::Catalog`).
+    pub(super) model_catalogs: Vec<String>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -640,6 +642,7 @@ impl Settings {
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
             disabled_mcp_servers: Vec::new(),
+            model_catalogs: Vec::new(),
             warnings: Vec::new(),
         }
     }
@@ -1003,6 +1006,12 @@ impl Settings {
             Ok(names) => self.disabled_mcp_servers = names,
             Err(()) => self.warnings.push(format!(
                 "{path}: disabledMcpServers must be a list of server names; ignored"
+            )),
+        }
+        match paths(object, "modelCatalogs") {
+            Ok(urls) => self.model_catalogs = urls,
+            Err(()) => self.warnings.push(format!(
+                "{path}: modelCatalogs must be a list of URLs; ignored"
             )),
         }
     }
@@ -1469,6 +1478,56 @@ impl Settings {
         let own = own.map(|directory| directory.join("models.json"));
         let sets = self.command_sets.iter().map(|set| set.join("models.json"));
         own.into_iter().chain(sets).collect()
+    }
+
+    /// Where the providers come from: `models_files`, then `modelCatalogs`.
+    pub(super) fn sources(&self) -> scramjet::agent::Sources {
+        scramjet::agent::Sources {
+            files: self.models_files(),
+            catalogs: self.model_catalogs.clone(),
+        }
+    }
+
+    /// Adds `url` to `modelCatalogs`, unless listed already; returns whether it was added.
+    pub(super) fn add_catalog(&mut self, url: &str) -> Result<bool, String> {
+        self.change_catalogs(|urls| {
+            let listed = urls.iter().any(|listed| listed == url);
+            if !listed {
+                urls.push(url.to_owned());
+            }
+            !listed
+        })
+    }
+
+    /// Removes `url` from `modelCatalogs`; returns whether it was listed.
+    pub(super) fn remove_catalog(&mut self, url: &str) -> Result<bool, String> {
+        self.change_catalogs(|urls| {
+            let before = urls.len();
+            urls.retain(|listed| listed != url);
+            urls.len() != before
+        })
+    }
+
+    /// Makes `change` to the file's `modelCatalogs`, saved when it says it changed them; none
+    /// left leaves the key out.
+    fn change_catalogs(
+        &mut self,
+        change: impl FnOnce(&mut Vec<String>) -> bool,
+    ) -> Result<bool, String> {
+        let path = (self.path.clone()).ok_or("neither XDG_CONFIG_HOME nor HOME is set")?;
+        let mut object = read_object(&path)?;
+        let mut urls = paths(&object, "modelCatalogs")
+            .map_err(|()| format!("{}: modelCatalogs must be a list of URLs", shown(&path)))?;
+        if !change(&mut urls) {
+            return Ok(false);
+        }
+        match urls.is_empty() {
+            true => drop(object.remove("modelCatalogs")),
+            false => drop(object.insert("modelCatalogs".into(), json!(urls))),
+        }
+        write_object(&path, object)?;
+        self.model_catalogs = urls;
+        Ok(true)
     }
 
     /// The settings file, shortened for display.

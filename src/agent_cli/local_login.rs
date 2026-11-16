@@ -424,10 +424,9 @@ impl Interactive {
     /// Reads the providers again, as `/reload` does.
     fn providers_changed(&mut self) {
         let logins = login::Logins::user();
-        self.session.agent.set_providers(Providers::read(
-            self.session.settings.models_files(),
-            logins,
-        ));
+        self.session
+            .agent
+            .set_providers(Providers::read(self.session.settings.sources(), logins));
         if let Some(screen) = &self.screen {
             screen.models(self.session.agent.models().unwrap_or_default());
         }

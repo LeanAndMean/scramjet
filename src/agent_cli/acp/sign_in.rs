@@ -71,7 +71,7 @@ impl SignIn {
     pub(super) fn read(urls: bool) -> Self {
         let programs = match login::Logins::user() {
             Some(logins) => {
-                let providers = Providers::read(Settings::load().models_files(), Some(logins));
+                let providers = Providers::read(Settings::load().sources(), Some(logins));
                 providers.login_programs().to_vec()
             }
             None => Vec::new(),

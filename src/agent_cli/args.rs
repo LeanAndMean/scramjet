@@ -14,6 +14,7 @@ pub(super) const USAGE: &str =
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
        scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
+       scramjet catalog add URL | remove URL | list
        scramjet lint [--strict] [--json] DIR...
        scramjet import [--dry-run] [DIR]
        scramjet acp [OPTIONS]
@@ -27,7 +28,9 @@ each request, as headers' values may be) and its models, with their contextWindo
 providersCommand names a program printing more, as {\"version\": 1, \"providers\": ...}, and
 its credentialFiles the files holding their keys, hidden as --list-credential-stores says,
 its engines the earliest Scramjet it works with ({\"scramjet\": \">=X.Y.Z\"}),
-and its logins the programs that log in to more providers. /login adds the models of ChatGPT,
+and its logins the programs that log in to more providers. The settings' modelCatalogs
+add the providers of model catalogs in models.dev's api.json shape, read from their URLs,
+saved, and read again as they age (scramjet catalog add URL, remove URL, list). /login adds the models of ChatGPT,
 GitHub Copilot and those logins, each saved in auth.json beside the settings. Requests go
 through the http:// proxy HTTPS_PROXY or HTTP_PROXY names (http://user:password@host:port),
 but to NO_PROXY's hosts and this machine.

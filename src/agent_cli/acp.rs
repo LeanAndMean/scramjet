@@ -490,7 +490,7 @@ fn keyed_providers(
         return None;
     };
     let providers =
-        scramjet::agent::Providers::read(Settings::load().models_files(), Some(logins.clone()));
+        scramjet::agent::Providers::read(Settings::load().sources(), Some(logins.clone()));
     Some((logins, providers))
 }
 

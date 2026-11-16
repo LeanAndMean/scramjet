@@ -10,9 +10,12 @@
 //! login's key.
 //! An API key `/login` saved for a provider the files name is sent in place of its `apiKey`.
 //! A provider whose entry lists no models offers those its server lists (`listed`).
+//! The model catalogs the settings list (`catalog`) add their providers after the files', unless
+//! a file names one.
 //! Providers may offer the same id: a model is named by its reference, `provider/id`.
 
 use super::ModelOption;
+use super::catalog::Catalog;
 use super::client::Protocol;
 use super::completions::Compat;
 use super::configured::{self, Commanded, Configured};
@@ -215,11 +218,33 @@ pub enum KeyFrom {
     Nowhere,
 }
 
+/// Where providers come from: `models.json` files, then model catalogs' URLs.
+#[derive(Clone, Debug, Default)]
+pub struct Sources {
+    pub files: Vec<PathBuf>,
+    pub catalogs: Vec<String>,
+}
+
+impl From<Vec<PathBuf>> for Sources {
+    fn from(files: Vec<PathBuf>) -> Self {
+        Self {
+            files,
+            catalogs: Vec::new(),
+        }
+    }
+}
+
 /// The providers' models, each once, in the order of their files, of the providers in each and
 /// of each provider's `models`; with what was wrong in the files.
 #[derive(Clone, Debug, Default)]
 pub struct Providers {
     files: Vec<PathBuf>,
+    /// The model catalogs' URLs.
+    catalog_urls: Vec<String>,
+    /// The catalogs, as last read.
+    catalogs: Vec<Catalog>,
+    /// The catalogs asked for since these providers were made, by URL, for those not saved.
+    tried_catalogs: HashMap<String, Result<String, String>>,
     /// A document given in place of the files.
     #[cfg(test)]
     given: Option<Value>,
@@ -244,11 +269,13 @@ pub struct Providers {
 }
 
 impl Providers {
-    /// The providers of the `models.json` files `files` that exist, in their order, then those
-    /// logged in to, as `logins` saved them.
-    pub fn read(files: Vec<PathBuf>, logins: Option<Logins>) -> Self {
+    /// The providers of the `models.json` files `sources` names that exist, in their order, then
+    /// its catalogs', then those logged in to, as `logins` saved them.
+    pub fn read(sources: impl Into<Sources>, logins: Option<Logins>) -> Self {
+        let Sources { files, catalogs } = sources.into();
         let mut providers = Self {
             files,
+            catalog_urls: catalogs,
             logins,
             ..Self::default()
         };
@@ -285,6 +312,7 @@ impl Providers {
             logins: self.logins.clone(),
             given_key: self.given_key.clone(),
             tried: std::mem::take(&mut self.tried),
+            tried_catalogs: std::mem::take(&mut self.tried_catalogs),
             ..Reading::default()
         };
         if let Some(logins) = &self.logins {
@@ -314,12 +342,17 @@ impl Providers {
         for (text, directory, what) in &documents {
             reading.document(text, directory, what);
         }
+        for url in &self.catalog_urls {
+            reading.catalog(url);
+        }
         reading.logins();
         self.models = reading.models;
         self.keyed = reading.keyed;
         self.origins = reading.origins;
         self.listings = reading.listings;
         self.tried = reading.tried;
+        self.catalogs = reading.catalogs;
+        self.tried_catalogs = reading.tried_catalogs;
         self.programs = reading.programs;
         let previous = std::mem::replace(&mut self.credential_files, reading.credential_files);
         self.problems = reading.problems;
@@ -374,6 +407,11 @@ impl Providers {
     /// The providers that list their models themselves, as their entries list none.
     pub fn listings(&self) -> &[Listing] {
         &self.listings
+    }
+
+    /// The model catalogs, as last read.
+    pub fn catalogs(&self) -> &[Catalog] {
+        &self.catalogs
     }
 
     /// Forgets the list `provider` gave, so that it is asked again when the providers are next
@@ -535,6 +573,9 @@ struct Reading {
     listings: Vec<Listing>,
     /// `Providers::tried`.
     tried: HashMap<String, Result<Vec<Value>, String>>,
+    catalogs: Vec<Catalog>,
+    /// `Providers::tried_catalogs`.
+    tried_catalogs: HashMap<String, Result<String, String>>,
     programs: Vec<LoginProgram>,
     /// `Providers::origins`.
     origins: HashMap<String, Vec<String>>,
@@ -613,6 +654,46 @@ impl Reading {
             };
             self.problems.push(format!("{what}: {problem}"));
         }
+    }
+
+    /// The providers of the model catalog at `url` that no file or catalog before named, as its
+    /// copy saved lists them, else as it lists them now.
+    fn catalog(&mut self, url: &str) {
+        let what = format!("model catalog {url}");
+        if let Err(problem) = super::catalog::check_url(url) {
+            return self.problems.push(format!("{what}: {problem}"));
+        }
+        let mut catalog = Catalog::new(url, self.logins.as_ref());
+        let text = match catalog.saved() {
+            Some(text) => Ok(text),
+            None => {
+                // A failure waits for /reload or the background to ask again.
+                let read =
+                    (self.tried_catalogs.get(url).cloned()).unwrap_or_else(|| catalog.read_now());
+                self.tried_catalogs.insert(url.to_owned(), read.clone());
+                read
+            }
+        };
+        let offered = text.and_then(|text| {
+            super::catalog::offered(&text).map_err(|problem| format!("it {problem}"))
+        });
+        let before = self.models.len();
+        match offered {
+            Ok(offered) => {
+                let (named, entries): (Vec<_>, Vec<_>) = (offered.providers.into_iter())
+                    .partition(|(name, _)| self.named.contains(name) || self.logs_in(name));
+                // Said by `scramjet catalog add`, not at each start: the user may not own the
+                // catalog, and the file or login is theirs.
+                catalog.shadowed = named.into_iter().map(|(name, _)| name).collect();
+                self.providers(Some(Ordered(entries)), &what);
+                catalog.offered = Ok(self.models.len() - before);
+            }
+            Err(problem) => {
+                self.problems.push(format!("{what}: {problem}"));
+                catalog.offered = Err(problem);
+            }
+        }
+        self.catalogs.push(catalog);
     }
 
     /// The models of the providers logged in to that no file named, as their logins listed
@@ -1883,6 +1964,116 @@ mod tests {
         super::super::login::save_key(&logins.auth, "anthropic", "k", origins).unwrap();
         super::super::login::logout(&logins, "anthropic").unwrap();
         assert!(!saved.exists());
+    }
+
+    #[test]
+    fn a_catalog_adds_its_providers_and_its_copy_saved_stays_while_its_server_is_down() {
+        use std::io::{BufRead, BufReader, Write};
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-providers-catalog-{}", std::process::id())),
+        );
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let file = scratch.0.join("models.json");
+        let named = json!({"providers": {"named": {"baseUrl": "http://127.0.0.1:9",
+            "api": "openai-completions", "models": [{"id": "own"}]}}});
+        std::fs::write(&file, named.to_string()).unwrap();
+        // In its order, not the keys' sorted one.
+        let catalog = r#"{"proxy": {"npm": "@ai-sdk/openai", "api": "http://127.0.0.1:9/v1",
+            "models": {"z": {"id": "z", "tool_call": true, "limit": {"context": 400000}},
+                "a": {"id": "a", "tool_call": true}}},
+            "named": {"npm": "@ai-sdk/openai", "api": "http://127.0.0.1:9/v1",
+                "models": {"m": {"id": "m", "tool_call": true}}}}"#;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!(
+            "http://{}/api/model-catalog",
+            listener.local_addr().unwrap()
+        );
+        let server = std::thread::spawn(move || {
+            let mut heads = Vec::new();
+            for answer in [
+                format!(
+                    "HTTP/1.1 200 OK\r\netag: \"v1\"\r\ncontent-length: {}\r\n\r\n{catalog}",
+                    catalog.len()
+                ),
+                "HTTP/1.1 304 Not Modified\r\netag: \"v1\"\r\n\r\n".to_owned(),
+            ] {
+                let (connection, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(connection);
+                let mut head = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    head.push_str(&line.to_lowercase());
+                }
+                reader.get_mut().write_all(answer.as_bytes()).unwrap();
+                heads.push(head);
+            }
+            heads
+        });
+        let sources = || Sources {
+            files: vec![file.clone()],
+            catalogs: vec![url.clone()],
+        };
+        let references = |providers: &Providers| -> Vec<String> {
+            providers.models().iter().map(Model::reference).collect()
+        };
+        let providers = Providers::read(sources(), Some(logins.clone()));
+        let offered = ["named/own", "proxy/z", "proxy/a"];
+        assert_eq!(references(&providers), offered);
+        assert_eq!(
+            providers.find("proxy/z").unwrap().info.window,
+            Some(400_000)
+        );
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        let catalogs = providers.catalogs();
+        assert_eq!(catalogs[0].shadowed(), ["named"]);
+        assert_eq!(catalogs[0].offered(), Ok(2));
+        // Read again by its ETag: unchanged, the copy saved stays.
+        catalogs[0].relist().unwrap();
+        let heads = server.join().unwrap();
+        assert!(heads[0].starts_with("get /api/model-catalog http/1.1\r\n"));
+        assert!(!heads[0].contains("if-none-match"));
+        assert!(
+            heads[1].contains("if-none-match: \"v1\"\r\n"),
+            "{}",
+            heads[1]
+        );
+        assert!(catalogs[0].age().unwrap() < Duration::from_secs(60));
+        // Its server gone, its models stay offered.
+        let again = Providers::read(sources(), Some(logins.clone()));
+        assert_eq!(references(&again), offered);
+        assert_eq!(again.catalogs()[0].offered(), Ok(2));
+        // One never read is not offered, and why is said once.
+        catalogs[0].forget();
+        let mut gone = Providers::read(sources(), Some(logins));
+        assert_eq!(references(&gone), ["named/own"]);
+        let problems = gone.problems().to_vec();
+        assert!(
+            problems[0].starts_with(&format!("model catalog {url}: ")),
+            "{problems:?}"
+        );
+        assert!(
+            problems[0].contains("cannot connect to 127.0.0.1:"),
+            "{problems:?}"
+        );
+        assert!(!problems[0].contains("(provider"), "{problems:?}");
+        gone.reload();
+        assert_eq!(gone.problems(), problems);
+        assert!(gone.catalogs()[0].offered().is_err());
+        let bad = Providers::read(
+            Sources {
+                files: Vec::new(),
+                catalogs: vec!["ftp://x".into()],
+            },
+            None,
+        );
+        assert_eq!(bad.problems().len(), 1);
     }
 
     #[test]

@@ -45,7 +45,7 @@ impl Session {
         self.agent.set_retries(settings.retries());
         self.agent.set_compacting(settings.compacting);
         self.agent.set_providers(Providers::read(
-            settings.models_files(),
+            settings.sources(),
             scramjet::agent::login::Logins::user(),
         ));
     }

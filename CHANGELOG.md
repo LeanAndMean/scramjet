@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.252.0 — Providers from a model catalog URL
+
+### Added
+
+- Providers and models can come from a model catalog URL in models.dev's `api.json` shape, such as a local proxy serves, without a `models.json` entry: `scramjet catalog add URL` (and `remove`, `list`) keeps it in the settings' `modelCatalogs`. Windows, output limits, effort levels, image input and prices come from the catalog; its last copy keeps the models offered while its server is down, and the full screen reads it again every 15 minutes.
+
 ## 2.251.2 — Next-step records the model does not copy
 
 ### Fixed

@@ -14,7 +14,7 @@ use super::select::{self, Picker};
 use super::text::{clip, visible};
 use super::{clipboard, editor, style};
 use scramjet::agent::login::{LoginProgram, Said};
-use scramjet::agent::{KeyFrom, Listing, codex, copilot, login};
+use scramjet::agent::{Catalog, KeyFrom, Listing, codex, copilot, login};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::process::{Command, Stdio};
@@ -491,11 +491,13 @@ impl Interactive {
 }
 
 /// What the background keeps current, as the session last read the providers: the logins
-/// packages' programs do, and the providers that list their models themselves.
+/// packages' programs do, the providers that list their models themselves, and the model
+/// catalogs.
 #[derive(Clone, Default)]
 pub(super) struct Kept {
     pub(super) programs: Vec<LoginProgram>,
     pub(super) listings: Vec<Listing>,
+    pub(super) catalogs: Vec<Catalog>,
 }
 
 impl Kept {
@@ -503,6 +505,7 @@ impl Kept {
         Self {
             programs: providers.login_programs().to_vec(),
             listings: providers.listings().to_vec(),
+            catalogs: providers.catalogs().to_vec(),
         }
     }
 }
@@ -523,6 +526,7 @@ pub(super) fn keep_lists_current(relisting: Relisting, kept: Arc<Mutex<Kept>>) {
             Source::Login(name, _) => login::relist(&logins, name),
             Source::Program(program) => program.relist(&logins),
             Source::Provider(listing) => listing.relist().map(|()| None),
+            Source::Catalog(catalog) => catalog.relist().map(|()| None),
         };
         loop {
             if let Some(notes) = lists.look(&logins, &kept(), Instant::now(), relist) {
@@ -541,6 +545,8 @@ enum Source<'a> {
     Program(&'a LoginProgram),
     /// One a provider of the files gives itself, as its entry lists no models.
     Provider(&'a Listing),
+    /// A model catalog's.
+    Catalog(&'a Catalog),
 }
 
 impl Source<'_> {
@@ -551,6 +557,7 @@ impl Source<'_> {
             Source::Login(name, _) => name.to_string(),
             Source::Program(program) => program.provider.clone(),
             Source::Provider(listing) => listing.key(),
+            Source::Catalog(catalog) => catalog.key(),
         }
     }
 
@@ -559,6 +566,7 @@ impl Source<'_> {
             Source::Login(_, shown) => shown.to_string(),
             Source::Program(program) => visible(&program.name),
             Source::Provider(listing) => visible(listing.provider()),
+            Source::Catalog(catalog) => format!("The model catalog {}", visible(catalog.url())),
         }
     }
 
@@ -570,6 +578,7 @@ impl Source<'_> {
                 login::List::read(logins, &program.provider).and_then(|l| l.age())
             }
             Source::Provider(listing) => listing.age(),
+            Source::Catalog(catalog) => catalog.age(),
         }
     }
 
@@ -578,12 +587,13 @@ impl Source<'_> {
             Source::Login(name, _) => offered(logins, name),
             Source::Program(program) => offered(logins, &program.provider),
             Source::Provider(listing) => listing.models(),
+            Source::Catalog(catalog) => catalog.models(),
         }
     }
 }
 
 /// The lists to keep current: of the logins saved in `logins`, `/login`'s own then `kept`'s
-/// programs', then those `kept`'s providers give themselves.
+/// programs', then those `kept`'s providers give themselves, then its catalogs'.
 fn sources<'a>(logins: &login::Logins, kept: &'a Kept) -> Vec<Source<'a>> {
     let logged_in = login::logged_in(&logins.auth).unwrap_or_default();
     let is_logged_in = |name: &str| logged_in.iter().any(|known| known == name);
@@ -594,7 +604,11 @@ fn sources<'a>(logins: &login::Logins, kept: &'a Kept) -> Vec<Source<'a>> {
         .filter(|program| is_logged_in(&program.provider))
         .map(Source::Program);
     let listings = kept.listings.iter().map(Source::Provider);
-    own.chain(programs).chain(listings).collect()
+    let catalogs = kept.catalogs.iter().map(Source::Catalog);
+    own.chain(programs)
+        .chain(listings)
+        .chain(catalogs)
+        .collect()
 }
 
 /// What the lists offered when last looked at.
@@ -621,17 +635,24 @@ impl Lists {
             said: HashSet::new(),
             seen: HashSet::new(),
         };
-        for listing in &kept.listings {
-            lists.see(listing, Instant::now());
-        }
+        lists.see_all(kept, Instant::now());
         lists
     }
 
-    /// Takes note of `listing` the first time, at `now`: one not saved was asked for just now,
-    /// as the providers were read, which said why it is not.
-    fn see(&mut self, listing: &Listing, now: Instant) {
-        let key = listing.key();
-        if self.seen.insert(key.clone()) && listing.age().is_none() {
+    /// Takes note of `kept`'s providers' lists and catalogs.
+    fn see_all(&mut self, kept: &Kept, now: Instant) {
+        for listing in &kept.listings {
+            self.see(listing.key(), listing.age(), now);
+        }
+        for catalog in &kept.catalogs {
+            self.see(catalog.key(), catalog.age(), now);
+        }
+    }
+
+    /// Takes note of the list `key` names the first time, at `now`: one not saved (no `age`)
+    /// was asked for just now, as the providers were read, which said why it is not.
+    fn see(&mut self, key: String, age: Option<Duration>, now: Instant) {
+        if self.seen.insert(key.clone()) && age.is_none() {
             self.retry.insert(key.clone(), now + RELIST_AFTER);
             self.said.insert(key);
         }
@@ -666,9 +687,7 @@ impl Lists {
         for key in gone {
             changed |= self.forget(&key);
         }
-        for listing in &kept.listings {
-            self.see(listing, now);
-        }
+        self.see_all(kept, now);
         for source in &sources {
             let (key, shown) = (source.key(), source.shown());
             let due = source.age(logins).is_none_or(|age| age >= RELIST_AFTER);
@@ -898,6 +917,67 @@ mod tests {
         let ids = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"];
         assert_eq!(few(&ids), "a, b, c, d, e, f, g, h, i, j and 2 more");
         assert_eq!(few(&ids[..11]), ids[..11].join(", "));
+    }
+
+    #[test]
+    fn model_catalogs_are_kept_current_too() {
+        let scratch = Scratch(
+            std::env::temp_dir().join(format!("scramjet-rs-relist-catalog-{}", std::process::id())),
+        );
+        let logins = login::Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let directory = scratch.0.join("catalogs");
+        std::fs::create_dir_all(&directory).unwrap();
+        // Never read: nothing listens there.
+        let url = "http://127.0.0.1:9/c";
+        let saved = |minutes: f64, ids: &[&str]| {
+            let models: serde_json::Map<String, Value> = (ids.iter())
+                .map(|id| (id.to_string(), json!({"id": id, "tool_call": true})))
+                .collect();
+            let body = json!({"proxy": {"npm": "@ai-sdk/openai", "api": "http://127.0.0.1:9/v1",
+                "models": models}});
+            let copy = json!({"url": url, "body": body.to_string(),
+                "fetched": now_ms() - minutes * 60_000.0});
+            let file = directory.join("http%3A%2F%2F127%2E0%2E0%2E1%3A9%2Fc.json");
+            std::fs::write(file, copy.to_string()).unwrap();
+        };
+        saved(1.0, &["a"]);
+        let sources = scramjet::agent::Sources {
+            files: Vec::new(),
+            catalogs: vec![url.to_owned()],
+        };
+        let providers = Providers::read(sources, Some(logins.clone()));
+        assert_eq!(providers.catalogs()[0].offered(), Ok(1));
+        let kept = Kept::of(&providers);
+        let mut lists = Lists::new(&logins, &kept);
+        let start = Instant::now();
+        let never =
+            |_: &Source| -> Result<Option<String>, String> { panic!("read again while fresh") };
+        assert_eq!(lists.look(&logins, &kept, start, never), None);
+        saved(16.0, &["a"]);
+        let relisted = |source: &Source| {
+            assert_eq!(source.key(), format!("catalog {url}"));
+            saved(0.0, &["a", "b"]);
+            Ok(None)
+        };
+        let said = lists.look(&logins, &kept, start, relisted);
+        assert_eq!(
+            said,
+            Some(vec![format!(
+                "The model catalog {url} now offers proxy/b (/model)"
+            )])
+        );
+        saved(16.0, &["a", "b"]);
+        let failing = |_: &Source| Err("offline".to_owned());
+        assert_eq!(
+            lists.look(&logins, &kept, start, failing),
+            Some(vec![format!(
+                "Warning: The model catalog {url}'s models could not be read again, so those it \
+                 listed before are offered: offline"
+            )])
+        );
     }
 
     #[test]

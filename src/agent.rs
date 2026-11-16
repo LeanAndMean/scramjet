@@ -7,6 +7,7 @@ mod autonomy;
 mod batch;
 mod builtin;
 mod calls;
+mod catalog;
 mod client;
 pub mod codex;
 mod commands;
@@ -56,6 +57,7 @@ pub use attached::Attached;
 pub use autonomy::{
     Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting, Suggestion,
 };
+pub use catalog::{Catalog, Offered, check_url as check_catalog_url};
 pub use client::{StreamProgress, download};
 pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, sets_in};
 pub use compaction::{AutoCompaction, Compaction};
@@ -69,7 +71,7 @@ pub use mcp::{
     Transport as McpTransport,
 };
 pub use problem::{Problem, ProblemFile};
-pub use providers::{KeyFrom, Providers, unmet_engine};
+pub use providers::{KeyFrom, Providers, Sources, unmet_engine};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::Choice;
 pub use request::{CacheRetention, set_cache_retention};

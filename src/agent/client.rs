@@ -479,6 +479,7 @@ pub(super) struct Fetched {
     pub status: u16,
     pub body: Vec<u8>,
     pub location: Option<String>,
+    pub etag: Option<String>,
     /// What of the request's headers may be credentials, for `said`.
     pub secrets: Vec<String>,
 }
@@ -578,6 +579,9 @@ pub(super) async fn fetch_within(
         let location = (response.headers().get(hyper::header::LOCATION))
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
+        let etag = (response.headers().get(hyper::header::ETAG))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let mut body = response.into_body();
         let mut bytes = Vec::new();
         while let Some(frame) = body.frame().await {
@@ -598,6 +602,7 @@ pub(super) async fn fetch_within(
             status,
             body: bytes,
             location,
+            etag,
             secrets,
         })
     };
