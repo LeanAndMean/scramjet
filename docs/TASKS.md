@@ -10,7 +10,7 @@ Set at the steer of 2026-11-16: an overview in Flightdeck of what is running on 
 
 Then what is left of 51, 44 and 48 where the loop can act on it. What needs the user (Tailscale, entering a device code for ChatGPT's and Copilot's live sign-ins, `/login` with the private package on their Windows) waits: they have no time for it now (2026-11-14), so do not ask mid-loop.
 
-`v2.237.2` is the latest release (2026-11-13, every job passed, `windows-smoke` included); a later alpha is the user's ask.
+`v2.237.2` is the latest release (2026-11-13, every job passed, `windows-smoke` included); a later alpha is the user's ask. `main` at 7ad0679 (2.251.1) is on `public` and passed a rehearsal with the Windows tests (run 43829828432, 2026-11-16), after the two before it found 2.251.0's and 2.251.1's fixes: rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else.
 
 After that, the order of the steer of 2026-11-12: macOS (35), from testers' reports and by hand once the user has a Mac; and last item 7, the lowest priority, kept in mind so that nothing built now corners it ([design](DESIGN.md#current-direction-2026-11-03)). What is left of 49 waits for tries on the user's PCs, the chain forms in `/resume` (25) for the user to see them, and what is left of 17 needs the user.
 
