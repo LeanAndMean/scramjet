@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.245.1 — Empty files can be written
+
+### Fixed
+
+- The `write` tool writes an empty file (an empty `__init__.py`, say), where on Linux it failed with "Invalid argument (os error 22)", though it had made the file.
+
 ## 2.245.0 — Terminals' sessions followed read-only
 
 ### Added

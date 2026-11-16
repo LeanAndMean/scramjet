@@ -2456,6 +2456,22 @@ disjoint regions."
             std::fs::read_to_string(root.join("new/g.txt")).unwrap(),
             "é\nx\n"
         );
+        // An empty file, new or over one with other links (both written in place).
+        let empty = |path: &str| {
+            let run = call("write", json!({"path":path,"content":""}));
+            run.run(&root, None, &cancel, &mut |_| {})
+                .map(|output| output.text)
+        };
+        assert!(
+            empty("new/__init__.py")
+                .unwrap()
+                .starts_with("Wrote 0 bytes")
+        );
+        std::fs::hard_link(root.join("new/g.txt"), root.join("linked.txt")).unwrap();
+        assert!(empty("new/g.txt").unwrap().starts_with("Wrote 0 bytes"));
+        for path in ["new/__init__.py", "new/g.txt", "linked.txt"] {
+            assert_eq!(std::fs::read(root.join(path)).unwrap(), b"", "{path}");
+        }
     }
 
     #[test]

@@ -62,7 +62,12 @@ pub fn overwrite(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> 
     #[cfg(unix)]
     {
         use rustix::{fs::FallocateFlags, io::Errno};
-        match rustix::fs::fallocate(&*file, FallocateFlags::empty(), 0, size) {
+        // Linux refuses a length of 0 (EINVAL), and an empty file needs no room.
+        let reserved = match size {
+            0 => Ok(()),
+            size => rustix::fs::fallocate(&*file, FallocateFlags::empty(), 0, size),
+        };
+        match reserved {
             Ok(()) | Err(Errno::OPNOTSUPP | Errno::NOSYS) => {}
             Err(error) => return Err(error.into()),
         }
