@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.248.0 — Requests outlast a few minutes of a provider's outage
+
+### Changed
+
+- A request that fails transiently (a gateway's 504, a connection reset, a busy 503) is sent again up to 10 times, as Claude Code does, where it was 3: the waits grow from 2 s to 60 s, so a turn left running rides out about 6 minutes of outage rather than 14 s before it stops for you to type "continue". Escape still stops it at once; `retry.maxRetries` and `--retries` still set the number.
+
+### Fixed
+
+- `--help` said a backoff longer than `provider.maxRetryDelayMs` fails the request; the backoff stops growing there, and only a longer wait the provider asks for fails it.
+
 ## 2.247.0 — Sessions an ACP client holds are not shared either
 
 ### Changed

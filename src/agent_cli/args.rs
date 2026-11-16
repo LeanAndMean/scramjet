@@ -52,7 +52,7 @@ but to NO_PROXY's hosts and this machine.
                          else the settings' defaultThinkingLevel, else medium)
   --max-output-tokens N  the most tokens a reply may have (default: the model's limit)
   --retries N            resend a request that failed transiently up to N times (default:
-                         the settings' retry.maxRetries, else 3)
+                         the settings' retry.maxRetries, else 10)
   --cache-retention short|long
                          how long providers keep the conversation's start cached for the next
                          request, as in Scramjet 1: long asks for an hour where the provider
@@ -261,11 +261,12 @@ default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cy
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
 list and the agent save; and startupModel: per-directory (new sessions start with the model
 chosen last in their project, kept in $XDG_STATE_HOME/scramjet/last-used-models.json) or
-global; retry: enabled, maxRetries (3), baseDelayMs (2000, doubled at each retry, give or take a tenth)
-and provider.maxRetryDelayMs (60000: a longer wait, the provider's or the backoff's, fails the
-request; 0 for no limit); compaction: enabled (true), reserveTokens (16384: compaction runs
-once the context passes the window less this) and keepRecentTokens (20000, kept whole), each
-at most a quarter of the window on a local runtime's model, and
+global; retry: enabled, maxRetries (10), baseDelayMs (2000, doubled at each retry up to
+provider.maxRetryDelayMs, give or take a tenth) and provider.maxRetryDelayMs (60000: a longer
+wait the provider asks for fails the request; 0 for no limit); compaction: enabled (true),
+reserveTokens (16384: compaction runs once the context passes the window less this) and
+keepRecentTokens (20000, kept whole), each at most a quarter of the window on a local
+runtime's model, and
 branchSummary.reserveTokens (16384); images: autoResize (true: images over 2000x2000 pixels or
 4.5 MB are scaled down before they are sent) and blockImages (false; true: no image is sent);
 and the full screen's scrollWheelStep (3 lines a notch,

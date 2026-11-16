@@ -211,7 +211,7 @@ pub struct Retries {
 impl Default for Retries {
     fn default() -> Self {
         Self {
-            attempts: 3,
+            attempts: 10,
             delay: Duration::from_secs(2),
             max_wait: Some(Duration::from_secs(60)),
         }
