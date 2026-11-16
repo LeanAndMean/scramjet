@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.251.1 — Hard-linked files on Windows
+
+### Fixed
+
+- On Windows, `write` and `edit` on a file with other hard links now change it in place, as on Linux and macOS, so its other names see the change; before, they got a new file and the other names kept the old content.
+
 ## 2.251.0 — A message sent as a turn ends is not lost
 
 ### Fixed

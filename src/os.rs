@@ -246,6 +246,12 @@ pub fn program_file(name: &str) -> String {
     }
 }
 
+/// Whether `file` has other names: hard links, which a new file in its place would leave.
+#[cfg(windows)]
+pub fn has_other_links(file: &std::fs::File) -> bool {
+    windows::links(file).is_some_and(|links| links > 1)
+}
+
 /// Whether two open files, or paths, are the same file however each is named.
 pub fn same_file(a: &std::fs::File, b: &Path) -> bool {
     #[cfg(unix)]
@@ -877,6 +883,14 @@ mod windows {
                 | u64::from(information.nFileIndexLow);
             (information.dwVolumeSerialNumber, index)
         })
+    }
+
+    /// How many names the file has, as `st_nlink` says.
+    pub(super) fn links(file: &std::fs::File) -> Option<u32> {
+        // SAFETY: as in `file_id`.
+        let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+        let got = unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut information) };
+        (got != 0).then_some(information.nNumberOfLinks)
     }
 
     /// Kills the process `id` and those it started, as Scramjet does: Windows has no group to

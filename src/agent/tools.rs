@@ -1020,6 +1020,10 @@ fn put_windows(path: &Path, content: &str) -> Result<(), String> {
         }
         opened => opened.map_err(failed)?,
     };
+    // As on Unix, a new file would leave the old content under its other names.
+    if crate::os::has_other_links(&file) {
+        return in_place(&mut file, content).map_err(failed);
+    }
     let (Some(parent), Some(name)) = (real.parent(), real.file_name()) else {
         return Err(format!("{}: not a file", path.display()));
     };

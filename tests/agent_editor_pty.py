@@ -783,7 +783,12 @@ def cancel_retry(read, until, send, output):
     # Wrapped, as the full screen cuts what is wider than it.
     rows = on_screen('Retrying (1/10) in 2s (Ctrl-C to cancel)')
     assert '(provider test): Connection refused (os error 111)' in ' '.join(rows), rows
-    assert re.match(SPINNING + 'Retrying \\(1/10\\) in [1-3]s \\(Esc to cancel\\)', rows[-3]), rows
+    # The status line comes later in the same frame, which may not all have arrived.
+    end = time.monotonic() + 10
+    while not re.match(SPINNING + 'Retrying \\(1/10\\) in [1-3]s \\(Esc to cancel\\)', rows[-3]):
+        assert time.monotonic() < end, rows
+        read(.05)
+        rows = shown()
     send(b'\x03')
     on_screen('(cancelled)')
     send(b'\x04')
