@@ -97,6 +97,9 @@ struct Follower {
     lines: Vec<Option<usize>>,
     /// The file's length and time when last read.
     seen: Option<(u64, SystemTime)>,
+    /// The calls shown running, by the count of calls before them, which their replay takes
+    /// again so that it gives them the same ids.
+    running: Option<usize>,
 }
 
 impl Follower {
@@ -111,6 +114,7 @@ impl Follower {
             ui,
             lines: Vec::new(),
             seen: None,
+            running: None,
         }
     }
 
@@ -135,9 +139,13 @@ impl Follower {
                     lock(&self.ui.log).notify(&self.out, WATCH_RESET, params);
                 }
                 self.ui = updates(&self.out, &self.id, &self.root, self.shown);
+                self.running = None;
                 0
             }
         };
+        if let Some(calls) = self.running.take() {
+            self.ui.calls = calls;
+        }
         if settled > from {
             let root = Some(self.root.as_path());
             scramjet::agent::show_entries(
@@ -149,7 +157,18 @@ impl Follower {
             self.ui.flush();
             self.ui.entry = None;
         }
-        self.lines = lines[..settled.max(from)].to_vec();
+        let from = settled.max(from);
+        // The calls of the last reply whose results are not all in: shown running.
+        if from < items.len() {
+            self.running = Some(self.ui.calls);
+            self.ui.unsettled = true;
+            let root = Some(self.root.as_path());
+            scramjet::agent::show_entries(&items[from..], &lines[from..], root, &mut self.ui);
+            self.ui.flush();
+            self.ui.entry = None;
+            self.ui.unsettled = false;
+        }
+        self.lines = lines[..from].to_vec();
         Ok(())
     }
 }
@@ -164,8 +183,9 @@ fn updates(out: &Out, id: &str, root: &Path, shown: Shown) -> Updates {
     }
 }
 
-/// How many of `items` show now: up to the last where each call before has its result, as a
-/// replay shows a call with its result.
+/// How many of `items` show settled: up to the last where each call before has its result, as
+/// a replay shows a call with its result. A call followed by anything but calls and results
+/// never gets one, as `show_entries` takes it.
 fn settled(items: &[Value]) -> usize {
     let mut open = HashSet::new();
     let mut settled = 0;
@@ -178,7 +198,7 @@ fn settled(items: &[Value]) -> usize {
             Some("function_call_output") => {
                 open.remove(id);
             }
-            _ => {}
+            _ => open.clear(),
         }
         if open.is_empty() {
             settled = at + 1;
@@ -207,7 +227,10 @@ mod tests {
             output("b"),
         ];
         assert_eq!(settled(&items), 5);
-        let items = [message, call("a"), output("a"), call("b")];
+        let items = [message.clone(), call("a"), output("a"), call("b")];
         assert_eq!(settled(&items), 3);
+        let stopped = json!({"type": "turn_stopped"});
+        let items = [message.clone(), call("a"), stopped, message];
+        assert_eq!(settled(&items), 4);
     }
 }

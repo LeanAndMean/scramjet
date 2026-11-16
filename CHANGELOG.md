@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.250.0 — A watched session's running tool calls show as they run
+
+### Changed
+
+- Following a terminal's session over ACP (`watch`, Flightdeck's overview), a tool call now shows as running as soon as its reply is saved, and updates once its result is in; before, nothing showed until every call of that reply had ended, so a long build or subagent looked idle.
+
 ## 2.249.1 — A crash in the full screen says what happened
 
 ### Fixed

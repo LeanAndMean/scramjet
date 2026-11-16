@@ -18,7 +18,7 @@ use scramjet::agent::{
 use serde_json::{Value, json};
 use std::{
     cell::Cell,
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     ffi::OsString,
     io::{BufRead, Read, Write},
     path::{Path, PathBuf},
@@ -3093,6 +3093,11 @@ struct Updates {
     /// A replayed tool call not sent yet, which takes its result's status and content, so
     /// that it goes as one `tool_call`.
     held: Cell<Option<Value>>,
+    /// Watched (`watch`): the replayed calls announced while they ran, which their results
+    /// update rather than announce again.
+    running: HashSet<String>,
+    /// Watched: the calls replayed now are still running.
+    unsettled: bool,
     /// The last replayed update was reasoning, whose response the next message is part of.
     thinking: bool,
     /// The session file's line of the item replayed now, which its updates carry as `entryId`.
@@ -3167,6 +3172,8 @@ impl Updates {
             cancel: Arc::default(),
             replaying: false,
             held: Cell::new(None),
+            running: HashSet::new(),
+            unsettled: false,
             thinking: false,
             entry: None,
             call_ids: HashMap::new(),
@@ -3731,6 +3738,16 @@ impl AgentUi for Updates {
             self.thinking = false;
             self.flush();
             self.stamp(&mut update);
+            let id = self.call_id();
+            if self.running.contains(&id) {
+                update["sessionUpdate"] = json!("tool_call_update");
+            }
+            if self.unsettled {
+                update["status"] = json!("in_progress");
+                self.running.insert(id);
+            } else {
+                self.running.remove(&id);
+            }
             if !self.terminal() {
                 return self.held.set(Some(update));
             }

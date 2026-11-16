@@ -6465,8 +6465,33 @@ fn acp_follows_a_terminals_session_read_only() {
         ]
         .to_vec()
     };
+    let go = scratch.0.join("go");
+    let command = format!(
+        "while [ ! -e '{}' ]; do sleep 0.05; done; echo ran",
+        go.display()
+    );
+    let bash = vec![
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+        serde_json::json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "bash", "input": {}}})
+        .to_string(),
+        serde_json::json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta",
+            "partial_json": serde_json::json!({"command": command}).to_string()}})
+        .to_string(),
+        r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ];
     let (port, bodies) = serve_events_after(
-        vec![reply("Done."), reply("Again."), reply("Summary.")],
+        vec![
+            reply("Done."),
+            reply("Again."),
+            reply("Summary."),
+            // The turn `/compact` cuts has its start summarized apart.
+            reply("Summary."),
+            bash,
+            reply("Ran."),
+        ],
         |_| Duration::ZERO,
     );
     let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
@@ -6583,6 +6608,26 @@ fn acp_follows_a_terminals_session_read_only() {
         shown(&replayed),
         [pair("agent_message_chunk", "Context compacted.")]
     );
+    // A call shows running before its result is in, and its result updates it.
+    writeln!(typed, "third prompt").unwrap();
+    let tool_call = |message: &serde_json::Value| {
+        message["params"]["update"]["rawInput"]["command"] == command.as_str()
+    };
+    let running = until(&messages, tool_call).0;
+    let running = &running["params"]["update"];
+    assert_eq!(running["sessionUpdate"], "tool_call", "{running}");
+    assert_eq!(running["status"], "in_progress", "{running}");
+    std::fs::write(&go, "").unwrap();
+    let (done, _) = until(&messages, |message| {
+        message["params"]["update"]["toolCallId"] == running["toolCallId"]
+            && message["params"]["update"]["status"] == "completed"
+    });
+    let done = &done["params"]["update"];
+    assert_eq!(done["sessionUpdate"], "tool_call_update", "{done}");
+    assert!(done.to_string().contains("ran"), "{done}");
+    until(&messages, |message| {
+        message["params"]["update"]["content"]["text"] == "Ran."
+    });
     // Its terminal gone, the watch ends; `unwatch` after it is answered all the same.
     drop(typed);
     terminal.wait().unwrap();
