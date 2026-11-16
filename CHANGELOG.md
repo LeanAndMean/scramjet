@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.255.0 — Selection keys carry on across rows
+
+### Changed
+
+- In the conversation, Shift+Left/Right and Ctrl+Shift+Left/Right go on to the row before or after instead of stopping at a screen row's edge, as they do in the prompt; a selected line break shows as one selected cell, so a selection ending on a blank row shows.
+- In the prompt, Shift+Home and Shift+End select to the start and end of the screen row in a wrapped line, as in VS Code, rather than the whole line's; Home, End, Ctrl+A and Ctrl+E still go to the whole line's.
+
 ## 2.254.1 — A failed git clone says how git ended
 
 ### Fixed

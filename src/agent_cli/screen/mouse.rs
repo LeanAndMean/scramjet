@@ -506,14 +506,37 @@ impl App {
             column: selection::snap(&self.shown(at), goal),
         };
         let within = |column| Mark { column, ..head };
+        // A step that cannot move within the row goes on to the row before or after, as in the
+        // prompt: a character step to that row's edge, a word step on from there.
+        let crossed = |forward: bool, word: bool| -> Mark {
+            let step = |line: &str, column| match word {
+                true => selection::word_step(line, column, forward),
+                false => selection::step(line, column, forward),
+            };
+            let column = step(&line, head.column);
+            if column != head.column {
+                return within(column);
+            }
+            let at = row(!forward);
+            if at == head.at {
+                return head;
+            }
+            let shown = self.shown(at);
+            let edge = if forward { 0 } else { selection::width(&shown) };
+            let column = match word {
+                true => step(&shown, edge),
+                false => edge,
+            };
+            Mark { at, column }
+        };
         let next = if key.is(B::SelectLeft) {
-            within(selection::step(&line, head.column, false))
+            crossed(false, false)
         } else if key.is(B::SelectRight) {
-            within(selection::step(&line, head.column, true))
+            crossed(true, false)
         } else if key.is(B::SelectWordLeft) {
-            within(selection::word_step(&line, head.column, false))
+            crossed(false, true)
         } else if key.is(B::SelectWordRight) {
-            within(selection::word_step(&line, head.column, true))
+            crossed(true, true)
         } else if key.is(B::SelectLineStart) {
             within(0)
         } else if key.is(B::SelectLineEnd) {

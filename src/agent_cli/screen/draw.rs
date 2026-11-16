@@ -526,7 +526,17 @@ impl App {
         // A row on a band is erased and painted on it rather than on the base.
         let shown = |line: &Line, at: usize| {
             let shown = match selected.as_ref().and_then(|s| s.columns(at)) {
-                Some((left, right)) => selection::highlight(&line.shown, left, right),
+                Some((left, right)) => {
+                    let mut shown = selection::highlight(&line.shown, left, right);
+                    let used = selection::width(&line.shown);
+                    if right == usize::MAX && line.breaks() && used + 1 < width {
+                        shown += style::RESET;
+                        shown += style::SELECTION.get();
+                        shown += " ";
+                        shown += style::RESET;
+                    }
+                    shown
+                }
                 None => line.shown.clone(),
             };
             (shown, line.band.map_or(base, Band::get))

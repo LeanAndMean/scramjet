@@ -33,6 +33,12 @@ impl Line {
             ..row(shown)
         }
     }
+
+    /// Whether a copy that goes on past its end puts something there, a line break or the
+    /// space its wrapping took, which a selection then shows as one cell.
+    pub(super) fn breaks(&self) -> bool {
+        !self.rule && self.joined.as_ref().is_none_or(|joined| !joined.is_empty())
+    }
 }
 
 /// The lines of rendered text, each ending its styles and starting with those still on from the

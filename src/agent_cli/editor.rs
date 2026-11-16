@@ -208,6 +208,8 @@ enum Extend {
     By(Edit),
     /// A row up (`true`) or down, as on screen.
     Row(bool),
+    /// To the start (`true`) or end of the screen row, in a wrapped line as in VS Code.
+    RowEdge(bool),
 }
 
 const EXTENDS: [(Binding, Extend); 8] = [
@@ -217,8 +219,8 @@ const EXTENDS: [(Binding, Extend); 8] = [
     (Binding::SelectLineDown, Extend::Row(false)),
     (Binding::SelectWordLeft, Extend::By(Edit::WordLeft)),
     (Binding::SelectWordRight, Extend::By(Edit::WordRight)),
-    (Binding::SelectLineStart, Extend::By(Edit::LineStart)),
-    (Binding::SelectLineEnd, Extend::By(Edit::LineEnd)),
+    (Binding::SelectLineStart, Extend::RowEdge(true)),
+    (Binding::SelectLineEnd, Extend::RowEdge(false)),
 ];
 
 /// The way `key` extends a selection, if it is one of the keys that select.
@@ -446,6 +448,31 @@ impl Layout {
                 .unwrap_or(first)
                 .offset,
         )
+    }
+
+    /// The cursor offset at the start (`start`) or end of its screen row. A row that a wrap
+    /// ends goes to before the spaces hung at its end, else to the next row's first offset,
+    /// the one after its last character.
+    fn row_edge(&self, text: &str, cursor: usize, start: bool) -> usize {
+        let here = self.at(cursor);
+        let row: Vec<&Stop> = self.stops.iter().filter(|s| s.row == here.row).collect();
+        let (Some(first), Some(last)) = (row.first(), row.last()) else {
+            return cursor;
+        };
+        let rest = &text[last.offset..];
+        if start {
+            first.offset
+        } else if rest.is_empty() || rest.starts_with('\n') {
+            last.offset
+        } else {
+            let hung = (row.iter().rev())
+                .take_while(|stop| text[stop.offset..].starts_with([' ', '\t']))
+                .last();
+            match hung {
+                Some(stop) => stop.offset,
+                None => last.offset + rest.graphemes(true).next().map_or(0, str::len),
+            }
+        }
     }
 }
 
@@ -692,6 +719,10 @@ impl Editor {
                         } else {
                             buffer.text.len()
                         });
+                    }
+                    Extend::RowEdge(start) => {
+                        let layout = Layout::new(&buffer.text, terminal_size().0);
+                        buffer.cursor = layout.row_edge(&buffer.text, buffer.cursor, start);
                     }
                 }
                 buffer.anchor = (anchor != buffer.cursor).then_some(anchor);
@@ -1302,6 +1333,20 @@ mod tests {
         assert_eq!(layout.vertical(2, true), None);
         assert_eq!(layout.vertical(1, false), Some(5));
         assert_eq!(layout.vertical(9, false), None);
+    }
+
+    #[test]
+    fn row_edges_are_the_screen_rows_in_a_wrapped_line() {
+        // "> one two" hangs its space, "  three" then; "abcdefghij" breaks inside the word.
+        let text = "one two three\nabcdefghij";
+        let layout = Layout::new(text, 10);
+        assert_eq!(layout.rows, ["> one two", "  three", "  abcdefg", "  hij"]);
+        assert_eq!(layout.row_edge(text, 2, false), 7);
+        assert_eq!(layout.row_edge(text, 9, true), 8);
+        assert_eq!(layout.row_edge(text, 9, false), 13);
+        assert_eq!(layout.row_edge(text, 16, false), 21);
+        assert_eq!(layout.row_edge(text, 23, true), 21);
+        assert_eq!(layout.row_edge(text, 21, false), 24);
     }
 
     /// Types `input` into `draft`, as the terminal sends it.

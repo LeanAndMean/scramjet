@@ -4790,6 +4790,19 @@ def fullscreen_mouse(read, until, send, output):
     # With the prompt empty, Shift+Up starts a selection at the end of the last line shown.
     send(b'\x1b[1;2A\x1b[1;2A\x1b[1;2H\x03')
     copied_text('Row 33 of the reply.\nRow 34 of the reply.\nRow 35 of the reply.')
+    # Shift+Left and Ctrl+Shift+Left go on from a row's start to the row above.
+    send(b'\x1b[1;2H\x1b[1;2D\x1b[1;6D\x03')
+    copied_text('.\nRow 35 of the reply.')
+    # Shift+Right goes on from a row's end to the next, the line break selected showing as a cell,
+    # and Ctrl+Shift+Right on past its first word.
+    mark = len(output)
+    send(b'\x1b[<0;6;%dM\x1b[<32;10;%dM\x1b[<0;10;%dm' % (row, row, row))
+    until(b'\x1b[7m20 ', mark)
+    mark = len(output)
+    send(b'\x1b[1;2F\x1b[1;2C')
+    until(b'\x1b[7m \x1b[0m', mark)
+    send(b'\x1b[1;6C\x03')
+    copied_text('20 of the reply.\nRow')
     # At the end of the conversation, Ctrl+Shift+Left starts one there, by a word.
     send(b'\x1b[<65;5;5M\x1b[<65;5;5M\x1b[<65;5;5M')
     on_screen('more lines below', gone=True)
