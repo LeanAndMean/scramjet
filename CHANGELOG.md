@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.246.0 — A session open in another terminal is forked, not shared
+
+### Changed
+
+- `/resume`, `--session` and `--continue` no longer open a session another running full screen or line mode holds, where both would write to the same file (the second marking an open question as ended): `/resume` forks it into a new session and says so, `--session` and `--continue` ask whether to fork it, or without a terminal to ask on refuse and name `--fork`. `/resume`'s Ctrl+D refuses to delete it.
+
 ## 2.245.1 — Empty files can be written
 
 ### Fixed

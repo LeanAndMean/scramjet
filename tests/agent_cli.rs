@@ -6227,6 +6227,96 @@ fn acp_lists_the_sessions_running_terminals_hold() {
 
 #[test]
 #[cfg(unix)]
+fn a_session_another_terminal_holds_is_forked_not_shared() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-held-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(&project).unwrap();
+    let text = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let (port, bodies) = serve_events_after(vec![text], |_| Duration::ZERO);
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test", "contextWindow": 1000}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    std::fs::create_dir_all(scratch.0.join("runtime")).unwrap();
+    let scramjet = || {
+        let mut command = program(&binary());
+        command
+            .args(["--model", "test/claude-test", "--retries", "0"])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_RUNTIME_DIR", scratch.0.join("runtime"))
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command
+    };
+    let mut terminal = scramjet().stdout(Stdio::null()).spawn().unwrap();
+    let mut typed = terminal.stdin.take().unwrap();
+    writeln!(typed, "first prompt").unwrap();
+    bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+    let records = scratch.0.join("runtime/scramjet-live");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let path = loop {
+        let record = (std::fs::read_dir(&records).into_iter().flatten().flatten())
+            .filter(|entry| entry.path().extension().is_some_and(|e| e == "json"))
+            .find_map(|entry| std::fs::read(entry.path()).ok())
+            .and_then(|read| serde_json::from_slice::<serde_json::Value>(&read).ok())
+            .filter(|record| record["state"] == "idle");
+        if let Some(record) = record {
+            break std::path::PathBuf::from(record["path"].as_str().unwrap());
+        }
+        assert!(Instant::now() < deadline, "no idle record");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let held = std::fs::read_to_string(&path).unwrap();
+    let pid = terminal.id();
+    let open = format!("is open in another terminal (process {pid})");
+    // Without a terminal to ask on, `--session` and `-c` refuse and name `--fork`.
+    for given in [&["--session", path.to_str().unwrap()][..], &["-c"]] {
+        let ran = scramjet().args(given).args(["-p", "hi"]).output().unwrap();
+        let said = String::from_utf8_lossy(&ran.stderr);
+        assert!(!ran.status.success(), "{given:?}: {said}");
+        assert!(
+            said.contains(&open) && said.contains("--fork"),
+            "{given:?}: {said}"
+        );
+    }
+    // `/resume` forks it.
+    let mut other = scramjet().spawn().unwrap();
+    writeln!(other.stdin.take().unwrap(), "/resume 1").unwrap();
+    let ran = other.wait_with_output().unwrap();
+    let said = String::from_utf8_lossy(&ran.stderr);
+    assert!(
+        said.contains(&format!(
+            "Forked session, as another terminal has it open (process {pid})"
+        )),
+        "{said}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), held);
+    drop(typed);
+    terminal.wait().unwrap();
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_follows_a_terminals_session_read_only() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-watch-{}", std::process::id())),

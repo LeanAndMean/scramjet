@@ -52,13 +52,6 @@ pub(super) fn held(id: &str) -> Option<(PathBuf, PathBuf, Value)> {
         })
 }
 
-/// The terminal process holding the session saved at `file`, if one does.
-pub(super) fn holder(file: &Path) -> Option<Value> {
-    (super::super::live::list().into_iter())
-        .find(|record| record["path"].as_str().map(Path::new) == Some(file))
-        .map(|record| record["pid"].clone())
-}
-
 /// Starts following session `id`: its branch replayed as `session/load` replays it, then request
 /// `request` answered, then each entry as its file takes it.
 pub(super) fn start(out: &Out, request: &Value, id: &str, shown: Shown) -> Option<Watch> {

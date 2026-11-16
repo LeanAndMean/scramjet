@@ -1434,7 +1434,7 @@ impl Connection {
         if info.item_count == 0 {
             return Err(unknown());
         }
-        if let Some(pid) = watch::holder(&file) {
+        if let Some(pid) = super::live::holder(&file) {
             return Err(invalid(format!(
                 "session {wanted} is open in a terminal (process {pid}): follow it with watch"
             )));

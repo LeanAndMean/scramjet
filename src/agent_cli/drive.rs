@@ -526,29 +526,39 @@ pub(super) fn new_session(front: &mut dyn Front) -> bool {
 }
 
 /// Continues in `session` (`/resume`); returns whether it did. As in Scramjet, a session
-/// continues in its own folder; one whose folder is gone is forked into this project.
+/// continues in its own folder; one whose folder is gone is forked into this project, and so is
+/// one another terminal holds, which would otherwise take both processes' writes.
 pub(super) fn resume(front: &mut dyn Front, session: &SessionInfo) -> bool {
+    let holder = super::live::holder(&session.path);
     let agent = &mut front.session().agent;
     let path = &session.path;
     let root = (session.root.as_deref()).filter(|root| root.is_dir());
-    let here = agent.session_here(path);
-    let moved = root.filter(|root| *root != agent.root() || !here);
+    let here = agent.session_here(path) && holder.is_none();
+    let moved = root.filter(|root| (*root != agent.root() || !here) && holder.is_none());
     let done = match (moved, here) {
         (Some(root), _) => (agent.resume_session_in(path, root))
             .map(|()| format!("Resumed session in {}", folder(session))),
         (None, true) => agent
             .resume_session(path)
             .map(|()| "Resumed session".to_owned()),
-        (None, false) => agent.fork_session_file(path).map(|()| {
-            let gone = match session.root {
-                Some(_) => ", as that folder is gone",
-                None => "",
-            };
-            format!(
-                "Forked session from {} into this project{gone}",
-                folder(session)
-            )
-        }),
+        (None, false) => agent
+            .fork_session_file(path)
+            .map(|()| match (holder, &session.root) {
+                (Some(pid), _) => {
+                    format!("Forked session, as another terminal has it open (process {pid})")
+                }
+                (None, root) => {
+                    let gone = if root.is_some() {
+                        ", as that folder is gone"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "Forked session from {} into this project{gone}",
+                        folder(session)
+                    )
+                }
+            }),
     };
     let change = match moved {
         Some(_) => Change::Moved,

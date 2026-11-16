@@ -231,6 +231,21 @@ pub(super) fn list() -> Vec<Value> {
     list_in(&directory())
 }
 
+/// The process of another terminal holding the session saved at `file`, if one does.
+pub(super) fn holder(file: &Path) -> Option<u64> {
+    holder_in(&directory(), file)
+}
+
+fn holder_in(directory: &Path, file: &Path) -> Option<u64> {
+    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    let file = canonical(file);
+    (list_in(directory).into_iter())
+        .find(|record| {
+            (record["path"].as_str()).is_some_and(|path| canonical(Path::new(path)) == file)
+        })
+        .and_then(|record| record["pid"].as_u64())
+}
+
 fn list_in(directory: &Path) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();

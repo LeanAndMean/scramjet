@@ -271,13 +271,17 @@ impl Interactive {
                         _ => None,
                     }
                 }
-                select::Act::Delete => {
-                    Some(match self.session.agent.delete_session(&row.session.path) {
+                select::Act::Delete => Some(match super::live::holder(&row.session.path) {
+                    Some(pid) => (
+                        format!("Failed to delete: another terminal has it open (process {pid})"),
+                        true,
+                    ),
+                    None => match self.session.agent.delete_session(&row.session.path) {
                         Ok(Removal::Trashed) => ("Session moved to trash".to_owned(), false),
                         Ok(Removal::Deleted) => ("Session deleted".to_owned(), false),
                         Err(error) => (format!("Failed to delete: {error}"), true),
-                    })
-                }
+                    },
+                }),
                 // Not keys of this list (`Picker::scoping`).
                 _ => None,
             };

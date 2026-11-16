@@ -279,33 +279,66 @@ fn session_choice(
     root: &Path,
     session_dir: Option<&Path>,
 ) -> Result<Option<SessionChoice>, String> {
+    let directory = || match session_dir {
+        Some(directory) => Ok(directory.to_owned()),
+        None => agent::session_directory(root).map_err(|e| e.to_string()),
+    };
     let find = |named: &str| -> Result<Found, String> {
         // As Scramjet's, a word that looks like a path is a session file, wherever it is.
         if named.contains(['/', '\\']) || named.ends_with(".jsonl") {
             return Ok(Found::Here(PathBuf::from(named)));
         }
         let projects = agent::projects_directory().map_err(|e| e.to_string())?;
-        let directory = match session_dir {
-            Some(directory) => directory.to_owned(),
-            None => agent::session_directory(root).map_err(|e| e.to_string())?,
-        };
+        let directory = directory()?;
         Session::find(&directory, &projects, named)
             .map_err(|error| format!("{}: {error}", directory.display()))?
             .ok_or_else(|| format!("no session found matching {named:?}"))
     };
+    // Another terminal's session would take both processes' writes: it is forked instead.
+    let open = |path: PathBuf, named: &str| match live::holder(&path) {
+        None => Ok(Some(SessionChoice::Open(path))),
+        Some(pid) => Ok(fork_held(named, pid)?.then_some(SessionChoice::Fork(path))),
+    };
     Ok(Some(match start {
         Start::New | Start::Resume => SessionChoice::New,
-        Start::Continue => SessionChoice::Continue,
+        Start::Continue => {
+            let latest = Session::latest(&directory()?).map_err(|e| e.to_string())?;
+            match latest {
+                Some(path) if live::holder(&path).is_some() => {
+                    let named = path.display().to_string();
+                    return open(path, &named);
+                }
+                _ => SessionChoice::Continue,
+            }
+        }
         Start::Unsaved => SessionChoice::Unsaved,
         Start::Fork(named) => SessionChoice::Fork(find(&named)?.path().to_owned()),
         Start::Session(named) => match find(&named)? {
-            Found::Here(path) => SessionChoice::Open(path),
+            Found::Here(path) => return open(path, &named),
             Found::Elsewhere { path, root } => match fork_here(&named, &root)? {
                 true => SessionChoice::Fork(path),
                 false => return Ok(None),
             },
         },
     }))
+}
+
+/// Asks whether to fork the session `named`, which the terminal of process `pid` holds; when the
+/// input is not a terminal, says how to instead.
+fn fork_held(named: &str, pid: u64) -> Result<bool, String> {
+    let open = format!("session {named:?} is open in another terminal (process {pid})");
+    if !std::io::stdin().is_terminal() {
+        return Err(format!(
+            "{open}; --fork {named:?} continues it in a new session"
+        ));
+    }
+    eprintln!("{}{}", open[..1].to_uppercase(), &open[1..]);
+    eprint!("Fork it into a new session? [y/N] ");
+    let mut answer = String::new();
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| e.to_string())?;
+    Ok(matches!(answer.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
 /// Asks, as Scramjet does, whether to fork the session `named` of the project `other` into this
