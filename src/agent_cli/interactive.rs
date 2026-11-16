@@ -19,13 +19,14 @@ use scramjet::agent::{
     Agent, AgentError, AgentUi, Attached, Choice, Command, EarlierSession, Installed, Problem,
 };
 use std::{
+    collections::HashMap,
     io::{BufRead, IsTerminal},
     path::Path,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, UNIX_EPOCH},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 /// How often the full screen, waiting for a prompt, tries again to write the lines a full disk
@@ -56,6 +57,8 @@ pub(super) struct Interactive {
     /// The packages' logins and the providers that list their models themselves, as the
     /// session last read them, for those lists to be kept current (`login::keep_lists_current`).
     pub(super) kept: Arc<Mutex<super::login::Kept>>,
+    /// When `/model` last tried each model catalog, by URL (`read_catalogs_again`).
+    pub(super) catalogs_tried: HashMap<String, Instant>,
 }
 
 /// How the session ended.
@@ -132,6 +135,7 @@ impl Interactive {
             in_turn: false,
             effort_at_start: None,
             kept,
+            catalogs_tried: HashMap::new(),
         };
         interactive.use_theme();
         Ok(interactive)

@@ -5,7 +5,7 @@
 //! `reasoning_options`, `tool_call` and `status`. Each provider becomes a `models.json` entry,
 //! read as the files' are. The catalog's last copy is saved in the state directory, so that its
 //! models stay offered while its server is down, and read again in the background as it ages
-//! (`agent_cli::login`), cheaply by its `ETag`.
+//! (`agent_cli::login`) and as `/model` opens, cheaply by its `ETag`.
 
 use super::client;
 use super::login;
@@ -18,6 +18,8 @@ use std::time::Duration;
 const WAIT: Duration = Duration::from_secs(5);
 /// How long reading it again in the background may take.
 const RELIST_WAIT: Duration = Duration::from_secs(30);
+/// How long reading it again may hold up a list about to be shown.
+const SHOWN_WAIT: Duration = Duration::from_secs(2);
 /// What a catalog gives beyond models.dev's shape, under each model: `cost_by_header`
 /// (`{header, values: {VALUE: cost}}`, read as `pricing`'s `header` and `byHeader`) and
 /// `unsupported_request_fields` (body fields its server rejects).
@@ -139,10 +141,19 @@ impl Catalog {
     /// Reads it again and saves it in place of the copy saved, which stays when that fails;
     /// asks with the copy's `ETag`, so that an unchanged one is not sent again.
     pub fn relist(&self) -> Result<(), String> {
+        self.relist_within(RELIST_WAIT)
+    }
+
+    /// As `relist`, waiting at most 2 seconds, for a list of models about to be shown.
+    pub fn relist_for_showing(&self) -> Result<(), String> {
+        self.relist_within(SHOWN_WAIT)
+    }
+
+    fn relist_within(&self, wait: Duration) -> Result<(), String> {
         let saved = self.read_saved();
         let etag = saved.as_ref().and_then(|saved| saved["etag"].as_str());
         let old = saved.as_ref().and_then(|saved| saved["body"].as_str());
-        match (self.fetch(RELIST_WAIT, etag)?, old) {
+        match (self.fetch(wait, etag)?, old) {
             (Some((body, etag)), _) => self.save(&body, etag.as_deref()),
             (None, Some(old)) => self.save(old, etag),
             (None, None) => Err("its server sent no catalog".to_owned()),

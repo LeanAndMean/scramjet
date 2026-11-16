@@ -11,7 +11,11 @@ use super::style::{MODEL_OFF, MODEL_ON, MUTED, RESET};
 use super::terminal;
 use super::text::{clip, visible};
 use scramjet::agent::{Agent, ModelOption, login};
+use std::time::{Duration, Instant};
 use unicode_width::UnicodeWidthStr;
+
+/// How old a model catalog's copy grows before `/model` reads it again.
+const CATALOG_FRESH: Duration = Duration::from_secs(60);
 
 /// What the scope is called, after `models`: `Models for Ctrl+P`.
 fn scope_name(models: &str) -> String {
@@ -481,6 +485,7 @@ impl Interactive {
     /// and nothing wanted, it lists the providers' models. The model set is remembered for
     /// sessions started later.
     pub(super) fn model(&mut self, wanted: &str) {
+        self.read_catalogs_again();
         let Some(models) = self.session.agent.listed_models() else {
             return self.say("No provider offers any model");
         };
@@ -516,6 +521,23 @@ impl Interactive {
                 }
                 Err(error) => self.say(&format!("Error: {error}")),
             }
+        }
+    }
+
+    /// Reads again the model catalogs whose copy is over a minute old, so that `/model` offers
+    /// what they offer now, waiting at most 2 seconds for each, and no more than once a minute
+    /// for one that could not be read: its copy is offered, and the background says why.
+    fn read_catalogs_again(&mut self) {
+        let now = Instant::now();
+        let catalogs = self.session.agent.providers().catalogs().to_vec();
+        for catalog in catalogs {
+            let fresh = |age: Duration| age < CATALOG_FRESH;
+            let tried = self.catalogs_tried.get(catalog.url());
+            if catalog.age().is_some_and(fresh) || tried.is_some_and(|at| fresh(now - *at)) {
+                continue;
+            }
+            self.catalogs_tried.insert(catalog.url().to_owned(), now);
+            let _ = catalog.relist_for_showing();
         }
     }
 

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.254.0 — `/model` reads model catalogs again
+
+### Changed
+
+- `/model` reads a model catalog again as it opens when its copy is over a minute old, waiting at most 2 seconds, so models a local proxy has just added are offered without waiting for the 15-minute refresh; a catalog that cannot be read is tried again a minute later, its copy offered meanwhile.
+
 ## 2.253.0 — A catalog's prices by backend and rejected fields
 
 ### Added

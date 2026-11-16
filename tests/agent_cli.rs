@@ -187,6 +187,105 @@ or https:// URL\n",
 }
 
 #[test]
+fn model_reads_a_catalog_again_once_its_copy_is_a_minute_old() {
+    use std::io::{BufRead, BufReader, Write};
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-model-catalog-{}", std::process::id())),
+    );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api.json", listener.local_addr().unwrap());
+    let catalog = |ids: &[&str]| {
+        let models: serde_json::Map<String, serde_json::Value> = (ids.iter())
+            .map(|id| {
+                (
+                    id.to_string(),
+                    serde_json::json!({"id": id, "tool_call": true}),
+                )
+            })
+            .collect();
+        serde_json::json!({"proxy": {"npm": "@ai-sdk/openai", "api": "http://127.0.0.1:9/v1",
+            "models": models}})
+        .to_string()
+    };
+    let answers = [catalog(&["alpha"]), catalog(&["alpha", "beta"])];
+    let server = std::thread::spawn(move || {
+        let mut heads = Vec::new();
+        for body in answers {
+            let (connection, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(connection);
+            let mut head = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                head.push_str(&line.to_lowercase());
+            }
+            let answer = format!(
+                "HTTP/1.1 200 OK\r\netag: \"v{}\"\r\ncontent-length: {}\r\n\r\n{body}",
+                heads.len() + 1,
+                body.len()
+            );
+            reader.get_mut().write_all(answer.as_bytes()).unwrap();
+            heads.push(head);
+        }
+        heads
+    });
+    let run = |args: &[&str], input: &str| {
+        let mut child = program(&binary())
+            .args(args)
+            .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stderr).unwrap()
+    };
+    run(&["catalog", "add", &url], "");
+    // Its copy just read is offered as it is.
+    let listed = run(&["--no-session"], "/model\n");
+    assert!(listed.contains("* proxy/alpha\n"), "{listed}");
+    assert!(!listed.contains("proxy/beta"), "{listed}");
+    let saved = scratch.0.join("state").join("scramjet").join("catalogs");
+    let saved = std::fs::read_dir(saved)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let age_copy = || {
+        let mut copy: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&saved).unwrap()).unwrap();
+        copy["fetched"] = serde_json::json!(copy["fetched"].as_f64().unwrap() - 61_000.0);
+        std::fs::write(&saved, copy.to_string()).unwrap();
+    };
+    age_copy();
+    let listed = run(&["--no-session"], "/model\n");
+    assert!(listed.contains("  proxy/beta\n"), "{listed}");
+    let heads = server.join().unwrap();
+    assert!(
+        heads[1].contains("if-none-match: \"v1\"\r\n"),
+        "{}",
+        heads[1]
+    );
+    // Its server gone, its copy is offered.
+    age_copy();
+    let listed = run(&["--no-session"], "/model\n");
+    assert!(listed.contains("  proxy/beta\n"), "{listed}");
+}
+
+#[test]
 fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-v1-{}", std::process::id())));
