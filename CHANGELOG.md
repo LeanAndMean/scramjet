@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.255.2 — A failed git command names git's version
+
+### Fixed
+
+- When a git command for a package fails, the error also names git's version, and for a git older than 2.20 says that updating it may fix the failure: Git for Windows 2.10's HTTPS helper crashes on newer processors and git then ends without a word (`git clone failed (exit code: 128; git 2.10.0.windows.1; this git is old, and updating it may fix this)`).
+
 ## 2.255.1 — A model whose provider went says where it came from
 
 ### Fixed

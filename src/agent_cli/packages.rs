@@ -237,18 +237,49 @@ fn git(directory: Option<&Path>) -> Command {
 }
 
 /// What `command` printed, trimmed; `git <what>` failing when it does, with git's exit status,
-/// which tells a git that printed nothing, interrupted or crashed, from one that refused.
+/// which tells a git that printed nothing, interrupted or crashed, from one that refused, and
+/// its version: an old Git for Windows's HTTPS helper crashes on newer CPUs without a word.
 fn run(command: &mut Command, what: &str) -> Result<String, String> {
     match command.stdout(Stdio::piped()).output() {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             Err("git is not installed; packages from git need it".into())
         }
         Err(error) => Err(format!("git: {error}")),
-        Ok(output) if !output.status.success() => {
-            Err(format!("git {what} failed ({})", output.status))
-        }
+        Ok(output) if !output.status.success() => Err(failed(what, &output.status, version())),
         Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned()),
     }
+}
+
+fn version() -> Option<String> {
+    let output = Command::new("git")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let version = text.trim().strip_prefix("git version ")?;
+    (output.status.success() && !version.is_empty()).then(|| version.to_owned())
+}
+
+/// Below this, git is old enough that updating it is the first thing to try.
+const OLD_GIT: (u32, u32) = (2, 20);
+
+fn failed(what: &str, status: &impl std::fmt::Display, version: Option<String>) -> String {
+    let Some(version) = version else {
+        return format!("git {what} failed ({status})");
+    };
+    let mut numbers = version.split('.').map(|part| part.parse::<u32>().ok());
+    let old = match (numbers.next().flatten(), numbers.next().flatten()) {
+        (Some(major), Some(minor)) => (major, minor) < OLD_GIT,
+        _ => false,
+    };
+    let hint = if old {
+        "; this git is old, and updating it may fix this"
+    } else {
+        ""
+    };
+    format!("git {what} failed ({status}; git {version}{hint})")
 }
 
 #[cfg(test)]
@@ -261,6 +292,28 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_failure_names_gits_version_and_an_old_one_asks_for_an_update() {
+        let status = "exit code: 128";
+        assert_eq!(
+            failed("clone", &status, Some("2.10.0.windows.1".into())),
+            "git clone failed (exit code: 128; git 2.10.0.windows.1; \
+             this git is old, and updating it may fix this)"
+        );
+        assert_eq!(
+            failed("clone", &status, Some("2.56.0".into())),
+            "git clone failed (exit code: 128; git 2.56.0)"
+        );
+        assert_eq!(
+            failed("clone", &status, Some("2.39.5 (Apple Git-154)".into())),
+            "git clone failed (exit code: 128; git 2.39.5 (Apple Git-154))"
+        );
+        assert_eq!(
+            failed("clone", &status, None),
+            "git clone failed (exit code: 128)"
+        );
     }
 
     fn parsed(text: &str) -> (String, String, String, Option<String>) {
