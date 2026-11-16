@@ -58,6 +58,7 @@ User decisions from the second `/rs:steer` of 2026-11-04. Copy and paste are use
 - **Copy-on-select**, a setting, on by default on macOS only: a completed mouse selection is copied, so Command+V works anywhere afterwards (Scramjet issue #643). Elsewhere, right-click copies a selection and pastes without one, and Ctrl+C copies a selection, as today.
 - When no clipboard route works, say once which key pastes through the terminal itself. Each terminal's quirks (Windows Terminal, Apple Terminal, iTerm2's `ReportRightClick`, xterm, VTE terminals such as Raspberry Pi OS's) are documented in this repository.
 - **Key remapping**, as Codex's `/keymap`: `/hotkeys` lists every key and also changes one (press the new key; conflicts shown), saved to a keybindings file; `/keybindings` (Claude Code's name) and `/keymap` open it. It is also the fallback where a terminal keeps right-click or a key to itself.
+- **Keys that select move as in an editor, in the prompt and the conversation alike** (third steer of 2026-11-16): Shift+Left/Right and Ctrl+Shift+Left/Right carry on across wrapped rows and on to the next or previous line, never stopping at a screen row's edge; Shift+Home/End go to the ends of the screen row in a wrapped line, as VS Code does.
 - **Effort levels stay as they are**: the UI offers only the levels the model lists, the footer shows the level sent, and the level chosen is kept and fitted to each model, so switching back restores it. With more providers, the levels come from each provider's model list.
 
 ### Packages, providers and MCP (2026-11-04)
