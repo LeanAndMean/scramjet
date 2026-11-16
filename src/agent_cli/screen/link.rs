@@ -359,9 +359,11 @@ impl Handle {
         clipboard::warm();
         let queue = Arc::new(Mutex::new(Queue::default()));
         let woke = wake.try_clone()?;
+        super::hold_panics();
         let thread = std::thread::Builder::new().name("screen".into()).spawn({
             let queue = queue.clone();
             move || {
+                let _stops = StopsTurnOnPanic(cancel.clone());
                 let sides = Sides {
                     root,
                     wake: woke,
@@ -423,14 +425,48 @@ impl std::ops::Deref for Handle {
     }
 }
 
-impl Drop for Handle {
-    /// Gives the terminal back as it was.
-    fn drop(&mut self) {
+impl Handle {
+    /// Gives the terminal back as it was, then prints the panics held meanwhile; an error when
+    /// the screen failed.
+    pub(in crate::agent_cli) fn close(mut self) -> Result<(), String> {
+        self.give_back()
+    }
+
+    fn give_back(&mut self) -> Result<(), String> {
+        let Some(thread) = self.thread.take() else {
+            return Ok(());
+        };
         self.link.send(ToScreen::Quit);
-        match self.thread.take().map(JoinHandle::join) {
-            Some(Ok(Err(error))) => eprintln!("Error: {error}"),
-            Some(Err(_)) => eprintln!("Error: the screen failed"),
-            _ => {}
+        let joined = thread.join();
+        eprint!("{}", super::held_panics());
+        match joined {
+            Ok(Err(error)) => Err(format!("the screen failed: {error}")),
+            Err(_) => Err(format!(
+                "the screen stopped on a bug: please report it at {ISSUES}"
+            )),
+            Ok(Ok(())) => Ok(()),
+        }
+    }
+}
+
+const ISSUES: &str = "https://github.com/LeanAndMean/scramjet/issues";
+
+/// Stops the turn running when the screen's thread panics, as Escape would, rather than let it
+/// go on with nothing shown.
+struct StopsTurnOnPanic(Arc<AtomicBool>);
+
+impl Drop for StopsTurnOnPanic {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        if let Err(error) = self.give_back() {
+            eprintln!("Error: {error}");
         }
     }
 }
@@ -566,5 +602,30 @@ impl AgentUi for Link {
     ) -> Option<usize> {
         self.pick_timed(Picker::question(title, options, recommended))
             .map(|(row, ..)| row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_screen_thread_panicking_stops_the_turn_and_ending_does_not() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let ended = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || drop(StopsTurnOnPanic(cancel))
+        });
+        assert!(ended.join().is_ok());
+        assert!(!cancel.load(Ordering::Relaxed));
+        let panicked = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || {
+                let _stops = StopsTurnOnPanic(cancel);
+                panic!("a bug in the screen");
+            }
+        });
+        assert!(panicked.join().is_err());
+        assert!(cancel.load(Ordering::Relaxed));
     }
 }

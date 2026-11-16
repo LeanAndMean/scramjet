@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.249.1 — A crash in the full screen says what happened
+
+### Fixed
+
+- When the full screen stops on a bug, the error now shows once the terminal is back (before, it was printed inside the screen and wiped as the screen closed, leaving only "the screen failed"), a running turn is stopped as Escape would stop it rather than going on unseen, and Scramjet exits with a failure status.
+
 ## 2.249.0 — Ctrl+C clears what you typed during a turn without stopping it
 
 ### Changed

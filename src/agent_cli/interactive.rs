@@ -168,14 +168,14 @@ impl Interactive {
     ) -> Result<(), String> {
         let result = self.read_and_run(resume, messages, files, notices);
         // The terminal is given back first, so that an error saving the settings shows.
-        self.screen = None;
+        let screen = self.screen.take().map_or(Ok(()), Handle::close);
         self.save_hide_thinking();
         if let Ok(Ended::NothingResumed) = result {
             eprintln!("{}", self.ui.dim("No session selected"));
         }
         super::write_held_at_exit(&mut self.session.agent);
         live::end();
-        result.map(drop)
+        result.map(drop).and(screen)
     }
 
     fn read_and_run(

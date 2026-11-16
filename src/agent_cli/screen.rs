@@ -1156,6 +1156,49 @@ impl Drop for Screen {
     }
 }
 
+/// Panics while the screen was shown, which it would have drawn over or taken with it as it was
+/// left, for `Handle` to print once the terminal is given back.
+static HELD: Mutex<String> = Mutex::new(String::new());
+
+/// Has a panic while the screen is shown kept rather than printed; others print as Rust's own
+/// hook prints them.
+fn hold_panics() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let mut held = HELD.lock().unwrap_or_else(PoisonError::into_inner);
+            match SHOWN.load(Ordering::SeqCst) {
+                true => held.push_str(&panic_report(info)),
+                false => default(info),
+            }
+        }));
+    });
+}
+
+/// A panic as Rust's own hook prints it: the thread, the place and the message, with a
+/// backtrace when `RUST_BACKTRACE` asks for one.
+fn panic_report(info: &std::panic::PanicHookInfo) -> String {
+    let thread = std::thread::current();
+    let name = thread.name().unwrap_or("<unnamed>");
+    let place = info
+        .location()
+        .map(|at| format!(" at {at}"))
+        .unwrap_or_default();
+    let message = info.payload_as_str().unwrap_or("Box<dyn Any>");
+    let backtrace = std::backtrace::Backtrace::capture();
+    let backtrace = match backtrace.status() {
+        std::backtrace::BacktraceStatus::Captured => format!("{backtrace}\n"),
+        _ => String::new(),
+    };
+    format!("thread '{name}' panicked{place}:\n{message}\n{backtrace}")
+}
+
+/// The panics held since the screen was last shown.
+fn held_panics() -> String {
+    std::mem::take(&mut *HELD.lock().unwrap_or_else(PoisonError::into_inner))
+}
+
 /// `view`'s report as the conversation shows a note, or a reply when it is markdown.
 fn report_shown(view: &ReportView) -> Transcript {
     let mut shown = Transcript::default();
