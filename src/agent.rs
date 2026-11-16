@@ -634,6 +634,8 @@ pub struct Agent {
     /// The names and providers of the providers' models, for the Model Identity; kept when they
     /// cannot be listed again.
     identities: HashMap<String, instructions::Identity>,
+    /// The current model and where its provider came from, as last found: kept once it is gone.
+    offered_by: Option<(String, String)>,
     /// What local runtimes said of their models' windows, by model reference (`follow_runtime`).
     runtime_windows: HashMap<String, turn::RuntimeWindow>,
     /// The models of the user's scope (`set_model_scope`); empty: all.
@@ -797,6 +799,8 @@ impl Agent {
             info: config.providers.info(&config.model),
             provider: None,
             identities: HashMap::new(),
+            offered_by: (config.providers.source(&config.model))
+                .map(|source| (config.model.clone(), source.to_owned())),
             runtime_windows: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
@@ -1652,6 +1656,9 @@ impl Agent {
         self.session.record_model(&model)?;
         self.info = self.config.providers.info(&model);
         self.provider = None;
+        if let Some(source) = self.config.providers.source(&model) {
+            self.offered_by = Some((model.clone(), source.to_owned()));
+        }
         self.config.model = model;
         self.keep_runtime_window();
         Ok(())
@@ -1864,6 +1871,17 @@ impl Agent {
                 self.config.model
             ),
         };
+        let gone = (self.offered_by.as_ref()).filter(|(model, _)| *model == self.config.model);
+        if let Some((model, source)) = gone {
+            message.push_str(&format!(
+                "\n{model} came from {source}, which offers it no longer"
+            ));
+        }
+        for program in providers.listed_none() {
+            if gone.is_none_or(|(_, source)| source != program) {
+                message.push_str(&format!("\n{program} listed no providers"));
+            }
+        }
         for problem in providers.problems() {
             message.push_str(&format!("\n{problem}"));
         }
@@ -2019,6 +2037,9 @@ impl Agent {
         if let Some(model) = self.config.providers.find(&self.config.model) {
             self.provider = several.then(|| model.provider.clone());
             self.info = model.info.clone();
+            if let Some(source) = self.config.providers.source(&self.config.model) {
+                self.offered_by = Some((self.config.model.clone(), source.to_owned()));
+            }
         } else if self.config.providers.problems().is_empty() {
             self.provider = None;
             self.info.route = None;

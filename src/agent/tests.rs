@@ -714,6 +714,66 @@ fn what_the_model_takes_comes_from_its_provider_read_again_each_time() {
         matches!(&error, Err(AgentError::Provider(message)) if message.starts_with("no provider offers any model: /login, or add providers to ")),
         "{error:?}"
     );
+    let gone = format!(
+        "\nopenai/m came from {}, which offers it no longer",
+        file.display()
+    );
+    assert!(
+        matches!(&error, Err(AgentError::Provider(message)) if message.ends_with(&gone)),
+        "{error:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_model_whose_program_lists_it_no_longer_says_where_it_came_from() {
+    let (mut agent, scratch) = agent("127.0.0.1:9".parse().unwrap(), "program-gone");
+    let file = scratch.0.join("models.json");
+    let program = scratch.0.join("list");
+    let list = |providers: Value| {
+        let output = json!({"version": 1, "providers": providers});
+        std::fs::write(&program, format!("#!/bin/sh\necho '{output}'\n")).unwrap();
+    };
+    list(
+        json!({"proxy": {"baseUrl": "http://127.0.0.1:9", "api": "anthropic-messages",
+        "models": [{"id": "m"}]}}),
+    );
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        &file,
+        json!({
+            "providers": {"own": {"baseUrl": "http://127.0.0.1:9", "api": "anthropic-messages",
+                "models": [{"id": "kept"}]}},
+            "providersCommand": ["./list", "127.0.0.1:9"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    agent.set_providers(Providers::read(vec![file.clone()], None));
+    agent.set_model("proxy/m").unwrap();
+    // As a program whose server moved answers: no providers, and no problem.
+    list(json!({}));
+    agent.load_model_info();
+    assert_eq!(agent.info.route, None);
+    let error = agent.turn("Hi", &mut Recorder::default(), &AtomicBool::new(false));
+    let Err(AgentError::Provider(message)) = &error else {
+        panic!("{error:?}");
+    };
+    let shown = file.display();
+    assert_eq!(
+        *message,
+        format!(
+            "no provider offers the model proxy/m; providers come from {shown}\n\
+                 proxy/m came from {shown}: ./list 127.0.0.1:9, which offers it no longer"
+        )
+    );
+    // A process that never saw it offered names the program that listed none.
+    let fresh = Providers::read(vec![file.clone()], None);
+    assert_eq!(
+        fresh.listed_none(),
+        [format!("{shown}: ./list 127.0.0.1:9")]
+    );
 }
 
 #[test]

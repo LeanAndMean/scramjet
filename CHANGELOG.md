@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.255.1 — A model whose provider went says where it came from
+
+### Fixed
+
+- When the current model's provider is gone, as when a `providersCommand` asks a local server that moved to another port, the error names where the model came from ("… came from FILE: COMMAND, which offers it no longer") and each `providersCommand` that ran but listed no providers. A program's problems now show its whole command line, arguments included.
+
 ## 2.255.0 — Selection keys carry on across rows
 
 ### Changed

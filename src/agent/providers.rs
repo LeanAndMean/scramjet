@@ -253,6 +253,10 @@ pub struct Providers {
     keyed: Vec<(String, KeyFrom)>,
     /// `origins`, of each of `keyed`.
     origins: HashMap<String, Vec<String>>,
+    /// Where each provider came from, as its problems name it.
+    sources: HashMap<String, String>,
+    /// The files' programs that ran and listed no providers, as their problems would name them.
+    listed_none: Vec<String>,
     credential_files: Vec<PathBuf>,
     problems: Vec<String>,
     /// Where `/login` saves what it does.
@@ -349,6 +353,8 @@ impl Providers {
         self.models = reading.models;
         self.keyed = reading.keyed;
         self.origins = reading.origins;
+        self.sources = reading.sources;
+        self.listed_none = reading.listed_none;
         self.listings = reading.listings;
         self.tried = reading.tried;
         self.catalogs = reading.catalogs;
@@ -472,6 +478,18 @@ impl Providers {
 
     /// The model `name` names: the one whose reference (`provider/id`) it is, else the first
     /// with that id, as sessions and settings written before references name it.
+    /// The files' programs that ran and listed no providers: a server they ask may have moved.
+    pub(super) fn listed_none(&self) -> &[String] {
+        &self.listed_none
+    }
+
+    /// Where the provider of the model `name` names (`find`) came from: a file, its program, a
+    /// catalog or a login.
+    pub(super) fn source(&self, name: &str) -> Option<&str> {
+        let model = self.find(name)?;
+        self.sources.get(&model.provider).map(String::as_str)
+    }
+
     pub(super) fn find(&self, name: &str) -> Option<&Model> {
         let models = &self.models;
         (models.iter())
@@ -579,6 +597,10 @@ struct Reading {
     programs: Vec<LoginProgram>,
     /// `Providers::origins`.
     origins: HashMap<String, Vec<String>>,
+    /// `Providers::sources`.
+    sources: HashMap<String, String>,
+    /// `Providers::listed_none`.
+    listed_none: Vec<String>,
     /// The servers each login's own entry names, as `login_origins` found them.
     logged_in_origins: RefCell<HashMap<String, Vec<String>>>,
 }
@@ -733,6 +755,9 @@ impl Reading {
                 ));
                 continue;
             }
+            self.sources
+                .entry(name.to_owned())
+                .or_insert_with(|| what.clone());
             self.provider(name, &entry, &what);
         }
     }
@@ -768,9 +793,11 @@ impl Reading {
                 if !words.is_empty() && words.iter().all(Value::is_string) =>
             {
                 let words: Vec<&str> = words.iter().filter_map(Value::as_str).collect();
-                let program = format!("{what}: {}", words[0]);
+                let program = format!("{what}: {}", words.join(" "));
                 let ran = run(&words, directory).map_err(|problem| format!("{what}: {problem}"));
                 match ran.and_then(|output| listed(&output, &program)) {
+                    Ok(None) => self.listed_none.push(program),
+                    Ok(Some(providers)) if providers.0.is_empty() => self.listed_none.push(program),
                     Ok(providers) => self.providers(providers, &program),
                     Err(problem) => self.problems.push(problem),
                 }
@@ -784,6 +811,7 @@ impl Reading {
     fn providers(&mut self, providers: Option<Ordered>, what: &str) {
         for (name, entry) in providers.into_iter().flat_map(|ordered| ordered.0) {
             self.named.push(name.clone());
+            (self.sources.entry(name.clone())).or_insert_with(|| what.to_owned());
             if !self.logs_in(&name) && !self.keyed.iter().any(|(keyed, _)| *keyed == name) {
                 let given = (self.given_key.as_ref()).is_some_and(|(given, _)| *given == name);
                 let from = match (super::login::key(&self.saved, &name), &entry["apiKey"]) {
