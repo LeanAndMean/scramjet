@@ -288,6 +288,7 @@ fn stopped_servers_get_their_input_closed_then_sigterm_then_sigkill() {
 }
 
 #[test]
+#[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
 fn under_the_sandbox_a_server_runs_outside_it_and_changing_it_keeps_the_server() {
     use crate::agent::{Sandbox, SandboxMode};
     if crate::agent::tests::missing("python3") {
