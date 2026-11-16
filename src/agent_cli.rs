@@ -294,10 +294,10 @@ fn session_choice(
             .map_err(|error| format!("{}: {error}", directory.display()))?
             .ok_or_else(|| format!("no session found matching {named:?}"))
     };
-    // Another terminal's session would take both processes' writes: it is forked instead.
+    // Another process's session would take both processes' writes: it is forked instead.
     let open = |path: PathBuf, named: &str| match live::holder(&path) {
         None => Ok(Some(SessionChoice::Open(path))),
-        Some(pid) => Ok(fork_held(named, pid)?.then_some(SessionChoice::Fork(path))),
+        Some(holder) => Ok(fork_held(named, &holder)?.then_some(SessionChoice::Fork(path))),
     };
     Ok(Some(match start {
         Start::New | Start::Resume => SessionChoice::New,
@@ -323,10 +323,10 @@ fn session_choice(
     }))
 }
 
-/// Asks whether to fork the session `named`, which the terminal of process `pid` holds; when the
-/// input is not a terminal, says how to instead.
-fn fork_held(named: &str, pid: u64) -> Result<bool, String> {
-    let open = format!("session {named:?} is open in another terminal (process {pid})");
+/// Asks whether to fork the session `named`, which another process holds; when the input is not
+/// a terminal, says how to instead.
+fn fork_held(named: &str, holder: &live::Holder) -> Result<bool, String> {
+    let open = format!("session {named:?} is open in {holder}");
     if !std::io::stdin().is_terminal() {
         return Err(format!(
             "{open}; --fork {named:?} continues it in a new session"

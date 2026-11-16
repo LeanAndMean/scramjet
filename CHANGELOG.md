@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.247.0 — Sessions an ACP client holds are not shared either
+
+### Changed
+
+- A session open in an ACP client (Zed, PyCharm, Flightdeck) is held as a terminal's is: `/resume` forks it, `--session` and `--continue` ask to fork it, and another client's `session/load` refuses it, so no two processes write one session. The messages name the client holding it ("Zed has it open (process N)").
+- `live_sessions` lists the sessions other ACP clients hold beside the terminals', with the `state` their turns are in and the `client` holding them, so Flightdeck's overview shows what Zed runs and can follow it read-only.
+
 ## 2.246.0 — A session open in another terminal is forked, not shared
 
 ### Changed

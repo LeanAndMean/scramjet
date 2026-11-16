@@ -6317,6 +6317,135 @@ fn a_session_another_terminal_holds_is_forked_not_shared() {
 
 #[test]
 #[cfg(unix)]
+fn a_session_an_acp_client_holds_is_listed_and_not_shared() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-held-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let project = std::fs::canonicalize(&project).unwrap();
+    let text = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done."}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#,
+        r#"{"type":"message_stop"}"#,
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    let (port, bodies) = serve_events_after(vec![text], |_| Duration::from_secs(1));
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let start = |client: serde_json::Value| {
+        let (child, mut stdin, messages) =
+            acp_models(&scratch.0, port, models.clone(), settings.clone(), &[]);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                "params": {"protocolVersion": 1, "clientInfo": client}}),
+        );
+        until(&messages, |message| message["id"] == 0);
+        (child, stdin, messages)
+    };
+    let (mut zed, mut stdin, messages) = start(serde_json::json!({"name": "zed", "title": "Zed"}));
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let created = until(&messages, |message| message["id"] == 1).0;
+    let session = created["result"]["sessionId"].as_str().unwrap().to_owned();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "hi"}]}}),
+    );
+    // Another ACP client sees it running, then idle, named by the client holding it.
+    let (mut other, mut asks, answers) = start(serde_json::json!({"name": "flightdeck"}));
+    let mut ids = 0;
+    let mut live_state = |state: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            ids += 1;
+            let method = "_io.github.leanandmean.scramjet/live_sessions";
+            send(
+                &mut asks,
+                serde_json::json!({"jsonrpc": "2.0", "id": ids, "method": method, "params": {}}),
+            );
+            let answer = until(&answers, |message| message["id"] == ids).0;
+            let sessions = answer["result"]["sessions"].as_array().unwrap().clone();
+            if sessions.len() == 1 && sessions[0]["state"] == state {
+                return sessions[0].clone();
+            }
+            assert!(Instant::now() < deadline, "never {state}: {sessions:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let running = live_state("running");
+    assert_eq!(running["sessionId"], session.as_str());
+    assert_eq!(running["pid"], zed.id());
+    assert_eq!(running["client"], "Zed");
+    bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+    until(&messages, |message| message["id"] == 2);
+    let idle = live_state("idle");
+    let path = idle["_meta"]["io.github.leanandmean.scramjet"]["path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let held = std::fs::read_to_string(&path).unwrap();
+    // The holder's own connection does not list its session as another's.
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3,
+            "method": "_io.github.leanandmean.scramjet/live_sessions", "params": {}}),
+    );
+    let own = until(&messages, |message| message["id"] == 3).0;
+    assert_eq!(own["result"]["sessions"], serde_json::json!([]), "{own}");
+    // A terminal does not open it.
+    let ran = program(&binary())
+        .args(["--model", "test/claude-test", "--retries", "0"])
+        .args(["--session", &path, "-p", "hi"])
+        .current_dir(&project)
+        .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_RUNTIME_DIR", scratch.0.join("runtime"))
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&ran.stderr);
+    assert!(!ran.status.success(), "{said}");
+    let open = format!("is open in Zed (process {})", zed.id());
+    assert!(said.contains(&open) && said.contains("--fork"), "{said}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), held);
+    // Closed, the session is free again.
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/close",
+            "params": {"sessionId": session}}),
+    );
+    until(&messages, |message| message["id"] == 4);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        ids += 1;
+        send(
+            &mut asks,
+            serde_json::json!({"jsonrpc": "2.0", "id": ids,
+                "method": "_io.github.leanandmean.scramjet/live_sessions", "params": {}}),
+        );
+        let answer = until(&answers, |message| message["id"] == ids).0;
+        if answer["result"]["sessions"] == serde_json::json!([]) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "still held: {answer}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop((stdin, asks));
+    zed.wait().unwrap();
+    other.wait().unwrap();
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_follows_a_terminals_session_read_only() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-watch-{}", std::process::id())),
@@ -6427,7 +6556,7 @@ fn acp_follows_a_terminals_session_read_only() {
         );
         let refused = until(&messages, |message| message["id"] == id).0;
         let message = refused["error"]["message"].as_str().unwrap_or_default();
-        assert!(message.contains("open in a terminal"), "{refused}");
+        assert!(message.contains("open in another terminal"), "{refused}");
     }
     // What the terminal does next follows as its file takes it.
     writeln!(typed, "second prompt").unwrap();

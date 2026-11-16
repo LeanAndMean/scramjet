@@ -527,7 +527,7 @@ pub(super) fn new_session(front: &mut dyn Front) -> bool {
 
 /// Continues in `session` (`/resume`); returns whether it did. As in Scramjet, a session
 /// continues in its own folder; one whose folder is gone is forked into this project, and so is
-/// one another terminal holds, which would otherwise take both processes' writes.
+/// one another process holds, which would otherwise take both processes' writes.
 pub(super) fn resume(front: &mut dyn Front, session: &SessionInfo) -> bool {
     let holder = super::live::holder(&session.path);
     let agent = &mut front.session().agent;
@@ -544,9 +544,7 @@ pub(super) fn resume(front: &mut dyn Front, session: &SessionInfo) -> bool {
         (None, false) => agent
             .fork_session_file(path)
             .map(|()| match (holder, &session.root) {
-                (Some(pid), _) => {
-                    format!("Forked session, as another terminal has it open (process {pid})")
-                }
+                (Some(holder), _) => format!("Forked session, as {}", holder.has_it_open()),
                 (None, root) => {
                     let gone = if root.is_some() {
                         ", as that folder is gone"

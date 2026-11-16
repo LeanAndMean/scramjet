@@ -6,6 +6,7 @@ use super::args::{Options, Start as Launch};
 use super::drive::{
     self, Change, Front, Messages, Offer, Picked, Routed, SandboxChange, Session, Start,
 };
+use super::live::State;
 use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
@@ -135,6 +136,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         forms: false,
         booleans: false,
         scramjet: false,
+        client: "ACP client".to_owned(),
         terminals: Terminals::Text,
         sign_in: sign_in::SignIn::default(),
         sessions: HashMap::new(),
@@ -445,6 +447,8 @@ struct Connection {
     /// The client knows Scramjet's extensions (`_meta["io.github.leanandmean.scramjet"]`).
     scramjet: bool,
     terminals: Terminals,
+    /// The client's name, as `initialize` gave it, for its sessions' live records.
+    client: String,
     sign_in: sign_in::SignIn,
     sessions: HashMap<String, Handle>,
     /// The ids sessions took later (a next step's fresh session), each with the one `sessions`
@@ -1199,6 +1203,11 @@ impl Connection {
             _ => Terminals::Text,
         };
         self.sign_in = sign_in::SignIn::read(capabilities["elicitation"]["url"].is_object());
+        let info = &params["clientInfo"];
+        let named = (info["title"].as_str()).or(info["name"].as_str());
+        if let Some(named) = named.map(str::trim).filter(|named| !named.is_empty()) {
+            self.client = named.chars().take(80).collect();
+        }
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
@@ -1261,6 +1270,7 @@ impl Connection {
             booleans: self.booleans,
             scramjet: self.scramjet,
             terminals: self.terminals,
+            client: self.client.clone(),
             renamed: self.renamed.clone(),
             cancel: cancel.clone(),
             turn: turn.clone(),
@@ -1282,6 +1292,7 @@ impl Connection {
                 return;
             }
             let mut front = worker.front(session, servers);
+            front.live(State::Idle);
             if opening == Opening::Load {
                 front.replay();
             }
@@ -1434,9 +1445,9 @@ impl Connection {
         if info.item_count == 0 {
             return Err(unknown());
         }
-        if let Some(pid) = super::live::holder(&file) {
+        if let Some(holder) = super::live::holder(&file) {
             return Err(invalid(format!(
-                "session {wanted} is open in a terminal (process {pid}): follow it with watch"
+                "session {wanted} is open in {holder}: follow it with watch"
             )));
         }
         match info.root {
@@ -1741,8 +1752,9 @@ fn listed_session(session: &scramjet::agent::SessionInfo) -> Option<Value> {
     Some(listed)
 }
 
-/// The sessions the user's terminals hold now, as `session/list` lists them, each with its
-/// process (`pid`), its `state` (`idle`, `running` or `waiting`) and `since` when.
+/// The sessions the user's terminals and other ACP clients hold now, as `session/list` lists
+/// them, each with its process (`pid`), its `state` (`idle`, `running` or `waiting`), `since`
+/// when, and for an ACP client's its `client` name.
 fn live_sessions() -> Vec<Value> {
     let mut sessions: Vec<Value> = (super::live::list().into_iter())
         .filter_map(|record| {
@@ -1758,6 +1770,9 @@ fn live_sessions() -> Vec<Value> {
             let since = std::time::Duration::from_millis(record["since"].as_u64()?);
             listed["pid"] = record["pid"].clone();
             listed["state"] = record["state"].clone();
+            if record["client"].is_string() {
+                listed["client"] = record["client"].clone();
+            }
             listed["since"] = json!(utc_time(std::time::UNIX_EPOCH + since));
             Some(listed)
         })
@@ -2113,6 +2128,7 @@ struct Worker {
     booleans: bool,
     scramjet: bool,
     terminals: Terminals,
+    client: String,
     renamed: Renamed,
     cancel: Arc<AtomicBool>,
     turn: Arc<Mutex<Turn>>,
@@ -2137,6 +2153,7 @@ impl Worker {
             steering: session.settings.steering_mode,
             follow_up: session.settings.follow_up_mode,
             cancel: self.cancel.clone(),
+            live: Mutex::new(super::live::Live::new(Some(self.client))),
             ..Updates::new(
                 self.out,
                 self.log,
@@ -2547,6 +2564,10 @@ impl Acp {
     }
 
     /// Tells the client what changed with the session: its config options and usage.
+    fn live(&self, state: State) {
+        lock(&self.ui.live).record(&self.session.agent, state);
+    }
+
     fn switched(&mut self) {
         self.options_changed();
         self.ui.usage_of(&self.session.agent);
@@ -2856,6 +2877,7 @@ impl Acp {
     /// of the prompts sent during its turn, the turn having ended for `ended`'s stop reason or
     /// failed with its error; cancelled, it says so.
     fn end_turn(&mut self, id: (&Value, Value), ended: Result<&str, (i64, &str)>) {
+        self.live(State::Idle);
         let mut turn = lock(&self.turn);
         turn.running = false;
         let waiting = std::mem::take(&mut turn.waiting);
@@ -2897,6 +2919,7 @@ impl Front for Acp {
         &mut self.ui
     }
     fn turn_starts(&mut self) {
+        self.live(State::Running);
         self.ui.window = self.session.agent.context_window();
         self.options_changed();
     }
@@ -2934,6 +2957,7 @@ impl Front for Acp {
         let request = match self.scramjet {
             true => {
                 let params = self.next_step_params(&offer);
+                lock(&self.ui.live).waiting();
                 Some(lock(&self.ui.log).request(&self.ui.out, NEXT_STEP, params))
             }
             false => {
@@ -2969,6 +2993,7 @@ impl Front for Acp {
                 None => std::thread::sleep(POLL),
             }
         };
+        lock(&self.ui.live).answered();
         let mut log = lock(&self.ui.log);
         match (&request, &answer) {
             (Some((id, _)), None | Some(None)) => log.withdraw(&self.ui.out, id),
@@ -3005,6 +3030,7 @@ impl Front for Acp {
     /// A client that knows Scramjet follows the new session's id; others keep the thread's,
     /// and are told in it.
     fn session_changed(&mut self, message: &str, _change: Change) {
+        lock(&self.ui.live).changed(&self.session.agent);
         let id = self.session.agent.session_id();
         if self.scramjet && id != self.ui.session {
             let params = json!({"sessionId": self.ui.session, "newSessionId": id});
@@ -3079,6 +3105,8 @@ struct Updates {
     taken_ids: std::collections::VecDeque<Value>,
     /// The title the prompt saved next gives a session with no name and no prompt yet.
     title: Option<String>,
+    /// The session's live record, which keeps terminals from opening it while it is here.
+    live: Mutex<super::live::Live>,
 }
 
 /// A tool call as ACP shows it.
@@ -3145,6 +3173,7 @@ impl Updates {
             prompt_shown: None,
             taken_ids: Default::default(),
             title: None,
+            live: Mutex::new(super::live::Live::new(None)),
         }
     }
 
@@ -3403,7 +3432,9 @@ impl Updates {
     /// client answered with an error, which a notice says.
     fn ask(&self, method: &str, params: Value, cancel: &AtomicBool) -> Option<Value> {
         let (id, answered) = lock(&self.log).request(&self.out, method, params);
+        lock(&self.live).waiting();
         let answer = self.answer(method, &id, &answered, cancel);
+        lock(&self.live).answered();
         if answer.is_some() {
             lock(&self.log).settled();
         }

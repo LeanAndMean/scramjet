@@ -272,10 +272,7 @@ impl Interactive {
                     }
                 }
                 select::Act::Delete => Some(match super::live::holder(&row.session.path) {
-                    Some(pid) => (
-                        format!("Failed to delete: another terminal has it open (process {pid})"),
-                        true,
-                    ),
+                    Some(holder) => (format!("Failed to delete: {}", holder.has_it_open()), true),
                     None => match self.session.agent.delete_session(&row.session.path) {
                         Ok(Removal::Trashed) => ("Session moved to trash".to_owned(), false),
                         Ok(Removal::Deleted) => ("Session deleted".to_owned(), false),

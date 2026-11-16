@@ -1,6 +1,7 @@
-//! The sessions the user's running terminals hold, for a front end such as Flightdeck to show:
-//! each full screen or line mode keeps a record of its session and whether a turn runs or waits
-//! for the user, in a private directory (`$XDG_RUNTIME_DIR`, else the temporary directory).
+//! The sessions the user's running terminals and ACP clients hold, for a front end such as
+//! Flightdeck to show, and so that no two processes write one session: each full screen, line
+//! mode and `scramjet acp` session keeps a record of its session and whether a turn runs or
+//! waits for the user, in a private directory (`$XDG_RUNTIME_DIR`, else the temporary directory).
 //! A record's `.lock` file stays locked while its process lives, so one that can be locked was
 //! left by a process gone, and whoever finds it removes it.
 
@@ -10,7 +11,10 @@ use std::{
     fs::{File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, PoisonError},
+    sync::{
+        Mutex, PoisonError,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -32,7 +36,7 @@ impl State {
     }
 }
 
-/// This process's record.
+/// A record standing.
 struct Record {
     /// Held locked while the record stands.
     _lock: File,
@@ -50,9 +54,19 @@ struct Shown {
     since: u64,
 }
 
-static RECORD: Mutex<Option<Record>> = Mutex::new(None);
-/// The state a waiting turn goes back to.
-static BEFORE_WAITING: Mutex<Option<State>> = Mutex::new(None);
+/// A session's record, kept while it lasts: the full screen's or line mode's one, or each of
+/// `scramjet acp`'s, which `client` names.
+pub(super) struct Live {
+    record: Option<Record>,
+    /// The state a waiting turn goes back to.
+    before_waiting: Option<State>,
+    /// The ACP client's name; a terminal's record has none.
+    client: Option<String>,
+}
+
+static TERMINAL: Mutex<Live> = Mutex::new(Live::new(None));
+/// Tells apart the records a process opens within one millisecond.
+static OPENED: AtomicU64 = AtomicU64::new(0);
 
 fn now() -> u64 {
     let since = SystemTime::now().duration_since(UNIX_EPOCH);
@@ -90,87 +104,117 @@ fn make_directory(directory: &Path) -> io::Result<()> {
     }
 }
 
-/// Records `agent`'s session in `state`, as the session now is: a new, resumed or forked one
-/// replaces the one before. An unsaved session (`--no-session`) has no record. A record that
-/// cannot be written is passed over: it only shows the session elsewhere.
-pub(super) fn record(agent: &Agent, state: State) {
-    let mut held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    if !agent.session_saved() {
-        *held = None;
-        return;
-    }
-    *BEFORE_WAITING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = None;
-    let mut shown = Shown {
-        id: agent.session_id(),
-        path: agent.session_path().to_owned(),
-        cwd: agent.root().to_owned(),
-        state,
-        since: now(),
-    };
-    if let Some(record) = held.as_ref() {
-        let same = Shown {
-            since: record.shown.since,
-            ..shown.clone()
-        };
-        if same == record.shown {
-            return;
-        }
-        if record.shown.state == state && record.shown.id == shown.id {
-            shown.since = record.shown.since;
-        }
-    }
-    if held.is_none() {
-        *held = open().ok();
-    }
-    if let Some(record) = held.as_mut()
-        && write(&record.json_path, &shown).is_ok()
-    {
-        record.shown = shown;
-    }
+fn terminal() -> std::sync::MutexGuard<'static, Live> {
+    TERMINAL.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Marks a turn as waiting for the user until `answered`.
+/// Records the terminal's session in `state` (`Live::record`).
+pub(super) fn record(agent: &Agent, state: State) {
+    terminal().record(agent, state);
+}
+
+/// Marks the terminal's turn as waiting for the user until `answered`.
 pub(super) fn waiting() {
-    let mut held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(record) = held.as_mut() else { return };
-    let mut before = BEFORE_WAITING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    if before.is_some() {
-        return;
-    }
-    *before = Some(record.shown.state);
-    set(record, State::Waiting);
+    terminal().waiting();
 }
 
 pub(super) fn answered() {
-    let mut held = RECORD.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(record) = held.as_mut() else { return };
-    if let Some(before) = BEFORE_WAITING
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .take()
-    {
-        set(record, before);
-    }
+    terminal().answered();
 }
 
-fn set(record: &mut Record, state: State) {
-    let shown = Shown {
-        state,
-        since: now(),
-        ..record.shown.clone()
-    };
-    if write(&record.json_path, &shown).is_ok() {
-        record.shown = shown;
-    }
-}
-
-/// Removes this process's record, as it ends.
+/// Removes the terminal's record, as it ends.
 pub(super) fn end() {
-    *RECORD.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    terminal().record = None;
+}
+
+impl Live {
+    pub(super) const fn new(client: Option<String>) -> Self {
+        Live {
+            record: None,
+            before_waiting: None,
+            client,
+        }
+    }
+
+    /// Records `agent`'s session in `state`, as the session now is: a new, resumed or forked
+    /// one replaces the one before. An unsaved session (`--no-session`) has no record. A record
+    /// that cannot be written is passed over: it only shows the session elsewhere.
+    pub(super) fn record(&mut self, agent: &Agent, state: State) {
+        if !agent.session_saved() {
+            self.record = None;
+            return;
+        }
+        self.before_waiting = None;
+        let mut shown = Shown {
+            id: agent.session_id(),
+            path: agent.session_path().to_owned(),
+            cwd: agent.root().to_owned(),
+            state,
+            since: now(),
+        };
+        if let Some(record) = self.record.as_ref() {
+            let same = Shown {
+                since: record.shown.since,
+                ..shown.clone()
+            };
+            if same == record.shown {
+                return;
+            }
+            if record.shown.state == state && record.shown.id == shown.id {
+                shown.since = record.shown.since;
+            }
+        }
+        if self.record.is_none() {
+            self.record = open().ok();
+        }
+        let client = self.client.as_deref();
+        if let Some(record) = self.record.as_mut()
+            && write(&record.json_path, &shown, client).is_ok()
+        {
+            record.shown = shown;
+        }
+    }
+
+    /// Records `agent`'s session again, in the state it was in, after it changed.
+    pub(super) fn changed(&mut self, agent: &Agent) {
+        let state = (self.record.as_ref()).map_or(State::Idle, |record| record.shown.state);
+        let before = self.before_waiting;
+        self.record(agent, state);
+        self.before_waiting = before;
+    }
+
+    /// Marks a turn as waiting for the user until `answered`.
+    pub(super) fn waiting(&mut self) {
+        if self.before_waiting.is_some() {
+            return;
+        }
+        let Some(record) = self.record.as_ref() else {
+            return;
+        };
+        self.before_waiting = Some(record.shown.state);
+        self.set(State::Waiting);
+    }
+
+    pub(super) fn answered(&mut self) {
+        if let Some(before) = self.before_waiting.take() {
+            self.set(before);
+        }
+    }
+
+    fn set(&mut self, state: State) {
+        let client = self.client.as_deref();
+        let Some(record) = self.record.as_mut() else {
+            return;
+        };
+        let shown = Shown {
+            state,
+            since: now(),
+            ..record.shown.clone()
+        };
+        if write(&record.json_path, &shown, client).is_ok() {
+            record.shown = shown;
+        }
+    }
 }
 
 impl Drop for Record {
@@ -183,7 +227,8 @@ impl Drop for Record {
 fn open() -> io::Result<Record> {
     let directory = directory();
     make_directory(&directory)?;
-    let name = format!("{}-{}", std::process::id(), now());
+    let opened = OPENED.fetch_add(1, Ordering::Relaxed);
+    let name = format!("{}-{}-{opened}", std::process::id(), now());
     let lock_path = directory.join(format!("{name}.lock"));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -207,8 +252,8 @@ fn open() -> io::Result<Record> {
 }
 
 /// Writes the record whole, in place of the one before, so a reader never sees half of it.
-fn write(path: &Path, shown: &Shown) -> io::Result<()> {
-    let record = json!({
+fn write(path: &Path, shown: &Shown, client: Option<&str>) -> io::Result<()> {
+    let mut record = json!({
         "pid": std::process::id(),
         "sessionId": shown.id,
         "path": shown.path,
@@ -216,6 +261,9 @@ fn write(path: &Path, shown: &Shown) -> io::Result<()> {
         "state": shown.state.word(),
         "since": shown.since,
     });
+    if let Some(client) = client {
+        record["client"] = json!(client);
+    }
     let fresh = path.with_extension("json.new");
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -225,39 +273,67 @@ fn write(path: &Path, shown: &Shown) -> io::Result<()> {
     std::fs::rename(&fresh, path)
 }
 
-/// The records of the processes running now, but this one's; those of processes gone are
-/// removed.
+/// The records of the other processes running now; those of processes gone are removed.
 pub(super) fn list() -> Vec<Value> {
     list_in(&directory())
 }
 
-/// The process of another terminal holding the session saved at `file`, if one does.
-pub(super) fn holder(file: &Path) -> Option<u64> {
+/// The other process holding the session saved at `file`, if one does: a terminal, or
+/// `scramjet acp` for a client.
+pub(super) fn holder(file: &Path) -> Option<Holder> {
     holder_in(&directory(), file)
 }
 
-fn holder_in(directory: &Path, file: &Path) -> Option<u64> {
+/// The process holding a session.
+pub(super) struct Holder {
+    pid: u64,
+    client: Option<String>,
+}
+
+impl Holder {
+    /// "another terminal has it open (process N)", or the ACP client's name in its place.
+    pub(super) fn has_it_open(&self) -> String {
+        format!("{} has it open (process {})", self.name(), self.pid)
+    }
+
+    fn name(&self) -> &str {
+        self.client.as_deref().unwrap_or("another terminal")
+    }
+}
+
+impl std::fmt::Display for Holder {
+    /// "another terminal (process N)", or the ACP client's name in its place.
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{} (process {})", self.name(), self.pid)
+    }
+}
+
+fn holder_in(directory: &Path, file: &Path) -> Option<Holder> {
     let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
     let file = canonical(file);
     (list_in(directory).into_iter())
         .find(|record| {
             (record["path"].as_str()).is_some_and(|path| canonical(Path::new(path)) == file)
         })
-        .and_then(|record| record["pid"].as_u64())
+        .and_then(|record| {
+            Some(Holder {
+                pid: record["pid"].as_u64()?,
+                client: record["client"].as_str().map(str::to_owned),
+            })
+        })
 }
 
 fn list_in(directory: &Path) -> Vec<Value> {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
-    let own = (RECORD.lock().unwrap_or_else(PoisonError::into_inner))
-        .as_ref()
-        .map(|record| record.json_path.clone());
+    let own = format!("{}-", std::process::id());
     let mut records = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
+        let name = entry.file_name();
         if path.extension().is_none_or(|extension| extension != "json")
-            || own.as_ref() == Some(&path)
+            || name.to_string_lossy().starts_with(&own)
         {
             continue;
         }
