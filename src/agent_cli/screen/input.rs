@@ -365,6 +365,7 @@ impl App {
         {
             match view.key(&key) {
                 Took::Moved => self.report_moved(),
+                Took::Scrolled(lines) => self.navigate(lines),
                 Took::Closed => self.answer(None),
                 Took::Nothing => {}
             }

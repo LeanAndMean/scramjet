@@ -65,14 +65,15 @@ fn share(n: u64, window: u64) -> String {
     }
 }
 
-/// The full screen's view: the categories, the items under each a key away.
-pub(super) fn view(breakdown: &Breakdown) -> ReportView {
+/// The full screen's view: the categories, the items under each a key away, and `prompt`, the
+/// system prompt's view, another key away.
+pub(super) fn view(breakdown: &Breakdown, prompt: ReportView) -> ReportView {
     let tab = Tab {
         name: "Context".to_owned(),
         summary: report(breakdown, false),
         details: report(breakdown, true),
     };
-    ReportView::new("Context", "summary", vec![tab], 0, false)
+    ReportView::new("Context", "summary", vec![tab], 0, false).linking("s", "system prompt", prompt)
 }
 
 #[cfg(test)]

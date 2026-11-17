@@ -29,6 +29,7 @@ pub(super) enum Builtin<'a> {
     /// With whether the details come first.
     Usage(bool),
     Context,
+    SystemPrompt,
     ReleaseNotes,
     Hotkeys,
     Keybindings,
@@ -73,6 +74,7 @@ impl<'a> Builtin<'a> {
                 Self::Usage(argument == "details")
             }
             "context" if argument.is_empty() => Self::Context,
+            "system-prompt" if argument.is_empty() => Self::SystemPrompt,
             "release-notes" if argument.is_empty() => Self::ReleaseNotes,
             "hotkeys" if argument.is_empty() => Self::Hotkeys,
             "keybindings" if argument.is_empty() => Self::Keybindings,
@@ -109,6 +111,7 @@ impl<'a> Builtin<'a> {
                 | Self::Status
                 | Self::Usage(_)
                 | Self::Context
+                | Self::SystemPrompt
                 | Self::ReleaseNotes
                 | Self::Hotkeys
                 | Self::Keybindings
@@ -146,6 +149,7 @@ impl Interactive {
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
+            Some(Builtin::SystemPrompt) => self.system_prompt(),
             Some(Builtin::ReleaseNotes) => self.release_notes(),
             Some(Builtin::Hotkeys) => self.hotkeys(),
             Some(Builtin::Keybindings) => self.keybindings(),
@@ -344,8 +348,25 @@ impl Interactive {
     fn context(&mut self) {
         let breakdown = self.session.agent.context_breakdown();
         match &self.screen {
-            Some(screen) => screen.show_report(super::context::view(&breakdown)),
+            Some(screen) => {
+                let prompt = super::system_prompt::view(&self.session.agent.system_prompt());
+                screen.show_report(super::context::view(&breakdown, prompt));
+            }
             None => self.say(super::context::report(&breakdown, true).trim_end()),
+        }
+    }
+
+    /// `/system-prompt`: on the full screen, the instructions and tools the last request sent.
+    fn system_prompt(&mut self) {
+        match &self.screen {
+            Some(screen) => {
+                let prompt = self.session.agent.system_prompt();
+                screen.show_report(super::system_prompt::view(&prompt));
+            }
+            None => self.say(
+                "/system-prompt shows on the full screen; /export writes the instructions and \
+tools into its page",
+            ),
         }
     }
 
@@ -830,6 +851,7 @@ mod tests {
         for prompt in [
             "/status",
             "/context",
+            "/system-prompt",
             "/export",
             "/export out.jsonl",
             "/hotkeys",
@@ -866,6 +888,7 @@ mod tests {
         for prompt in [
             "/status now",
             "/context all",
+            "/system-prompt all",
             "/hotkeys all",
             "/copy all",
             "/scoped-models luna",

@@ -63,6 +63,7 @@ mod settings_menu;
 mod slash;
 mod spelling;
 mod style;
+mod system_prompt;
 mod terminal;
 mod text;
 mod theme;

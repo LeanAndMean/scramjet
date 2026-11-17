@@ -656,6 +656,8 @@ pub struct Agent {
     calls: Option<calls::Calls>,
     /// A step's request that a pause of the turn left streaming.
     replying: Option<request::Replying>,
+    /// The instructions and tools the session's last request sent.
+    sent: Option<(Vec<Part>, Value)>,
     pub usage: Usage,
 }
 
@@ -780,6 +782,7 @@ impl Agent {
             .enable_all()
             .build()?;
         let mut agent = Self {
+            sent: None,
             instructions: Vec::new(),
             agents_directory: None,
             approvals: approvals::path(),
@@ -1120,6 +1123,7 @@ impl Agent {
     /// Continues in `session`; the one before goes, kept only while its file cannot take lines it
     /// holds. One left without a conversation was never written, as Scramjet would not have.
     fn replace_session(&mut self, session: Session) {
+        self.sent = None;
         let left = std::mem::replace(&mut self.session, session);
         if left.holding() {
             self.left.push(left);

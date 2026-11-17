@@ -432,9 +432,17 @@ impl App {
             B::SelectLineStart,
         ];
         let length = self.transcript.len();
+        // A report shows in the conversation's place, the prompt hidden.
+        let report = matches!(
+            self.dialog,
+            Some(Open {
+                shown: Shown::Report(_),
+                ..
+            })
+        );
         if self.selection.is_some()
-            || self.dialog.is_some()
-            || !self.draft.text().is_empty()
+            || (self.dialog.is_some() && !report)
+            || (!report && !self.draft.text().is_empty())
             || length == 0
             || !backwards.iter().any(|&binding| key.is(binding))
         {

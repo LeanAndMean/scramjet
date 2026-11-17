@@ -4,8 +4,8 @@ use super::client::{self, ClientError, Protocol};
 use super::completions;
 use super::providers::{Login, ModelInfo};
 use super::{
-    Agent, AgentError, AgentUi, PRODUCER, Purpose, Retries, StreamProgress, image, messages, rates,
-    sent, status, tools,
+    Agent, AgentError, AgentUi, PRODUCER, Part, Purpose, Retries, StreamProgress, image,
+    instructions, messages, rates, sent, status, tools,
 };
 use serde_json::{Value, json};
 use std::{
@@ -55,10 +55,16 @@ fn cache_retention() -> CacheRetention {
 }
 
 impl Agent {
+    #[cfg(test)]
     pub(super) fn request(&self) -> Value {
+        self.request_with(&self.instruction_parts())
+    }
+
+    /// The request, its instructions those of `parts`.
+    pub(super) fn request_with(&self, parts: &[Part]) -> Value {
         let mut request = json!({
             "model": self.info.id,
-            "instructions": self.instructions(),
+            "instructions": instructions::joined(parts),
             "input": self.replay_conversation(),
             "tools": self.tool_definitions(),
             "tool_choice": "auto",
@@ -699,6 +705,32 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn the_system_prompt_shown_is_what_the_last_request_sent() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "done",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, _scratch) = agent(endpoint, "system-prompt");
+        let next = agent.system_prompt();
+        assert!(!next.sent);
+        assert_eq!(next.parts, agent.instruction_parts());
+        assert_eq!(next.tools, agent.tool_definitions());
+        agent
+            .turn("hi", &mut Recorder::default(), &AtomicBool::new(false))
+            .unwrap();
+        let body = server.join().unwrap().remove(0);
+        let sent = agent.system_prompt();
+        assert!(sent.sent);
+        assert_eq!(
+            json!(instructions::joined(&sent.parts)),
+            body["instructions"]
+        );
+        assert_eq!(sent.tools, body["tools"]);
+        agent.new_session().unwrap();
+        assert!(!agent.system_prompt().sent);
     }
 
     #[test]

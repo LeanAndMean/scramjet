@@ -1,0 +1,41 @@
+{
+  "size": "100x40",
+  "settings": {"theme": "scramjet-dark"},
+  "files": {"CLAUDE.md": "# Rules\n\nRun the tests before each commit.\n"},
+  "replies": [
+    [{"text": "It asks for the tests before each commit."}]
+  ],
+  "steps": [
+    {"sleep": 1.0},
+    {"type": "/system-prompt\r"},
+    {"until": "No request has been sent yet"},
+    {"sleep": 0.5},
+    {"shot": "before"},
+    {"type": "\u001b"},
+    {"sleep": 0.3},
+    {"type": "What do the rules ask?\r"},
+    {"until": "before each commit."},
+    {"type": "/system-prompt\r"},
+    {"until": "last request sent"},
+    {"sleep": 0.5},
+    {"shot": "sent"},
+    {"type": "\u001b[B\u001b[B\u001b[B\u001b[6~"},
+        {"sleep": 0.3},
+    {"shot": "scrolled"},
+    {"type": "\u001b[F"},
+        {"sleep": 0.3},
+    {"shot": "end"},
+    {"type": "\u001b[1;2A\u001b[1;2A\u001b[1;2A"},
+    {"sleep": 0.3},
+    {"shot": "selected"},
+    {"type": "\u0003"},
+    {"sleep": 0.5},
+    {"shot": "copied"},
+    {"type": "\u001b[H"},
+    {"sleep": 0.3},
+    {"shot": "home"},
+    {"type": "\u001b"},
+    {"sleep": 0.5},
+    {"shot": "closed"}
+  ]
+}

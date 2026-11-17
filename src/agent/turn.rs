@@ -374,8 +374,11 @@ finish and is not checked on. Reply to continue.",
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui, false, cancel);
                     self.compact_for_runtime(ui, cancel)?;
-                    let mut request = self.request();
+                    let parts = self.instruction_parts();
+                    let mut request = self.request_with(&parts);
                     self.fit_for_runtime(&mut request, &mut past_window_said, ui);
+                    let tools = request.get("tools").cloned().unwrap_or(json!([]));
+                    self.sent = Some((parts, tools));
                     self.start_reply(request)?
                 }
             };

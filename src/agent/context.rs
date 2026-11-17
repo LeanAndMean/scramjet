@@ -1,7 +1,7 @@
 //! What the context holds, part by part, as `/context` shows it: each part's size estimated from
 //! its text, as compaction estimates, and scaled to the context the last response reported.
 use super::compaction::estimate;
-use super::{Agent, Section, mcp, shortened};
+use super::{Agent, Part, Section, mcp, shortened};
 use serde_json::Value;
 
 /// The context's parts, by category, and the window they fill.
@@ -53,7 +53,33 @@ fn tokens(text: &str) -> u64 {
     (text.chars().count() as u64).div_ceil(4)
 }
 
+/// The system prompt as `/system-prompt` shows it: the instructions in their parts, then the
+/// tool definitions.
+#[derive(Debug, PartialEq)]
+pub struct SystemPrompt {
+    pub parts: Vec<Part>,
+    pub tools: Value,
+    /// Whether the session's last request sent them; else the next request sends them.
+    pub sent: bool,
+}
+
 impl Agent {
+    /// What the session's last request sent, or before one what the next sends.
+    pub fn system_prompt(&self) -> SystemPrompt {
+        match &self.sent {
+            Some((parts, tools)) => SystemPrompt {
+                parts: parts.clone(),
+                tools: tools.clone(),
+                sent: true,
+            },
+            None => SystemPrompt {
+                parts: self.instruction_parts(),
+                tools: self.tool_definitions(),
+                sent: false,
+            },
+        }
+    }
+
     /// What the next request's context holds, by part.
     pub fn context_breakdown(&self) -> Breakdown {
         let mut items: Vec<(&'static str, String, u64)> = Vec::new();

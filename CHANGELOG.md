@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.257.0 — /system-prompt shows what the last request sent
+
+### Added
+
+- `/system-prompt` shows, on the full screen, the instructions the session's last request sent, each part under a heading with its size (the opening, each context file by its path, the skills, Scramjet's directives, the listings, identity, environment), then each tool's definition; before any request, those the next one sends, and it says which. Up and Down, PgUp and PgDn, Home and End scroll it, the mouse or Shift and the arrows select and Ctrl+C copies, Escape closes it; nothing goes into the conversation. In `/context`'s view, `s` opens it.
+
+### Changed
+
+- The full-screen reports (`/usage`, `/context`, `/release-notes`) scroll with Up and Down and go to their start and end with Home and End, and Shift with the arrows starts a selection in them as in the conversation.
+
 ## 2.256.0 — /context shows what the context holds
 
 ### Added

@@ -19,6 +19,10 @@
     {"until": "Preamble"},
     {"sleep": 0.3},
     {"shot": "context-details"},
+    {"type": "s"},
+    {"until": "last request sent"},
+    {"sleep": 0.3},
+    {"shot": "context-system-prompt"},
     {"type": "\u001b"},
     {"sleep": 0.5},
     {"shot": "context-closed"}
