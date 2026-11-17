@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.259.0 — Autopilot shown while on
+
+### Changed
+
+- While `/autopilot` is on, the footer's first line says so (`• autopilot`, after the sandbox's mode), so a chained next step is never a surprise.
+
 ## 2.258.3 — Copying over SSH is quick
 
 ### Fixed

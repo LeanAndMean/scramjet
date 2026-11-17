@@ -1,6 +1,7 @@
 //! The two lines under the prompt, as Scramjet's footer: the project's directory with its Git
-//! branch, the session's name and the sandbox's mode, then the session's tokens with the model's output rate, the
-//! cost, how full the context is, and the model with its provider and effort.
+//! branch, the session's name, the sandbox's mode and whether autopilot is on, then the
+//! session's tokens with the model's output rate, the cost, how full the context is, and the
+//! model with its provider and effort.
 
 use super::settings::scramjet_level;
 use super::style::{FOOTER, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
@@ -37,6 +38,8 @@ pub(super) struct Shown {
     pub(super) effort: Option<String>,
     /// The sandbox's mode, while the agent's tools run in one.
     pub(super) sandbox: Option<&'static str>,
+    /// Whether `/autopilot` is on.
+    pub(super) autopilot: bool,
 }
 
 impl Shown {
@@ -58,6 +61,7 @@ impl Shown {
                 .filter(|_| agent.reasons() && !none)
                 .map(str::to_owned),
             sandbox: agent.sandbox().map(|sandbox| sandbox.mode.name()),
+            autopilot: agent.autopilot(),
         }
     }
 }
@@ -158,6 +162,9 @@ impl Footer {
         }
         if let Some(mode) = self.shown.sandbox {
             place += &format!(" • sandbox {mode}");
+        }
+        if self.shown.autopilot {
+            place += " • autopilot";
         }
         let place = clip(&visible(&one_line(&place)), room);
         [format!("{FOOTER}{place}{RESET}"), self.stats(room)]
@@ -345,6 +352,7 @@ mod tests {
             provider: None,
             effort: Some("high".into()),
             sandbox: None,
+            autopilot: false,
         }
     }
 
@@ -361,6 +369,12 @@ mod tests {
             place,
             "~/repos/project (main) • Refactor • sandbox read-only"
         );
+        let autopilot = Shown {
+            autopilot: true,
+            ..opus()
+        };
+        let [place, _] = footer(autopilot).lines(67).map(|line| plain(&line));
+        assert_eq!(place, "~/repos/project (main) • Refactor • autopilot");
         assert_eq!(
             stats,
             "↑12k ↓3.4k R104k 53k/1.0M (5.3%, auto)      claude-opus-5-5 • high"
