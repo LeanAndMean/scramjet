@@ -33,7 +33,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 
 ## Documents
 
-- `README.md`: how to use the harness and its truthful current status. Keep it short.
+- `README.md`: the front page for users: what Scramjet 2 is and does, its truthful status, install and first steps, with links. Keep it short; the reference detail is in the user guides under `docs/guide/`.
 - `docs/DESIGN.md`: product direction and essential invariants agreed with the user.
 - `docs/ROADMAP.md`: rough stages.
 - `CHANGELOG.md`: what changed in each version, for users, newest first (Workflow).
@@ -42,6 +42,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 - `docs/TASKS.md`: pending work only: the current focus, next candidates with their obstacles, open questions and the `Last steer:` commit. Remove what is finished. Keep it under about 45 KB, so a fresh session reads it whole.
 - `docs/ISSUES.md`: known issues, not scheduled.
 - `docs/THEMES.md`: the agreed look, themes and theme editor, moved out of `docs/DESIGN.md` for room.
+- `docs/DECISIONS.md`: user decisions moved out of `docs/DESIGN.md` once built, for room (`docs/RPC.md` holds RPC mode's).
 
 ## When to stop for the user
 
