@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/scramjet-logo.png" alt="Scramjet logo" width="600">
+  <img src="assets/scramjet-logo.png" alt="Scramjet 2 logo" width="720">
 </p>
 
 # Scramjet 2

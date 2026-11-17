@@ -6,7 +6,7 @@ Last steer: 6cba6ae
 
 ## Current focus
 
-Set at the second steer of 2026-11-17, top priority: the README with Scramjet 2's own logo (68), then pushing it to `public`; then the local proxy's pull request for 62, as one pull request (rebase onto its `develop`, its suite, the Windows test), opened when the user asks; then 63, 51, 44 and 48.
+Set at the second steer of 2026-11-17, top priority: the README with Scramjet 2's own logo (68; done in 2.258.1 and pushed to `public`); then the local proxy's pull request for 62, as one pull request (rebase onto its `develop`, its suite, the Windows test), opened when the user asks; then 63, 51, 44 and 48.
 
 Earlier steers' focus, all done but what the paragraph above carries on: `/context` (2.256.0), `/system-prompt` (2.257.0), the README drafted (2.258.0), the proxy's install change (its 9d9341bf), the selection keys (64, 2.255.0); 63 waits for the user's git update on that PC.
 
@@ -22,9 +22,7 @@ After that, the order of the steer of 2026-11-12: macOS (35), from testers' repo
 
 ## Next candidates
 
-Order agreed at the second steer of 2026-11-17 (Current focus): 68, then 62's pull request, 63, 51, 44, 48; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
-
-68. **The README as a front page** ([design](DESIGN.md#what-the-context-holds-shown-2026-11-17); user, steer of 2026-11-17). Drafted in 2.258.0: the README (93 lines, 8 KB, the logo in `assets/`), the guides in `docs/guide/` (carried by the program with `docs/TERMINALS.md`, `builtin::DOCS`; a guide added there must join that list, a test says so), `CONTRIBUTING.md`. The user saw it rendered and approved it at the second steer of 2026-11-17, but for the logo: replace `assets/scramjet-logo.png` (Scramjet 1's) with the user's Scramjet 2 logo ("scramjet" in white with a red "RS" on black, 2172×724 PNG; where it is: `CLAUDE.local.md`), check it rendered (a local render with Python's `markdown` and headless Chromium, never an upload; the old picture's width 600 may want changing for its wider shape), then push `main` to `public` (item 51's standing approval). A guide's facts are each in one place: change them there, and keep the README's Status links absolute.
+Order agreed at the second steer of 2026-11-17 (Current focus): 62's pull request, 63, 51, 44, 48; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
 
 63. **`scramjet install` of a git package fails on Windows** (user, third steer of 2026-11-16). Cause found and confirmed (2.254.1–2.255.2's commits and c9729e8 say how): that PC's git is 2.10.0 (2016), whose HTTPS helper crashes in its OpenSSL on CPUs with SHA extensions and exits 128 silently; `OPENSSL_ia32cap=:~0x20000000` let the install reach GitHub's sign-in. Since 2.255.2 a failed git command names git's version, and below 2.20 says to update it. Git's stderr stays the console's (piped, Git for Windows prompts through a failing `/dev/tty` script). Left: the user updates Git for Windows on that PC and installs again.
 

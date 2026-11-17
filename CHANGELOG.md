@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.258.1 — Scramjet 2's own logo
+
+### Changed
+
+- The README shows Scramjet 2's own logo in place of Scramjet 1's.
+
 ## 2.258.0 — The README is a front page
 
 ### Changed
