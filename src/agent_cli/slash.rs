@@ -28,6 +28,7 @@ pub(super) enum Builtin<'a> {
     Status,
     /// With whether the details come first.
     Usage(bool),
+    Context,
     ReleaseNotes,
     Hotkeys,
     Keybindings,
@@ -71,6 +72,7 @@ impl<'a> Builtin<'a> {
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
+            "context" if argument.is_empty() => Self::Context,
             "release-notes" if argument.is_empty() => Self::ReleaseNotes,
             "hotkeys" if argument.is_empty() => Self::Hotkeys,
             "keybindings" if argument.is_empty() => Self::Keybindings,
@@ -106,6 +108,7 @@ impl<'a> Builtin<'a> {
                 | Self::Rename(_)
                 | Self::Status
                 | Self::Usage(_)
+                | Self::Context
                 | Self::ReleaseNotes
                 | Self::Hotkeys
                 | Self::Keybindings
@@ -142,6 +145,7 @@ impl Interactive {
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Usage(details)) => self.usage(details),
+            Some(Builtin::Context) => self.context(),
             Some(Builtin::ReleaseNotes) => self.release_notes(),
             Some(Builtin::Hotkeys) => self.hotkeys(),
             Some(Builtin::Keybindings) => self.keybindings(),
@@ -333,6 +337,16 @@ impl Interactive {
             false => super::usage::summary(&history, current, model, now, None),
         };
         self.say(report.trim_end());
+    }
+
+    /// `/context`, as Claude Code's: how much of the window each part of the context takes; on
+    /// the full screen in a view of its own, the items under each a key away.
+    fn context(&mut self) {
+        let breakdown = self.session.agent.context_breakdown();
+        match &self.screen {
+            Some(screen) => screen.show_report(super::context::view(&breakdown)),
+            None => self.say(super::context::report(&breakdown, true).trim_end()),
+        }
     }
 
     /// `/mcp`, as Codex's: the MCP servers, how each is, and its tools; `/mcp reconnect`, as
@@ -815,6 +829,7 @@ mod tests {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
             "/status",
+            "/context",
             "/export",
             "/export out.jsonl",
             "/hotkeys",
@@ -850,6 +865,7 @@ mod tests {
         // These go to the model as they are, as before a turn.
         for prompt in [
             "/status now",
+            "/context all",
             "/hotkeys all",
             "/copy all",
             "/scoped-models luna",

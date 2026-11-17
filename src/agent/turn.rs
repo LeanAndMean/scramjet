@@ -1196,14 +1196,14 @@ Scramjet\n",
         agent.show_conversation(&mut shown);
         assert_eq!(shown.shown[0], format!("command {typed} sent {sent}"));
         // Without the read tool the model is not told to read them.
-        let text = instructions::agent(
+        let text = instructions::joined(&instructions::agent(
             agent.root(),
             &[],
             &agent.commands,
             &[],
             &agent.skills,
             &Default::default(),
-        );
+        ));
         assert!(!text.contains("<available_skills>"));
     }
 

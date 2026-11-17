@@ -1,0 +1,26 @@
+{
+  "size": "100x50",
+  "settings": {"theme": "scramjet-dark"},
+  "files": {"CLAUDE.md": "# Rules\n\nRun the tests before each commit.\n"},
+  "window": 200000,
+  "total": 5510,
+  "prompt": "Read README.md.",
+  "replies": [
+    [{"call": "read", "arguments": {"path": "CLAUDE.md"}}],
+    [{"text": "It asks for the tests before each commit."}]
+  ],
+  "steps": [
+    {"until": "before each commit."},
+    {"type": "/context\r"},
+    {"until": "Compaction reserve"},
+    {"sleep": 0.5},
+    {"shot": "context"},
+    {"type": "d"},
+    {"until": "Preamble"},
+    {"sleep": 0.3},
+    {"shot": "context-details"},
+    {"type": "\u001b"},
+    {"sleep": 0.5},
+    {"shot": "context-closed"}
+  ]
+}

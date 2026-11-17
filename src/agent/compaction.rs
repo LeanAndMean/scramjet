@@ -834,7 +834,7 @@ impl Agent {
     /// The settings' `reserveTokens` and `keepRecentTokens`, each at most a quarter of the window
     /// on a model a local runtime serves: their defaults suit Scramjet's 200k windows, and on
     /// Ollama's 32k or 40k one compaction would never run, or keep nearly everything.
-    fn reserve_and_kept(&self) -> (u64, u64) {
+    pub(super) fn reserve_and_kept(&self) -> (u64, u64) {
         let Compacting {
             reserve,
             keep_recent,
@@ -848,7 +848,7 @@ impl Agent {
 
     /// As Scramjet counts the context: the last response's, if the current model gave it, and an
     /// estimate of the items added after it, such as tool output from a cancelled turn.
-    fn context_size(&self) -> Option<u64> {
+    pub(super) fn context_size(&self) -> Option<u64> {
         let tokens = self.usage.context_tokens?;
         let last = self
             .conversation

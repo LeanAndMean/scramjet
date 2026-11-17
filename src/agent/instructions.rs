@@ -10,6 +10,43 @@ const CONTEXT_FILE_BYTES: u64 = 256 << 10;
 /// Scramjet's base directives, from its command framing to its release timing.
 const DIRECTIVES: &str = include_str!("directives.md");
 
+/// What a part of the instructions holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Section {
+    /// Pi's list of tools and guidelines, or the prompt file in their place, with what is
+    /// appended to it.
+    Opening,
+    ContextFile,
+    Skills,
+    /// The `# Scramjet` orientation and Scramjet's directives.
+    Directives,
+    Agents,
+    Commands,
+    Mcp,
+    Sandbox,
+    Identity,
+    Environment,
+}
+
+/// A part of the instructions: what it holds, its name (a context file's path), and its text.
+/// The parts' texts, in order, are the instructions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Part {
+    pub section: Section,
+    pub name: String,
+    pub text: String,
+}
+
+impl Part {
+    pub(super) fn new(section: Section, name: &str, text: String) -> Self {
+        Self {
+            section,
+            name: name.to_owned(),
+            text,
+        }
+    }
+}
+
 /// The agent's instructions, in Scramjet's order: Pi's list of the `tools` offered and the
 /// guidelines for them, or the opening `loaded` has in their place, the texts it appends, the
 /// context files, the `skills`, Scramjet's directives, then the subagents and commands. Each
@@ -21,14 +58,9 @@ pub(super) fn agent(
     agents: &[subagent::Definition],
     skills: &Skills,
     loaded: &Loaded,
-) -> String {
+) -> Vec<Part> {
     let has = |tool: &str| tools.contains(&tool);
     let agents = if has(subagent::NAME) { agents } else { &[] };
-    let catalog: String = [subagent::catalog(agents), commands.catalog()]
-        .into_iter()
-        .filter(|catalog| !catalog.is_empty())
-        .map(|catalog| catalog + "\n\n")
-        .collect();
     let mut listed: Vec<String> = super::tools::CODING_TOOLS
         .into_iter()
         .filter(|tool| has(tool))
@@ -131,11 +163,41 @@ Guidelines:
     if !text.ends_with('\n') {
         text.push('\n');
     }
-    let text = text
-        + &project_context(&loaded.context)
-        + &skills_section(has("read"), skills)
-        + &format!("\n{}\n{DIRECTIVES}\n{catalog}", orientation());
-    text.trim_end().to_owned()
+    let mut parts = vec![Part::new(Section::Opening, "Opening", text)];
+    parts.extend(project_context(&loaded.context));
+    parts.push(Part::new(
+        Section::Skills,
+        "Skills",
+        skills_section(has("read"), skills),
+    ));
+    parts.push(Part::new(
+        Section::Directives,
+        "Scramjet's directives",
+        format!("\n{}\n{DIRECTIVES}\n", orientation()),
+    ));
+    let catalogs = [
+        (Section::Agents, "Subagents", subagent::catalog(agents)),
+        (Section::Commands, "Commands", commands.catalog()),
+    ];
+    for (section, name, catalog) in catalogs {
+        if !catalog.is_empty() {
+            parts.push(Part::new(section, name, catalog + "\n\n"));
+        }
+    }
+    parts.retain(|part| !part.text.is_empty());
+    while let Some(last) = parts.last_mut() {
+        last.text.truncate(last.text.trim_end().len());
+        match last.text.is_empty() {
+            true => parts.pop(),
+            false => break,
+        };
+    }
+    parts
+}
+
+/// The text of `parts`, in order.
+pub(super) fn joined(parts: &[Part]) -> String {
+    parts.iter().map(|part| part.text.as_str()).collect()
 }
 
 /// The `# Scramjet` section, as Scramjet 1's.
@@ -314,12 +376,12 @@ Guidelines:
     if !prompt.trim().is_empty() {
         text += &format!("\n\n{prompt}");
     }
-    text += &project_context(&context_files(
+    text += &joined(&project_context(&context_files(
         cwd,
         agent_directory,
         hidden,
         &mut Vec::new(),
-    ));
+    )));
     let listed = skills_section(tools.contains(&"read"), skills);
     if !listed.is_empty() && !text.ends_with('\n') {
         text.push('\n');
@@ -500,20 +562,17 @@ fn directory_context(
     files
 }
 
-/// The context `files`, as Pi's `# Project Context`; empty without any.
-fn project_context(files: &[(PathBuf, String)]) -> String {
-    let mut text = String::new();
-    if !files.is_empty() {
-        text.push_str("\n# Project Context\n\nProject-specific instructions and guidelines:\n");
-        for (path, contents) in files {
-            text.push_str(&format!(
-                "\n## {}\n\n{}\n",
-                path.display(),
-                contents.trim_end()
-            ));
-        }
-    }
-    text
+/// The context `files`, as Pi's `# Project Context`, one part each, the first with the heading.
+fn project_context(files: &[(PathBuf, String)]) -> Vec<Part> {
+    let mut heading =
+        "\n# Project Context\n\nProject-specific instructions and guidelines:\n".to_owned();
+    (files.iter())
+        .map(|(path, contents)| {
+            let text = std::mem::take(&mut heading)
+                + &format!("\n## {}\n\n{}\n", path.display(), contents.trim_end());
+            Part::new(Section::ContextFile, &path.display().to_string(), text)
+        })
+        .collect()
 }
 
 /// UTC date as YYYY-MM-DD, from days since the Unix epoch.
@@ -540,6 +599,57 @@ mod tests {
     use super::super::ProblemFile;
     use super::*;
 
+    fn agent(
+        root: &Path,
+        tools: &[&str],
+        commands: &Commands,
+        agents: &[subagent::Definition],
+        skills: &Skills,
+        loaded: &Loaded,
+    ) -> String {
+        joined(&super::agent(root, tools, commands, agents, skills, loaded))
+    }
+
+    #[test]
+    fn the_parts_are_the_instructions_in_order_each_marked() {
+        let loaded = Loaded {
+            context: vec![
+                (PathBuf::from("/p/CLAUDE.md"), "one\n".into()),
+                (PathBuf::from("/p/AGENTS.md"), "two".into()),
+            ],
+            ..Loaded::default()
+        };
+        let commands = Commands::parsed(&[("set:go", "---\ndescription: Go\n---\nGo.")]);
+        let parts = super::agent(
+            Path::new("/p"),
+            &["read"],
+            &commands,
+            &[],
+            &Skills::default(),
+            &loaded,
+        );
+        let sections: Vec<_> = parts
+            .iter()
+            .map(|part| (part.section, &*part.name))
+            .collect();
+        assert_eq!(
+            sections,
+            [
+                (Section::Opening, "Opening"),
+                (Section::ContextFile, "/p/CLAUDE.md"),
+                (Section::ContextFile, "/p/AGENTS.md"),
+                (Section::Directives, "Scramjet's directives"),
+                (Section::Commands, "Commands"),
+            ]
+        );
+        assert!(parts[1].text.starts_with("\n# Project Context\n"));
+        assert_eq!(parts[2].text, "\n## /p/AGENTS.md\n\ntwo\n");
+        assert!(
+            parts[4].text.ends_with("- /set:go: Go"),
+            "{}",
+            parts[4].text
+        );
+    }
     #[test]
     fn the_tools_and_guidelines_listed_are_the_configured_ones() {
         let root = Path::new("/nonexistent/scramjet-rs-instructions");

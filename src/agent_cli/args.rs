@@ -204,6 +204,11 @@ last 30 days, the models most of it went to and the costliest session; /usage de
 requests, tokens, cache hits, cost, days, weeks, providers, models and their speed. On the full
 screen it opens in the conversation's place on the current provider's; d shows its details,
 Tab (or Left and Right) all of it or another provider's, Escape closes it.
+/context shows how much of the model's window each part of the context takes (the system
+prompt, the tools, MCP's, the context files, the skills', agents' and commands' listings, the
+messages), with the free space and the compaction reserve; each part's size is estimated from its
+text and scaled to the context the last response reported. On the full screen d shows the items
+under each part.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
@@ -220,7 +225,7 @@ skills and context files again, and starts the MCP servers whose entries changed
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
 available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disable [SERVER|all]
 starts or stops them, saved in disabledMcpServers.
-Typed while a turn runs, /status, /usage, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /usage, /context, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

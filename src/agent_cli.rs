@@ -22,6 +22,7 @@ mod children;
 mod clipboard;
 mod completion;
 mod console;
+mod context;
 mod design;
 mod diff;
 mod drive;

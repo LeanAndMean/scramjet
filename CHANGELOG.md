@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.256.0 — /context shows what the context holds
+
+### Added
+
+- `/context`, as Claude Code's: how much of the model's window each part of the context takes (the system prompt, identity and environment, the tools, MCP's tools, the context files, the skills', subagents' and commands' listings, the messages), then the free space and the compaction reserve. Each part's size is estimated from its text and scaled to the context the last response reported, and says so; before any response, the estimate alone. On the full screen `d` shows the items under each part: each tool, MCP server, context file, skill, and command set.
+
 ## 2.255.3 — MCP servers' processes end with them on Windows
 
 ### Fixed

@@ -14,6 +14,7 @@ mod commands;
 mod compaction;
 mod completions;
 mod configured;
+pub mod context;
 mod cooldown;
 pub mod copilot;
 mod delegate;
@@ -63,6 +64,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, s
 pub use compaction::{AutoCompaction, Compaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use image::{decode_base64, mime as image_type, set_images};
+pub use instructions::{Part, Section};
 pub use lint::{Diagnostic, Severity, lint};
 pub use listed::Listing;
 pub use login::config_directory;
@@ -575,7 +577,7 @@ impl Stats {
 
 pub struct Agent {
     config: AgentConfig,
-    instructions: String,
+    instructions: Vec<instructions::Part>,
     conversation: Vec<Value>,
     prompts: Vec<String>,
     commands: Commands,
@@ -778,7 +780,7 @@ impl Agent {
             .enable_all()
             .build()?;
         let mut agent = Self {
-            instructions: String::new(),
+            instructions: Vec::new(),
             agents_directory: None,
             approvals: approvals::path(),
             rates: rates::path(),
@@ -1387,6 +1389,11 @@ impl Agent {
     /// The instructions the model's next request starts with: those of the session, then the
     /// current model's identity and the environment's facts.
     pub fn instructions(&self) -> String {
+        instructions::joined(&self.instruction_parts())
+    }
+
+    /// `instructions`, in its parts, each marked with what it holds.
+    pub fn instruction_parts(&self) -> Vec<Part> {
         let mut contributors: Vec<String> = Vec::new();
         for contributor in self.session.contributors() {
             let contributor = self.config.providers.reference(contributor);
@@ -1400,14 +1407,26 @@ impl Agent {
         let sandbox = (self.config.sandbox.as_ref())
             .filter(|_| self.offers(permissions::NAME))
             .map(|sandbox| permissions::section(sandbox, &self.config.root));
-        self.instructions.clone()
-            + &servers.unwrap_or_default()
-            + &sandbox.unwrap_or_default()
-            + &instructions::identity(model, &contributors, &self.identities)
-            + &instructions::environment(
-                &self.config.root,
-                self.session_saved().then(|| self.session.path()),
-            )
+        let mut parts = self.instructions.clone();
+        parts.extend([
+            Part::new(Section::Mcp, "MCP servers", servers.unwrap_or_default()),
+            Part::new(Section::Sandbox, "Sandbox", sandbox.unwrap_or_default()),
+            Part::new(
+                Section::Identity,
+                "Model identity",
+                instructions::identity(model, &contributors, &self.identities),
+            ),
+            Part::new(
+                Section::Environment,
+                "Environment",
+                instructions::environment(
+                    &self.config.root,
+                    self.session_saved().then(|| self.session.path()),
+                ),
+            ),
+        ]);
+        parts.retain(|part| !part.text.is_empty());
+        parts
     }
 
     /// The definitions of the tools the model's requests offer.

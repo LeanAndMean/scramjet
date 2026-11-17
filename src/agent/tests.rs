@@ -2782,7 +2782,7 @@ with material responses in this session branch, the imminent one included:\n{}\n
         );
         assert!(instructions.contains(&identity), "{instructions}");
         assert!(instructions.ends_with(&environment), "{instructions}");
-        assert!(instructions.starts_with(&agent.instructions));
+        assert!(instructions.starts_with(&instructions::joined(&agent.instructions)));
     }
     assert!(
         bodies[0]["instructions"]
