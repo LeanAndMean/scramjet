@@ -863,7 +863,7 @@ fn command_entry(command: &Command) -> (String, String) {
         (Some(hint), description) => format!("{hint} — {description}"),
         (None, description) => description.to_owned(),
     };
-    (command.name.clone(), description)
+    (command.listed_name().to_owned(), description)
 }
 
 /// The model, after its provider when the models are those of several, and its reasoning

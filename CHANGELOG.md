@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.261.0 — `/bug`
+
+### Added
+
+- `/bug` (also `/feedback` and `/report-issue`) has the agent draft an issue about Scramjet for `LeanAndMean/scramjet`, with the version, platform, terminal and steps, anonymized (home paths as `~`, no names, private repositories or code, nothing from the session unless you agree to the excerpt). The whole issue is shown for your approval before it is posted; if it cannot be posted, you get the draft and the link to post it yourself.
+
 ## 2.260.1 — An install's programs said rightly
 
 ### Fixed

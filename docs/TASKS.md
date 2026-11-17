@@ -6,7 +6,7 @@ Last steer: 907384d
 
 ## Current focus
 
-Set at the third steer of 2026-11-17, in order: 73 (`/bug`), 74 (model changes marked), 75 (`explore` and `general-purpose`), 76 (the sandbox policy: its design signed off at a steer, then built), then 77 (subagents that write, moderate priority). Meanwhile the user tries 62's proxy branch with another agent; its pull request when they ask. 63, 51, 44 and 48 wait on the user.
+Set at the third steer of 2026-11-17, in order: 74 (model changes marked), 75 (`explore` and `general-purpose`), 76 (the sandbox policy: its design signed off at a steer, then built), then 77 (subagents that write, moderate priority). Meanwhile the user tries 62's proxy branch with another agent; its pull request when they ask. 63, 51, 44 and 48 wait on the user.
 
 `v2.258.2` is the latest release (2026-11-17, the user's ask, with their revised logo, 907384d): rehearsal with the Windows tests 44020556363, release run 44021982941. Rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else; a later alpha is the user's ask.
 
@@ -16,9 +16,8 @@ After that, the order of the steer of 2026-11-12: macOS (35), from testers' repo
 
 ## Next candidates
 
-Order agreed at the third steer of 2026-11-17 (Current focus): 73–77; then 62's pull request, 63, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
+Order agreed at the third steer of 2026-11-17 (Current focus): 74–77; then 62's pull request, 63, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
 
-73. **`/bug`** ([design](DESIGN.md#agents-the-sandboxs-reach-and-model-changes-2026-11-17)), `/feedback` and `/report-issue` accepted: an anonymized issue drafted for `LeanAndMean/scramjet`, shown whole before posting through `create_issue`'s publication check.
 74. **Model changes marked where they happen** ([design](DESIGN.md#agents-the-sandboxs-reach-and-model-changes-2026-11-17)): a note built from each `model_change` record when the request is assembled (nothing new saved, old sessions included), `<model_switch>` as a developer message for OpenAI's models, `<system-reminder>` in the next user message for the others; a burst of changes before the next request makes one note. Today the record never reaches the model (`session.rs` counts it as unused).
 75. **Built-in `explore` and `general-purpose` agents** ([design](DESIGN.md#agents-the-sandboxs-reach-and-model-changes-2026-11-17)), in the built-in set (`builtin::SET`; each changes the PTY journeys' counts, as item 47 says). Before writing `explore`, compare Claude Code's Explore prompt (its installed CLI), `~/repos/mach12`'s `structural-mapper` and `code-explorer`.
 76. **A sandbox policy** ([design](DESIGN.md#agents-the-sandboxs-reach-and-model-changes-2026-11-17)): first its design in `docs/DESIGN.md` for the user's sign-off at a steer (settings' names and shape after Claude Code's `sandbox.filesystem` and Codex's `writable_roots`; the project-only reach with `PATH`'s directories and git's identity kept; Bubblewrap and Seatbelt; what Windows cannot do), then built.

@@ -380,6 +380,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "commands/bug.md",
                 "commands/troubleshoot.md",
                 "agents/command-architect.md",
                 "agents/command-failure-analyst.md",

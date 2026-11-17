@@ -2267,7 +2267,8 @@ impl Acp {
         let commands = (agent.commands().list().iter())
             .filter(|command| !command.delegate_only)
             .map(|command| {
-                let mut listed = json!({"name": command.name, "description": command.description});
+                let name = command.listed_name();
+                let mut listed = json!({"name": name, "description": command.description});
                 if let Some(hint) = &command.argument_hint {
                     listed["input"] = json!({"hint": hint});
                 }

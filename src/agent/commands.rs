@@ -586,11 +586,15 @@ impl Commands {
         self.list.iter().find(|command| command.name == name)
     }
 
-    /// The command a prompt runs: `/<name> args` names it.
+    /// The command a prompt runs: `/<name> args` names it, and `/bug`, `/feedback` and
+    /// `/report-issue` the built-in set's `scramjet:bug`.
     pub(super) fn named(&self, prompt: &str) -> Option<&Command> {
         let rest = prompt.strip_prefix('/')?;
         let name = rest.split(char::is_whitespace).next().unwrap_or(rest);
-        self.get(name)
+        match name {
+            "bug" | "feedback" | "report-issue" => self.get(REPORT),
+            name => self.get(name),
+        }
     }
 
     /// Takes the command `prompt` names again from its file, so that one edited since start or
@@ -619,7 +623,18 @@ impl Commands {
     }
 }
 
+/// The command that drafts an issue for Scramjet, typed as `/bug` (Claude Code's name).
+const REPORT: &str = "scramjet:bug";
+
 impl Command {
+    /// The name the `/` list shows it by: `bug` for `scramjet:bug`, else its own.
+    pub fn listed_name(&self) -> &str {
+        match self.name.as_str() {
+            REPORT => "bug",
+            name => name,
+        }
+    }
+
     /// The command as its file says now, `None` when the file cannot be read or no longer
     /// parses as this command.
     pub(super) fn current(&self) -> Option<Command> {
@@ -1431,6 +1446,20 @@ or agents directory, nor a models.json",
             )
         );
         assert_eq!(commands.expand("/rs:notes"), None);
+    }
+
+    #[test]
+    fn bug_and_the_other_agents_names_for_it_run_the_report_command() {
+        let commands = Commands::parsed(&[("scramjet:bug.md", "Report $ARGUMENTS")]);
+        let framed =
+            |text| format!("<scramjet-command name=\"scramjet:bug\">\n{text}\n</scramjet-command>");
+        for typed in ["/bug", "/feedback", "/report-issue", "/scramjet:bug"] {
+            let expected = Some(framed("Report it hangs"));
+            assert_eq!(commands.expand(&format!("{typed} it hangs")), expected);
+        }
+        assert_eq!(commands.expand("/bugs"), None);
+        assert_eq!(commands.get(REPORT).unwrap().listed_name(), "bug");
+        assert_eq!(Commands::default().expand("/bug"), None);
     }
 
     #[test]
