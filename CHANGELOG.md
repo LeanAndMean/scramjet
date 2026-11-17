@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.258.2 — A package's program not downloaded is said
+
+### Fixed
+
+- A git package whose program from its release was not downloaded (no `gh`, or `gh` not signed in to an account that can read it) says so at each start, with `scramjet update` to fetch it, instead of failing only at `/login`.
+- A login or providers program that is not there names the full path it was looked for at, in place of "The system cannot find the path specified".
+
 ## 2.258.1 — Scramjet 2's own logo
 
 ### Changed

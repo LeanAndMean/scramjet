@@ -205,7 +205,9 @@ impl LoginProgram {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|error| Failure::from(format!("cannot run {program}: {error}")))?;
+            .map_err(|error| {
+                Failure::from(crate::agent::providers::cannot_run(program, &path, &error))
+            })?;
         let mut input = child.stdin.take().expect("piped");
         let line = request.to_string() + "\n";
         // Apart, so that a program that reads none of it does not hold this one up.
@@ -565,7 +567,10 @@ esac"#
         let failed = run("absent").unwrap_err();
         assert_eq!(
             failed.message,
-            "cannot run ./absent: No such file or directory (os error 2)"
+            format!(
+                "cannot run ./absent: there is no {}",
+                scratch.0.join("absent").display()
+            )
         );
         script(
             &scratch,

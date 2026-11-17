@@ -27,6 +27,15 @@ pub(super) fn fetch(directory: &Path) -> (Vec<String>, Vec<String>) {
     fetch_with(&gh, directory, std::env::consts::ARCH)
 }
 
+/// The programs the package cloned in `directory` takes from a release but does not have.
+pub(super) fn missing(directory: &Path) -> Vec<String> {
+    (sets_in(directory).iter())
+        .filter_map(|set| wanted(set, directory).ok().flatten())
+        .filter(|program| !with_extension(&program.path).is_file())
+        .map(|program| program.shown)
+        .collect()
+}
+
 fn fetch_with(gh: &Path, directory: &Path, arch: &str) -> (Vec<String>, Vec<String>) {
     let (mut done, mut failed) = (Vec::new(), Vec::new());
     let wanted: Vec<Wanted> = sets_in(directory)
@@ -263,6 +272,7 @@ mod tests {
     fn the_newest_tags_release_brings_the_program_once() {
         let (scratch, clone) = package("once", RELEASE, str::to_owned);
         let gh = scratch.0.join("gh");
+        assert_eq!(missing(&clone), ["bin/tool"]);
         let (done, failed) = fetch_with(&gh, &clone, "x86_64");
         assert_eq!(
             (done, failed),
@@ -271,6 +281,7 @@ mod tests {
                 vec![]
             )
         );
+        assert!(missing(&clone).is_empty());
         let program = clone.join("bin/tool");
         // Another test's child forked during the write holds the file open for a moment.
         let output = (0..100)

@@ -1384,6 +1384,18 @@ fn in_directory(path: &str, directory: &Path) -> PathBuf {
 
 /// The program a file in `directory` names: `~/` starts a path in the home directory, a path
 /// with a `/` is from `directory`, and a name is looked for in `PATH`.
+/// Why `program`, at `path`, could not be started: for one that is not there, where it was
+/// looked for, as a relative path's directory is otherwise not said.
+pub(super) fn cannot_run(program: &str, path: &Path, error: &std::io::Error) -> String {
+    match error.kind() == std::io::ErrorKind::NotFound && path.is_absolute() && !path.exists() {
+        true => {
+            let path: PathBuf = path.components().collect();
+            format!("cannot run {program}: there is no {}", path.display())
+        }
+        false => format!("cannot run {program}: {error}"),
+    }
+}
+
 pub(super) fn program_path(program: &str, directory: &Path) -> PathBuf {
     match crate::os::after_tilde(program).zip(std::env::home_dir()) {
         Some((rest, home)) => crate::os::join(&home, rest),
@@ -1406,7 +1418,7 @@ fn run(words: &[&str], directory: &Path) -> Result<Vec<u8>, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|error| format!("cannot run {program}: {error}"))?;
+        .map_err(|error| cannot_run(program, &path, &error))?;
     let group = child.id();
     let (mut stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     // What is past the limits is read and dropped: a closed pipe would end the program.
@@ -1765,7 +1777,10 @@ mod tests {
             ("./old", "./old speaks version 2, not 1".to_owned()),
             (
                 "./absent",
-                "cannot run ./absent: No such file or directory (os error 2)".to_owned(),
+                format!(
+                    "cannot run ./absent: there is no {}",
+                    scratch.0.join("absent").display()
+                ),
             ),
         ] {
             write(json!({"providersCommand": [program]}));

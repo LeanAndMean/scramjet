@@ -1231,10 +1231,12 @@ impl Settings {
             };
             let directory = source.clone_directory(root);
             let mut failed = None;
+            let mut fetched = false;
             if self.cloning && !directory.exists() {
                 eprintln!("Cloning {} into {}…", source.written, shown(&directory));
                 failed = packages::clone(source, &directory, root).err();
                 if failed.is_none() {
+                    fetched = true;
                     let (downloaded, missing) = super::programs::fetch(&directory);
                     for line in downloaded {
                         eprintln!("{line}");
@@ -1254,7 +1256,18 @@ impl Settings {
                     shown(&directory),
                     failed.map(|why| format!(" ({why})")).unwrap_or_default()
                 )),
-                true => loaded.push((source.written.clone(), directory)),
+                true => {
+                    if self.cloning && !fetched {
+                        for program in super::programs::missing(&directory) {
+                            self.warnings.push(format!(
+                                "{0}: {program} has not been downloaded from its release; \
+                                 `scramjet update {0}` downloads it, or says what stops it",
+                                source.written
+                            ));
+                        }
+                    }
+                    loaded.push((source.written.clone(), directory))
+                }
             }
         }
         for directory in &self.local_packages {
