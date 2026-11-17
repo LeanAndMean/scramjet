@@ -872,6 +872,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
         let loaded = load(&prompt, &scratch, None, &Hidden::default());
         let tools = super::super::tools::offered(
             &super::super::tools::DEFAULT_TOOLS.map(String::from),
+            &[],
             None,
             false,
             false,

@@ -36,7 +36,7 @@ impl Session {
         scramjet::agent::set_user_shell(settings.default_shell);
         scramjet::agent::set_images(settings.resize_images, settings.block_images);
         self.agent.reload(
-            settings.tools.clone(),
+            (settings.tools.clone(), settings.harness_off.clone()),
             settings.command_sets.clone(),
             settings.skills.clone(),
             settings.mcp_servers.clone(),

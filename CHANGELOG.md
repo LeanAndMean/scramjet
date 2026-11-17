@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.260.0 — The harness's tools can be turned off
+
+### Added
+
+- `tools` in `/settings` lists the harness's own tools after the coding tools, so each (`switch_scramjet_model`, `subagent`, the GitHub publications, …) can be switched off; the setting takes Codex's table form, `{"switch_scramjet_model": false}`, which `/settings` now saves, and a list naming any of them as before. A list of coding tools alone keeps them all on.
+
 ## 2.259.0 — Autopilot shown while on
 
 ### Changed

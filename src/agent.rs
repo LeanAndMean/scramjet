@@ -265,6 +265,8 @@ pub struct AgentConfig {
     pub compacting: Compacting,
     /// The coding tools the model has, among `CODING_TOOLS`: the settings' `tools`.
     pub tools: Vec<String>,
+    /// The harness's own tools the settings' `tools` turns off, among `HARNESS_TOOLS`.
+    pub harness_off: Vec<String>,
     /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools the model has in this run,
     /// coding tools in place of `tools` and the harness's own, as Scramjet's allowlist.
     pub only_tools: Option<Vec<String>>,
@@ -843,13 +845,14 @@ impl Agent {
     /// at the next routing.
     pub fn reload(
         &mut self,
-        tools: Vec<String>,
+        (tools, harness_off): (Vec<String>, Vec<String>),
         command_sets: Vec<PathBuf>,
         skills: Vec<PathBuf>,
         mcp_servers: Vec<McpServer>,
         mcp_disabled: Vec<String>,
     ) {
         self.config.tools = tools;
+        self.config.harness_off = harness_off;
         self.config.command_sets = command_sets;
         self.config.skills = skills;
         self.config.mcp_servers = mcp_servers;
@@ -1023,6 +1026,7 @@ impl Agent {
             &config.root,
             &self.without_left_out(tools::offered(
                 &config.tools,
+                &config.harness_off,
                 config.only_tools.as_deref(),
                 mcp,
                 false,
@@ -1036,10 +1040,12 @@ impl Agent {
         self.prompt_files = (loaded.files, loaded.problems);
     }
 
-    /// The coding tools of the requests that follow, as the settings' `tools`; the instructions
-    /// are written again for them, the command sets and skills kept as they are.
-    pub fn set_tools(&mut self, tools: Vec<String>) {
+    /// The coding tools of the requests that follow and the harness's tools turned off, as the
+    /// settings' `tools`; the instructions are written again for them, the command sets and
+    /// skills kept as they are.
+    pub fn set_tools(&mut self, tools: Vec<String>, harness_off: Vec<String>) {
         self.config.tools = tools;
+        self.config.harness_off = harness_off;
         self.instruct();
     }
 
@@ -1452,6 +1458,7 @@ impl Agent {
         let sandbox = config.sandbox.is_some();
         self.without_left_out(tools::offered(
             &config.tools,
+            &config.harness_off,
             config.only_tools.as_deref(),
             mcp,
             sandbox,

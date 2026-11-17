@@ -9,8 +9,9 @@ use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet::agent::{
-    CODING_TOOLS, Compacting, DEFAULT_TOOLS, McpServer, McpTransport, Origin, Retries, SandboxMode,
-    Set, UserShell, offline, sets_in, shortened, state_directory, write_replacing,
+    CODING_TOOLS, Compacting, DEFAULT_TOOLS, HARNESS_TOOLS, McpServer, McpTransport, Origin,
+    Retries, SandboxMode, Set, UserShell, offline, sets_in, shortened, state_directory,
+    write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -386,7 +387,10 @@ impl Row {
                     });
                 return format!("The entries /tree shows when it opens{there}.");
             }
-            Self::Tools => "The coding tools the agent has. Subagents have their own.",
+            Self::Tools => {
+                "The tools the agent has: the coding tools, then the harness's own. Subagents have \
+                 their own."
+            }
             Self::DefaultShell => {
                 "The shell your ! and !! commands run in: bash (Git for Windows), PowerShell or \
                  cmd. Unset, bash when found, else PowerShell. The agent's tools are chosen in Tools."
@@ -479,6 +483,8 @@ pub(super) struct Settings {
     recall: Option<PathBuf>,
     /// `tools`: the agent's coding tools, Scramjet's by default.
     pub(super) tools: Vec<String>,
+    /// The harness's own tools `tools` turns off.
+    pub(super) harness_off: Vec<String>,
     pub(super) hide_credentials: HideCredentials,
     /// `sandbox`: how the agent's tools are confined; `None`: not at all.
     pub(super) sandbox: Option<SandboxMode>,
@@ -620,6 +626,7 @@ impl Settings {
             startup_model: StartupModel::PerDirectory,
             recall: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
+            harness_off: Vec::new(),
             hide_credentials: HideCredentials::Never,
             sandbox: None,
             sandbox_network: true,
@@ -895,10 +902,11 @@ impl Settings {
         }
         match object.get("tools") {
             None => {}
-            Some(Value::Array(names)) => self.tools = self.read_tools(&path, names),
+            Some(Value::Array(names)) => self.read_tools(&path, names),
+            Some(Value::Object(switched)) => self.switch_tools(&path, switched),
             Some(_) => wrong(
                 "tools",
-                &format!("a list of tool names ({})", CODING_TOOLS.join(", ")),
+                "a list of tool names, or an object of tool names to true or false",
             ),
         }
         match command_sets(object) {
@@ -1548,23 +1556,62 @@ impl Settings {
         self.path.as_deref().map(shown)
     }
 
-    /// The coding tools `names` lists that there are.
-    fn read_tools(&mut self, path: &str, names: &[Value]) -> Vec<String> {
+    /// The tools `names` lists that there are, on, and the others off; the harness's own stay
+    /// on when it names none of them, as before they could be turned off.
+    fn read_tools(&mut self, path: &str, names: &[Value]) {
         let mut tools: Vec<String> = Vec::new();
         for name in names {
             match name.as_str() {
-                Some(tool) if CODING_TOOLS.contains(&tool) => {
+                Some(tool) if CODING_TOOLS.contains(&tool) || HARNESS_TOOLS.contains(&tool) => {
                     if !tools.iter().any(|known| known == tool) {
                         tools.push(tool.to_owned());
                     }
                 }
-                _ => self.warnings.push(format!(
-                    "{path}: tools: {name} is not one of {}; ignored",
-                    CODING_TOOLS.join(", ")
-                )),
+                _ => self
+                    .warnings
+                    .push(format!("{path}: tools: {name} is not a tool; ignored")),
             }
         }
-        tools
+        let harness = |tool: &String| HARNESS_TOOLS.contains(&tool.as_str());
+        self.harness_off = match tools.iter().any(harness) {
+            true => (HARNESS_TOOLS.iter())
+                .filter(|tool| !tools.iter().any(|on| on == *tool))
+                .map(|tool| tool.to_string())
+                .collect(),
+            false => Vec::new(),
+        };
+        tools.retain(|tool| !harness(tool));
+        self.tools = tools;
+    }
+
+    /// Codex's `[tools]` table: each tool `switched` names on or off, the others as by default.
+    fn switch_tools(&mut self, path: &str, switched: &Map<String, Value>) {
+        let mut tools: Vec<String> = DEFAULT_TOOLS.map(str::to_owned).to_vec();
+        let mut off: Vec<String> = Vec::new();
+        for (tool, on) in switched {
+            let (list, harness) = match tool.as_str() {
+                tool if CODING_TOOLS.contains(&tool) => (&mut tools, false),
+                tool if HARNESS_TOOLS.contains(&tool) => (&mut off, true),
+                _ => {
+                    self.warnings
+                        .push(format!("{path}: tools: {tool:?} is not a tool; ignored"));
+                    continue;
+                }
+            };
+            let Value::Bool(on) = on else {
+                self.warnings.push(format!(
+                    "{path}: tools: {tool} must be true or false; ignored"
+                ));
+                continue;
+            };
+            list.retain(|known| known != tool);
+            if *on != harness {
+                list.push(tool.clone());
+            }
+        }
+        tools.sort_by_key(|tool| CODING_TOOLS.iter().position(|known| known == tool));
+        off.sort_by_key(|tool| HARNESS_TOOLS.iter().position(|known| known == tool));
+        (self.tools, self.harness_off) = (tools, off);
     }
 
     /// Ctrl+T's choice, saved when it changed.
@@ -1798,12 +1845,21 @@ impl Settings {
                 Filter::All => "everything",
             }
             .into(),
-            Row::Tools if self.tools.is_empty() => "none".into(),
-            Row::Tools => (CODING_TOOLS.iter())
-                .filter(|tool| self.tools.iter().any(|known| known == *tool))
-                .copied()
-                .collect::<Vec<_>>()
-                .join(", "),
+            Row::Tools => {
+                let coding = (CODING_TOOLS.iter())
+                    .filter(|tool| self.tools.iter().any(|known| known == *tool))
+                    .copied()
+                    .collect::<Vec<_>>();
+                let coding = match coding.is_empty() {
+                    true => "no coding tools".to_owned(),
+                    false => coding.join(", "),
+                };
+                match self.harness_off.len() {
+                    0 => coding,
+                    1 => format!("{coding}; {} off", self.harness_off[0]),
+                    off => format!("{coding}; {off} of the harness's tools off"),
+                }
+            }
             Row::DefaultShell => {
                 let used = UserShell::used(self.default_shell);
                 match (self.default_shell, scramjet::agent::found(used.name())) {
@@ -1984,15 +2040,24 @@ impl Settings {
         }
     }
 
-    /// The agent's coding tools, chosen in `/settings`, saved in `CODING_TOOLS`' order.
-    pub(super) fn set_tools(&mut self, tools: Vec<String>) -> io::Result<()> {
-        let tools: Vec<String> = (CODING_TOOLS.iter())
-            .filter(|tool| tools.iter().any(|chosen| chosen == *tool))
-            .map(|tool| tool.to_string())
+    /// The agent's tools, `on` among them, chosen in `/settings`; saved as Codex's `[tools]`
+    /// table of those that differ from the defaults, so that a tool added later has its default.
+    pub(super) fn set_tools(&mut self, on: &[String]) -> io::Result<()> {
+        let on = |tool: &str| on.iter().any(|chosen| chosen == tool);
+        let mut saved = Map::new();
+        for tool in CODING_TOOLS.into_iter().chain(HARNESS_TOOLS) {
+            let default = !CODING_TOOLS.contains(&tool) || DEFAULT_TOOLS.contains(&tool);
+            if on(tool) != default {
+                saved.insert(tool.to_owned(), json!(on(tool)));
+            }
+        }
+        self.tools = (CODING_TOOLS.into_iter().filter(|tool| on(tool)))
+            .map(str::to_owned)
             .collect();
-        let saved = json!(tools);
-        self.tools = tools;
-        self.save("tools", saved)
+        self.harness_off = (HARNESS_TOOLS.into_iter().filter(|tool| !on(tool)))
+            .map(str::to_owned)
+            .collect();
+        self.save("tools", Value::Object(saved))
     }
 
     /// Sets `key` in the file as it is now, keeping the rest of it; a file that cannot be read
@@ -2635,30 +2700,60 @@ mod tests {
     }
 
     #[test]
-    fn tools_lists_the_agents_coding_tools() {
+    fn tools_lists_the_agents_tools_or_switches_them_as_codexs_table() {
         let scratch = Scratch::new("tools");
         let settings = settings_with(
             &scratch,
             r#"{"tools": ["read", "grep", "gerp", "bash", 3, "ls", "read", "find"]}"#,
         );
         assert_eq!(settings.tools, ["read", "grep", "bash", "ls", "find"]);
+        assert!(settings.harness_off.is_empty());
         let path = shown(&scratch.0.join("settings.json"));
-        let known = CODING_TOOLS.join(", ");
         assert_eq!(
             settings.warnings,
             [
-                format!(r#"{path}: tools: "gerp" is not one of {known}; ignored"#),
-                format!("{path}: tools: 3 is not one of {known}; ignored"),
+                format!(r#"{path}: tools: "gerp" is not a tool; ignored"#),
+                format!("{path}: tools: 3 is not a tool; ignored"),
             ]
         );
         let none = settings_with(&scratch, r#"{"tools": []}"#);
-        assert!(none.tools.is_empty() && none.warnings.is_empty());
+        assert!(none.tools.is_empty() && none.harness_off.is_empty());
+        assert!(none.warnings.is_empty());
+        let harness = settings_with(&scratch, r#"{"tools": ["read", "subagent"]}"#);
+        assert_eq!(harness.tools, ["read"]);
+        let off: Vec<&str> = (HARNESS_TOOLS.into_iter())
+            .filter(|tool| *tool != "subagent")
+            .collect();
+        assert_eq!(harness.harness_off, off);
+
+        let switched = settings_with(
+            &scratch,
+            r#"{"tools": {"switch_scramjet_model": false, "bash": false, "delegate": true,
+                "nope": false, "ls": "no"}}"#,
+        );
+        let mut tools = DEFAULT_TOOLS.to_vec();
+        tools.retain(|tool| *tool != "bash");
+        assert_eq!(switched.tools, tools);
+        assert_eq!(switched.harness_off, ["switch_scramjet_model"]);
+        assert_eq!(
+            switched.warnings,
+            [
+                format!("{path}: tools: ls must be true or false; ignored"),
+                format!(r#"{path}: tools: "nope" is not a tool; ignored"#),
+            ]
+        );
+        assert_eq!(
+            settings_with(&scratch, r#"{"tools": {}}"#).tools,
+            DEFAULT_TOOLS
+        );
+
         let wrong = settings_with(&scratch, r#"{"tools": "read,grep"}"#);
         assert_eq!(wrong.tools, DEFAULT_TOOLS);
         assert_eq!(
             wrong.warnings,
             [format!(
-                "{path}: tools must be a list of tool names ({known}); ignored"
+                "{path}: tools must be a list of tool names, or an object of tool names to true \
+or false; ignored"
             )]
         );
     }
@@ -3261,10 +3356,24 @@ mod tests {
         settings.cycle(Row::TreeFilter).unwrap();
         assert_eq!(settings.shown(Row::TreeFilter), "everything");
         settings.cycle(Row::FollowUp).unwrap();
-        settings
-            .set_tools(vec!["ls".into(), "read".into()])
-            .unwrap();
-        assert_eq!(settings.shown(Row::Tools), "read, ls");
+        let mut on = vec!["ls".to_owned(), "read".to_owned()];
+        on.extend(
+            (HARNESS_TOOLS.into_iter())
+                .filter(|tool| *tool != "switch_scramjet_model")
+                .map(str::to_owned),
+        );
+        settings.set_tools(&on).unwrap();
+        assert_eq!(
+            settings.shown(Row::Tools),
+            "read, ls; switch_scramjet_model off"
+        );
+        let mut tools_off = json!({"switch_scramjet_model": false});
+        for tool in DEFAULT_TOOLS
+            .into_iter()
+            .filter(|tool| !["ls", "read"].contains(tool))
+        {
+            tools_off[tool] = json!(false);
+        }
         assert_eq!(settings.theme, None);
         settings.set_theme("scramjet-dark").unwrap();
         assert_eq!(settings.shown(Row::Theme), "scramjet-dark");
@@ -3293,7 +3402,7 @@ mod tests {
                 "terminal": {"showTerminalProgress": true},
                 "treeFilterMode": "all",
                 "followUpMode": "all",
-                "tools": ["read", "ls"],
+                "tools": tools_off,
                 "theme": "scramjet-dark",
                 "look": "margin",
                 "banner": "card",
@@ -3304,8 +3413,14 @@ mod tests {
         for row in ROWS {
             assert_eq!(reread.shown(row), settings.shown(row), "{row:?}");
         }
-        settings.set_tools(Vec::new()).unwrap();
-        assert_eq!(settings.shown(Row::Tools), "none");
+        settings.set_tools(&[]).unwrap();
+        assert_eq!(
+            settings.shown(Row::Tools),
+            format!(
+                "no coding tools; {} of the harness's tools off",
+                HARNESS_TOOLS.len()
+            )
+        );
     }
 
     fn install_set(settings: &mut Settings, directory: &Path) -> Result<Set, String> {

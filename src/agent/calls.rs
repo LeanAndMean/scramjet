@@ -1746,6 +1746,42 @@ get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scra
     }
 
     #[test]
+    fn a_harness_tool_turned_off_is_not_offered_and_does_not_run() {
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", switch::NAME, json!({"provider":"x","model":"y"})),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "harness-off");
+        agent.set_tools(
+            vec!["read".into()],
+            vec![switch::NAME.into(), "create_pr".into()],
+        );
+        let model = agent.config.model.clone();
+        agent
+            .turn("switch", &mut Recorder::default(), &AtomicBool::new(false))
+            .unwrap();
+        let bodies = server.join().unwrap();
+        let names: Vec<_> = (bodies[0]["tools"].as_array().unwrap().iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert!(!names.contains(&switch::NAME) && !names.contains(&"create_pr"));
+        assert!(names.contains(&"read") && names.contains(&"create_issue"));
+        let instructions = bodies[0]["instructions"].as_str().unwrap();
+        assert!(
+            !instructions.contains("- switch_scramjet_model:"),
+            "{instructions}"
+        );
+        let output = (agent.conversation().iter())
+            .find_map(|item| item["output"].as_str())
+            .unwrap();
+        assert!(
+            output.starts_with("Tool switch_scramjet_model not found."),
+            "{output}"
+        );
+        assert_eq!(agent.config.model, model);
+    }
+
+    #[test]
     fn a_run_of_given_prompts_offers_no_tool_it_cannot_use() {
         let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let (mut agent, _scratch) = agent(closed.local_addr().unwrap(), "idle-tools");

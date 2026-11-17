@@ -9,8 +9,8 @@ use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
 use super::theme_editor::ThemeEditor;
 use super::{background, editor, installed, palette, select, style};
 use scramjet::agent::{
-    Approval, Approvals, CODING_TOOLS, Choice, Edge, Installed, NextStep, NextSteps, Problem,
-    Publication, Sandbox, Scope, Setting, config_directory, shortened, write_replacing,
+    Approval, Approvals, CODING_TOOLS, Choice, Edge, HARNESS_TOOLS, Installed, NextStep, NextSteps,
+    Problem, Publication, Sandbox, Scope, Setting, config_directory, shortened, write_replacing,
 };
 use std::{
     path::{Path, PathBuf},
@@ -139,7 +139,16 @@ fn tool_note(tool: &str) -> &'static str {
         "write" => "Create or overwrite files",
         "grep" => "Search file contents for patterns, as ripgrep",
         "find" => "Find files by glob pattern, as fd",
-        _ => "List directory contents",
+        "ls" => "List directory contents",
+        "report_scramjet_command_status" => "Ends a command's run with its status, as commands ask",
+        "get_scramjet_user_input" => "Asks you a question mid-turn",
+        "delegate" => "Runs another command as a subroutine",
+        "subagent" => "Gives a task to a subagent",
+        "switch_scramjet_model" => "Changes the session's model",
+        "suggest_scramjet_next_steps" => "Suggests a command to run next",
+        "request_permissions" => "Asks you for more of the sandbox's reach; with the sandbox only",
+        "mcp_search" | "mcp_call" => "MCP servers' tools; with servers configured only",
+        _ => "Publishes to GitHub, after its check",
     }
 }
 
@@ -479,25 +488,24 @@ impl Interactive {
         }
     }
 
-    /// The coding tools, each switched on or off with Enter; the agent has them from its next
-    /// request on.
+    /// The coding tools, then the harness's own, each switched on or off with Enter; the agent
+    /// has them from its next request on.
     fn choose_tools(&mut self) {
+        let all: Vec<&str> = CODING_TOOLS.into_iter().chain(HARNESS_TOOLS).collect();
         let mut at = 0;
         loop {
             let Some(screen) = &self.screen else {
                 return;
             };
-            let on = |tool: &str| {
-                self.session
-                    .settings
-                    .tools
-                    .iter()
-                    .any(|known| known == tool)
+            let settings = &self.session.settings;
+            let on = |tool: &str| match CODING_TOOLS.contains(&tool) {
+                true => settings.tools.iter().any(|known| known == tool),
+                false => !settings.harness_off.iter().any(|off| off == tool),
             };
-            let rows: Vec<String> = (CODING_TOOLS.iter())
+            let rows: Vec<String> = (all.iter())
                 .map(|tool| format!("[{}] {tool}", if on(tool) { "x" } else { " " }))
                 .collect();
-            let notes = (CODING_TOOLS.iter())
+            let notes = (all.iter())
                 .map(
                     |tool| match !cfg!(windows) || scramjet::agent::found(tool) {
                         true => tool_note(tool).to_owned(),
@@ -519,16 +527,15 @@ impl Interactive {
                 return;
             };
             at = index;
-            let tool = CODING_TOOLS[index];
-            let mut tools = self.session.settings.tools.clone();
-            match on(tool) {
-                true => tools.retain(|known| known != tool),
-                false => tools.push(tool.to_owned()),
-            }
-            let saved = self.session.settings.set_tools(tools);
+            let chosen: Vec<String> = (all.iter())
+                .filter(|tool| on(tool) != (**tool == all[index]))
+                .map(|tool| tool.to_string())
+                .collect();
+            let saved = self.session.settings.set_tools(&chosen);
+            let settings = &self.session.settings;
             self.session
                 .agent
-                .set_tools(self.session.settings.tools.clone());
+                .set_tools(settings.tools.clone(), settings.harness_off.clone());
             if let Err(error) = saved {
                 self.say(&format!("Error: settings not saved: {error}"));
             }

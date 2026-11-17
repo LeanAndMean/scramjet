@@ -2710,8 +2710,12 @@ def settings_menu(read, until, send, output):
     assert '\u203a [x] read' in rows and '  [x] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
     on_screen('\u203a [ ] grep')
+    # The harness's own tools follow the coding tools.
+    send(b'\x1b[B' * 11 + b'\r')
+    rows = on_screen('\u203a [ ] switch_scramjet_model')
+    assert rows[-1] == '  Changes the session\'s model', rows
     send(b'\x1b')
-    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find, ls'))
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find, ls; s…'))
     send(b'\x1b')
     ending(read, output, EMPTY)
     # Typed during a turn, it opens at once while the call runs; the turn's next request has what
@@ -2726,7 +2730,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B' * 23 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
-    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find'))
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find; switc…'))
     send(b'\x1b')
     on_screen('Replied.')
     send(b'\x04')
@@ -3336,9 +3340,12 @@ assert tools(bodies[0]) == ['read', 'bash', 'edit', 'write', 'find', 'ls'], bodi
 assert '\n- grep: Search file contents' not in bodies[0]['instructions'], bodies[0]['instructions']
 assert tools(bodies[1]) == ['read', 'bash', 'edit', 'write', 'find'], bodies[1]['tools']
 assert '\n- ls: List directory contents' not in bodies[1]['instructions'], bodies[1]['instructions']
+assert all('switch_scramjet_model' not in str(body['tools']) for body in bodies), bodies[0]['tools']
+assert 'suggest_scramjet_next_steps' in str(bodies[0]['tools']), bodies[0]['tools']
 assert saved(menu_home) == {
     'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
-    'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'tools': ['read', 'bash', 'edit', 'write', 'find'],
+    'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time',
+    'tools': {'grep': False, 'ls': False, 'switch_scramjet_model': False},
 }, open(settings_path(menu_home)).read()
 guide = os.path.join(work, 'guide.md')
 with open(guide, 'w') as file:

@@ -1553,6 +1553,7 @@ mod tests {
             retries: Default::default(),
             compacting: Default::default(),
             tools: crate::agent::DEFAULT_TOOLS.map(String::from).to_vec(),
+            harness_off: Vec::new(),
             only_tools: None,
             command_sets: Vec::new(),
             skills: Vec::new(),

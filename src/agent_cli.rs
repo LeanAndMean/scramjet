@@ -458,6 +458,7 @@ fn start(
         retries: settings.retries(),
         compacting: settings.compacting,
         tools: settings.tools.clone(),
+        harness_off: settings.harness_off.clone(),
         only_tools: options.only_tools,
         command_sets: settings.command_sets.clone(),
         skills: settings.skills.clone(),

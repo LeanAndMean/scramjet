@@ -160,10 +160,11 @@ pub(super) fn not_found(name: &str, offered: &[impl AsRef<str>]) -> String {
 }
 
 /// The tools the model has, in the order it sees them: the coding tools `coding` lists, then the
-/// harness's own, those for MCP servers' tools only with `mcp` (servers are configured); with
-/// `only` (`--tools`), those it names alone, as Scramjet's allowlist.
+/// harness's own but those `off` lists, those for MCP servers' tools only with `mcp` (servers are
+/// configured); with `only` (`--tools`), those it names alone, as Scramjet's allowlist.
 pub(super) fn offered(
     coding: &[String],
+    off: &[String],
     only: Option<&[String]>,
     mcp: bool,
     sandbox: bool,
@@ -173,7 +174,7 @@ pub(super) fn offered(
         .filter(|tool| named(only.unwrap_or(coding), tool))
         .filter(|tool| !cfg!(windows) || found(tool));
     let harness = (HARNESS_TOOLS.into_iter())
-        .filter(|tool| only.is_none_or(|only| named(only, tool)))
+        .filter(|tool| only.map_or(!named(off, tool), |only| named(only, tool)))
         .filter(|tool| mcp || !super::mcp::TOOLS.contains(tool))
         .filter(|tool| sandbox || *tool != super::permissions::NAME);
     coding.chain(harness).collect()

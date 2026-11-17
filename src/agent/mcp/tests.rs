@@ -784,7 +784,7 @@ fn reload_starts_again_the_servers_that_ended_or_changed_and_keeps_the_others() 
             config.command_sets.clone(),
             config.skills.clone(),
         );
-        agent.reload(tools, sets, skills, servers, Vec::new());
+        agent.reload((tools, Vec::new()), sets, skills, servers, Vec::new());
     };
     reload(&mut agent, vec![a.clone(), b.clone()]);
     settle(&agent);
