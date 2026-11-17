@@ -1,8 +1,9 @@
 //! The desktop's clipboard as Scramjet uses it. Copying: with `pbcopy` on macOS, else with a
 //! PowerShell kept running on Windows and under WSL (`powershell.rs`) outside a remote session,
 //! then the Wayland compositor itself (`wayland.rs`) or `wl-copy` under Wayland, then the X server
-//! itself (`x11.rs`), `xclip` or `xsel`; else, and also in a remote session, through the terminal
-//! with OSC 52. Pasting: with that PowerShell, `pbpaste` on macOS, else from the Wayland compositor
+//! itself (`x11.rs`), `xclip` or `xsel`; else through the terminal with OSC 52. In a remote session
+//! OSC 52 alone, as the desktop there is reached back over the network (a forwarded X display
+//! took over a second a copy); the desktop's routes only for text too long for it. Pasting: with that PowerShell, `pbpaste` on macOS, else from the Wayland compositor
 //! itself, then from the X server itself, then with `wl-paste`, `xclip` or `xsel`;
 //! never in a remote session, whose clipboard is the terminal's. When no route reads it, the first
 //! failure names the key that pastes through the terminal itself.
@@ -97,14 +98,24 @@ pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), Stri
 /// Copies `text`. `Ok(Some(sequence))`: write `sequence` to the terminal, which copies it; never
 /// without a `terminal` to write it to.
 pub(super) fn copy(text: &str, terminal: bool) -> Result<Option<String>, String> {
-    let copied = directly(text);
-    if copied && !(terminal && remote()) {
-        return Ok(None);
+    copied(text, terminal, remote(), directly)
+}
+
+/// `copy`, in a session `remote` or not, with `directly` the desktop's routes.
+fn copied(
+    text: &str,
+    terminal: bool,
+    remote: bool,
+    directly: impl FnOnce(&str) -> bool,
+) -> Result<Option<String>, String> {
+    let sequence = osc52(text).filter(|_| terminal);
+    if remote && sequence.is_some() {
+        return Ok(sequence);
     }
-    match osc52(text).filter(|_| terminal) {
-        Some(sequence) => Ok(Some(sequence)),
-        None if copied => Ok(None),
-        None => Err("Failed to copy to clipboard".to_owned()),
+    match (directly(text), sequence) {
+        (true, _) => Ok(None),
+        (false, Some(sequence)) => Ok(Some(sequence)),
+        (false, None) => Err("Failed to copy to clipboard".to_owned()),
     }
 }
 
@@ -687,5 +698,20 @@ mod tests {
         assert_eq!(osc52("hi").as_deref(), Some("\x1b]52;c;aGk=\x07"));
         assert!(osc52(&"a".repeat(75_000)).is_some());
         assert!(osc52(&"a".repeat(75_003)).is_none());
+    }
+
+    #[test]
+    fn a_remote_copy_goes_through_the_terminal_alone_unless_too_long_for_it() {
+        let sequence = Some("\x1b]52;c;aGk=\x07".to_owned());
+        let unused = |_: &str| -> bool { panic!("the desktop was tried") };
+        assert_eq!(copied("hi", true, true, unused), Ok(sequence.clone()));
+        let long = "a".repeat(75_003);
+        assert_eq!(copied(&long, true, true, |_| true), Ok(None));
+        let failed = Err("Failed to copy to clipboard".to_owned());
+        assert_eq!(copied(&long, true, true, |_| false), failed);
+        assert_eq!(copied("hi", false, true, |_| true), Ok(None));
+        assert_eq!(copied("hi", true, false, |_| true), Ok(None));
+        assert_eq!(copied("hi", true, false, |_| false), Ok(sequence));
+        assert_eq!(copied("hi", false, false, |_| false), failed);
     }
 }

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.258.3 — Copying over SSH is quick
+
+### Fixed
+
+- In a remote session (SSH, mosh) a copy goes through the terminal (OSC 52) alone, at once: it no longer waits first on the desktop reached back over the network, which with X forwarding took over a second a copy and kept a process holding the forwarded display. Text too long for OSC 52 still goes through the desktop.
+
 ## 2.258.2 — A package's program not downloaded is said
 
 ### Fixed

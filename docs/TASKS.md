@@ -6,7 +6,7 @@ Last steer: 907384d
 
 ## Current focus
 
-Set at the third steer of 2026-11-17, in order: 69 (copying over SSH), 70 (the autopilot shown), 71 (the harness's tools switchable), 72 (the private package independent of the proxy), 73 (`/bug`), 74 (model changes marked), 75 (`explore` and `general-purpose`), 76 (the sandbox policy: its design signed off at a steer, then built), then 77 (subagents that write, moderate priority). Meanwhile the user tries 62's proxy branch with another agent; its pull request when they ask. 63, 51, 44 and 48 wait on the user.
+Set at the third steer of 2026-11-17, in order: 70 (the autopilot shown), 71 (the harness's tools switchable), 72 (the private package independent of the proxy), 73 (`/bug`), 74 (model changes marked), 75 (`explore` and `general-purpose`), 76 (the sandbox policy: its design signed off at a steer, then built), then 77 (subagents that write, moderate priority). Meanwhile the user tries 62's proxy branch with another agent; its pull request when they ask. 63, 51, 44 and 48 wait on the user.
 
 `v2.258.2` is the latest release (2026-11-17, the user's ask, with their revised logo, 907384d): rehearsal with the Windows tests 44020556363, release run 44021982941. Rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else; a later alpha is the user's ask.
 
@@ -16,9 +16,8 @@ After that, the order of the steer of 2026-11-12: macOS (35), from testers' repo
 
 ## Next candidates
 
-Order agreed at the third steer of 2026-11-17 (Current focus): 69–77; then 62's pull request, 63, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
+Order agreed at the third steer of 2026-11-17 (Current focus): 70–77; then 62's pull request, 63, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
 
-69. **Copying is slow when Scramjet runs over SSH** (user, third steer of 2026-11-17): on a remote Linux machine reached by `ssh`, copying with the right button is very slow, Ctrl+C slower than locally. Likely, not yet measured: `clipboard::copy` (`src/agent_cli/clipboard.rs`) tries the desktop first (`directly`: the built-in X11 client, then `xclip`, `xsel`, up to 5 s each) before OSC 52, and with X forwarding (the user's SSH configuration has `ForwardX11 yes`) `DISPLAY` reaches back over the network. Measure first; then most likely OSC 52 first when remote. Try it on the remote server `CLAUDE.local.md` names (approved, `CLAUDE.md`), and clean up after.
 70. **The autopilot shown while on** (user): a lasting mark in the status line while `/autopilot` is on; today only `/autopilot status` and `/settings` say it.
 71. **The harness's own tools can be turned off** ([design](DESIGN.md#agents-the-sandboxs-reach-and-model-changes-2026-11-17); the user asked about `switch_scramjet_model`): `tools` and `/settings` take `HARNESS_TOOLS` (`src/agent/tools.rs`) as well as `CODING_TOOLS` (`read_tools` in `src/agent_cli/settings.rs` warns on any other name today); `--tools` already can.
 72. **The private package independent of the proxy** ([design](DESIGN.md#providers-from-a-model-catalog-2026-11-16)): remove its bridge to the local proxy's model list (`providersCommand` and the module behind it) and its `credentialFiles`, dropping the user's uncommitted one-line port edit in its `models.json` with them, update its README, and release it (minor). Scramjet 1's extension never had such a bridge. The proxy's models then come through 62's catalog, under their own provider.
