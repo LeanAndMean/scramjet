@@ -248,17 +248,7 @@ pub(super) fn identity(
     contributors: &[String],
     known: &std::collections::HashMap<String, Identity>,
 ) -> String {
-    let name = |model: &str| -> String {
-        let Some(identity) = known.get(model) else {
-            return format!("{model} (ID: {model})");
-        };
-        let id = &identity.id;
-        let name = identity.name.as_deref().unwrap_or(id);
-        match &identity.provider {
-            Some(provider) => format!("{name} (ID: {id}, provider: {provider})"),
-            None => format!("{name} (ID: {id})"),
-        }
-    };
+    let name = |model: &str| named(model, known);
     let mut models: Vec<&str> = contributors.iter().map(String::as_str).collect();
     if !models.contains(&current) {
         models.push(current);
@@ -284,6 +274,41 @@ When posting to GitHub, use honest contribution-aware attribution:
         current = name(current),
         listed = listed.join("\n"),
     )
+}
+
+/// A model as the Model Identity and model change notes name it.
+fn named(model: &str, known: &std::collections::HashMap<String, Identity>) -> String {
+    let Some(identity) = known.get(model) else {
+        return format!("{model} (ID: {model})");
+    };
+    let id = &identity.id;
+    let name = identity.name.as_deref().unwrap_or(id);
+    match &identity.provider {
+        Some(provider) => format!("{name} (ID: {id}, provider: {provider})"),
+        None => format!("{name} (ID: {id})"),
+    }
+}
+
+/// The note that marks where the model changed other than by the agent's own switch: for
+/// OpenAI's protocols a developer message tagged as Codex tags it, else a `<system-reminder>`
+/// on the user's side, as Claude Code gives its reminders.
+pub(super) fn model_change_note(
+    from: &str,
+    to: &str,
+    known: &std::collections::HashMap<String, Identity>,
+    developer: bool,
+) -> serde_json::Value {
+    let (from, to) = (named(from, known), named(to, known));
+    let text = format!(
+        "The session's model changed here from {from} to {to}: the replies before this point \
+were written by {from}, those after it by {to} until a later change."
+    );
+    match developer {
+        true => serde_json::json!({"role":"developer",
+            "content":format!("<model_switch>\n{text}\n</model_switch>")}),
+        false => serde_json::json!({"role":"user",
+            "content":format!("<system-reminder>\n{text}\n</system-reminder>")}),
+    }
 }
 
 /// The facts that end the agent's instructions, as Scramjet's: the date, the directory and the

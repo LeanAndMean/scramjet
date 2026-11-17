@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.262.0 — Model changes marked where they happen
+
+### Changed
+
+- When you change the model (`/model`, Ctrl+P, a next step's model, or resuming with another), the next request tells the model where the change happened and which model wrote the replies before it, so it can tell whose replies are whose: a `<model_switch>` developer message on OpenAI's Responses API, a `<system-reminder>` on the user's side elsewhere. Sessions saved before this version get the notes too. The agent's own `switch_scramjet_model` call stays its record, with no note.
+
 ## 2.261.0 — `/bug`
 
 ### Added

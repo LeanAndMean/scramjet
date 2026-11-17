@@ -2030,7 +2030,12 @@ fn a_clone_continues_the_conversation_where_it_is_in_a_new_session() {
             parts => parts[0]["text"].as_str().unwrap(),
         })
         .collect();
-    assert_eq!(texts, ["one", "first", "other", "another", "more"]);
+    // The model changed from a to b before "other".
+    assert!(texts[2].starts_with("<model_switch>\nThe session's model changed here from test/a"));
+    assert_eq!(
+        [&texts[..2], &texts[3..]].concat(),
+        ["one", "first", "other", "another", "more"]
+    );
     assert_eq!(
         std::fs::read_to_string(&original).unwrap(),
         saved.join("\n") + "\n"
@@ -2118,7 +2123,12 @@ fn an_export_holds_the_current_branch_and_an_import_continues_in_a_copy() {
             parts => parts[0]["text"].as_str().unwrap(),
         })
         .collect();
-    assert_eq!(texts, ["one", "first", "other", "another", "more"]);
+    // The model changed from a to b before "other".
+    assert!(texts[2].starts_with("<model_switch>\nThe session's model changed here from test/a"));
+    assert_eq!(
+        [&texts[..2], &texts[3..]].concat(),
+        ["one", "first", "other", "another", "more"]
+    );
     assert_eq!(std::fs::read_to_string(&original).unwrap(), saved);
     assert_eq!(
         std::fs::read_to_string(&exported).unwrap().lines().count(),

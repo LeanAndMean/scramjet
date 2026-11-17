@@ -97,43 +97,66 @@ impl Agent {
     /// reasoning, and `fc_` ids paired with it. The same id from another provider is another
     /// model. A next-step record goes as a note on the user's side: sent as a call, it read as
     /// the model's own after each suggestion, and models made it themselves.
+    ///
+    /// Where the model changed other than by the agent's own switch, a note says so before the
+    /// next item sent, after the results of a call rather than between them.
     fn replay_conversation(&self) -> Vec<Value> {
+        let developer = matches!(self.info.protocol, Protocol::Responses | Protocol::Codex);
+        // Older sessions name models by id, as `produced` takes them.
+        let reference = |model: &str| self.config.providers.reference(model);
+        let note = |change: &super::ModelChange| {
+            let (from, to) = (reference(&change.from), reference(&change.to));
+            (from != to)
+                .then(|| instructions::model_change_note(&from, &to, &self.identities, developer))
+        };
         let mut records = std::collections::HashSet::new();
-        self.conversation
-            .iter()
-            .filter(|item| sent(item))
-            .map(|item| {
-                let mut item = item.clone();
-                if item["type"] == "function_call" && item["name"] == status::RECORD {
-                    records.insert(item["call_id"].clone());
+        let mut replay = |item: &Value| {
+            let mut item = item.clone();
+            if item["type"] == "function_call" && item["name"] == status::RECORD {
+                records.insert(item["call_id"].clone());
+                return Value::Null;
+            } else if item["type"] == "function_call_output" && records.contains(&item["call_id"]) {
+                let output = item["output"].as_str().unwrap_or_default();
+                return json!({"role":"user","content":status::record_note(output)});
+            }
+            let producer = item.as_object_mut().and_then(|object| {
+                let producer = object.remove(PRODUCER);
+                object.retain(|key, _| !key.starts_with("_scramjet_"));
+                producer
+            });
+            let current = |producer: &Value| producer.as_str().is_some_and(|p| self.produced(p));
+            if producer.is_some_and(|producer| !current(&producer)) {
+                if item["type"] == "reasoning" {
                     return Value::Null;
-                } else if item["type"] == "function_call_output"
-                    && records.contains(&item["call_id"])
+                }
+                if item["type"] == "function_call"
+                    && item["id"].as_str().is_some_and(|id| id.starts_with("fc_"))
                 {
-                    let output = item["output"].as_str().unwrap_or_default();
-                    return json!({"role":"user","content":status::record_note(output)});
+                    item.as_object_mut().unwrap().remove("id");
                 }
-                let producer = item.as_object_mut().and_then(|object| {
-                    let producer = object.remove(PRODUCER);
-                    object.retain(|key, _| !key.starts_with("_scramjet_"));
-                    producer
-                });
-                let current =
-                    |producer: &Value| producer.as_str().is_some_and(|p| self.produced(p));
-                if producer.is_some_and(|producer| !current(&producer)) {
-                    if item["type"] == "reasoning" {
-                        return Value::Null;
-                    }
-                    if item["type"] == "function_call"
-                        && item["id"].as_str().is_some_and(|id| id.starts_with("fc_"))
-                    {
-                        item.as_object_mut().unwrap().remove("id");
-                    }
-                }
-                item
-            })
-            .filter(|item| !item.is_null())
-            .collect()
+            }
+            item
+        };
+        let mut changes = self.session.model_changes().iter().peekable();
+        let mut due = Vec::new();
+        let mut replayed = Vec::new();
+        for (at, item) in self.conversation.iter().enumerate() {
+            due.extend(std::iter::from_fn(|| {
+                changes.next_if(|change| change.at <= at)
+            }));
+            if !sent(item) {
+                continue;
+            }
+            if item["type"] != "function_call_output" {
+                replayed.extend(due.drain(..).filter_map(note));
+            }
+            let item = replay(item);
+            if !item.is_null() {
+                replayed.push(item);
+            }
+        }
+        replayed.extend(due.into_iter().chain(changes).filter_map(note));
+        replayed
     }
 
     /// Fails when no provider offers the current model, after looking again.
@@ -1272,6 +1295,88 @@ response is incomplete; retry the request."});
                 json!({"type":"message","role":"assistant","content":"Done."}),
                 json!({"role":"user","content":"next"}),
             ]
+        );
+    }
+
+    #[test]
+    fn a_model_change_is_noted_where_it_happened_in_the_protocols_way() {
+        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "model-note");
+        agent.add(json!({"role":"user","content":"one"})).unwrap();
+        let reply = json!({"type":"message","role":"assistant","content":"Done.",
+            "_scramjet_model":agent.model()});
+        agent.add(reply).unwrap();
+        let before = agent.model().to_owned();
+        agent.set_model("other").unwrap();
+        let after = agent.model().to_owned();
+        let text = format!(
+            "The session's model changed here from {before} (ID: {before}) to {after} (ID: \
+{after}): the replies before this point were written by {before} (ID: {before}), those after it \
+by {after} (ID: {after}) until a later change."
+        );
+        // Before the next item, the note is the request's last.
+        agent.info.protocol = Protocol::Responses;
+        let developer = json!({"role":"developer",
+            "content":format!("<model_switch>\n{text}\n</model_switch>")});
+        assert_eq!(agent.replay_conversation()[2], developer);
+        agent.add(json!({"role":"user","content":"two"})).unwrap();
+        let replay = agent.replay_conversation();
+        assert_eq!(replay.len(), 4);
+        assert_eq!(
+            (&replay[2], &replay[3]["content"]),
+            (&developer, &json!("two"))
+        );
+        agent.info.protocol = Protocol::Messages;
+        let reminder = format!("<system-reminder>\n{text}\n</system-reminder>");
+        assert_eq!(
+            agent.replay_conversation()[2],
+            json!({"role":"user","content":reminder})
+        );
+        // A change back before the next item leaves nothing to note.
+        agent
+            .add(json!({"type":"message","role":"assistant","_scramjet_model":after}))
+            .unwrap();
+        agent.set_model("third").unwrap();
+        agent.set_model("other").unwrap();
+        assert_eq!(agent.replay_conversation().len(), 5);
+    }
+
+    #[test]
+    fn a_resumed_sessions_changes_are_noted_after_results_and_not_for_the_agents_switch() {
+        let (mut agent, scratch) = agent(([127, 0, 0, 1], 9).into(), "model-note-resume");
+        let path = scratch.0.join("changes.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                "{\"type\":\"session\",\"version\":1}\n",
+                "{\"type\":\"model_change\",\"model\":\"a\"}\n",
+                "{\"role\":\"user\",\"content\":\"go\"}\n",
+                "{\"type\":\"function_call\",\"call_id\":\"s\",\"name\":\"switch_scramjet_model\",\"arguments\":\"{}\",\"_scramjet_model\":\"a\"}\n",
+                "{\"type\":\"function_call\",\"call_id\":\"r\",\"name\":\"read\",\"arguments\":\"{}\",\"_scramjet_model\":\"a\"}\n",
+                "{\"type\":\"model_change\",\"model\":\"b\"}\n",
+                "{\"type\":\"function_call_output\",\"call_id\":\"s\",\"output\":\"Switched\"}\n",
+                "{\"type\":\"model_change\",\"model\":\"c\"}\n",
+                "{\"type\":\"function_call_output\",\"call_id\":\"r\",\"output\":\"text\"}\n",
+                "{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"Read.\",\"_scramjet_model\":\"c\"}\n",
+            ),
+        )
+        .unwrap();
+        agent.resume_session(&path).unwrap();
+        agent.info.protocol = Protocol::Messages;
+        let replay = agent.replay_conversation();
+        let kinds: Vec<&str> = (replay.iter())
+            .map(|item| match item["content"].as_str() {
+                Some(text) if text.starts_with("<system-reminder>") => "note",
+                _ => item["type"].as_str().unwrap_or("user"),
+            })
+            .collect();
+        let results = ["function_call_output", "function_call_output"];
+        let calls = ["user", "function_call", "function_call"];
+        assert_eq!(kinds, [&calls[..], &results, &["note", "message"]].concat());
+        let note = replay[5]["content"].as_str().unwrap();
+        let [b, c] = ["b", "c"].map(|model| agent.config.providers.reference(model));
+        assert!(
+            note.contains(&format!("from {b} (ID: {b}) to {c} (ID: {c})")),
+            "{note}"
         );
     }
 

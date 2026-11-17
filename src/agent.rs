@@ -79,8 +79,9 @@ pub use question::Choice;
 pub use request::{CacheRetention, set_cache_retention};
 pub use sandbox::{Remembered, Sandbox, SandboxMode};
 pub use session::{
-    Branch, Found, Label, Removal, Session, SessionInfo, directory as session_directory,
-    projects_directory, read_branch, read_conversation, state_directory,
+    Branch, Found, Label, ModelChange, Removal, Session, SessionInfo,
+    directory as session_directory, projects_directory, read_branch, read_conversation,
+    state_directory,
 };
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};

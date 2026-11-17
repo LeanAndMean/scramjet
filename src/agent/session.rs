@@ -11,7 +11,11 @@ use std::{
     time::SystemTime,
 };
 
+mod changes;
 pub(super) mod kept;
+
+pub use changes::ModelChange;
+use changes::ModelChanges;
 
 /// Held while lines are written to a session file, so that a process ending on a signal leaves
 /// none cut short, which would make the file unreadable.
@@ -188,6 +192,8 @@ pub struct Session {
     /// The models that produced response items on the path, compacted ones included, in the
     /// order they first did.
     contributors: Vec<String>,
+    /// Where the model changed on the path, as the next request says.
+    changes: ModelChanges,
     /// The latest `session_info` name in the file, which applies to the whole session.
     name: Option<String>,
     /// The latest thinking level change on the path, which a resume restores.
@@ -286,6 +292,7 @@ struct Context {
     items: Vec<Value>,
     model: Option<String>,
     contributors: Vec<String>,
+    changes: ModelChanges,
     effort: Option<String>,
     files: FileLists,
     context_tokens: Option<u64>,
@@ -470,6 +477,7 @@ impl Entries {
             items: Vec::new(),
             model: None,
             contributors: Vec::new(),
+            changes: ModelChanges::default(),
             effort: None,
             files: FileLists::default(),
             context_tokens: None,
@@ -479,6 +487,7 @@ impl Entries {
         let items = &mut context.items;
         for entry in self.path(leaf) {
             let value = &entry.value;
+            context.changes.see(value, context.model.as_deref());
             if value["type"] == "compaction" {
                 let cut = value["first_kept"]
                     .as_u64()
@@ -987,6 +996,7 @@ impl Session {
             file: None,
             model: None,
             contributors: Vec::new(),
+            changes: ModelChanges::default(),
             name: None,
             effort: None,
             files: FileLists::default(),
@@ -1070,6 +1080,7 @@ impl Session {
                 file: Some(file),
                 model: context.model,
                 contributors: context.contributors,
+                changes: context.changes,
                 name: entries.name.clone(),
                 effort: context.effort,
                 files: context.files,
@@ -1233,6 +1244,7 @@ impl Session {
         let prompts = entries.prompts();
         self.model = context.model;
         self.contributors = context.contributors;
+        self.changes = context.changes;
         self.name = entries.name;
         self.effort = context.effort;
         self.files = context.files;
@@ -1308,6 +1320,7 @@ impl Session {
         self.leaf = leaf;
         self.model = context.model;
         self.contributors = context.contributors;
+        self.changes = context.changes;
         self.effort = context.effort;
         self.files = context.files;
         self.context_tokens = context.context_tokens;
@@ -1647,6 +1660,11 @@ impl Session {
         &self.contributors
     }
 
+    /// Where the model changed on the current branch, but by the agent's own switch.
+    pub fn model_changes(&self) -> &[ModelChange] {
+        self.changes.list()
+    }
+
     /// The thinking level the latest change on the path set, if any.
     pub fn effort(&self) -> Option<&str> {
         self.effort.as_deref()
@@ -1737,6 +1755,7 @@ impl Session {
         self.lines = line + 1;
         self.leaf = Some(line);
         self.tail = self.leaf;
+        self.changes.see(item, self.model.as_deref());
         if item["type"] == "model_change" {
             self.model = item["model"].as_str().map(str::to_owned);
         } else if item["type"] == "thinking_level_change" {

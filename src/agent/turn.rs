@@ -747,7 +747,16 @@ mod tests {
         let bodies = server.join().unwrap();
         let models: Vec<_> = bodies.iter().map(|body| body["model"].clone()).collect();
         assert_eq!(models, ["m", "other", "other"]);
-        assert_eq!(last_output(&bodies[1]), "(no output)");
+        // The change mid-turn is noted after the result before it.
+        let input = bodies[1]["input"].as_array().unwrap();
+        let (note, result) = (&input[input.len() - 1], &input[input.len() - 2]);
+        assert!(
+            note["content"]
+                .as_str()
+                .unwrap()
+                .contains("changed here from test/m")
+        );
+        assert_eq!(result["output"], "(no output)");
         let check = bodies[2]["input"]
             .as_array()
             .unwrap()
