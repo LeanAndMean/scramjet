@@ -269,7 +269,7 @@ fn install_package(source: Source) -> Result<(), String> {
         .filter_map(|set| program(set, &directory))
         .collect();
     match programs.is_empty() {
-        true => outln!("It runs no program of its own."),
+        true => outln!("It runs no program at each start."),
         false => {
             outln!("It runs at each start:");
             for program in programs {

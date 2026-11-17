@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.260.1 — An install's programs said rightly
+
+### Fixed
+
+- `scramjet install` of a package with a login program but nothing run at each start says "It runs no program at each start.", where it said it runs no program of its own.
+
 ## 2.260.0 — The harness's tools can be turned off
 
 ### Added
