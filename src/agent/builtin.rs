@@ -1,7 +1,7 @@
 //! What the program carries with it, as Scramjet 1's npm package carries its `scramjet` set and
 //! README: the `scramjet` command set (`/scramjet:troubleshoot`, the command-authoring agents and
-//! skill) and the README its instructions point to. A build run from its checkout uses the
-//! checkout's files; a release, which has none, writes its own under
+//! skill) and the README its instructions point to, with the guides it links. A build run from
+//! its checkout uses the checkout's files; a release, which has none, writes its own under
 //! `$XDG_DATA_HOME/scramjet/builtin` and uses those.
 use std::fs;
 use std::io;
@@ -31,7 +31,24 @@ const SET: &[(&str, &str)] = set_files![
     "skills/writing-scramjet-commands/SKILL.md",
 ];
 
-const README: &str = include_str!("../../README.md");
+macro_rules! doc_files {
+    ($($path:literal),* $(,)?) => {
+        &[$(($path, include_str!(concat!("../../", $path)))),*]
+    };
+}
+
+/// The README and the documents it links for users, by their paths in the checkout.
+const DOCS: &[(&str, &str)] = doc_files![
+    "README.md",
+    "docs/TERMINALS.md",
+    "docs/guide/acp.md",
+    "docs/guide/command-sets.md",
+    "docs/guide/configuration.md",
+    "docs/guide/install.md",
+    "docs/guide/migration.md",
+    "docs/guide/providers.md",
+    "docs/guide/sessions.md",
+];
 
 /// Where a release writes what it carries.
 fn written() -> Option<PathBuf> {
@@ -39,24 +56,36 @@ fn written() -> Option<PathBuf> {
     Some(data.join("scramjet").join("builtin"))
 }
 
-/// The paths the README may have: the checkout's, then the one a release writes.
-pub(super) fn readme_paths() -> impl Iterator<Item = PathBuf> {
-    let checkout = crate::os::join(Path::new(CHECKOUT), "README.md");
-    [Some(checkout), written().map(|root| root.join("README.md"))]
-        .into_iter()
-        .flatten()
+/// The documents a read is of, by their paths in the checkout (`docs/guide/install.md`), when
+/// `path` is the checkout's copy of one or the one a release writes.
+pub(super) fn document(path: &Path) -> Option<&'static str> {
+    let roots = [Some(PathBuf::from(CHECKOUT)), written()];
+    DOCS.iter().map(|(relative, _)| *relative).find(|relative| {
+        (roots.iter().flatten()).any(|root| path == crate::os::join(root, relative))
+    })
 }
 
 /// The README for the instructions: the checkout's when it is there, else the one written for
-/// this version; `None` when neither can be had.
+/// this version with its documents; `None` when neither can be had.
 pub(super) fn readme() -> Option<PathBuf> {
     let checkout = crate::os::join(Path::new(CHECKOUT), "README.md");
     if checkout.is_file() {
         return Some(checkout);
     }
     let root = written()?;
-    write(&root, &[("README.md", README)], false).ok()?;
+    write_documents(&root).ok()?;
     Some(root.join("README.md"))
+}
+
+/// Writes the documents under `root`, removing the guides of an older version, but not the
+/// `scramjet` set beside them.
+fn write_documents(root: &Path) -> io::Result<()> {
+    write(root, DOCS, false)?;
+    let kept: Vec<PathBuf> = (DOCS.iter())
+        .map(|(relative, _)| crate::os::join(root, relative))
+        .collect();
+    remove_others(&root.join("docs"), &kept);
+    Ok(())
 }
 
 /// The directory of the `scramjet` set, or why there is none.
@@ -156,6 +185,24 @@ mod tests {
     }
 
     #[test]
+    fn the_documents_carried_are_the_checkouts_guides_whole() {
+        let checkout = std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or(CHECKOUT.into());
+        let checkout = Path::new(&checkout);
+        for (path, content) in DOCS {
+            let known = fs::read_to_string(checkout.join(path)).unwrap();
+            assert_eq!(known, *content, "{path}");
+        }
+        let guides: Vec<String> = files(&checkout.join("docs/guide"))
+            .into_iter()
+            .map(|(path, _)| format!("docs/guide/{path}"))
+            .collect();
+        let carried: Vec<&str> = (DOCS.iter().map(|(path, _)| *path))
+            .filter(|path| path.starts_with("docs/guide/"))
+            .collect();
+        assert_eq!(guides, carried);
+    }
+
+    #[test]
     fn a_release_writes_what_differs_and_removes_an_older_versions_files() {
         let root = std::env::temp_dir().join(format!("scramjet-builtin-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -178,6 +225,29 @@ mod tests {
         written(&root);
         let set = crate::agent::Set::at(&root, crate::agent::Origin::BuiltIn).unwrap();
         assert_eq!(set.name, "scramjet");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_release_writes_the_documents_beside_the_set_and_removes_older_guides() {
+        let root = std::env::temp_dir().join(format!("scramjet-docs-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write(&root.join("scramjet"), SET, true).unwrap();
+        fs::create_dir_all(root.join("docs/guide")).unwrap();
+        fs::write(root.join("docs/guide/dropped.md"), "older").unwrap();
+        write_documents(&root).unwrap();
+        assert!(!root.join("docs/guide/dropped.md").exists());
+        let documents: Vec<String> = files(&root)
+            .into_iter()
+            .map(|(path, _)| path)
+            .filter(|path| !path.starts_with("scramjet/"))
+            .collect();
+        let mut expected: Vec<&str> = DOCS.iter().map(|(path, _)| *path).collect();
+        expected.sort();
+        assert_eq!(documents, expected);
+        assert_eq!(files(&root.join("scramjet")).len(), SET.len());
+        let guide = root.join("docs/guide/providers.md");
+        assert_eq!(document(&guide), None, "not this program's written copy");
         fs::remove_dir_all(&root).unwrap();
     }
 }

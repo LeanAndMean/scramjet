@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.258.0 — The README is a front page
+
+### Changed
+
+- The README is a front page: what Scramjet 2 does, its status, install, a first run, installing a command set (Mach 12 as the example) and the way over from Scramjet 1, Claude Code or Codex. The reference it held moved, nothing dropped, into guides under `docs/guide/` (installing, providers and logins, sessions and keys, command sets, configuration, ACP, migration), and the checks and tools for developing it into `CONTRIBUTING.md`.
+- The program carries those guides and `docs/TERMINALS.md` beside the README it points its agent to, so a release's agent finds the whole reference; a read of one shows in one line, as the README's does.
+
 ## 2.257.0 — /system-prompt shows what the last request sent
 
 ### Added

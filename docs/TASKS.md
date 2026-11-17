@@ -6,7 +6,7 @@ Last steer: e15d58e
 
 ## Current focus
 
-Set at the steer of 2026-11-17, top priority: `/context` (done, 2.256.0), then `/system-prompt` (done, 2.257.0); then the README as a front page (68); then the proxy's install change in 62; then 63 (waiting for the user's git update), what else is left of 62, and 51, 44 and 48, as below.
+Set at the steer of 2026-11-17, top priority: `/context` (done, 2.256.0), then `/system-prompt` (done, 2.257.0); then the README as a front page (68; drafted, 2.258.0, for the next steer); then the proxy's install change in 62; then 63 (waiting for the user's git update), what else is left of 62, and 51, 44 and 48, as below.
 
 Set at the third steer of 2026-11-16: first, top priority, `scramjet install` of a git package on Windows (63; cause found, waiting for the user to update that PC's git); the keys that select in the conversation (64) are done (2.255.0); then what is left of 62, and 51, 44 and 48, as below.
 
@@ -24,7 +24,7 @@ After that, the order of the steer of 2026-11-12: macOS (35), from testers' repo
 
 Order agreed at the steer of 2026-11-17 (Current focus): 68, 62's install change, then 63, 62, 51, 44, 48; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
 
-68. **The README as a front page** ([design](DESIGN.md#what-the-context-holds-shown-2026-11-17); user, steer of 2026-11-17). Today 183 lines and 39 KB of reference. Scramjet 1's (`~/repos/scramjet/README.md`, 104 lines) shows the shape. Its logo `~/repos/scramjet/packages/scramjet/assets/scramjet-logo.png` (1923×818, 320 KB) is copied to `assets/scramjet-logo.png` and centred at width 600. Then a pitch, features, a short Status (`scripts/release-notes.sh` reads it; keep its links absolute), install and first run, ways over, a command-set repository's install with Mach 12 (`scramjet install git:github.com/LeanAndMean/mach12`, linking `https://github.com/LeanAndMean/mach12`) as the example, and links. The rest moves into `docs/guide/*.md` (providers and logins, sessions and keys, command sets, configuration, ACP, migration); keep each fact once. Show the draft at the next steer; nothing is pushed before.
+68. **The README as a front page** ([design](DESIGN.md#what-the-context-holds-shown-2026-11-17); user, steer of 2026-11-17). Drafted in 2.258.0: the README (93 lines, 8 KB, the logo in `assets/`), the guides in `docs/guide/` (carried by the program with `docs/TERMINALS.md`, `builtin::DOCS`; a guide added there must join that list, a test says so), `CONTRIBUTING.md`. Left: show it at the next steer (the rendered page: a local render with Python's `markdown` and headless Chromium, never an upload); **do not push `main` to `public` before the user has seen it**. A guide's facts are each in one place: change them there, and keep the README's Status links absolute.
 
 63. **`scramjet install` of a git package fails on Windows** (user, third steer of 2026-11-16). Cause found and confirmed (2.254.1–2.255.2's commits and c9729e8 say how): that PC's git is 2.10.0 (2016), whose HTTPS helper crashes in its OpenSSL on CPUs with SHA extensions and exits 128 silently; `OPENSSL_ia32cap=:~0x20000000` let the install reach GitHub's sign-in. Since 2.255.2 a failed git command names git's version, and below 2.20 says to update it. Git's stderr stays the console's (piped, Git for Windows prompts through a failing `/dev/tty` script). Left: the user updates Git for Windows on that PC and installs again.
 

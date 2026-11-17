@@ -391,7 +391,8 @@ impl<'a> Call<'a> {
         }
     }
     /// As Scramjet's compact reads, a read of a skill's `SKILL.md`, an `AGENTS.md` or
-    /// `CLAUDE.md`, or the README the instructions point to, by its path in `root`.
+    /// `CLAUDE.md`, or the README the instructions point to or a guide it links, by its path in
+    /// `root`.
     pub fn compact(&self, root: &Path) -> Option<CompactRead> {
         let given = (self.arguments["path"].as_str()).filter(|_| self.name == "read")?;
         let path = resolve(root, given);
@@ -402,8 +403,9 @@ impl<'a> Call<'a> {
             let skill = skill.map_or(name.into(), |skill| skill.to_string_lossy());
             return Some(CompactRead::Skill(format!("{skill}{lines}")));
         }
-        if super::builtin::readme_paths().any(|readme| path == readme) {
-            return Some(CompactRead::Docs(format!("README.md{lines}")));
+        if let Some(document) = super::builtin::document(&path) {
+            let shown = document.strip_prefix("docs/").unwrap_or(document);
+            return Some(CompactRead::Docs(format!("{shown}{lines}")));
         }
         if !matches!(name, "AGENTS.md" | "AGENTS.MD" | "CLAUDE.md" | "CLAUDE.MD") {
             return None;
@@ -2562,10 +2564,17 @@ inline image size limit.]",
                     .to_string()
             ))
         );
-        assert_eq!(
-            compact(json!({"path":crate::agent::builtin::readme_paths().next().unwrap()})),
-            Some(CompactRead::Docs("README.md".into()))
-        );
+        let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+        for (path, shown) in [
+            ("README.md", "README.md"),
+            ("docs/guide/providers.md", "guide/providers.md"),
+        ] {
+            let path = crate::os::join(checkout, path);
+            assert_eq!(
+                compact(json!({ "path": path })),
+                Some(CompactRead::Docs(shown.into()))
+            );
+        }
         for other in [
             "README.md",
             "skill.md",
