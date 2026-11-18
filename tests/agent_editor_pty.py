@@ -3522,7 +3522,7 @@ def installed_view(read, until, send, output):
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     send(b'\x1b[A')
-    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 4 commands, 6 agents, 3 skills'))
+    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 4 commands, 8 agents, 3 skills'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')

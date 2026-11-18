@@ -386,6 +386,8 @@ mod tests {
                 "agents/command-failure-analyst.md",
                 "agents/command-reviewer.md",
                 "agents/command-set-explorer.md",
+                "agents/explore.md",
+                "agents/general-purpose.md",
                 "agents/independent-command-assessor.md",
                 "agents/instruction-semantics-analyzer.md",
                 "skills/reading-past-sessions/SKILL.md",

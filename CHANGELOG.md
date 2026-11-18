@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.263.0 — Built-in `explore` and `general-purpose` agents
+
+### Added
+
+- Two subagents come with the program, without any command set: `scramjet:explore` finds where something is defined or used, traces a behavior from entry point to effect, or maps what depends on what, at the breadth asked ("quick", "medium", "very thorough"), and answers with `path:line` evidence and what it could not establish; `scramjet:general-purpose` takes multi-step investigations that need judgment. Both are read-only, as every subagent.
+
 ## 2.262.0 — Model changes marked where they happen
 
 ### Changed
