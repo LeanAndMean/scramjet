@@ -750,6 +750,7 @@ impl Interactive {
                 Picked::Act(act, index, spot) => (act, index, spot),
                 Picked::Row(_)
                 | Picked::Tab(_)
+                | Picked::Read(_)
                 | Picked::Toggle(..)
                 | Picked::Label(_)
                 | Picked::Placed(..) => {

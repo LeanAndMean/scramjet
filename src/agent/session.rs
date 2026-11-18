@@ -4,10 +4,10 @@ pub use kept::{Written, write_kept};
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    fs::{File, OpenOptions},
+    fs::{File, Metadata, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, PoisonError},
+    sync::{Arc, Mutex, PoisonError},
     time::SystemTime,
 };
 
@@ -79,6 +79,26 @@ pub struct SessionInfo {
     pub continues: Option<PathBuf>,
     /// The project it belongs to, as its header names it.
     pub root: Option<PathBuf>,
+}
+
+/// The session files `Session::infos_soon` left to a thread of its own.
+pub struct Reading {
+    /// How many files it reads that the list shown lacks.
+    pub left: usize,
+    read: Arc<Mutex<Option<Vec<SessionInfo>>>>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Reading {
+    /// Set once the whole list is read.
+    pub fn done(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.done.clone()
+    }
+
+    /// The whole list, newest first, once it is read.
+    pub fn take(&self) -> Option<Vec<SessionInfo>> {
+        (self.read.lock().unwrap_or_else(PoisonError::into_inner)).take()
+    }
 }
 
 /// The conversation on a session's current branch, as `/export` shows it.
@@ -865,13 +885,38 @@ impl Session {
     /// index (`index`) while a file is unchanged, else read, in parallel. Unreadable and invalid
     /// files are skipped.
     pub fn infos(paths: Vec<PathBuf>) -> Vec<SessionInfo> {
-        Self::indexed_infos(paths, index::file)
+        Self::indexed_infos(paths, index::file, usize::MAX).0
     }
 
+    /// As `infos`, but reading at once only the newest `at_once` of the files the index does
+    /// not hold, so that a list can show without waiting for the rest; `Reading` reads them all
+    /// on a thread of its own, then gives the whole list.
+    pub fn infos_soon(paths: Vec<PathBuf>, at_once: usize) -> (Vec<SessionInfo>, Option<Reading>) {
+        let (sessions, left) = Self::indexed_infos(paths.clone(), index::file, at_once);
+        if left == 0 {
+            return (sessions, None);
+        }
+        let reading = Reading {
+            left,
+            read: Arc::default(),
+            done: Arc::default(),
+        };
+        let (read, done) = (reading.read.clone(), reading.done.clone());
+        std::thread::spawn(move || {
+            let sessions = Self::infos(paths);
+            *read.lock().unwrap_or_else(PoisonError::into_inner) = Some(sessions);
+            done.store(true, std::sync::atomic::Ordering::Release);
+        });
+        (sessions, Some(reading))
+    }
+
+    /// `infos`, reading at most `at_most` files (the newest) that the index does not hold, and
+    /// how many it left unread.
     fn indexed_infos(
         paths: Vec<PathBuf>,
         index_of: impl Fn(&Path) -> Option<PathBuf>,
-    ) -> Vec<SessionInfo> {
+        at_most: usize,
+    ) -> (Vec<SessionInfo>, usize) {
         let mut indexes: HashMap<PathBuf, (Option<PathBuf>, index::Index)> = HashMap::new();
         let mut sessions = Vec::new();
         let mut unread = Vec::new();
@@ -889,6 +934,13 @@ impl Session {
                 Some(info) => sessions.push(info),
                 None => unread.push((path, metadata)),
             }
+        }
+        let mut left = 0;
+        if unread.len() > at_most {
+            let newest = |(_, metadata): &(PathBuf, Metadata)| metadata.modified().ok();
+            unread.sort_by_key(|file| std::cmp::Reverse(newest(file)));
+            left = unread.len() - at_most;
+            unread.truncate(at_most);
         }
         let read = Self::read_infos(&unread);
         for (info, size) in &read {
@@ -916,12 +968,12 @@ impl Session {
                 .cmp(&a.modified)
                 .then_with(|| b.path.cmp(&a.path))
         });
-        sessions
+        (sessions, left)
     }
 
     /// What `list` shows of each of the session files `unread`, read in parallel, with each
     /// file's size as it was before it was read.
-    fn read_infos(unread: &[(PathBuf, std::fs::Metadata)]) -> Vec<(SessionInfo, u64)> {
+    fn read_infos(unread: &[(PathBuf, Metadata)]) -> Vec<(SessionInfo, u64)> {
         let next = std::sync::atomic::AtomicUsize::new(0);
         // More threads than this spend their time in the kernel (measured with 48 cores).
         let workers = std::thread::available_parallelism().map_or(1, |count| count.get());

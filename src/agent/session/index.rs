@@ -87,7 +87,11 @@ impl Index {
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("index");
-        let temporary = directory.join(format!(".{name}.{}.tmp", std::process::id()));
+        // A list read on a thread of its own may save while another is saved.
+        static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let save = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = std::process::id();
+        let temporary = directory.join(format!(".{name}.{id}.{save}.tmp"));
         let written = crate::os::private_file(
             std::fs::OpenOptions::new()
                 .write(true)
@@ -127,7 +131,7 @@ mod tests {
         let paths = (std::fs::read_dir(directory).unwrap())
             .map(|entry| entry.unwrap().path())
             .collect();
-        let infos = Session::indexed_infos(paths, |_| Some(index.to_owned()));
+        let (infos, _) = Session::indexed_infos(paths, |_| Some(index.to_owned()), usize::MAX);
         let prompts = infos.into_iter().map(|info| info.first_prompt.unwrap());
         prompts.collect()
     }
@@ -173,6 +177,44 @@ mod tests {
         std::fs::write(&index, "{not json").unwrap();
         assert_eq!(prompts(&directory, &index), ["again"]);
         assert!(std::fs::read_to_string(&index).unwrap().contains("1000-1"));
+        std::fs::remove_dir_all(&scratch).unwrap();
+    }
+
+    #[test]
+    fn a_limited_read_takes_the_newest_unindexed_files_and_counts_the_rest() {
+        let scratch = std::env::temp_dir().join(format!("scramjet-soon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let directory = scratch.join("project");
+        std::fs::create_dir_all(&directory).unwrap();
+        let index = scratch.join("cache").join("project.json");
+        let now = SystemTime::now();
+        for (at, prompt) in ["old", "middle", "new"].iter().enumerate() {
+            let path = directory.join(format!("{at}000-1.jsonl"));
+            write(
+                &path,
+                prompt,
+                now - Duration::from_secs(60 - at as u64 * 10),
+            );
+        }
+        let paths = || {
+            (std::fs::read_dir(&directory).unwrap())
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>()
+        };
+        let read = |at_most| {
+            let (infos, left) = Session::indexed_infos(paths(), |_| Some(index.clone()), at_most);
+            let prompts: Vec<String> = (infos.into_iter())
+                .map(|info| info.first_prompt.unwrap())
+                .collect();
+            (prompts, left)
+        };
+        assert_eq!(read(1), (vec!["new".to_owned()], 2));
+        // What was read is indexed, so the next read reaches further.
+        assert_eq!(read(1), (vec!["new".to_owned(), "middle".to_owned()], 1));
+        assert_eq!(
+            read(usize::MAX),
+            (["new", "middle", "old"].map(String::from).to_vec(), 0)
+        );
         std::fs::remove_dir_all(&scratch).unwrap();
     }
 }

@@ -291,6 +291,7 @@ impl Link {
             Some(Answer::Acted(act, row, place)) => Picked::Act(act, row, place),
             Some(Answer::Toggled(toggle, place)) => Picked::Toggle(toggle, place),
             Some(Answer::Tabbed(place)) => Picked::Tab(place),
+            Some(Answer::Read(place)) => Picked::Read(place),
             Some(Answer::Picked(row)) => Picked::Row(row),
             _ => Picked::Row(None),
         }

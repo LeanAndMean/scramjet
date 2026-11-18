@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.268.0 — `/resume` shows before every session is read
+
+### Changed
+
+- When many sessions are not yet in `/resume`'s index (the first open after an update, or Tab's first look at every folder), the list shows at once with the 50 newest of them and fills in as the rest are read, saying "reading N more" in its title; a query typed meanwhile and the selected session are kept, and the search says it covers only those read so far.
+
 ## 2.267.0 — `/resume` opens fast
 
 ### Changed

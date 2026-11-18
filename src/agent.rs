@@ -79,7 +79,7 @@ pub use question::Choice;
 pub use request::{CacheRetention, set_cache_retention};
 pub use sandbox::{Remembered, Sandbox, SandboxMode};
 pub use session::{
-    Branch, Found, Label, ModelChange, Removal, Session, SessionInfo,
+    Branch, Found, Label, ModelChange, Reading, Removal, Session, SessionInfo,
     directory as session_directory, projects_directory, read_branch, read_conversation,
     state_directory,
 };
@@ -1065,6 +1065,35 @@ impl Agent {
     /// sessions cannot be read is passed over.
     pub fn all_sessions(&self) -> Result<Vec<SessionInfo>, AgentError> {
         let mut sessions = self.sessions()?;
+        sessions.extend(Session::infos(self.other_projects_files()));
+        sessions.retain(|session| session.item_count > 0);
+        sessions.sort_by(|a, b| (b.modified, &b.path).cmp(&(a.modified, &a.path)));
+        Ok(sessions)
+    }
+
+    /// As `sessions`, or with `all` `all_sessions`, but reading at once only the newest of the
+    /// files their indexes do not hold, `at_once` at most; the `Reading` gives the whole list.
+    pub fn sessions_soon(
+        &self,
+        all: bool,
+        at_once: usize,
+    ) -> Result<(Vec<SessionInfo>, Option<session::Reading>), AgentError> {
+        let directory = self.session.path().parent().unwrap_or(Path::new("."));
+        let mut paths: Vec<PathBuf> = match std::fs::read_dir(directory) {
+            Ok(entries) => entries.flatten().map(|entry| entry.path()).collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.into()),
+        };
+        if all {
+            paths.extend(self.other_projects_files());
+        }
+        let (mut sessions, reading) = Session::infos_soon(paths, at_once);
+        sessions.retain(|session| session.item_count > 0);
+        Ok((sessions, reading))
+    }
+
+    /// The files in the session directories of the projects other than this one.
+    fn other_projects_files(&self) -> Vec<PathBuf> {
         let here = self.session_directory();
         // A saved session's directory is one of the projects'; an unsaved run's, or one
         // `session_dir` names, is elsewhere.
@@ -1084,10 +1113,7 @@ impl Agent {
                 paths.extend(files.map(|file| file.path()));
             }
         }
-        sessions.extend(Session::infos(paths));
-        sessions.retain(|session| session.item_count > 0);
-        sessions.sort_by(|a, b| (b.modified, &b.path).cmp(&(a.modified, &a.path)));
-        Ok(sessions)
+        paths
     }
 
     /// Whether the saved session `path` is one `sessions` lists, which `resume_session` continues

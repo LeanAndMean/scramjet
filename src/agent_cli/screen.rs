@@ -174,6 +174,8 @@ pub(super) enum Answer {
     Toggled(Toggle, Spot),
     /// Tab in a picker that takes it (`Picker::tabbing`).
     Tabbed(Spot),
+    /// The rows a picker waited for were read (`Picker::reading`).
+    Read(Spot),
     /// The row chosen with Enter, and where the list was (`Picker::placing`).
     Placed(usize, Spot),
     /// Shift+L in `/tree`'s list on an entry, with the list as it was, to show again once the
@@ -479,6 +481,14 @@ impl App {
                 && let Some(row) = picker.expired()
             {
                 self.answer(Some(Answer::Expired(row)));
+            }
+            if let Some(Open {
+                shown: Shown::Pick(picker),
+                ..
+            }) = &self.dialog
+                && let Some(spot) = picker.read()
+            {
+                self.answer(Some(Answer::Read(spot)));
             }
             self.copied()?;
             self.pasted();

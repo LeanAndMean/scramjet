@@ -13,6 +13,8 @@ use super::style::{self, Band, Style};
 use super::text;
 use super::tree::{Filter, View};
 use scramjet::agent::{Choice, FRESH_MARK, Label, ModelOption};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -270,6 +272,8 @@ pub(super) enum Picked {
     Toggle(Toggle, Spot),
     /// Tab, in a list that shows one of two sets of rows (`Picker::tabbing`).
     Tab(Spot),
+    /// More rows were read (`Picker::reading`), to show the list again with them.
+    Read(Spot),
     /// Shift+L in `/tree`, to label the entry, an index into the tree's entries.
     Label(usize),
     /// The row chosen with Enter in a list that is shown again after it (`Picker::placing`).
@@ -300,7 +304,12 @@ pub(super) struct Picker {
     status: Option<(String, bool)>,
     /// When `at` showed `status`, which on the session list (`acting`) goes after a while.
     status_at: Option<Instant>,
+    /// Set once more rows are read (`reading`).
+    reading: Option<Arc<AtomicBool>>,
 }
+
+/// How often a list waiting for more rows (`Picker::reading`) looks whether they are read.
+const READ_CHECK: Duration = Duration::from_millis(50);
 
 /// How long the session list's status shows without a key, as in Scramjet's session selector:
 /// an info, then a warning.
@@ -389,6 +398,7 @@ impl Picker {
             folds: Vec::new(),
             status: None,
             status_at: None,
+            reading: None,
         }
     }
 
@@ -409,6 +419,7 @@ impl Picker {
             folds: Vec::new(),
             status: None,
             status_at: None,
+            reading: None,
         }
     }
 
@@ -634,6 +645,19 @@ impl Picker {
         }
     }
 
+    /// Ends the list once `done` is set, more rows having been read meanwhile, unless a
+    /// deletion waits to be confirmed.
+    pub(super) fn reading(mut self, done: Arc<AtomicBool>) -> Self {
+        self.reading = Some(done);
+        self
+    }
+
+    /// Where the list is, once the rows it waits for (`reading`) are read.
+    pub(super) fn read(&self) -> Option<Spot> {
+        let done = self.reading.as_ref()?.load(Ordering::Acquire);
+        (done && !self.list.warned).then(|| self.spot())
+    }
+
     /// Stops the countdown, as any key or click in Scramjet's selector does.
     pub(super) fn stop(&mut self) {
         self.deadline = None;
@@ -655,6 +679,10 @@ impl Picker {
         let now = Instant::now();
         let status = (self.status_ends()).filter(|&end| end > now);
         let status = status.map(|end| end - now + Duration::from_millis(1));
+        let status = match self.reading {
+            Some(_) => Some(status.map_or(READ_CHECK, |status| status.min(READ_CHECK))),
+            None => status,
+        };
         let Some(deadline) = self.deadline else {
             return status;
         };
@@ -698,6 +726,7 @@ impl Picker {
             folds: Vec::new(),
             status: None,
             status_at: None,
+            reading: None,
         }
     }
 
@@ -1831,6 +1860,25 @@ mod tests {
             (header(&kept), kept.next_change()),
             ("Resume  Session deleted".into(), None)
         );
+    }
+
+    #[test]
+    fn a_list_waiting_for_rows_ends_once_read_unless_a_deletion_waits() {
+        let texts = ["newest", "older"].map(String::from);
+        let row = |index: usize, width: usize| text::clip(&texts[index], width);
+        let done = Arc::new(AtomicBool::new(false));
+        let mut list = Picker::search("Resume", 10, haystacks(&texts), 0, None, "None", row)
+            .acting()
+            .reading(done.clone());
+        assert!(list.read().is_none());
+        assert!(list.next_change().unwrap() <= READ_CHECK);
+        assert_eq!(list.key(&key("down")), None);
+        list.key(&key("ctrl+d"));
+        done.store(true, Ordering::Release);
+        assert!(list.read().is_none());
+        list.key(&key("escape"));
+        let spot = list.read().unwrap();
+        assert_eq!((spot.position, spot.shown), (1, vec![0, 1]));
     }
 
     #[test]

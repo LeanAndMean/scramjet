@@ -7,9 +7,19 @@ use super::keymap::{self, Binding};
 use super::screen;
 use super::text::{clip, one_line};
 use super::{editor, select, style, tree};
-use scramjet::agent::{AgentError, Removal, SessionInfo, shortened};
+use scramjet::agent::{AgentError, Reading, Removal, SessionInfo, shortened};
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
+
+/// How many session files the list reads before it shows, of those their index does not hold:
+/// the newest; the rest are read while it shows.
+const READ_AT_ONCE: usize = 50;
+
+/// A list of sessions as read so far: the whole list, or the newest while the rest are read.
+struct Loaded {
+    sessions: Vec<SessionInfo>,
+    reading: Option<Reading>,
+}
 
 /// The keys' hint; with `chains`, the form chains are shown in, the keys that change it.
 fn resume_keys(all: bool, chains: Option<Chains>) -> String {
@@ -104,9 +114,12 @@ impl Interactive {
         // The row selected when a key changed how the list shows, to select again.
         let mut kept: Option<(std::path::PathBuf, bool)> = None;
         // This folder's sessions and all folders', read once each until one is renamed or deleted.
-        let mut loaded: [Option<Vec<SessionInfo>>; 2] = [None, None];
+        let mut loaded: [Option<Loaded>; 2] = [None, None];
         loop {
             let listed_sessions = self.listed_sessions(all, &mut loaded);
+            let reading = (loaded[usize::from(all)].as_ref())
+                .and_then(|loaded| loaded.reading.as_ref())
+                .map(|reading| (reading.left, reading.done()));
             let mut sessions = match listed_sessions {
                 Ok(sessions) => {
                     let sessions = (sessions.into_iter())
@@ -122,10 +135,12 @@ impl Interactive {
             };
             if sessions.is_empty()
                 && !named_only
+                && reading.is_none()
                 && (all
                     || self
                         .listed_sessions(true, &mut loaded)
-                        .map_or(true, |all| all.is_empty()))
+                        .map_or(true, |all| all.is_empty())
+                        && loaded[1].as_ref().is_none_or(|all| all.reading.is_none()))
             {
                 self.screen.as_ref()?.dismiss();
                 self.say("No sessions to resume");
@@ -160,11 +175,16 @@ impl Interactive {
                 true => format!("{}, chains {}", sort.label(), chains.setting()),
                 false => sort.label().to_owned(),
             };
+            let shown = match &reading {
+                Some((left, _)) => format!("{shown}, reading {left} more"),
+                None => shown,
+            };
             let title = match named_only {
                 true => format!("Resume session ({scope}named, {shown})"),
                 false => format!("Resume session ({scope}{shown})"),
             };
             let none = match keymap::key(Binding::SessionToggleNamedFilter) {
+                _ if reading.is_some() => "No matching sessions among those read so far".to_owned(),
                 _ if sessions.is_empty() && !named_only => match keymap::key(Binding::Tab) {
                     Some(key) => format!("No sessions in this folder ({key} shows all)"),
                     None => "No sessions in this folder".to_owned(),
@@ -194,6 +214,9 @@ impl Interactive {
             }
             if chains == Chains::Folded {
                 picker = picker.folding(sessions.iter().map(|row| row.fold).collect());
+            }
+            if let Some((_, done)) = reading {
+                picker = picker.reading(done);
             }
             if let Some((at, status)) = spot.take() {
                 picker = picker.at(at, status);
@@ -231,6 +254,11 @@ impl Interactive {
                 select::Picked::Tab(at) => {
                     kept = selected(&at);
                     all = !all;
+                    spot = Some((at, None));
+                    continue;
+                }
+                select::Picked::Read(at) => {
+                    kept = selected(&at);
                     spot = Some((at, None));
                     continue;
                 }
@@ -291,21 +319,28 @@ impl Interactive {
     }
 
     /// This folder's sessions, or with `all` every folder's, as `loaded` holds them, read into
-    /// it when it does not.
+    /// it when it does not, the newest first and the rest while the list shows.
     fn listed_sessions(
         &self,
         all: bool,
-        loaded: &mut [Option<Vec<SessionInfo>>; 2],
+        loaded: &mut [Option<Loaded>; 2],
     ) -> Result<Vec<SessionInfo>, AgentError> {
         let slot = &mut loaded[usize::from(all)];
-        if let Some(sessions) = slot {
-            return Ok(sessions.clone());
+        if let Some(loaded) = slot {
+            if let Some(mut sessions) = (loaded.reading.as_ref()).and_then(Reading::take) {
+                sessions.retain(|session| session.item_count > 0);
+                *loaded = Loaded {
+                    sessions,
+                    reading: None,
+                };
+            }
+            return Ok(loaded.sessions.clone());
         }
-        let sessions = match all {
-            true => self.session.agent.all_sessions(),
-            false => self.session.agent.sessions(),
-        }?;
-        *slot = Some(sessions.clone());
+        let (sessions, reading) = self.session.agent.sessions_soon(all, READ_AT_ONCE)?;
+        *slot = Some(Loaded {
+            sessions: sessions.clone(),
+            reading,
+        });
         Ok(sessions)
     }
 
