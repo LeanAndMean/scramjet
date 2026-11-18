@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.265.0 — Shift+PgUp and Shift+PgDn select a page
+
+### Added
+
+- Shift+PgUp and Shift+PgDn move a selection's end a page, in the conversation as PgUp and PgDn scroll, crossing into the rows below it at its end, and in the prompt by as many rows as it has room for; with the prompt empty, Shift+PgUp starts one at the end of the conversation shown. xterm and GNOME Terminal keep these keys for their own scrolling: [TERMINALS.md](docs/TERMINALS.md) says how to give them others.
+
 ## 2.264.0 — `modelOverrides` by id pattern
 
 ### Added

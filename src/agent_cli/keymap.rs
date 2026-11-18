@@ -33,6 +33,8 @@ pub(super) enum Binding {
     SelectWordRight,
     SelectLineStart,
     SelectLineEnd,
+    SelectPageAbove,
+    SelectPageBelow,
     JumpForward,
     JumpBackward,
     PageUp,
@@ -172,7 +174,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 94] = [
+const DEFINITIONS: [Definition; 96] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -189,6 +191,8 @@ const DEFINITIONS: [Definition; 94] = [
     define(B::SelectWordRight, "tui.editor.selectWordRight", &["ctrl+shift+right", "alt+shift+right"], S::Selecting, "Select a word right"),
     define(B::SelectLineStart, "tui.editor.selectLineStart", &["shift+home"], S::Selecting, "Select to the start of the line"),
     define(B::SelectLineEnd, "tui.editor.selectLineEnd", &["shift+end"], S::Selecting, "Select to the end of the line"),
+    define(B::SelectPageAbove, "tui.editor.selectPageUp", &["shift+pageUp"], S::Selecting, "Select a page up"),
+    define(B::SelectPageBelow, "tui.editor.selectPageDown", &["shift+pageDown"], S::Selecting, "Select a page down"),
     define(B::JumpForward, "tui.editor.jumpForward", &["ctrl+]"], S::Navigation, "Jump forward to character"),
     define(B::JumpBackward, "tui.editor.jumpBackward", &["ctrl+alt+]"], S::Navigation, "Jump backward to character"),
     define(B::PageUp, "tui.viewport.pageUp", &["pageUp"], S::Navigation, "Scroll the conversation up a page"),

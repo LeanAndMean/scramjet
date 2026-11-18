@@ -427,6 +427,7 @@ impl App {
         use crate::agent_cli::keymap::Binding as B;
         let backwards = [
             B::SelectLineUp,
+            B::SelectPageAbove,
             B::SelectLeft,
             B::SelectWordLeft,
             B::SelectLineStart,
@@ -490,24 +491,37 @@ impl App {
         };
         let line = self.shown(head.at);
         let length = self.transcript.len();
-        let row = |up: bool| -> At {
-            match head.at {
+        // The dock is reached from the conversation's end when the view is there, or by a page,
+        // which then scrolls to the end.
+        let step = |at: At, up: bool, dock: bool| -> At {
+            match at {
                 At::Line(place) => {
                     let line = self.transcript.line(place);
                     match up {
                         true if line > 0 => At::Line(self.transcript.locate(line - 1)),
                         false if line + 1 < length => At::Line(self.transcript.locate(line + 1)),
-                        false if !self.docked.is_empty() && self.reaches_dock() => At::Dock(0),
-                        _ => head.at,
+                        false if !self.docked.is_empty() && dock => At::Dock(0),
+                        _ => at,
                     }
                 }
                 At::Dock(row) => match up {
                     true if row > 0 => At::Dock(row - 1),
                     true if length > 0 => At::Line(self.transcript.locate(length - 1)),
                     false if row + 1 < self.docked.len() => At::Dock(row + 1),
-                    _ => head.at,
+                    _ => at,
                 },
             }
+        };
+        let row = |up: bool| step(head.at, up, self.reaches_dock());
+        let page = |up: bool| {
+            let mut at = head.at;
+            for _ in 0..self.rows.saturating_sub(1).max(1) {
+                match step(at, up, true) {
+                    next if next == at => break,
+                    next => at = next,
+                }
+            }
+            at
         };
         let moved = |at: At| Mark {
             at,
@@ -553,21 +567,36 @@ impl App {
             moved(row(true))
         } else if key.is(B::SelectLineDown) {
             moved(row(false))
+        } else if key.is(B::SelectPageAbove) {
+            moved(page(true))
+        } else if key.is(B::SelectPageBelow) {
+            moved(page(false))
         } else {
             return false;
         };
-        let vertical = key.is(B::SelectLineUp) || key.is(B::SelectLineDown);
+        let vertical = [
+            B::SelectLineUp,
+            B::SelectLineDown,
+            B::SelectPageAbove,
+            B::SelectPageBelow,
+        ]
+        .iter()
+        .any(|&binding| key.is(binding));
         if let Some(selection) = &mut self.selection {
             selection.head = next;
             selection.goal = vertical.then_some((next, goal));
         }
-        if let At::Line(place) = next.at {
-            let (line, top) = (self.transcript.line(place), self.shown_top());
-            if line < top {
-                self.navigate(line as isize - top as isize);
-            } else if line >= top + self.rows {
-                self.navigate((line + 1 - top - self.rows) as isize);
+        match next.at {
+            At::Line(place) => {
+                let (line, top) = (self.transcript.line(place), self.shown_top());
+                if line < top {
+                    self.navigate(line as isize - top as isize);
+                } else if line >= top + self.rows {
+                    self.navigate((line + 1 - top - self.rows) as isize);
+                }
             }
+            At::Dock(_) if matches!(head.at, At::Line(_)) => self.navigate(isize::MAX),
+            At::Dock(_) => {}
         }
         true
     }

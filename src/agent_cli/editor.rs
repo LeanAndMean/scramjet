@@ -8,6 +8,7 @@ use super::keys::Key;
 use super::text::{FROM, JOINED, SPACE, UNTIL};
 use super::{console, spelling, style};
 use std::{
+    cell::Cell,
     ops::Range,
     path::PathBuf,
     sync::{
@@ -208,11 +209,13 @@ enum Extend {
     By(Edit),
     /// A row up (`true`) or down, as on screen.
     Row(bool),
+    /// As many rows up (`true`) or down as the prompt shows.
+    Page(bool),
     /// To the start (`true`) or end of the screen row, in a wrapped line as in VS Code.
     RowEdge(bool),
 }
 
-const EXTENDS: [(Binding, Extend); 8] = [
+const EXTENDS: [(Binding, Extend); 10] = [
     (Binding::SelectLeft, Extend::By(Edit::Left)),
     (Binding::SelectRight, Extend::By(Edit::Right)),
     (Binding::SelectLineUp, Extend::Row(true)),
@@ -221,6 +224,8 @@ const EXTENDS: [(Binding, Extend); 8] = [
     (Binding::SelectWordRight, Extend::By(Edit::WordRight)),
     (Binding::SelectLineStart, Extend::RowEdge(true)),
     (Binding::SelectLineEnd, Extend::RowEdge(false)),
+    (Binding::SelectPageAbove, Extend::Page(true)),
+    (Binding::SelectPageBelow, Extend::Page(false)),
 ];
 
 /// The way `key` extends a selection, if it is one of the keys that select.
@@ -432,11 +437,22 @@ impl Layout {
 
     /// The cursor offset on the row above or below, nearest the current column.
     fn vertical(&self, cursor: usize, up: bool) -> Option<usize> {
+        self.rows_away(cursor, up, 1)
+    }
+
+    /// The cursor offset `count` rows above or below, or on the first or last row if fewer
+    /// are there, nearest the current column; `None` on the first row going up or the last
+    /// going down.
+    fn rows_away(&self, cursor: usize, up: bool, count: usize) -> Option<usize> {
         let here = self.at(cursor);
-        let row = if up {
-            here.row.checked_sub(1)?
-        } else {
-            here.row + 1
+        let last = self.stops.last()?.row;
+        let row = match up {
+            true => here
+                .row
+                .checked_sub(1)
+                .map(|_| here.row.saturating_sub(count))?,
+            false if here.row < last => (here.row + count).min(last),
+            false => return None,
         };
         let mut row_stops = self.stops.iter().filter(|stop| stop.row == row);
         let first = *row_stops.next()?;
@@ -645,6 +661,7 @@ impl Editor {
             undo,
             last,
             jump,
+            shown_rows,
         } = draft;
         let escape = key.is(Binding::Interrupt);
         if escape {
@@ -719,6 +736,15 @@ impl Editor {
                         } else {
                             buffer.text.len()
                         });
+                    }
+                    Extend::Page(up) => {
+                        let layout = Layout::new(&buffer.text, terminal_size().0);
+                        let page = match shown_rows.get() {
+                            0 => terminal_size().1,
+                            rows => rows,
+                        };
+                        buffer.cursor = (layout.rows_away(buffer.cursor, up, page))
+                            .unwrap_or(if up { 0 } else { buffer.text.len() });
                     }
                     Extend::RowEdge(start) => {
                         let layout = Layout::new(&buffer.text, terminal_size().0);
@@ -1040,6 +1066,9 @@ pub(super) struct Draft {
     last: Last,
     /// Ctrl+] (`true`) or Ctrl+Alt+] waits for the character to jump to.
     jump: Option<bool>,
+    /// How many rows the prompt had room for when last drawn, a page for the keys that
+    /// select one.
+    shown_rows: Cell<usize>,
 }
 
 /// What the status row says until the next key, about a key or what it did.
@@ -1088,6 +1117,11 @@ impl Draft {
     /// The text selected with the keys that select, if any.
     pub(super) fn selected(&self) -> Option<&str> {
         (self.buffer.selection()).and_then(|range| self.buffer.text.get(range))
+    }
+
+    /// Notes that the prompt shows `rows` of its rows.
+    pub(super) fn shown(&self, rows: usize) {
+        self.shown_rows.set(rows);
     }
 
     pub(super) fn deselect(&mut self) {
@@ -1553,6 +1587,22 @@ mod tests {
         // Escape lets it go and leaves the text.
         type_in(&mut editor, &mut draft, b"\x1b[1;2H\x1b");
         assert_eq!((draft.selected(), draft.text()), (None, "first\nsecond"));
+        // Shift+PgUp and Shift+PgDn move it as many rows as the prompt has room for, keeping
+        // the column, and past the first or last row to the start or end.
+        let mut draft = editor.draft("a1\nb2\nc3\nd4\ne5".into());
+        draft.shown(2);
+        type_in(&mut editor, &mut draft, b"\x1b[D\x1b[5;2~");
+        assert_eq!(draft.selected(), Some("3\nd4\ne"));
+        type_in(&mut editor, &mut draft, b"\x1b[5;2~");
+        assert_eq!(draft.selected(), Some("1\nb2\nc3\nd4\ne"));
+        type_in(&mut editor, &mut draft, b"\x1b[5;2~");
+        assert_eq!(draft.selected(), Some("a1\nb2\nc3\nd4\ne"));
+        type_in(&mut editor, &mut draft, b"\x1b[6;2~");
+        assert_eq!(draft.selected(), Some("c3\nd4\ne"));
+        type_in(&mut editor, &mut draft, b"\x1b[6;2~");
+        assert_eq!(draft.selected(), Some("e"));
+        type_in(&mut editor, &mut draft, b"\x1b[6;2~");
+        assert_eq!(draft.selected(), Some("5"));
     }
 
     #[test]

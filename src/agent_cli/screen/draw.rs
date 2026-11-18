@@ -133,7 +133,9 @@ fn prompt_rows(
     spelled: bool,
 ) -> (Option<(usize, usize)>, (usize, usize)) {
     let (text, row, column) = draft.rows(width, spelled);
-    let shown = (room * layout.editor_share / 100).max(1).min(text.len());
+    let most = (room * layout.editor_share / 100).max(1);
+    draft.shown(most);
+    let shown = most.min(text.len());
     let top = (row + 1).saturating_sub(shown).min(text.len() - shown);
     let start = rows.len();
     rows.extend(selection::rows(&text[top..top + shown]));

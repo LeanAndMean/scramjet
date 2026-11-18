@@ -4817,6 +4817,21 @@ def fullscreen_mouse(read, until, send, output):
     copied_text('reply.')
     send(b'\x1b[<64;5;5M\x1b[<64;5;5M')
     on_screen('6 more lines below')
+    # Shift+PgUp moves it a page up, as PgUp scrolls, from the last line shown to the first;
+    # again, it scrolls to keep it shown, and Shift+PgDn comes back a page.
+    rows = shown()
+    page = next(i for i, text in enumerate(rows) if 'more lines below' in text) - 1
+    lines = [text.strip() for text in rows[:page + 1]]
+    send(b'\x1b[5;2~\x1b[1;2H\x03')
+    copied_text('\n'.join(lines))
+    send(b'\x1b[5;2~\x1b[5;2~')
+    on_screen('%d more lines below' % (6 + page))
+    send(b'\x1b[6;2~\x1b[1;2H\x03')
+    copied_text('\n'.join(lines))
+    send(b'\x1b')
+    on_screen('more lines below', gone=True)
+    send(b'\x1b[<64;5;5M\x1b[<64;5;5M')
+    on_screen('6 more lines below')
     # The prompt selects with them too, shown reversed; Ctrl+C copies it, which stays.
     mark = len(output)
     send(b'hello world\x1b[1;6D\x1b[1;2D')
