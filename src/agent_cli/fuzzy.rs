@@ -99,6 +99,14 @@ pub(super) fn parse(query: &str) -> Vec<Token> {
     tokens
 }
 
+/// Each whitespace-separated word of `query` as a substring to find, for rows of long text in
+/// which most queries' characters would appear in order.
+pub(super) fn words(query: &str) -> Vec<Token> {
+    (query.to_lowercase().split_whitespace())
+        .map(|word| Token::Phrase(word.to_owned()))
+        .collect()
+}
+
 /// The indices of the rows every token matches, best first; equal scores go by the rows' ranks,
 /// then keep the rows' order. Without tokens, every row in order.
 pub(super) fn filter(tokens: &[Token], rows: &[Haystack]) -> Vec<usize> {
@@ -301,5 +309,17 @@ mod tests {
         assert!(filter(&parse("re:"), &rows).is_empty());
         assert!(filter(&parse("re:(parser"), &rows).is_empty());
         assert_eq!(parse("RE:x"), [Token::Fuzzy("re:x".chars().collect())]);
+    }
+
+    #[test]
+    fn words_match_as_substrings_only() {
+        let rows = [
+            Haystack::new("Theme  scramjet-dark"),
+            Haystack::new("The Model's levels"),
+        ];
+        assert_eq!(filter(&words("THEME"), &rows), [0]);
+        assert_eq!(filter(&words("the  levels"), &rows), [1]);
+        assert_eq!(filter(&words("tm"), &rows), [] as [usize; 0]);
+        assert_eq!(filter(&parse("tm"), &rows).len(), 2);
     }
 }

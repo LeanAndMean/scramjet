@@ -518,6 +518,15 @@ impl Picker {
         self
     }
 
+    /// Makes a query show the rows whose texts contain each of its words, rather than its
+    /// characters in order, for texts as long as `/settings`' descriptions.
+    pub(super) fn by_words(mut self) -> Self {
+        if let Some(search) = &mut self.list.search {
+            search.words = true;
+        }
+        self
+    }
+
     /// Selects `row`, when it is shown.
     pub(super) fn on_row(mut self, row: usize) -> Self {
         if let Some(position) = self.list.rows.iter().position(|&shown| shown == row) {
@@ -1004,6 +1013,8 @@ struct Search {
     initial: usize,
     /// Whether the rows a query matches keep their order (`Picker::in_order`).
     ordered: bool,
+    /// Whether a query's words match as substrings (`Picker::by_words`).
+    words: bool,
 }
 
 impl List {
@@ -1046,6 +1057,7 @@ impl List {
             none: none.into(),
             initial: list.selected,
             ordered: false,
+            words: false,
         }));
         list
     }
@@ -1116,7 +1128,10 @@ impl List {
         let Some(search) = &self.search else {
             return;
         };
-        let tokens = fuzzy::parse(&search.query);
+        let tokens = match search.words {
+            true => fuzzy::words(&search.query),
+            false => fuzzy::parse(&search.query),
+        };
         self.filtered = !tokens.is_empty();
         if tokens.is_empty() {
             self.rows = (0..search.texts.len()).collect();

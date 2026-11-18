@@ -1,9 +1,11 @@
 //! `/settings`, as Scramjet's: the settings in a list, each changed with Enter and saved at
 //! once, with the next steps of commands, publication approval and what is installed.
+use super::fuzzy::Haystack;
 use super::interactive::{Interactive, completions};
 use super::palette::Background;
 use super::screen::{Answer, Dialog, Optional};
-use super::settings::{Row, rows, scramjet_level};
+use super::select::Spot;
+use super::settings::{Row, groups, scramjet_level};
 use super::text::clip;
 use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
 use super::theme_editor::ThemeEditor;
@@ -50,6 +52,13 @@ const NEW_THEME_NOTE: &str = "Make a theme of your own: choose how many main col
     session shows it as you go.";
 
 /// What the theme editor's rolls start from: a new one each time.
+/// `/settings`' list: each heading (`None`), then its rows.
+fn listed() -> Vec<Option<Row>> {
+    (groups().into_iter())
+        .flat_map(|(_, rows)| [None].into_iter().chain(rows.into_iter().map(Some)))
+        .collect()
+}
+
 fn seed() -> u64 {
     (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH))
         .map_or(0, |since| since.as_nanos() as u64)
@@ -161,19 +170,20 @@ impl Interactive {
             let path = self.session.settings.shown_path();
             let path = path.unwrap_or_else(|| "not saved: HOME is not set".into());
             eprintln!("Settings ({path})");
-            for row in self.setting_rows() {
-                eprintln!("  {row}");
+            for (row, text) in listed().into_iter().zip(self.setting_rows()) {
+                let indent = if row.is_some() { "    " } else { "  " };
+                eprintln!("{indent}{text}");
             }
             return;
         }
-        let mut at = 0;
+        let mut place: Option<(Spot, usize)> = None;
         loop {
             // Ctrl+T in the list changes the thinking blocks too.
             self.save_hide_thinking();
             let Some(screen) = &self.screen else {
                 return;
             };
-            let listed = rows();
+            let listed = listed();
             let shown = self.setting_rows();
             let levels = !self.session.agent.effort_levels().is_empty();
             let problems = self.session.agent.next_steps().problems;
@@ -181,8 +191,9 @@ impl Interactive {
             let command_line_tools = self.session.agent.command_line_tools();
             let notes = (listed.iter())
                 .map(|row| match row {
-                    Row::ThinkingLevel if !levels => NO_LEVELS.to_owned(),
-                    Row::Tools if let Some(tools) = &command_line_tools => format!(
+                    None => String::new(),
+                    Some(Row::ThinkingLevel) if !levels => NO_LEVELS.to_owned(),
+                    Some(row @ Row::Tools) if let Some(tools) = &command_line_tools => format!(
                         "{} This run has those the command line gave: {}.",
                         row.description(),
                         if tools.is_empty() {
@@ -191,31 +202,53 @@ impl Interactive {
                             tools.join(", ")
                         }
                     ),
-                    Row::NextSteps if !problems.is_empty() => {
+                    Some(row @ Row::NextSteps) if !problems.is_empty() => {
                         format!("{} {}", row.description(), not_used(&problems))
                     }
-                    Row::Publishing if let Some(problem) = &publishing => {
+                    Some(row @ Row::Publishing) if let Some(problem) = &publishing => {
                         format!("{} {}", row.description(), every_one_asks(problem))
                     }
-                    row => row.description(),
+                    Some(row) => row.description(),
                 })
                 .collect();
-            let picker = select::Picker::select(
+            let mut heading = "";
+            let texts = (listed.iter().zip(&shown).enumerate())
+                .map(|(index, (row, text))| match row {
+                    Some(row) => {
+                        let about = row.description();
+                        Haystack::ranked(&format!("{text} {heading} {about}"), index)
+                    }
+                    None => {
+                        heading = text;
+                        Haystack::new("")
+                    }
+                })
+                .collect();
+            let headings = listed.iter().map(Option::is_none).collect();
+            let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
+            let picker = select::Picker::search(
                 "Settings",
-                select::VISIBLE,
-                listed.len(),
-                at,
+                visible,
+                texts,
+                1,
                 None,
+                "No matching setting",
                 |index, width| clip(&shown[index], width),
             );
-            let picker = picker
+            let mut picker = (picker.in_order().by_words().headed(headings))
                 .noting(select::hint("change", &[], "close"), notes)
                 .held();
-            let Some(index) = screen.pick(picker) else {
+            if let Some((spot, index)) = place.take() {
+                picker = picker.at(spot, None).on_row(index);
+            }
+            let Some((index, spot)) = screen.pick_placed(picker) else {
                 break;
             };
-            at = index;
-            match listed[index] {
+            place = Some((spot, index));
+            let Some(row) = listed[index] else {
+                continue;
+            };
+            match row {
                 Row::ThinkingLevel => self.choose_thinking_level(),
                 Row::Tools => self.choose_tools(),
                 Row::Theme => self.choose_theme(),
@@ -263,11 +296,11 @@ impl Interactive {
         }
     }
 
-    /// `/settings`' rows: each label, as wide as the widest, and its value.
+    /// `/settings`' rows (`listed`): each heading, and each label, as wide as the widest, with
+    /// its value.
     fn setting_rows(&self) -> Vec<String> {
-        let listed = rows();
-        let width = listed
-            .iter()
+        let listed = listed();
+        let width = (listed.iter().flatten())
             .map(|row| row.label().len())
             .max()
             .unwrap_or(0);
@@ -286,9 +319,14 @@ impl Interactive {
             }
             row => self.session.settings.shown(row),
         };
-        (listed.iter())
-            .map(|&row| format!("{:width$}  {}", row.label(), value(row)))
-            .collect()
+        let groups = groups().into_iter();
+        (groups.flat_map(|(heading, rows)| {
+            let rows = rows.into_iter();
+            [heading.to_owned()]
+                .into_iter()
+                .chain(rows.map(|row| format!("{:width$}  {}", row.label(), value(row))))
+        }))
+        .collect()
     }
 
     /// The model's levels to choose from; the one chosen is the session's and the

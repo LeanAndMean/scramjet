@@ -731,15 +731,30 @@ mod tests {
         std::fs::write(commands.join("work.md"), "Work on $1.\n").unwrap();
         project_sets(&mut agent);
         agent.autonomy = None;
-        // While the call runs, and before the status check's request.
+        // While the call runs.
         let mut ui = Recorder {
-            pauses: vec![false, true, false, true],
+            pauses: vec![false, true],
             ..Recorder::default()
         };
         let cancel = AtomicBool::new(false);
         let paused = agent.turn("/rs:work go", &mut ui, &cancel);
         assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        // The pause may come while the call's request streams; then it comes again at the call.
+        for _ in 0..3 {
+            let conversation = agent.conversation();
+            if conversation
+                .iter()
+                .any(|item| item["type"] == "function_call")
+            {
+                break;
+            }
+            ui.pauses = vec![true];
+            let paused = agent.resume_turn(&mut ui, &cancel);
+            assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
+        }
         agent.set_model("other").unwrap();
+        // Before the status check's request, or while the reply before it streams.
+        ui.pauses = vec![false, true];
         let paused = agent.resume_turn(&mut ui, &cancel);
         assert!(matches!(paused, Err(AgentError::Paused)), "{paused:?}");
         agent.resume_turn(&mut ui, &cancel).unwrap();

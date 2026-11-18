@@ -148,7 +148,7 @@ pub(super) enum Delivery {
     OneAtATime,
 }
 
-/// A row of `/settings`, in the order shown.
+/// A row of `/settings`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Row {
     ThinkingLevel,
@@ -185,46 +185,75 @@ pub(super) enum Row {
     Installed,
 }
 
-pub(super) const ROWS: [Row; 32] = [
-    Row::ThinkingLevel,
-    Row::StartupModel,
-    Row::ThinkingBlocks,
-    Row::MarkdownReads,
-    Row::Theme,
-    Row::Look,
-    Row::Banner,
-    Row::Steering,
-    Row::FollowUp,
-    Row::DoubleEscape,
-    Row::CopyOnSelect,
-    Row::WheelStep,
-    Row::RetainTranscript,
-    Row::Changelog,
-    Row::PromptHeight,
-    Row::CompletionRows,
-    Row::TerminalProgress,
-    Row::SpellCheck,
-    Row::AutoCompact,
-    Row::ResizeImages,
-    Row::BlockImages,
-    Row::BranchSummary,
-    Row::TreeFilter,
-    Row::Tools,
-    Row::DefaultShell,
-    Row::Credentials,
-    Row::Sandbox,
-    Row::SandboxNetwork,
-    Row::Autopilot,
-    Row::NextSteps,
-    Row::Publishing,
-    Row::Installed,
+/// `/settings`' headings, each over its rows, in the order shown.
+pub(super) const GROUPS: [(&str, &[Row]); 6] = [
+    ("Model", &[Row::ThinkingLevel, Row::StartupModel]),
+    (
+        "Display",
+        &[
+            Row::ThinkingBlocks,
+            Row::MarkdownReads,
+            Row::Theme,
+            Row::Look,
+            Row::Banner,
+            Row::RetainTranscript,
+            Row::Changelog,
+            Row::TerminalProgress,
+        ],
+    ),
+    (
+        "Input",
+        &[
+            Row::Steering,
+            Row::FollowUp,
+            Row::DoubleEscape,
+            Row::CopyOnSelect,
+            Row::WheelStep,
+            Row::PromptHeight,
+            Row::CompletionRows,
+            Row::SpellCheck,
+        ],
+    ),
+    (
+        "Conversation",
+        &[
+            Row::AutoCompact,
+            Row::ResizeImages,
+            Row::BlockImages,
+            Row::BranchSummary,
+            Row::TreeFilter,
+        ],
+    ),
+    (
+        "Tools and safety",
+        &[
+            Row::Tools,
+            Row::DefaultShell,
+            Row::Credentials,
+            Row::Sandbox,
+            Row::SandboxNetwork,
+        ],
+    ),
+    (
+        "Commands and sets",
+        &[
+            Row::Autopilot,
+            Row::NextSteps,
+            Row::Publishing,
+            Row::Installed,
+        ],
+    ),
 ];
 
-/// The rows `/settings` lists here: `ROWS` without those for another system.
-pub(super) fn rows() -> Vec<Row> {
-    (ROWS.into_iter())
-        .filter(|&row| row != Row::DefaultShell || cfg!(windows))
-        .filter(|&row| !matches!(row, Row::Sandbox | Row::SandboxNetwork) || cfg!(unix))
+/// The groups `/settings` lists here: `GROUPS` without the rows for another system.
+pub(super) fn groups() -> Vec<(&'static str, Vec<Row>)> {
+    let here = |row: &&Row| {
+        (**row != Row::DefaultShell || cfg!(windows))
+            && (!matches!(row, Row::Sandbox | Row::SandboxNetwork) || cfg!(unix))
+    };
+    (GROUPS.iter())
+        .map(|(heading, rows)| (*heading, rows.iter().filter(here).copied().collect()))
+        .filter(|(_, rows): &(_, Vec<Row>)| !rows.is_empty())
         .collect()
 }
 
@@ -2307,6 +2336,15 @@ fn shows_progress(var: impl Fn(&str) -> Option<String>) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn each_row_is_under_one_heading() {
+        let mut rows: Vec<_> = GROUPS.iter().flat_map(|(_, rows)| *rows).collect();
+        let count = rows.len();
+        rows.sort_by_key(|row| format!("{row:?}"));
+        rows.dedup();
+        assert_eq!((rows.len(), count), (32, 32));
+    }
+
     struct Scratch(PathBuf);
 
     impl Scratch {
@@ -3410,7 +3448,7 @@ or false; ignored"
         );
         let reread = Settings::read(Some(path.clone()));
         assert!(reread.warnings.is_empty(), "{:?}", reread.warnings);
-        for row in ROWS {
+        for &row in GROUPS.iter().flat_map(|(_, rows)| *rows) {
             assert_eq!(reread.shown(row), settings.shown(row), "{row:?}");
         }
         settings.set_tools(&[]).unwrap();

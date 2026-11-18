@@ -2693,6 +2693,21 @@ def settings_menu(read, until, send, output):
     assert '  ' + setting('Theme', 'scramjet-dark') in rows, rows
     assert '  ' + setting('Look', 'panels') in rows, rows
     assert rows[-1] == '  start at. Shift+Tab cycles it.', rows
+    # The rows are under headings, which the selection passes over.
+    assert rows.index('  Model') < rows.index('  Display'), rows
+    # Typing shows the rows whose label, value, heading or description has each word, under
+    # their headings; Enter changes one, and the list shows again with the query.
+    send(b'version')
+    rows = on_screen('> version')
+    heading = rows.index('  Display')
+    assert rows[heading + 1:heading + 3] == ['\u203a ' + setting('Changelog', 'whole'), ''], rows
+    send(b'\r')
+    rows = on_screen('\u203a ' + setting('Changelog', 'titles'))
+    assert '> version' in rows, rows
+    send(b'zz')
+    on_screen('No matching setting')
+    send(b'\x7f' * 9)
+    on_screen('\u203a ' + setting('Thinking level', 'medium'))
     # The thinking level is chosen from the model's levels; Enter takes one and goes back.
     send(b'\r')
     rows = on_screen('Thinking level  \u2191\u2193 move \u00b7 Enter select \u00b7 Esc back')
@@ -2700,12 +2715,11 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\x1b[B\r' + b'\x1b[B' * 5 + b'\r')
+    send(b'\x1b[B\x1b[B\r' + b'\x1b[B' * 8 + b'\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
-    assert '  ' + setting('Thinking blocks', 'hidden') in rows, rows
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B' * 16 + b'\r')
+    send(b'\x1b[B' * 13 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [x] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -3344,7 +3358,7 @@ assert all('switch_scramjet_model' not in str(body['tools']) for body in bodies)
 assert 'suggest_scramjet_next_steps' in str(bodies[0]['tools']), bodies[0]['tools']
 assert saved(menu_home) == {
     'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
-    'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time',
+    'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'collapseChangelog': True,
     'tools': {'grep': False, 'ls': False, 'switch_scramjet_model': False},
 }, open(settings_path(menu_home)).read()
 guide = os.path.join(work, 'guide.md')

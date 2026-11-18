@@ -57,7 +57,7 @@
       "until": "Esc close"
     },
     {
-      "type": "\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B"
+      "type": "auto-compact"
     },
     {
       "sleep": 0.3

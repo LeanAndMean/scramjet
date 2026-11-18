@@ -2081,10 +2081,11 @@ mod tests {
             let mut heads = Vec::new();
             for answer in [
                 format!(
-                    "HTTP/1.1 200 OK\r\netag: \"v1\"\r\ncontent-length: {}\r\n\r\n{catalog}",
+                    "HTTP/1.1 200 OK\r\netag: \"v1\"\r\nconnection: close\r\n\
+                     content-length: {}\r\n\r\n{catalog}",
                     catalog.len()
                 ),
-                "HTTP/1.1 304 Not Modified\r\netag: \"v1\"\r\n\r\n".to_owned(),
+                "HTTP/1.1 304 Not Modified\r\netag: \"v1\"\r\nconnection: close\r\n\r\n".to_owned(),
             ] {
                 let (connection, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(connection);

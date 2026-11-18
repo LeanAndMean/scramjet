@@ -43,7 +43,7 @@
       "until": "Esc close"
     },
     {
-      "type": "\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B\u001b[B"
+      "type": "block images"
     },
     {
       "sleep": 0.3

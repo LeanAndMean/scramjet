@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.266.0 — `/settings` under headings, with search
+
+### Changed
+
+- `/settings` lists its rows under headings in one list: Model, Display, Input, Conversation, Tools and safety, Commands and sets (printed the same way without the full screen). Typing shows only the settings whose name, value, heading or description has each word typed, under their headings; after a change the list shows again with the query.
+
 ## 2.265.0 — Shift+PgUp and Shift+PgDn select a page
 
 ### Added
