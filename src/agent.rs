@@ -1076,12 +1076,15 @@ impl Agent {
             _ => session::projects_directory(),
         };
         let projects = projects.and_then(std::fs::read_dir);
+        let mut paths = Vec::new();
         for entry in projects.into_iter().flatten().flatten() {
             let other = entry.path();
             if other != here {
-                sessions.extend(Session::list(&other).unwrap_or_default());
+                let files = std::fs::read_dir(&other).into_iter().flatten().flatten();
+                paths.extend(files.map(|file| file.path()));
             }
         }
+        sessions.extend(Session::infos(paths));
         sessions.retain(|session| session.item_count > 0);
         sessions.sort_by(|a, b| (b.modified, &b.path).cmp(&(a.modified, &a.path)));
         Ok(sessions)

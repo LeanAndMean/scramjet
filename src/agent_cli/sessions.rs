@@ -103,11 +103,10 @@ impl Interactive {
         let mut open: Vec<std::path::PathBuf> = Vec::new();
         // The row selected when a key changed how the list shows, to select again.
         let mut kept: Option<(std::path::PathBuf, bool)> = None;
+        // This folder's sessions and all folders', read once each until one is renamed or deleted.
+        let mut loaded: [Option<Vec<SessionInfo>>; 2] = [None, None];
         loop {
-            let listed_sessions = match all {
-                true => self.session.agent.all_sessions(),
-                false => self.session.agent.sessions(),
-            };
+            let listed_sessions = self.listed_sessions(all, &mut loaded);
             let mut sessions = match listed_sessions {
                 Ok(sessions) => {
                     let sessions = (sessions.into_iter())
@@ -121,16 +120,18 @@ impl Interactive {
                     return None;
                 }
             };
-            let screen = self.screen.as_ref()?;
-            let none_anywhere = || match all {
-                true => true,
-                false => (self.session.agent.all_sessions()).map_or(true, |all| all.is_empty()),
-            };
-            if sessions.is_empty() && !named_only && none_anywhere() {
-                screen.dismiss();
+            if sessions.is_empty()
+                && !named_only
+                && (all
+                    || self
+                        .listed_sessions(true, &mut loaded)
+                        .map_or(true, |all| all.is_empty()))
+            {
+                self.screen.as_ref()?.dismiss();
                 self.say("No sessions to resume");
                 return None;
             }
+            let screen = self.screen.as_ref()?;
             let current = (sessions.iter())
                 .position(|row| row.holds(|path| self.session.agent.is_session(path)));
             // Newest first, so the first other than the current one is the likely choice.
@@ -282,8 +283,30 @@ impl Interactive {
                 // Not keys of this list (`Picker::scoping`).
                 _ => None,
             };
+            if matches!(act, select::Act::Rename | select::Act::Delete) {
+                loaded = [None, None];
+            }
             spot = Some((at, status));
         }
+    }
+
+    /// This folder's sessions, or with `all` every folder's, as `loaded` holds them, read into
+    /// it when it does not.
+    fn listed_sessions(
+        &self,
+        all: bool,
+        loaded: &mut [Option<Vec<SessionInfo>>; 2],
+    ) -> Result<Vec<SessionInfo>, AgentError> {
+        let slot = &mut loaded[usize::from(all)];
+        if let Some(sessions) = slot {
+            return Ok(sessions.clone());
+        }
+        let sessions = match all {
+            true => self.session.agent.all_sessions(),
+            false => self.session.agent.sessions(),
+        }?;
+        *slot = Some(sessions.clone());
+        Ok(sessions)
     }
 
     pub(super) fn fork(&mut self, wanted: &str) {

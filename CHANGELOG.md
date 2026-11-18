@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.267.0 — `/resume` opens fast
+
+### Changed
+
+- `/resume` opens about ten times faster: what it lists of each session is kept in `~/.local/state/scramjet/session-cache/` and read again only from the files changed since, the others are read in parallel, and the list is read once while sorting, filtering or showing chains differently (again after a rename or delete). On 544 sessions (195 MB) line mode's `/resume` went from 0.5–0.7 s to 0.04 s.
+
 ## 2.266.0 — `/settings` under headings, with search
 
 ### Changed

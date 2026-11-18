@@ -12,6 +12,7 @@ use std::{
 };
 
 mod changes;
+mod index;
 pub(super) mod kept;
 
 pub use changes::ModelChange;
@@ -56,7 +57,7 @@ pub(super) fn end_writes() {
 }
 
 /// A saved session as `/resume` lists it.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionInfo {
     pub path: PathBuf,
     /// Its first prompt to the model, as typed; not a `!` command.
@@ -851,24 +852,119 @@ impl Drop for Session {
 impl Session {
     /// The sessions saved in `directory`, newest first. Unreadable and invalid files are skipped.
     pub fn list(directory: &Path) -> io::Result<Vec<SessionInfo>> {
-        let entries = match std::fs::read_dir(directory) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error),
-        };
-        let mut sessions: Vec<SessionInfo> = (entries.flatten())
-            .filter_map(|entry| Self::info(&entry.path()).ok())
-            .collect();
+        match std::fs::read_dir(directory) {
+            Ok(entries) => Ok(Self::infos(
+                entries.flatten().map(|entry| entry.path()).collect(),
+            )),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// What `list` shows of each of the session files `paths`, newest first: from a project's
+    /// index (`index`) while a file is unchanged, else read, in parallel. Unreadable and invalid
+    /// files are skipped.
+    pub fn infos(paths: Vec<PathBuf>) -> Vec<SessionInfo> {
+        Self::indexed_infos(paths, index::file)
+    }
+
+    fn indexed_infos(
+        paths: Vec<PathBuf>,
+        index_of: impl Fn(&Path) -> Option<PathBuf>,
+    ) -> Vec<SessionInfo> {
+        let mut indexes: HashMap<PathBuf, (Option<PathBuf>, index::Index)> = HashMap::new();
+        let mut sessions = Vec::new();
+        let mut unread = Vec::new();
+        for path in paths {
+            let Ok(metadata) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let directory = path.parent().unwrap_or(Path::new(".")).to_owned();
+            let (_, index) = indexes.entry(directory).or_insert_with_key(|directory| {
+                let file = index_of(directory);
+                let index = file.as_deref().map(index::Index::load).unwrap_or_default();
+                (file, index)
+            });
+            match index.get(&path, &metadata) {
+                Some(info) => sessions.push(info),
+                None => unread.push((path, metadata)),
+            }
+        }
+        let read = Self::read_infos(&unread);
+        for (info, size) in &read {
+            let directory = info.path.parent().unwrap_or(Path::new("."));
+            if let Some((_, index)) = indexes.get_mut(directory) {
+                index.put(info, *size);
+            }
+        }
+        sessions.extend(read.into_iter().map(|(info, _)| info));
+        for (directory, (file, index)) in &mut indexes {
+            let Some(file) = file else {
+                continue;
+            };
+            // Files that are not sessions are not indexed, so they stay out of it either way.
+            let listed = std::fs::read_dir(directory).into_iter().flatten().flatten();
+            let names: Vec<String> = listed
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect();
+            index.keep_only(&names.iter().map(String::as_str).collect::<Vec<_>>());
+            // An index not written leaves the files to be read again next time.
+            let _ = index.save(file);
+        }
         sessions.sort_by(|a, b| {
             b.modified
                 .cmp(&a.modified)
                 .then_with(|| b.path.cmp(&a.path))
         });
-        Ok(sessions)
+        sessions
+    }
+
+    /// What `list` shows of each of the session files `unread`, read in parallel, with each
+    /// file's size as it was before it was read.
+    fn read_infos(unread: &[(PathBuf, std::fs::Metadata)]) -> Vec<(SessionInfo, u64)> {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        // More threads than this spend their time in the kernel (measured with 48 cores).
+        let workers = std::thread::available_parallelism().map_or(1, |count| count.get());
+        let workers = workers.min(6).min(unread.len());
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut read = Vec::new();
+                        loop {
+                            let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some((path, metadata)) = unread.get(at) else {
+                                return read;
+                            };
+                            let Ok(modified) = metadata.modified() else {
+                                continue;
+                            };
+                            if let Ok(info) = Self::info_at(path, modified) {
+                                read.push((info, metadata.len()));
+                            }
+                        }
+                    })
+                })
+                .collect();
+            (handles.into_iter())
+                .flat_map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                })
+                .collect()
+        })
     }
 
     /// What `list` shows of the session file `path`.
     pub fn info(path: &Path) -> io::Result<SessionInfo> {
+        let modified = std::fs::metadata(path)?.modified()?;
+        Self::info_at(path, modified)
+    }
+
+    /// `info`, giving the file's modification time as `modified`, taken before it is read so that
+    /// a line written meanwhile changes it.
+    fn info_at(path: &Path, modified: SystemTime) -> io::Result<SessionInfo> {
         let entries = read(path)?;
         let context = entries.context(path, entries.tail)?;
         Ok(SessionInfo {
@@ -881,7 +977,7 @@ impl Session {
             name: entries.name.clone(),
             item_count: context.items.len(),
             summary: super::status::completed_summary(&context.items),
-            modified: std::fs::metadata(path)?.modified()?,
+            modified,
             parent: entries.parent.clone().filter(|_| !entries.continues()),
             continues: entries.parent.clone().filter(|_| entries.continues()),
             root: entries.header["root"].as_str().map(PathBuf::from),

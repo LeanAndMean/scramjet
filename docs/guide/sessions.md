@@ -34,7 +34,7 @@ Misspelled words in the prompt are underlined (American English, with common dev
 
 `/tree` (or Escape twice on an empty prompt) goes back to any earlier point and continues from there, optionally summarizing the branch left behind; `/fork` and `/branch` continue in a new session. `/resume` (another folder's session continues in that folder), `/compact`, `/export` (a self-contained web page) and `/copy` work as in Scramjet 1; in `/resume`, sessions that fresh-session next steps chained show their summaries, and Ctrl+X shows chains flat, threaded or folded.
 
-Sessions are saved under `~/.local/state/scramjet/sessions/` (or `--session-dir`). A session's file shows what was sent and received; it holds the whole conversation and what the agent read, so look through it before attaching it to a report.
+Sessions are saved under `~/.local/state/scramjet/sessions/` (or `--session-dir`). A session's file shows what was sent and received; it holds the whole conversation and what the agent read, so look through it before attaching it to a report. `/resume` keeps what it lists of each project's sessions in `~/.local/state/scramjet/session-cache/`, read again from a session's file once that changes; it holds their prompts and replies (what `/resume` searches); a removed session's entry goes at the next `/resume`, and a removed directory is rebuilt.
 
 ## Keys
 
