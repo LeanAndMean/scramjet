@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.264.0 — `modelOverrides` by id pattern
+
+### Added
+
+- A `models.json` provider's `modelOverrides` take id patterns: `"claude-*": {"api": "anthropic-messages", "baseUrl": "…"}` gives every listed model whose id matches what its list does not say, its protocol and server included, so one entry with no `models` serves a proxy that offers Claude on Messages and GPT on Responses, and keeps up as the proxy adds models. Patterns apply before a model's own id, the most general first.
+
 ## 2.263.0 — Built-in `explore` and `general-purpose` agents
 
 ### Added

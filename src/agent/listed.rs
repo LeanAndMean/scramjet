@@ -363,11 +363,45 @@ fn rates(pricing: &Value, messages: bool) -> Option<Value> {
 
 /// `model` with what `overrides`, an entry's `modelOverrides`, says of its id, as Scramjet
 /// applies them: each field in place of the list's, `cost`, `headers` and `compat` field by field.
+/// A key with `*`s is a pattern of ids, each `*` standing for any text; those its id matches
+/// apply first, the one with fewest letters besides its `*`s first, and its own id's last.
 pub(super) fn overridden(mut model: Value, overrides: &Map<String, Value>) -> Value {
     let id = model["id"].as_str().unwrap_or_default().to_owned();
-    let Some(given) = overrides.get(&id).and_then(Value::as_object) else {
-        return model;
+    let mut matching: Vec<(&String, &Map<String, Value>)> = (overrides.iter())
+        .filter(|(key, _)| key.contains('*') && matches(key, &id))
+        .filter_map(|(key, given)| Some((key, given.as_object()?)))
+        .collect();
+    matching.sort_by_key(|(key, _)| (key.len() - key.matches('*').count(), *key));
+    if let Some(given) = overrides.get(&id).and_then(Value::as_object) {
+        matching.push((&id, given));
+    }
+    for (_, given) in matching {
+        model = override_with(model, given);
+    }
+    model
+}
+
+/// Whether `id` is one `pattern` matches, each `*` in it standing for any text.
+fn matches(pattern: &str, id: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = id.strip_prefix(first) else {
+        return false;
     };
+    let mut parts: Vec<&str> = parts.collect();
+    let Some(last) = parts.pop() else {
+        return rest.is_empty();
+    };
+    for part in parts {
+        match rest.find(part) {
+            Some(at) => rest = &rest[at + part.len()..],
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
+}
+
+fn override_with(mut model: Value, given: &Map<String, Value>) -> Value {
     for (key, value) in given {
         match (key.as_str(), model.get_mut(key), value) {
             ("id", _, _) => {}
@@ -499,6 +533,30 @@ mod tests {
             json!({"id": "gpt-6", "reasoning": true, "input": ["text"], "contextWindow": 400_000,
                 "cost": {"input": 1.0, "output": 10.0}})
         );
+    }
+
+    #[test]
+    fn patterns_of_ids_override_before_the_id_itself() {
+        let overrides = json!({
+            "*": {"contextWindow": 128_000},
+            "claude-*": {"api": "anthropic-messages", "contextWindow": 1_000_000,
+                "compat": {"a": 1}},
+            "claude-haiku-4-*": {"contextWindow": 200_000, "compat": {"b": 2}},
+            "claude-haiku-4-5": {"reasoning": false},
+            "gpt-*-luna": {"api": "openai-responses"}});
+        let overrides = overrides.as_object().unwrap();
+        let model = |id: &str| overridden(json!({"id": id, "reasoning": true}), overrides);
+        assert_eq!(
+            model("claude-haiku-4-5"),
+            json!({"id": "claude-haiku-4-5", "reasoning": false, "api": "anthropic-messages",
+                "contextWindow": 200_000, "compat": {"a": 1, "b": 2}})
+        );
+        assert_eq!(model("claude-opus-5")["contextWindow"], 1_000_000);
+        assert_eq!(model("gpt-6-luna")["api"], "openai-responses");
+        assert_eq!(model("gpt-6-sol").get("api"), None);
+        assert_eq!(model("deepseek")["contextWindow"], 128_000);
+        assert!(matches("a*b*c", "abc") && matches("a*b*c", "axxbyyc"));
+        assert!(!matches("a*b*c", "acb") && !matches("ab*ba", "aba") && !matches("a", "ab"));
     }
 
     #[test]

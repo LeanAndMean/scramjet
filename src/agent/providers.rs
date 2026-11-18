@@ -1907,6 +1907,49 @@ mod tests {
     }
 
     #[test]
+    fn a_listed_provider_routes_each_model_by_the_protocol_its_pattern_gives() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-providers-routed-{}", std::process::id())),
+        );
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let (base, server) = serve_json(
+            1,
+            |_, _| json!({"data": [{"id": "claude-a", "display_name": "Claude A"}, {"id": "gpt-b"}]}),
+        );
+        let document = json!({"providers": {"proxy": {
+            "baseUrl": base, "api": "anthropic-messages", "apiKey": "k",
+            "modelOverrides": {
+                "claude-*": {"reasoning": true, "contextWindow": 1_000_000},
+                "gpt-*": {"api": "openai-responses", "baseUrl": format!("{base}/v1"),
+                    "contextWindow": 400_000}}}}});
+        let providers = Providers::given_logged_in(document, logins);
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        let claude = &providers.find("proxy/claude-a").unwrap().info;
+        assert_eq!(
+            (claude.protocol, claude.window, claude.reasoning),
+            (Protocol::Messages, Some(1_000_000), true)
+        );
+        let gpt = &providers.find("proxy/gpt-b").unwrap().info;
+        assert_eq!(
+            (gpt.protocol, gpt.window),
+            (Protocol::Responses, Some(400_000))
+        );
+        assert!(route(&providers, "gpt-b").path.ends_with("/v1"));
+        assert_eq!(
+            route(&providers, "gpt-b").headers[0],
+            ("authorization".into(), "Bearer k".into())
+        );
+        assert_eq!(
+            route(&providers, "claude-a").headers[0],
+            ("x-api-key".into(), "k".into())
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
     fn a_provider_that_lists_no_models_offers_those_its_server_lists() {
         let scratch = ScratchDir::new(
             std::env::temp_dir().join(format!("scramjet-providers-listed-{}", std::process::id())),
