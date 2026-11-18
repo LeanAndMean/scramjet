@@ -152,7 +152,7 @@ def main():
     # Each scenario: (title, extra arguments, settings, Git repository?, through a subagent?,
     # checks); each check (label, command, judged(output) -> bool, known gap on this platform).
     scenarios = [
-        ('-p, credential stores hidden (unattended)', [], {}, False, False, [
+        ('-p, credential stores hidden (hideCredentials: unattended)', [], {'hideCredentials': 'unattended'}, False, False, [
             ('a store is unreadable', 'cat ~/.ssh/id_fake ~/.netrc ~/.aws/credentials 2>&1', secret_hidden, None),
             ('a hidden directory lists nothing', 'ls ~/.ssh 2>&1 | grep -c id_fake',
              lambda o: o.strip().startswith('0'), None),

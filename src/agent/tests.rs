@@ -2607,7 +2607,7 @@ fn each_response_is_priced_by_its_backends_rates_and_resumes_keep_what_it_cost()
     let (endpoint, server) = serve(vec![
         served_by(None),
         served_by(Some(" Bedrock ")),
-        served_by(Some("onehpc")),
+        served_by(Some("remote")),
     ]);
     let (mut agent, _scratch) = agent(endpoint, "priced");
     agent.info.prices = pricing::Prices::of(&json!({
