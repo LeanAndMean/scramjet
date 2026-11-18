@@ -247,6 +247,15 @@ User decisions from `/rs:steer` on 2026-11-17. Hiding what the model is given ke
 - **`/system-prompt`**: a full-screen viewer of the instructions exactly as the last request sent them (before any request, the next one's, said so), each part marked (the opening, each context file with its path, the listings, identity, environment), then the tool definitions. It scrolls (arrows, PgUp/PgDn, Home/End), its text can be selected and copied, and Escape closes it, leaving nothing in the conversation. `/context`'s system prompt row opens it too. Ctrl+O is unchanged: the prompt is too large to expand inline.
 - **The README is a front page** for users: Scramjet 2's own logo at its top (the user's, "scramjet" with a red "RS"; steer of 2026-11-17, second, replacing Scramjet 1's), a pitch, what Scramjet 2 does, a short status (the section release notes take), install and first run, a short way over from Scramjet 1, Claude Code or Codex, and installing a command-set repository with Mach 12 (`LeanAndMean/mach12`) as the example and link. The reference detail moves into user guides under `docs/guide/`, nothing lost. Its draft is shown to the user at a steer before it is pushed.
 
+### Selecting by page, /settings' headings and /resume (2026-11-18)
+
+User decisions from the second `/rs:steer` of 2026-11-18:
+
+- **Shift+PgUp/PgDn move a selection's end a page,** in the conversation and the prompt, as standard editors do, so a long stretch of the conversation can be copied without holding Shift+Up. Not Ctrl+PgUp/PgDn.
+- **`/settings` shows its rows under headings in one list,** as `/login` and `/model`'s all-models list do, and typing filters them, as Claude Code's `/config` does. Not two levels or tabs, which hide rows.
+- **`/resume` opens fast:** the loaded sessions are kept while the list changes view, files are read in parallel, each file's summary is cached by its size and modification time, and the list opens at once with the newest sessions while the rest are read (the recent ones are almost always the one chosen).
+- **WSL interop stays open** in turns with the credential stores hidden: Windows programs keep working there, and the docs say the hiding does not cover what they read through `\\wsl.localhost\`.
+
 ## Essential responsibilities and invariants
 
 ### Execution and authority
