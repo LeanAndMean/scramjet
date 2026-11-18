@@ -191,7 +191,7 @@ User decisions from the third `/rs:steer` of 2026-11-17:
 
 ### A sandbox policy (proposed 2026-11-18, for sign-off)
 
-The design the steer of 2026-11-17 asked for before item 76 is built. Nothing here is agreed until a steer says so; the questions it needs answered are at its end.
+The design the steer of 2026-11-17 asked for before item 76 is built. Nothing here is agreed until a steer says so: the user did not approve it at the steer of 2026-11-18; the questions it needs answered are at its end.
 
 **What there is today.** `sandbox` (`read-only`, `workspace-write`, `off`) and `sandboxNetwork` set the main agent's sandbox; `/add-dir` and `/sandbox add` grant more writable directories for the session, and a granted write can be kept always in a project (`sandbox-grants.json`, in the user's configuration, never read from a repository); `hideCredentials` hides the credential stores (`HIDDEN_FILES`, `HIDDEN_DIRECTORIES`, packages' `credentialFiles`) from commands and from `read`, `grep` and `find`. Subagents always run read-only, off the network, with the stores hidden; nothing sets them.
 
