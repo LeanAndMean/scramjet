@@ -189,6 +189,56 @@ User decisions from the third `/rs:steer` of 2026-11-17:
 - **A sandbox policy,** designed for the user's sign-off before it is built: writable roots, paths that cannot be read (Claude Code's `denyRead` and `allowRead`, by the credential stores' hiding, which `read`, `grep` and `find` honor too) and the network, set apart for the main agent and for subagents. Subagents ship read-only. A **project-only reach** in one setting: the home directory, other users' and mounted drives (`/mnt/*`) hidden but for the project, `/add-dir`'s directories, the directories on `PATH` and what git needs to commit as the user (`~/.gitconfig`: commits must keep working); system directories outside home stay readable. It holds only with the sandbox on; Windows cannot hide reads, and says so there.
 - **Subagents that write:** moderate priority, up from item 7's lowest; the shipped default stays read-only.
 
+### A sandbox policy (proposed 2026-11-18, for sign-off)
+
+The design the steer of 2026-11-17 asked for before item 76 is built. Nothing here is agreed until a steer says so; the questions it needs answered are at its end.
+
+**What there is today.** `sandbox` (`read-only`, `workspace-write`, `off`) and `sandboxNetwork` set the main agent's sandbox; `/add-dir` and `/sandbox add` grant more writable directories for the session, and a granted write can be kept always in a project (`sandbox-grants.json`, in the user's configuration, never read from a repository); `hideCredentials` hides the credential stores (`HIDDEN_FILES`, `HIDDEN_DIRECTORIES`, packages' `credentialFiles`) from commands and from `read`, `grep` and `find`. Subagents always run read-only, off the network, with the stores hidden; nothing sets them.
+
+**The references** (read 2026-11-18). Claude Code 2.1.259 (its settings' schema in the installed binary): `sandbox.filesystem.allowWrite`, `denyWrite`, `denyRead`, and `allowRead` ("Paths to re-allow reading within denyRead regions. Takes precedence over denyRead"); on Linux a denied directory becomes a tmpfs with the allowed and writable paths bound back into it. Its `permissions.blockReadsOutsideWorkingDirectories` refuses file-tool reads outside the working directories in every mode, and with the sandbox on "Sandboxed commands lose your home directory (git identity, SSH keys, home-installed tools) until you re-open paths with sandbox.filesystem.allowRead". Codex 0.169.1 has the older `sandbox_mode` with `[sandbox_workspace_write] writable_roots` and `network_access`, and newer named permission profiles (beta; `default_permissions`, `[permissions.<name>.filesystem]` mapping paths to `read`, `write` or `deny`, the more specific winning, `:workspace_roots`, `network.enabled`; learn.chatgpt.com/docs/permissions). Neither sets subagents apart: both give a subagent its parent's sandbox (Codex's agent files may not override `sandbox_mode`, developers.openai.com/codex/subagents).
+
+**Proposed settings.** `sandbox` becomes an object, Claude Code's shape with Codex's modes (kept from 2026-11-06); the string form stays accepted as `{"mode": …}`, `sandboxNetwork` as `network`:
+
+```json
+"sandbox": {
+  "mode": "workspace-write",
+  "network": true,
+  "filesystem": {
+    "allowWrite": ["~/scratch"],
+    "denyRead": ["~/notes/private"],
+    "allowRead": ["~/.m2"]
+  },
+  "subagents": {"network": false, "filesystem": {"denyRead": []}}
+},
+"blockReadsOutsideWorkingDirectories": true
+```
+
+- `allowWrite` lists directories writable in every project (Codex's `writable_roots`, accepted as a name); those granted always in one project stay in `sandbox-grants.json`. Writable paths are readable.
+- `denyRead` hides more paths as the credential stores are hidden (an empty directory or file in commands; refused by `read`, `grep` and `find`), with or without the sandbox wherever `hideCredentials` hides. `denyWrite` is not offered: what is outside the writable roots is read-only already, and the protected paths stay Codex's.
+- `allowRead` re-opens what `denyRead` and the project-only reach hide, never a credential store: those stay `hideCredentials`' to show, so that `allowRead: ["~"]` cannot uncover `~/.ssh`.
+- **Subagents are set apart** by `subagents`, which takes `network` and `filesystem` (`denyRead`, `allowRead`; `allowWrite` with item 77). It inherits the main agent's `denyRead`, `allowRead` and project-only reach unless it gives its own, never the main agent's mode, writable roots or network: subagents ship read-only and off the network, as today. Item 77 adds its `mode` (a worktree or writable roots).
+- Only the user's own settings set any of it, as `sandbox-grants.json`: when project settings come, a project can narrow the reach, never widen it.
+
+**The project-only reach**, in Claude Code's key `blockReadsOutsideWorkingDirectories` (top level, as there is no `permissions` object; `permissions.blockReadsOutsideWorkingDirectories` accepted too), off by default, a row in `/sandbox` and `/settings`. With it on, commands in the sandbox see, outside the system's own directories:
+
+- the project and `/add-dir`'s directories (and those granted always), each read-only unless writable;
+- each directory on `PATH` under the home directory, with its install prefix (the parent of a `bin`, unless that is the home directory or `~/.local`), and the same for where its symlinks lead: here `~/.nvm/versions/node/v25.2.1`, `~/.cargo`, `~/miniforge3`, `~/.bun`, `~/.local/bin`, and `claude`'s `~/.local/share/claude/versions`. Toolchain stores that those programs read from a fixed place, named as the credential stores are: `~/.rustup` (or `RUSTUP_HOME`), uv's `~/.local/share/uv`. What else a tool needs is the user's `allowRead`;
+- what git needs to commit as the user: `~/.gitconfig`, `~/.config/git` (or `$XDG_CONFIG_HOME/git`, `GIT_CONFIG_GLOBAL`). Committing also needs `.git` writable, which `workspace-write` protects as Codex does: the user grants it with `/add-dir .git`. Signing keys stay hidden (`~/.ssh`, `~/.gnupg`, and `/run` is empty);
+- what Scramjet gave the agent to read: the directories of the loaded command sets, skills, agents and packages, its built-in `~/.local/share/scramjet/builtin`, and this project's own sessions (the prior-session fallback), read-only.
+
+Hidden: the rest of the home directory, the other users' homes (`/home`, `/root`), and mounted drives (`/mnt`, WSL's `C:` included, and `/media`), each a tmpfs over which the kept paths are bound back, as Claude Code does (bubblewrap), or a `deny file-read*` for the home directory followed by `allow` rules for what is kept (Seatbelt, whose later rules win). System directories (`/usr`, `/etc`, `/opt`, `/var`) stay readable. `read`, `grep` and `find` honor the same reach always, as Claude Code's file tools do, so that the agent's tools agree with its commands; their refusal says to ask the user for `/add-dir` or an `allowRead`. Commands are confined only with the sandbox on (the main agent's) and always for subagents; with the main agent's sandbox off, `/sandbox` and the row's note say that its commands are not. On Windows nothing can hide reads from commands (the low integrity level only stops writes): there the file tools honor it, and the first turn says once that commands do not.
+
+**Network** stays on or off. Domain lists (Claude Code's `allowedDomains`, Codex's `network.domains`) need a filtering proxy of the harness's own in front of each command; they wait for a need.
+
+**How it is checked.** `scripts/try-sandbox.py` gains the project-only checks (home, `/mnt/c` and another user's home unreadable; `PATH`'s programs, git's identity and the kept directories readable). For real, in a scratch clone of this repository with the reach on and `.git` granted: `cargo build` and `cargo test`, `node`, `codex --version`, `uv run`, `claude --version`, `git commit`; and a subagent's `read` of a skill. What fails there becomes a kept path or a known gap, not a new rule. Tried by hand with bubblewrap on 2026-11-18 (`/home` and `/mnt` a tmpfs, the project and the kept paths above bound back read-only): `cargo`, `rustc`, `node`, `codex`, `claude`, `uv`, `python3` and `git log` with the user's identity all ran, and `/mnt` was empty.
+
+**For the user to answer at the steer:**
+
+1. The shape: `sandbox` as an object with Claude Code's `filesystem` names (recommended), or flat keys beside today's (`sandboxAllowWrite`, `sandboxDenyRead`), or Codex's path-to-access profiles.
+2. The name: Claude Code's `blockReadsOutsideWorkingDirectories` (recommended, though ours keeps more than Claude Code's), or a shorter one of our own such as `sandbox.filesystem.projectOnly`.
+3. File tools honoring the reach even with the sandbox off, as Claude Code's do (recommended), or only with it on, as the 2026-11-17 decision could be read.
+4. Subagents inheriting the main agent's `denyRead`, `allowRead` and reach unless `subagents` gives its own (recommended), or set only by `subagents`.
+
 ### What the context holds, shown (2026-11-17)
 
 User decisions from `/rs:steer` on 2026-11-17. Hiding what the model is given keeps users from troubleshooting it:
