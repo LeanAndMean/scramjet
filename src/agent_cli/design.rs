@@ -10,8 +10,9 @@ pub(super) enum Design {
     /// `>` before prompts, a `●` line for each call in the color of how it went, dim reasoning.
     #[default]
     Classic,
-    /// A rail down the left of each block: the accent's beside prompts, a dotted one beside
-    /// reasoning, one beside a call's result, red when it failed; replies have none.
+    /// A rail down the left of each block: the accent's beside prompts, a row above and below,
+    /// a dotted one beside reasoning, a thin one beside replies, and beside a call's result one
+    /// in the color of how it went.
     Rails,
     /// Blocks on the theme's backgrounds: a band for each prompt, and each call on the
     /// background of how it went.
@@ -65,9 +66,13 @@ impl Design {
         }
     }
 
-    /// The band a prompt's rows and the empty rows around them are on.
-    pub(super) fn prompt_band(self) -> Option<Band> {
-        (self == Self::Panels).then_some(Band::Prompt)
+    /// The row above and below a prompt's: its band, or its rail alone.
+    pub(super) fn prompt_pad(self) -> Option<String> {
+        match self {
+            Self::Panels => Some(Band::Prompt.mark().into()),
+            Self::Rails => Some(format!("{}▌{}", style::PROMPT_MARK, style::RESET)),
+            Self::Classic | Self::Margin => None,
+        }
     }
 
     /// What goes before each row of reasoning; `None`: nothing.
@@ -108,7 +113,23 @@ impl Design {
                 None,
                 marked,
             )),
-            Self::Classic | Self::Rails => None,
+            Self::Rails => {
+                let rail = format!("{}▏{} ", style::REPLY_RAIL, style::RESET);
+                Some(Gutter::same(&rail, 2, None, marked))
+            }
+            Self::Classic => None,
+        }
+    }
+
+    /// What goes before each row of a notice of the session's own (an error, a retry), whose
+    /// text is in `style`; `None`: nothing.
+    pub(super) fn notice(self, style: Style, marked: bool) -> Option<Gutter> {
+        match self {
+            Self::Rails => {
+                let mark = format!("{style}!{} ", style::RESET);
+                Some(Gutter::new(&mark, "  ", 2, None, marked))
+            }
+            Self::Classic | Self::Panels | Self::Margin => None,
         }
     }
 
@@ -118,6 +139,7 @@ impl Design {
             let color = match outcome {
                 Outcome::Failed => style::RAIL_FAILED,
                 Outcome::Running => style::RAIL_RUNNING,
+                Outcome::Done if self == Self::Rails => style::RAIL_DONE,
                 Outcome::Done => style::RAIL,
             };
             let rail = format!("{color}{rail}{} ", style::RESET);
@@ -338,7 +360,7 @@ impl Gutter {
         Self {
             first: format!("{band}{first}{from}"),
             rest: format!("{band}{rest}{from}"),
-            blank: format!("{band}{rest}"),
+            blank: format!("{band}{rest}{from}"),
             columns,
         }
     }
@@ -470,7 +492,17 @@ mod tests {
     fn gutters_go_before_each_row_and_blank_rows_keep_rails_and_bands() {
         let rails = Design::Rails.output(Outcome::Failed, true);
         assert_eq!(plain(&rails.row(true, "x")), format!("│ {FROM}x"));
-        assert_eq!(plain(&rails.blank), "│ ");
+        // A copy of an empty row holds nothing of its rail.
+        assert_eq!(plain(&rails.blank), format!("│ {FROM}"));
+        assert!(rails.first.contains(style::RAIL_FAILED.get()));
+        let done = Design::Rails.output(Outcome::Done, false);
+        assert!(done.first.contains(style::RAIL_DONE.get()));
+        let reply = Design::Rails.reply(false).unwrap();
+        assert_eq!(plain(&reply.row(true, "ok")), "▏ ok");
+        let notice = Design::Rails.notice(style::WARNING, false).unwrap();
+        assert_eq!(plain(&notice.row(true, "a")), "! a");
+        assert_eq!(plain(&notice.row(false, "b")), "  b");
+        assert!(Design::Panels.notice(style::WARNING, false).is_none());
         let classic = Design::Classic.output(Outcome::Done, true);
         assert_eq!(classic.row(false, "x"), format!("  {FROM}x"));
         assert_eq!(classic.row(false, ""), "");

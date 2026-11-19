@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.271.0 — The rails look says how each call went
+
+### Changed
+
+- In the `rails` look, a call's rail is in the color of how it went (running, done, failed), and a failed call's output keeps its normal color; a prompt's rail runs a row above and below it, where a turn starts, and replies have a thin rail of their own.
+- Retry and error notices start with a `!` in the `rails` look; in every look, the error a turn stopped on is in the error color.
+
 ## 2.270.0 — The classic look says how each call went
 
 ### Changed

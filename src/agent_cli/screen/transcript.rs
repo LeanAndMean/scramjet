@@ -687,7 +687,9 @@ mod tests {
         assert_eq!(
             rows(&shown_in(Design::Rails)),
             [
+                "▌",
                 "▌ fix the test",
+                "▌",
                 "",
                 "┊ Looking at it.",
                 "",
@@ -695,9 +697,11 @@ mod tests {
                 "│ 1 failed",
                 "│ Command exited with code 101",
                 "",
-                "It fails.",
+                "▏ It fails.",
                 "",
+                "▌",
                 "▌ again",
+                "▌",
                 "",
                 "○ bash make",
                 "│ building",
@@ -817,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_calls_output_is_red_but_on_its_panel() {
+    fn a_failed_calls_output_is_red_but_where_a_band_or_rail_says_it_failed() {
         let row = |design| {
             let styled = styled_in(design);
             let failed = styled
@@ -825,10 +829,15 @@ mod tests {
                 .find(|(row, _)| plain(row).contains("1 failed"));
             failed.expect("the failed call's output").0
         };
-        assert!(row(Design::Rails).contains(style::TOOL_FAILED.get()));
-        let panels = row(Design::Panels);
-        assert!(panels.contains(style::TOOL_OUTPUT.get()), "{panels:?}");
-        assert!(!panels.contains(style::TOOL_FAILED.get()), "{panels:?}");
+        assert!(row(Design::Margin).contains(style::TOOL_FAILED.get()));
+        for design in [Design::Panels, Design::Rails] {
+            let row = row(design);
+            // What follows the gutter: the rails' own is in the error color.
+            let rail = format!("{}│{}", style::RAIL_FAILED, style::RESET);
+            let row = row.replace(&rail, "");
+            assert!(row.contains(style::TOOL_OUTPUT.get()), "{row:?}");
+            assert!(!row.contains(style::TOOL_FAILED.get()), "{row:?}");
+        }
     }
 
     #[test]
@@ -868,7 +877,9 @@ mod tests {
         let result = Event::ToolResult("bash".into(), output.into(), None, true, Instant::now());
         transcript.push(result);
         // As a resumed session shows a reply: whole, not streamed.
-        let reply = "One fails: compaction, in the agent's tests.";
+        let retry = Event::Retrying("busy".into(), 1, 3, std::time::Duration::from_secs(2));
+        transcript.push(retry);
+        let reply = "One fails: compaction, in the agent's tests.\n\nRun it alone.";
         transcript.push(Event::Assistant(reply.into()));
         for design in [Design::Rails, Design::Panels, Design::Margin] {
             let look = Look {
@@ -879,7 +890,10 @@ mod tests {
             let lines = transcript.window(0, 100);
             assert_eq!(
                 selection::text(&lines[..lines.len() - 1], 0, usize::MAX).trim(),
-                format!("{prompt}\n\nRun them all.\n\n{command}\n{output}\n\n{reply}"),
+                format!(
+                    "{prompt}\n\nRun them all.\n\n{command}\n{output}\n\nbusy\n{}\n\n{reply}",
+                    "Retrying (1/3) in 2s (Ctrl-C to cancel)"
+                ),
                 "{design:?}"
             );
         }

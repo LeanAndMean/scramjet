@@ -72,16 +72,19 @@ styles! {
     THINKING_HIDDEN: [ITALIC] ThinkingText;
     /// In the looks other than the classic one (`design`): reasoning, and the margin's label
     /// beside it; in every look, the mark beside a sent prompt and its text, and the margin's
-    /// label; the rails beside reasoning and a call's result, a failed one's and a running
-    /// one's; in every look, a call's tool and how it went; the margin's label for it.
+    /// label; the rails beside reasoning and a call's result, a done one's in the rails look, a
+    /// failed one's and a running one's; in every look, a call's tool and how it went; the
+    /// margin's label for it.
     THOUGHT: [ITALIC] ThinkingText;
     THOUGHT_LABEL: [] Dim;
     PROMPT_MARK: [] Accent;
     PROMPT_LABEL: [BOLD] Accent;
     PROMPT_TEXT: [BOLD] UserMessageText;
-    /// The margin's label beside a reply.
+    /// The margin's label beside a reply, and the rail beside it in the rails look.
     REPLY_LABEL: [BOLD];
+    REPLY_RAIL: [] Text;
     RAIL: [] BorderMuted;
+    RAIL_DONE: [] Success;
     RAIL_FAILED: [] Error;
     RAIL_RUNNING: [] Warning;
     TOOL_NAME: [BOLD] ToolTitle;
@@ -126,6 +129,8 @@ styles! {
     USAGE_BAR: [] Accent;
     /// A provider failure that is retried.
     WARNING: [] Warning;
+    /// The error a turn stopped on, and a failed compaction's.
+    ERROR: [] Error;
     /// What Scramjet notifies the user of about a command, such as a blocked report.
     NOTICE: [] Warning;
     /// The record of a next step chosen or offered after a command completed.

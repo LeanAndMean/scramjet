@@ -324,6 +324,8 @@ pub(super) struct Terminal {
 /// after the gutter.
 struct Lead {
     gutter: Gutter,
+    /// Empty rows between rows of text have the gutter's `blank`, so that a rail runs on.
+    bridging: bool,
     /// The first row had its gutter.
     started: bool,
     /// At the start of a row, before its text.
@@ -336,6 +338,7 @@ impl Lead {
     fn new(gutter: Gutter) -> Self {
         Self {
             gutter,
+            bridging: false,
             started: false,
             at_start: true,
             active: String::new(),
@@ -355,6 +358,11 @@ impl Lead {
                 continue;
             }
             rest = &rest[c.len_utf8()..];
+            if c == '\n' && self.bridging && self.started && self.at_start {
+                out += style::RESET;
+                out += &self.gutter.blank;
+                out += &self.active;
+            }
             if c == '\n' {
                 self.at_start = true;
             } else if std::mem::take(&mut self.at_start) {
@@ -394,8 +402,10 @@ impl Terminal {
         let took = (self.tool_started.take()).map(|started| at.saturating_duration_since(started));
         let style = match () {
             _ if !self.color => "",
-            // Panels say a call failed by its band; red text on it is hard to read.
-            _ if failed && self.design != Design::Panels => style::TOOL_FAILED.get(),
+            // Panels say a call failed by its band, rails by the rail; red text is hard to read.
+            _ if failed && matches!(self.design, Design::Classic | Design::Margin) => {
+                style::TOOL_FAILED.get()
+            }
             _ => style::TOOL_OUTPUT.get(),
         };
         let reset = if style.is_empty() { "" } else { style::RESET };
@@ -815,7 +825,10 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 Streaming::Text => self.design.reply(self.marked),
                 Streaming::None => None,
             };
-            self.lead = lead.filter(|_| styled).map(Lead::new);
+            self.lead = lead.filter(|_| styled).map(|lead| Lead {
+                bridging: kind == Streaming::Text,
+                ..Lead::new(lead)
+            });
             let width = match (styled, &self.lead) {
                 (false, _) => 0,
                 (true, Some(lead)) => self.width().saturating_sub(lead.gutter.columns).max(10),
@@ -997,9 +1010,7 @@ impl AgentUi for Terminal {
             visible(error),
             retrying(attempt, retries),
         );
-        let text = self.styled(style::WARNING, &self.wrapped(&text));
-        // As every block, it ends with a blank line before what follows.
-        self.err(&format!("{text}\n\n"));
+        self.notice_block(style::WARNING, &text);
         self.show_countdown(retrying(attempt, retries), delay);
     }
     fn cooling(&mut self, delay: Duration) {
@@ -1046,7 +1057,11 @@ impl AgentUi for Terminal {
             let mut wrap = self.markdown_wrapper(width);
             let text = wrap.push(&text) + &wrap.finish();
             let text = match lead {
-                Some(lead) => Lead::new(lead).apply(&text),
+                Some(lead) => Lead {
+                    bridging: true,
+                    ..Lead::new(lead)
+                }
+                .apply(&text),
                 None => text,
             };
             self.out(&format!("{text}\n\n"));
@@ -1166,11 +1181,13 @@ impl AgentUi for Terminal {
         self.command_block(&ran.command, ran.include, &ran.output, Some(&ran.ending));
     }
     fn stopped(&mut self, error: Option<&str>) {
-        let text = match error {
-            Some(error) => format!("Error: {}", visible(error)),
-            None => self.dim("(cancelled)"),
-        };
-        self.said(&text);
+        match error {
+            Some(error) => self.notice_block(style::ERROR, &format!("Error: {}", visible(error))),
+            None => {
+                let text = self.dim("(cancelled)");
+                self.said(&text);
+            }
+        }
     }
     /// As Scramjet shows a compaction: the estimated context size before it, then the summary;
     /// an automatic one also says why it ran.
@@ -1261,10 +1278,7 @@ impl AgentUi for Terminal {
     }
     /// A block of its own, ending with a blank line as a tool block does.
     fn notice(&mut self, text: &str) {
-        self.clear();
-        let text = self.wrapped(&visible(text));
-        let text = self.styled(style::NOTICE, &text);
-        self.err(&format!("{text}\n\n"));
+        self.notice_block(style::NOTICE, &visible(text));
     }
     fn next_step(&mut self, record: &str) {
         self.clear();
@@ -1396,8 +1410,26 @@ impl Terminal {
         self.err(&format!("{block}\n"));
     }
     pub(super) fn compaction_error(&mut self, error: &str) {
+        let text = format!("Error: automatic compaction failed: {error}");
+        self.notice_block(style::ERROR, &text);
+    }
+    /// A notice of the session's own in `style`, wrapped, as a block of its own ending with a
+    /// blank line, with the look's mark for it.
+    fn notice_block(&mut self, style: Style, text: &str) {
         self.clear();
-        let text = self.wrapped(&format!("Error: automatic compaction failed: {error}"));
+        let gutter = (self.design.notice(style, self.marked)).filter(|_| self.color);
+        let width = match (self.color, &gutter) {
+            (false, _) => 0,
+            (true, Some(gutter)) => self.width().saturating_sub(gutter.columns).max(10),
+            (true, None) => self.width(),
+        };
+        let mut wrap = self.wrapper(width);
+        let text = wrap.push(text) + &wrap.finish();
+        let text = self.styled(style, &text);
+        let text = match gutter {
+            Some(gutter) => Lead::new(gutter).apply(&text),
+            None => text,
+        };
         self.err(&format!("{text}\n\n"));
     }
     /// An approval question as it stays on screen once answered.
@@ -1661,15 +1693,14 @@ impl Terminal {
         } else {
             String::new()
         };
-        let band = (self.design.prompt_band())
-            .map_or(String::new(), |band| format!("{}{rule}\n", band.mark()));
-        let mut block = band.clone();
+        let pad = (self.design.prompt_pad()).map_or(String::new(), |pad| format!("{pad}{rule}\n"));
+        let mut block = pad.clone();
         for (index, row) in rows.iter().enumerate() {
             let text = format!("{}{}{}", style::PROMPT_TEXT, &row[2..], style::RESET);
             block += &gutter.row(index == 0, &text);
             block.push('\n');
         }
-        block += &band;
+        block += &pad;
         self.err(&block);
     }
     /// `options` numbered under `title`, as `numbered_choice` asks.
@@ -2342,7 +2373,7 @@ to expand\n(exit 2)"
         let rows = boxed("\x1b[1m[branch]\x1b[0m Went\n\nThere");
         assert_eq!(
             rows,
-            "\x16\x1c\n\x16 \x1d\x1b[1m[branch]\x1b[0m Went\n\x16 \n\x16 \x1dThere\n\x16\x1c\n"
+            "\x16\x1c\n\x16 \x1d\x1b[1m[branch]\x1b[0m Went\n\x16 \x1d\n\x16 \x1dThere\n\x16\x1c\n"
         );
         let lines = selection::lines(&rows);
         assert!(lines.iter().all(|line| line.band == Some(Band::Message)));
