@@ -24,6 +24,10 @@ pub(super) enum Design {
     /// Rounded cards: one around each prompt in the accent, and around each call in the color
     /// of how it went, its tool, glyph and time on the top edge; a `✦` before each reply.
     Cards,
+    /// Cards filled with the background of what they hold: a prompt's, and a call's for how it
+    /// went, so that a done card's border is muted; where the theme paints no such backgrounds,
+    /// as cards.
+    Tinted,
     /// A log of actions, after Codex: a `•` before each call in the color of how it went, a bold
     /// verb for what it did, its output under a `└`, a `•` before each reply, and a rule saying
     /// how long a turn worked once it ends.
@@ -40,12 +44,13 @@ pub(super) enum Design {
 }
 
 impl Design {
-    pub(super) const ALL: [Design; 8] = [
+    pub(super) const ALL: [Design; 9] = [
         Self::Classic,
         Self::Rails,
         Self::Panels,
         Self::Margin,
         Self::Cards,
+        Self::Tinted,
         Self::Outline,
         Self::Timeline,
         Self::Mono,
@@ -58,6 +63,7 @@ impl Design {
             Self::Panels => "panels",
             Self::Margin => "margin",
             Self::Cards => "cards",
+            Self::Tinted => "tinted",
             Self::Outline => "outline",
             Self::Timeline => "timeline",
             Self::Mono => "mono",
@@ -94,12 +100,12 @@ impl Design {
                 None,
                 marked,
             )),
-            Self::Cards => {
-                let side = format!("{}│{}", style::PROMPT_MARK, style::RESET);
+            Self::Cards | Self::Tinted => {
+                let side = format!("{}│{}", self.prompt_border(), style::RESET);
                 let first = format!("{side} {} ", mark("›"));
                 // Its side at the right takes 2 of the 6 columns.
                 let gutter = Gutter::new(&first, &format!("{side}   "), 6, None, marked);
-                Some(gutter.closed(&format!(" {side}"), width))
+                Some(gutter.closed(&format!(" {side}"), width, self.tint(Band::Prompt)))
             }
             Self::Outline => Some(Gutter::new(
                 &format!("{} ", mark("›")),
@@ -141,8 +147,9 @@ impl Design {
                 let rule = format!("{}{}{}", style::RAIL, "─".repeat(width), style::RESET);
                 (Some(rule), None)
             }
-            Self::Cards => {
-                let edge = |left, right| card_edge(style::PROMPT_MARK, left, right, width);
+            Self::Cards | Self::Tinted => {
+                let tint = self.tint(Band::Prompt);
+                let edge = |left, right| card_edge(tint, self.prompt_border(), left, right, width);
                 (Some(edge('╭', '╮')), Some(edge('╰', '╯')))
             }
             Self::Classic | Self::Outline | Self::Timeline => (None, None),
@@ -152,7 +159,9 @@ impl Design {
     /// The row a call's block ends with, `width` columns wide, where the look closes it: a
     /// card's bottom edge.
     pub(super) fn bottom(self, outcome: Outcome, width: usize) -> Option<String> {
-        (self == Self::Cards).then(|| card_edge(outcome.style(), '╰', '╯', width))
+        let (tint, border) = (self.tint(outcome.band()), self.card_border(outcome));
+        self.carded()
+            .then(|| card_edge(tint, border, '╰', '╯', width))
     }
 
     /// What goes before each row of reasoning; `None`: nothing.
@@ -164,7 +173,9 @@ impl Design {
                 Some(Gutter::same(&rail, 2, None, marked))
             }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Cards | Self::Outline | Self::Mono => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Cards | Self::Tinted | Self::Outline | Self::Mono => {
+                Some(Gutter::same("  ", 2, None, marked))
+            }
             Self::Margin => Some(Gutter::new(
                 &label("think", style::THOUGHT_LABEL),
                 MARGIN_BLANK,
@@ -198,7 +209,7 @@ impl Design {
                 let rail = format!("{}▏{} ", style::REPLY_RAIL, style::RESET);
                 Some(Gutter::same(&rail, 2, None, marked))
             }
-            Self::Cards => {
+            Self::Cards | Self::Tinted => {
                 let star = format!("{}✦{} ", style::PROMPT_MARK, style::RESET);
                 Some(Gutter::new(&star, "  ", 2, None, marked))
             }
@@ -219,7 +230,7 @@ impl Design {
     /// text is in `style`, of the kind `kind` names in a word; `None`: nothing.
     pub(super) fn notice(self, kind: &str, style: Style, marked: bool) -> Option<Gutter> {
         match self {
-            Self::Rails | Self::Cards => {
+            Self::Rails | Self::Cards | Self::Tinted => {
                 let mark = format!("{style}!{} ", style::RESET);
                 Some(Gutter::new(&mark, "  ", 2, None, marked))
             }
@@ -250,7 +261,7 @@ impl Design {
         match self {
             Self::Classic => None,
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Rails | Self::Cards | Self::Outline | Self::Mono => {
+            Self::Rails | Self::Cards | Self::Tinted | Self::Outline | Self::Mono => {
                 Some(Gutter::same("  ", 2, None, marked))
             }
             Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
@@ -274,10 +285,10 @@ impl Design {
             Self::Rails | Self::Timeline => rail("│"),
             Self::Panels => Gutter::same(" ", 1, Some(outcome.band()), marked),
             Self::Margin => rail("▏"),
-            Self::Cards => {
-                let side = format!("{}│{}", outcome.style(), style::RESET);
+            Self::Cards | Self::Tinted => {
+                let side = format!("{}│{}", self.card_border(outcome), style::RESET);
                 let gutter = Gutter::same(&format!("{side} "), 4, None, marked);
-                gutter.closed(&format!(" {side}"), width)
+                gutter.closed(&format!(" {side}"), width, self.tint(outcome.band()))
             }
             Self::Outline => {
                 let elbow = format!("  {color}└{} ", style::RESET);
@@ -354,8 +365,8 @@ impl Design {
                 };
                 (lead, columns, Some(right), None)
             }
-            Self::Cards => {
-                let border = outcome.style();
+            Self::Cards | Self::Tinted => {
+                let border = self.card_border(outcome);
                 let lead = format!("{border}╭─{} {glyph} {name_shown} ", style::RESET);
                 let right = match took {
                     Some(took) => format!(" {took} {border}─╮{}", style::RESET),
@@ -381,15 +392,17 @@ impl Design {
             }
         };
         // A card's top edge runs on to its right, and its sides down the rows under it.
-        let card = (self == Self::Cards).then(|| outcome.style());
+        let card = self.carded().then(|| self.card_border(outcome));
         // Rows under the first keep a panel's edge.
         let below = match (band.and_then(edge), card) {
-            (Some(edge), _) => format!("{edge}{}", " ".repeat(indent_of(lead_columns, width) - 1)),
-            (None, Some(border)) => format!(
+            (_, Some(border)) => format!(
                 "{border}│{}{}",
                 style::RESET,
                 " ".repeat(indent_of(lead_columns, width) - 1)
             ),
+            (Some(edge), None) => {
+                format!("{edge}{}", " ".repeat(indent_of(lead_columns, width) - 1))
+            }
             (None, None) if self == Self::Timeline => format!(
                 "{}│{}{}",
                 self.rail(outcome),
@@ -495,11 +508,36 @@ impl Design {
                 });
             }
         }
+        let tint = self.tint(outcome.band());
+        let rows: Vec<String> = rows.iter().map(|row| tinted(row, tint)).collect();
         rows.join("\n")
     }
 }
 
 impl Design {
+    /// Whether the look draws cards around prompts and calls.
+    fn carded(self) -> bool {
+        matches!(self, Self::Cards | Self::Tinted)
+    }
+    /// The band a card holding `band`'s rows is filled with: in tinted cards, that one.
+    fn tint(self, band: Band) -> Option<Band> {
+        (self == Self::Tinted).then_some(band)
+    }
+    /// The color of a call's card for how it went: in tinted cards on a painted fill, a done
+    /// one's muted, as its fill says it.
+    fn card_border(self, outcome: Outcome) -> Style {
+        match outcome {
+            Outcome::Done if self == Self::Tinted && Band::Done.painted() => style::RAIL,
+            outcome => outcome.style(),
+        }
+    }
+    /// The color of a prompt's card: the accent, or in tinted cards on a painted fill muted.
+    fn prompt_border(self) -> Style {
+        match self == Self::Tinted && Band::Prompt.painted() {
+            true => style::RAIL,
+            false => style::PROMPT_MARK,
+        }
+    }
     /// The color of a rail beside a call's rows, for how it went.
     fn rail(self, outcome: Outcome) -> Style {
         if self == Self::Mono {
@@ -602,10 +640,23 @@ pub(super) fn pad_row(band: Band) -> String {
 }
 
 /// A card's top or bottom edge, `width` columns wide, between its `left` and `right` corners, in
-/// `style`; a copy leaves it out.
-fn card_edge(style: Style, left: char, right: char, width: usize) -> String {
+/// `style`, filled with `tint` if any; a copy leaves it out.
+fn card_edge(tint: Option<Band>, style: Style, left: char, right: char, width: usize) -> String {
     let rule = "─".repeat(width.saturating_sub(2));
-    format!("{style}{left}{rule}{right}{}", style::RESET)
+    tinted(&format!("{style}{left}{rule}{right}{}", style::RESET), tint)
+}
+
+/// `row` filled with `tint`'s background where the theme paints it, each reset in it starting
+/// the fill again; unlike a band, which takes the whole row, it ends with the row's own cells.
+fn tinted(row: &str, tint: Option<Band>) -> String {
+    match tint.filter(|tint| tint.painted()) {
+        Some(tint) => {
+            let on = tint.get();
+            let row = row.replace(style::RESET, &format!("{}{on}", style::RESET));
+            format!("{on}{row}{}", style::RESET)
+        }
+        None => row.to_owned(),
+    }
 }
 
 /// The cells `text` takes on screen: its marks for the full screen take none.
@@ -688,6 +739,8 @@ pub(super) struct Gutter {
     /// What closes each row at the right, after `fill` columns of text, as a card's side.
     right: String,
     fill: usize,
+    /// The band a card's rows are filled with, as tinted cards fill them.
+    tint: Option<Band>,
     marked: bool,
 }
 
@@ -711,16 +764,18 @@ impl Gutter {
             columns,
             right: String::new(),
             fill: 0,
+            tint: None,
             marked,
         }
     }
     /// The gutter with `right` closing each row of a block `width` wide, its columns among the
-    /// gutter's.
-    fn closed(self, right: &str, width: usize) -> Self {
+    /// gutter's, the rows filled with `tint` if any.
+    fn closed(self, right: &str, width: usize, tint: Option<Band>) -> Self {
         let fill = width.saturating_sub(self.columns);
         let mut gutter = Self {
             right: right.to_owned(),
             fill,
+            tint,
             ..self
         };
         gutter.blank = gutter.row(false, " ");
@@ -750,7 +805,8 @@ impl Gutter {
             String::new()
         };
         let pad = " ".repeat(self.fill.saturating_sub(cells(row)));
-        format!("{lead}{row}{}{until}{pad}{}", style::RESET, self.right)
+        let row = format!("{lead}{row}{}{until}{pad}{}", style::RESET, self.right);
+        tinted(&row, self.tint)
     }
 }
 
@@ -796,7 +852,7 @@ mod tests {
         }
         assert_eq!(Design::named("plain"), None);
         let mut design = Design::Classic;
-        let seen: Vec<_> = (0..8)
+        let seen: Vec<_> = (0..9)
             .map(|_| {
                 design = design.next();
                 design
@@ -809,6 +865,7 @@ mod tests {
                 Design::Panels,
                 Design::Margin,
                 Design::Cards,
+                Design::Tinted,
                 Design::Outline,
                 Design::Timeline,
                 Design::Mono,

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.280.0 — Tinted cards
+
+### Added
+
+- A `tinted` look (`/settings` → Look): cards filled with the background of what they hold, a prompt's, and a call's while it runs, once done and when it failed, so a done card's border is muted and only running and failed cards keep a colored one. The fill ends with the card. In a theme that paints no backgrounds ("Terminal colors") it shows as `cards`.
+
 ## 2.279.0 — The mono look
 
 ### Added
