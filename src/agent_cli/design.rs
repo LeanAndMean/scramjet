@@ -145,7 +145,19 @@ impl Design {
                 let first = label(kind, style);
                 Some(Gutter::new(&first, MARGIN_BLANK, MARGIN, None, marked))
             }
-            Self::Classic | Self::Panels => None,
+            Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
+            Self::Classic => None,
+        }
+    }
+
+    /// What goes before each row of a message of the session's own (a command's report,
+    /// `(cancelled)`): nothing but the room that brings it to the replies' left edge.
+    pub(super) fn message(self, marked: bool) -> Option<Gutter> {
+        match self {
+            Self::Classic => None,
+            Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
+            Self::Rails => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
         }
     }
 
@@ -568,10 +580,19 @@ mod tests {
             .unwrap();
         assert_eq!(plain(&notice.row(true, "a")), "! a");
         assert_eq!(plain(&notice.row(false, "b")), "  b");
-        assert!(
-            Design::Panels
-                .notice("retry", style::WARNING, false)
-                .is_none()
+        // Panels put a notice, and a message of the session's own, at the replies' edge.
+        let notice = Design::Panels
+            .notice("retry", style::WARNING, false)
+            .unwrap();
+        assert_eq!(plain(&notice.row(true, "a")), " a");
+        for design in Design::ALL {
+            let reply = design.reply(false).map_or(0, |gutter| gutter.columns);
+            let message = design.message(false).map_or(0, |gutter| gutter.columns);
+            assert_eq!(message, reply, "{design:?}");
+        }
+        assert_eq!(
+            plain(&Design::Margin.message(true).unwrap().blank),
+            format!("       {FROM}")
         );
         // The margin labels a notice with its kind, in its color.
         let notice = Design::Margin

@@ -1380,21 +1380,36 @@ fn print(stdout: bool, text: &str) {
 }
 
 impl Terminal {
-    /// A message of the session's own, wrapped, as a block ending with a blank line.
     /// The blank line that separates a running call's rows from the next call's.
     pub(super) fn blank_line(&mut self) {
         self.err("\n");
     }
+    /// A message of the session's own, wrapped, at the replies' left edge, as a block ending
+    /// with a blank line.
     pub(super) fn said(&mut self, text: &str) {
+        let gutter = self.design.message(self.marked).filter(|_| self.color);
+        self.said_with(text, gutter);
+    }
+    fn said_with(&mut self, text: &str, gutter: Option<Gutter>) {
         self.clear();
-        let text = self.wrapped(&self.themed(text));
+        let width = match (self.color, &gutter) {
+            (false, _) => 0,
+            (true, Some(gutter)) => self.width().saturating_sub(gutter.columns).max(10),
+            (true, None) => self.width(),
+        };
+        let mut wrap = self.wrapper(width);
+        let text = wrap.push(&self.themed(text)) + &wrap.finish();
+        let text = match gutter {
+            Some(gutter) => Lead::new(gutter).apply(&text),
+            None => text,
+        };
         self.err(&format!("{text}\n\n"));
     }
     /// The banner a session starts with, every key and what was loaded when results are shown
     /// whole (Ctrl+O).
     pub(super) fn banner(&mut self, opening: &Opening) {
         if self.banner == Banner::Plain || !self.color {
-            return self.said(&banner::plain(opening));
+            return self.said_with(&banner::plain(opening), None);
         }
         self.clear();
         let rows = banner::rows(self.banner, opening, self.width(), self.full, self.marked);
@@ -1419,19 +1434,8 @@ impl Terminal {
     fn notice_block(&mut self, kind: &str, style: Style, text: &str) {
         self.clear();
         let gutter = (self.design.notice(kind, style, self.marked)).filter(|_| self.color);
-        let width = match (self.color, &gutter) {
-            (false, _) => 0,
-            (true, Some(gutter)) => self.width().saturating_sub(gutter.columns).max(10),
-            (true, None) => self.width(),
-        };
-        let mut wrap = self.wrapper(width);
-        let text = wrap.push(text) + &wrap.finish();
-        let text = self.styled(style, &text);
-        let text = match gutter {
-            Some(gutter) => Lead::new(gutter).apply(&text),
-            None => text,
-        };
-        self.err(&format!("{text}\n\n"));
+        let text = self.styled(style, text);
+        self.said_with(&text, gutter);
     }
     /// An approval question as it stays on screen once answered.
     pub(super) fn approval(&mut self, question: &str, answer: Answer) {

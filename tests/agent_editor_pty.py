@@ -736,7 +736,7 @@ def first(read, until, send, output):
     # Shift+Enter, as kitty's protocol sends it, adds a line; the prompt is sent trimmed.
     send(b'\x1b[13;2uthree\x1b[13;2u\r')
     rows = on_screen('Error: provider: cannot connect')
-    assert '\n \u203a one\n   two\n   three\n\n\nError: provider' in '\n'.join(rows), rows
+    assert '\n \u203a one\n   two\n   three\n\n\n Error: provider' in '\n'.join(rows), rows
     send(b'\x1b[A')
     ending(read, output, ['> one', '  two', '  three'])
     send(b'\x03')
@@ -750,7 +750,7 @@ def resumed(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     # The resumed conversation comes first: its one prompt, whose request failed.
     rows = on_screen('\u2500' * 20)
-    assert '\n \u203a one\n   two\n   three\n\n\nError: provider' in '\n'.join(rows), rows
+    assert '\n \u203a one\n   two\n   three\n\n\n Error: provider' in '\n'.join(rows), rows
     send(b'\x1b[A')
     ending(read, output, ['> one', '  two', '  three'])
     # A line ending in a backslash goes on in the next.
@@ -782,7 +782,7 @@ def cancel_retry(read, until, send, output):
     send(b'go\r')
     # Wrapped, as the full screen cuts what is wider than it.
     rows = on_screen('Retrying (1/10) in 2s (Ctrl-C to cancel)')
-    assert '(provider test): Connection refused (os error 111)' in ' '.join(rows), rows
+    assert '(provider test): Connection refused (os error 111)' in ' '.join(row.strip() for row in rows), rows
     # The status line comes later in the same frame, which may not all have arrived.
     end = time.monotonic() + 10
     while not re.match(SPINNING + 'Retrying \\(1/10\\) in [1-3]s \\(Esc to cancel\\)', rows[-3]):
@@ -1788,8 +1788,8 @@ def relisted_at_start(read, until, send, output):
     shown, on_screen = full_screen(columns=80, rows=30)(read, output)
     # Twenty minutes old, the list is read again as the session starts, and the change is said.
     rows = on_screen('GitHub Copilot now offers grok-5 (/model)')
-    at = rows.index('GitHub Copilot now offers grok-5 (/model)')
-    assert rows[at + 1] == 'GitHub Copilot no longer offers grok-4.6', rows
+    at = rows.index(' GitHub Copilot now offers grok-5 (/model)')
+    assert rows[at + 1] == ' GitHub Copilot no longer offers grok-4.6', rows
     send(b'/model\r')
     rows = on_screen('    grok-5')
     picked = rows[[row.startswith('Select model') for row in rows].index(True):]
@@ -2096,7 +2096,7 @@ def failed_after_bang(read, until, send, output):
 def resumed_bang_and_error(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     rows = '\n'.join(on_screen('Error: provider: cannot connect'))
-    assert ' $ echo secret\n\n secret\n' in rows and ' \u203a hello\n\n\nError: provider: cannot connect' in rows, rows
+    assert ' $ echo secret\n\n secret\n' in rows and ' \u203a hello\n\n\n Error: provider: cannot connect' in rows, rows
     send(b'\x03\x04')
 
 
@@ -2507,7 +2507,7 @@ def starts_with(model, steps=(), notices=(), columns=60):
         footer_ends(read, output, re.compile(' %s( \u2022 .+)?' % re.escape(model)), columns)
         rows = shown()
         for notice in notices:
-            assert notice in rows, rows
+            assert ' ' + notice in rows, rows
         for keys, said in steps:
             send(keys)
             if isinstance(said, Footer):
@@ -2991,7 +2991,7 @@ def double_escape_does_nothing(read, until, send, output):
     shown, on_screen = full_screen(200)(read, output)
     rows = on_screen('\u2500' * 20)
     footer_ends(read, output, 'gpt-6-luna \u2022 medium', columns=200)
-    assert ('settings: ' + settings_path(quiet) + ': defaultThinkingLevel must be "off", "minimal", "low", "medium", '
+    assert (' settings: ' + settings_path(quiet) + ': defaultThinkingLevel must be "off", "minimal", "low", "medium", '
             '"high", "xhigh", "max"; ignored') in rows, rows
     send(b'\x1b')
     read(.1)
@@ -3004,7 +3004,7 @@ def double_escape_does_nothing(read, until, send, output):
 def broken_settings_are_kept(read, until, send, output):
     shown, on_screen = full_screen(200)(read, output)
     rows = on_screen('\u2500' * 20)
-    assert ('settings: ' + settings_path(broken) + ': EOF while parsing a value at line 1 column 25; using the '
+    assert (' settings: ' + settings_path(broken) + ': EOF while parsing a value at line 1 column 25; using the '
             'defaults') in rows, rows
     send(b'\x14')
     on_screen('Thinking blocks: hidden')
@@ -3035,7 +3035,9 @@ def name_and_session(read, until, send, output):
                 'ID: ' + os.path.basename(path)[:-len('.jsonl')], '', 'Messages', 'User: 1', 'Assistant: 1',
                 'Tool Calls: 0', 'Tool Results: 0', 'Total: 2', '', 'Tokens', 'Input: 100', 'Output: 34',
                 'Cache Read: 1,000', 'Cache Write: 100', 'Total: 1,234', '', 'Cost', 'Total: $0.0740']
-    start = rows.index('Session Info')
+    # At the replies' edge, as panels show the session's own messages.
+    expected = [' ' + row if row else '' for row in expected]
+    start = rows.index(' Session Info')
     assert rows[start:start + len(expected)] == expected, rows
     send(b'\x04')
 
@@ -3459,7 +3461,7 @@ def command_sets(read, until, send, output):
     # Status checks answered without a report: after three, the command waits for the user.
     on_screen('Nearly there.')
     rows = on_screen('/tools:echo is waiting for you')
-    assert 'Reply to continue.' in ' '.join(rows), rows
+    assert 'Reply to continue.' in ' '.join(row.strip() for row in rows), rows
     send(b'\x04')
 
 
@@ -3512,7 +3514,7 @@ def reloads(read, until, send, output):
         file.write('{"tools": ["read", "bash"], "followUpMode": "each"}')
     send(b'/reload\r')
     rows = on_screen('Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files')
-    assert ('settings: %s: followUpMode must be "all" or "one-at-a-time"; ignored'
+    assert (' settings: %s: followUpMode must be "all" or "one-at-a-time"; ignored'
             % settings_path(reloading)) in rows, rows
     send(b'/fresh:h')
     rows = on_screen('\u2192 /fresh:hi')
@@ -3534,7 +3536,7 @@ def installed_view(read, until, send, output):
     shown, on_screen = full_screen(120, 40)(read, output)
     rows = on_screen('\u2500' * 20)
     # One line about the problems, which /settings lists under Installed.
-    attention = '3 problems in what was loaded: see Installed in /settings'
+    attention = ' 3 problems in what was loaded: see Installed in /settings'
     assert attention in rows and not any('followUpMode' in row for row in rows), rows
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
@@ -3578,7 +3580,7 @@ def installed_view(read, until, send, output):
     select_row(read, shown, send, '/demo:greet', b'\x1b[A')
     send(b'\r')
     rows = on_screen('\u203a   /demo:greet             Greet someone kindly')
-    assert 'Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files' in rows, rows
+    assert ' Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files' in rows, rows
     assert rows.count(attention) == 2, rows
     # On a link that leads nowhere, it asks before removing the link; Escape keeps it.
     rows = select_row(read, shown, send, 'agents: ', b'\x1b[A')
@@ -3597,7 +3599,7 @@ def installed_view(read, until, send, output):
     rows = on_screen('Removed %s, a link to' % stale_agent)
     assert not os.path.lexists(stale_agent)
     # What was loaded is read again, and the list no longer has it.
-    after = '2 problems in what was loaded: see Installed in /settings'
+    after = ' 2 problems in what was loaded: see Installed in /settings'
     rows = on_screen(after)
     assert not any(row.startswith('    agents: ') for row in rows), rows
     # The settings file opened from its own row comes back on that row, not on its problem's.

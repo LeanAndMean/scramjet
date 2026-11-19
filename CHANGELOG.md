@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.274.0 — Notices at the text's edge
+
+### Changed
+
+- In the `panels`, `rails` and `margin` looks, errors, retries and notes, and the session's own messages (a command's report such as `/session`'s, `(cancelled)`), start at the same left edge as replies, rather than at the screen's first column. The banner stays at the first column, with the status row and the editor.
+
 ## 2.273.0 — Panels in the terminal's own colors
 
 ### Changed
