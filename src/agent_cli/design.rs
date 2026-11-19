@@ -24,15 +24,20 @@ pub(super) enum Design {
     /// Rounded cards: one around each prompt in the accent, and around each call in the color
     /// of how it went, its tool, glyph and time on the top edge; a `✦` before each reply.
     Cards,
+    /// A log of actions, after Codex: a `•` before each call in the color of how it went, a bold
+    /// verb for what it did, its output under a `└`, a `•` before each reply, and a rule saying
+    /// how long a turn worked once it ends.
+    Outline,
 }
 
 impl Design {
-    pub(super) const ALL: [Design; 5] = [
+    pub(super) const ALL: [Design; 6] = [
         Self::Classic,
         Self::Rails,
         Self::Panels,
         Self::Margin,
         Self::Cards,
+        Self::Outline,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -42,6 +47,7 @@ impl Design {
             Self::Panels => "panels",
             Self::Margin => "margin",
             Self::Cards => "cards",
+            Self::Outline => "outline",
         }
     }
 
@@ -82,6 +88,13 @@ impl Design {
                 let gutter = Gutter::new(&first, &format!("{side}   "), 6, None, marked);
                 Some(gutter.closed(&format!(" {side}"), width))
             }
+            Self::Outline => Some(Gutter::new(
+                &format!("{} ", mark("›")),
+                "  ",
+                2,
+                None,
+                marked,
+            )),
         }
     }
 
@@ -105,7 +118,7 @@ impl Design {
                 let edge = |left, right| card_edge(style::PROMPT_MARK, left, right, width);
                 (Some(edge('╭', '╮')), Some(edge('╰', '╯')))
             }
-            Self::Classic => (None, None),
+            Self::Classic | Self::Outline => (None, None),
         }
     }
 
@@ -124,7 +137,7 @@ impl Design {
                 Some(Gutter::same(&rail, 2, None, marked))
             }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Cards => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Cards | Self::Outline => Some(Gutter::same("  ", 2, None, marked)),
             Self::Margin => Some(Gutter::new(
                 &label("think", style::THOUGHT_LABEL),
                 MARGIN_BLANK,
@@ -162,6 +175,10 @@ impl Design {
                 let star = format!("{}✦{} ", style::PROMPT_MARK, style::RESET);
                 Some(Gutter::new(&star, "  ", 2, None, marked))
             }
+            Self::Outline => {
+                let bullet = format!("{}•{} ", style::MUTED, style::RESET);
+                Some(Gutter::new(&bullet, "  ", 2, None, marked))
+            }
             Self::Classic => None,
         }
     }
@@ -178,6 +195,10 @@ impl Design {
                 let first = label(kind, style);
                 Some(Gutter::new(&first, MARGIN_BLANK, MARGIN, None, marked))
             }
+            Self::Outline => {
+                let mark = format!("{style}■{} ", style::RESET);
+                Some(Gutter::new(&mark, "  ", 2, None, marked))
+            }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
             Self::Classic => None,
         }
@@ -189,7 +210,7 @@ impl Design {
         match self {
             Self::Classic => None,
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Rails | Self::Cards => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Rails | Self::Cards | Self::Outline => Some(Gutter::same("  ", 2, None, marked)),
             Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
         }
     }
@@ -197,13 +218,13 @@ impl Design {
     /// What goes before each row of a call's result, or of its output while it runs, `width`
     /// columns wide; in cards, also what closes it at the right.
     pub(super) fn output(self, outcome: Outcome, width: usize, marked: bool) -> Gutter {
+        let color = match outcome {
+            Outcome::Failed => style::RAIL_FAILED,
+            Outcome::Running => style::RAIL_RUNNING,
+            Outcome::Done if self == Self::Rails => style::RAIL_DONE,
+            Outcome::Done => style::RAIL,
+        };
         let rail = |rail: &str| {
-            let color = match outcome {
-                Outcome::Failed => style::RAIL_FAILED,
-                Outcome::Running => style::RAIL_RUNNING,
-                Outcome::Done if self == Self::Rails => style::RAIL_DONE,
-                Outcome::Done => style::RAIL,
-            };
             let rail = format!("{color}{rail}{} ", style::RESET);
             Gutter::same(&rail, 2, None, marked)
         };
@@ -219,6 +240,10 @@ impl Design {
                 let side = format!("{}│{}", outcome.style(), style::RESET);
                 let gutter = Gutter::same(&format!("{side} "), 4, None, marked);
                 gutter.closed(&format!(" {side}"), width)
+            }
+            Self::Outline => {
+                let elbow = format!("  {color}└{} ", style::RESET);
+                Gutter::new(&elbow, "    ", 4, None, marked)
             }
         }
     }
@@ -281,6 +306,22 @@ impl Design {
                     None => format!("{border}─╮{}", style::RESET),
                 };
                 (lead, name.chars().count() + 6, Some(right), None)
+            }
+            Self::Outline => {
+                let bullet = match outcome {
+                    Outcome::Running => '◦',
+                    Outcome::Done => '•',
+                    Outcome::Failed => '✗',
+                };
+                let verb = verb(name, outcome);
+                let lead = format!(
+                    "{}{bullet}{} {}{verb}{} ",
+                    outcome.style(),
+                    style::RESET,
+                    style::TOOL_NAME,
+                    style::RESET
+                );
+                (lead, verb.chars().count() + 3, took, None)
             }
         };
         // A card's top edge runs on to its right, and its sides down the rows under it.
@@ -392,6 +433,21 @@ impl Design {
             }
         }
         rows.join("\n")
+    }
+}
+
+/// What outline's heading calls what tool `name` does, as it runs or once it ran; a tool with no
+/// verb of its own, by its name.
+fn verb(name: &str, outcome: Outcome) -> &str {
+    let running = outcome == Outcome::Running;
+    match name {
+        "bash" => ["Ran", "Running"][running as usize],
+        "read" => ["Read", "Reading"][running as usize],
+        "edit" => ["Edited", "Editing"][running as usize],
+        "write" => ["Wrote", "Writing"][running as usize],
+        "grep" | "find" => ["Searched", "Searching"][running as usize],
+        "ls" => ["Listed", "Listing"][running as usize],
+        name => name,
     }
 }
 
@@ -618,7 +674,7 @@ mod tests {
         }
         assert_eq!(Design::named("plain"), None);
         let mut design = Design::Classic;
-        let seen: Vec<_> = (0..5)
+        let seen: Vec<_> = (0..6)
             .map(|_| {
                 design = design.next();
                 design
@@ -631,6 +687,7 @@ mod tests {
                 Design::Panels,
                 Design::Margin,
                 Design::Cards,
+                Design::Outline,
                 Design::Classic
             ]
         );
@@ -717,6 +774,44 @@ mod tests {
         assert_eq!(Design::Panels.bottom(Outcome::Done, 6), None);
         let bottom = Design::Cards.bottom(Outcome::Failed, 6).unwrap();
         assert!(bottom.starts_with(&format!("{}╰────╯", style::OUTCOME_FAILED)));
+    }
+
+    #[test]
+    fn outline_shows_a_verb_after_how_a_call_went_and_its_output_under_an_elbow() {
+        let shown = |name, outcome, took| {
+            plain(&Design::Outline.heading(name, "src", outcome, took, 30, true))
+        };
+        // A copy of the heading holds what the call was called with.
+        assert_eq!(
+            shown("bash", Outcome::Running, Some("4s")),
+            format!("◦ Running {FROM}src{UNTIL}               4s")
+        );
+        assert_eq!(
+            shown("grep", Outcome::Done, None),
+            format!("• Searched {FROM}src")
+        );
+        assert_eq!(
+            shown("read", Outcome::Failed, None),
+            format!("✗ Read {FROM}src")
+        );
+        assert_eq!(
+            shown("mcp_call", Outcome::Done, None),
+            format!("• mcp_call {FROM}src")
+        );
+        let heading = Design::Outline.heading("bash", "x", Outcome::Failed, None, 30, false);
+        assert!(heading.starts_with(&format!("{}✗", style::OUTCOME_FAILED)));
+        let output = Design::Outline.output(Outcome::Failed, 30, true);
+        assert_eq!(plain(&output.row(true, "a")), format!("  └ {FROM}a"));
+        assert_eq!(plain(&output.row(false, "b")), format!("    {FROM}b"));
+        assert!(output.first.contains(&format!("{}└", style::RAIL_FAILED)));
+        let reply = Design::Outline.reply(false).unwrap();
+        assert_eq!(plain(&reply.row(true, "ok")), "• ok");
+        assert_eq!(plain(&reply.row(false, "more")), "  more");
+        let notice = Design::Outline.notice("retry", style::WARNING, false);
+        assert_eq!(plain(&notice.unwrap().row(true, "busy")), "■ busy");
+        let prompt = Design::Outline.prompt(30, false).unwrap();
+        assert_eq!(plain(&prompt.row(true, "hi")), "› hi");
+        assert_eq!(Design::Outline.prompt_pads(30), (None, None));
     }
 
     #[test]

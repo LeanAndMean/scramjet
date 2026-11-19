@@ -460,7 +460,7 @@ impl App {
         }
     }
 
-    fn look(&self, width: usize) -> Look {
+    pub(super) fn look(&self, width: usize) -> Look {
         Look {
             width: width.saturating_sub(1).max(1),
             hide_thinking: self.hide_thinking.load(Ordering::Relaxed),

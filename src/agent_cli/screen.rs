@@ -309,6 +309,8 @@ struct App {
     /// Since the last turn ended, until the user sends or types something: `Waiting for you`,
     /// with the draft as it was then.
     handed: Option<(Activity, String)>,
+    /// When the turn running started, and whether it has run a call.
+    working: Option<(Instant, bool)>,
     dialog: Option<Open>,
     /// Keys typed while an answered held list waits for the session's next, which then takes
     /// them, or the prompt does.
@@ -390,6 +392,7 @@ impl App {
             activity: None,
             session_shell: false,
             handed: None,
+            working: None,
             dialog: None,
             held_keys: Vec::new(),
             typed: None,
@@ -593,6 +596,11 @@ impl App {
                 if let Event::Subagents(children) = &event {
                     self.footer.subagents(0, children);
                 }
+                if let (Some((_, ran)), Event::ToolCall(..) | Event::Calls(_)) =
+                    (&mut self.working, &event)
+                {
+                    *ran = true;
+                }
                 self.conversation_mut().push(event);
             }
             ToScreen::Call(index, event) => {
@@ -621,10 +629,17 @@ impl App {
                 // A turn going on after a pause still does what it did.
                 let doing = self.activity.take();
                 self.activity = Some(doing.unwrap_or_else(|| Activity::new("Working")));
+                self.working.get_or_insert((Instant::now(), false));
                 self.efforts = efforts;
                 self.handed = None;
             }
             ToScreen::Ended { finished } => {
+                if let Some((started, true)) = self.working.take()
+                    && finished
+                {
+                    self.conversation_mut()
+                        .push(Event::Worked(started.elapsed()));
+                }
                 self.conversation_mut().split();
                 self.activity = None;
                 self.conversation_mut().turn_ended();
@@ -1309,6 +1324,37 @@ mod tests {
         assert_eq!(prompts(&from), ["one"]);
         // Its turn takes the other.
         assert_eq!(app.queue().messages.take(), ["two"]);
+    }
+
+    #[test]
+    fn a_finished_turn_that_ran_calls_says_how_long_it_worked_in_the_outline_look() {
+        let (mut app, _from) = app();
+        app.design = Design::Outline;
+        let turn = |app: &mut App, call: bool, finished: bool| {
+            app.message(ToScreen::Turn(EffortCycle::default()));
+            if call {
+                let call = Event::ToolCall("bash".into(), "make".into(), None);
+                app.message(ToScreen::Event(call));
+            }
+            app.message(ToScreen::Event(Event::Assistant("done".into())));
+            app.message(ToScreen::Ended { finished });
+        };
+        let worked = |app: &mut App| {
+            let look = app.look(60);
+            app.transcript.render(look, &app.hide_thinking.clone());
+            let count = app.transcript.len();
+            (0..count)
+                .filter(|&line| app.transcript.shown(line).contains("Worked for <1s"))
+                .count()
+        };
+        turn(&mut app, true, true);
+        assert_eq!(worked(&mut app), 1);
+        // Not after a turn that only replied, nor one stopped.
+        turn(&mut app, false, true);
+        turn(&mut app, true, false);
+        assert_eq!(worked(&mut app), 1);
+        turn(&mut app, true, true);
+        assert_eq!(worked(&mut app), 2);
     }
 
     #[test]

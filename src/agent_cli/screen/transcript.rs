@@ -657,6 +657,7 @@ mod tests {
         transcript.push(result);
         transcript.push(Event::Progress(StreamProgress::Text("It fails.".into())));
         transcript.push(Event::Assistant("It fails.".into()));
+        transcript.push(Event::Worked(Duration::from_secs(75)));
         transcript.split();
         transcript.push(Event::UserPrompt("again".into()));
         transcript.push(Event::ToolCall("bash".into(), "make".into(), None));
@@ -770,6 +771,30 @@ mod tests {
                 "╭─ ○ bash make ────────────────────────╮",
                 "│ building                             │",
                 "╰──────────────────────────────────────╯",
+                "",
+            ]
+        );
+        // Outline puts a bold verb after how each call went, its output under an elbow, and says
+        // how long a turn worked once it ends; no other look shows that.
+        assert_eq!(
+            rows(&shown_in(Design::Outline)),
+            [
+                "› fix the test",
+                "",
+                "  Looking at it.",
+                "",
+                "✗ Ran cargo test                    2.0s",
+                "  └ 1 failed",
+                "    Command exited with code 101",
+                "",
+                "• It fails.",
+                "",
+                "─ Worked for 1m 15s ────────────────────",
+                "",
+                "› again",
+                "",
+                "◦ Running make",
+                "  └ building",
                 "",
             ]
         );
@@ -919,11 +944,17 @@ mod tests {
             failed.expect("the failed call's output").0
         };
         assert!(row(Design::Classic).contains(style::TOOL_FAILED.get()));
-        for design in [Design::Panels, Design::Rails, Design::Margin, Design::Cards] {
+        for design in [
+            Design::Panels,
+            Design::Rails,
+            Design::Margin,
+            Design::Cards,
+            Design::Outline,
+        ] {
             let row = row(design);
             // What follows the gutter: the rails' own, and a panel's edge in 16 colors, are in
             // the error color.
-            let row = ["│", "▏"].iter().fold(row, |row, rail| {
+            let row = ["│", "▏", "└"].iter().fold(row, |row, rail| {
                 row.replace(&format!("{}{rail}{}", style::RAIL_FAILED, style::RESET), "")
             });
             let row = ["▎", "│"].iter().fold(row, |row, edge| {
@@ -978,7 +1009,7 @@ mod tests {
         transcript.push(retry);
         let reply = "One fails: compaction, in the agent's tests.\n\nRun it alone.";
         transcript.push(Event::Assistant(reply.into()));
-        for design in [Design::Rails, Design::Panels, Design::Margin, Design::Cards] {
+        for design in Design::ALL.into_iter().filter(|&d| d != Design::Classic) {
             let look = Look {
                 design,
                 ..look(24, true)

@@ -3307,10 +3307,10 @@ or false; ignored"
         );
         assert_eq!(
             seen(Row::Look, &mut settings),
-            ["panels", "margin", "cards", "classic"]
+            ["panels", "margin", "cards", "outline"]
         );
         // Then round to the first again, and on.
-        for _ in 0..3 {
+        for _ in 0..4 {
             settings.cycle(Row::Look).unwrap();
         }
         assert_eq!(

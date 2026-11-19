@@ -32,6 +32,8 @@ pub(super) enum Event {
     /// A command the user runs with `!` (true) or `!!` starts.
     CommandStarted(String, bool),
     CommandResult(UserCommand),
+    /// A turn that ran calls finished, after working this long.
+    Worked(Duration),
     /// A turn stopped before its end: cancelled (`None`), or failed with the error.
     Stopped(Option<String>),
     Compacted(Compaction, Option<AutoCompaction>),
@@ -98,6 +100,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::CommandStarted(command, include) => ui.command_started(command, *include),
         Event::CommandResult(ran) => ui.command_result(ran),
         Event::Stopped(error) => ui.stopped(error.as_deref()),
+        Event::Worked(took) => ui.worked(*took),
         Event::Compacted(compaction, automatic) => ui.compacted(compaction, *automatic),
         Event::CompactionFailed(error) => ui.compaction_error(error),
         Event::UserPrompt(prompt) => ui.user_prompt(prompt),

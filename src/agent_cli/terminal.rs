@@ -9,7 +9,7 @@ use super::interactive::thinking;
 use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
 use super::style::{self, Band, Style};
-use super::text::{FROM, RULE, Wrap, call_line, clip, printable, style_at, visible};
+use super::text::{FROM, RULE, Wrap, call_line, clip, columns, printable, style_at, visible};
 use super::{children, console, diff, editor, job, markdown, record};
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
@@ -666,6 +666,27 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             Some(edge) => format!("{edge}\n"),
             None => self.pad(outcome),
         }
+    }
+    /// In the outline look, the rule a turn that ran calls ends with, saying how long it worked;
+    /// a copy leaves it out.
+    pub(super) fn worked(&mut self, took: Duration) {
+        if self.design != Design::Outline || !self.color {
+            return;
+        }
+        self.clear();
+        let seconds = match elapsed(took.as_secs()) {
+            seconds if seconds.is_empty() => " <1s".to_owned(),
+            seconds => seconds,
+        };
+        let label = format!("─ Worked for{seconds} ");
+        let rule = "─".repeat(self.width().saturating_sub(columns(&label)));
+        let copied = if self.marked {
+            RULE.to_string()
+        } else {
+            String::new()
+        };
+        let line = self.styled(style::MUTED, &format!("{label}{rule}"));
+        self.err(&format!("{line}{copied}\n"));
     }
     /// Ends the block of a call asking a question not yet answered, as its result will.
     pub(super) fn asking(&mut self) {

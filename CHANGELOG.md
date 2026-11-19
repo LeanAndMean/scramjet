@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.277.0 — The outline look
+
+### Added
+
+- An `outline` look (`/settings` → Look), after Codex: each call a line with `◦` (running), `•` (done) or `✗` (failed) in its state's color and a bold verb (`Ran`, `Read`, `Edited`, `Searched`…; other tools by name), its output under a `└`, a `•` before each reply and `■` before notices. A turn that ran calls ends with a rule saying how long it worked (`─ Worked for 1m 05s ───`).
+
 ## 2.276.0 — The cards look
 
 ### Added
