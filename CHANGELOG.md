@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.272.0 — The margin look says how each call went
+
+### Changed
+
+- In the `margin` look, a call's heading ends with how it went (`○`, `✓`, `✗`) after its time, as in `panels`; its output sits under a thin rail at the left edge in that color, so it keeps the screen's width, and a failed call's output keeps its normal color.
+- The `margin` look draws a rule above each prompt, where a turn starts, and labels retries, errors and notices in its column (`retry`, `error`, `note`).
+
 ## 2.271.0 — The rails look says how each call went
 
 ### Changed

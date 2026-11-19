@@ -711,20 +711,22 @@ mod tests {
         assert_eq!(
             rows(&shown_in(Design::Margin)),
             [
+                "─".repeat(40).as_str(),
                 "   you fix the test",
                 "",
                 " think Looking at it.",
                 "",
-                "  bash cargo test                   2.0s",
-                "     │ 1 failed",
-                "     │ Command exited with code 101",
+                "  bash cargo test                 2.0s ✗",
+                "▏ 1 failed",
+                "▏ Command exited with code 101",
                 "",
                 " reply It fails.",
                 "",
+                "─".repeat(40).as_str(),
                 "   you again",
                 "",
-                "  bash make",
-                "     │ building",
+                "  bash make                            ○",
+                "▏ building",
                 "",
             ]
         );
@@ -821,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_calls_output_is_red_but_where_a_band_or_rail_says_it_failed() {
+    fn a_failed_calls_output_is_red_but_where_a_band_rail_or_label_says_it_failed() {
         let row = |design| {
             let styled = styled_in(design);
             let failed = styled
@@ -829,12 +831,13 @@ mod tests {
                 .find(|(row, _)| plain(row).contains("1 failed"));
             failed.expect("the failed call's output").0
         };
-        assert!(row(Design::Margin).contains(style::TOOL_FAILED.get()));
-        for design in [Design::Panels, Design::Rails] {
+        assert!(row(Design::Classic).contains(style::TOOL_FAILED.get()));
+        for design in [Design::Panels, Design::Rails, Design::Margin] {
             let row = row(design);
             // What follows the gutter: the rails' own is in the error color.
-            let rail = format!("{}│{}", style::RAIL_FAILED, style::RESET);
-            let row = row.replace(&rail, "");
+            let row = ["│", "▏"].iter().fold(row, |row, rail| {
+                row.replace(&format!("{}{rail}{}", style::RAIL_FAILED, style::RESET), "")
+            });
             assert!(row.contains(style::TOOL_OUTPUT.get()), "{row:?}");
             assert!(!row.contains(style::TOOL_FAILED.get()), "{row:?}");
         }

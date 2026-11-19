@@ -17,8 +17,9 @@ pub(super) enum Design {
     /// Blocks on the theme's backgrounds: a band for each prompt, and each call on the
     /// background of how it went.
     Panels,
-    /// A column of labels down the left: who speaks, or the tool that ran, in the color of how
-    /// it went; everything else to the right of it.
+    /// A column of labels down the left: who speaks, the tool that ran in the color of how it
+    /// went, or the kind of notice; a rule above each prompt, and a call's output under a thin
+    /// rail at the left edge, so that it keeps its width.
     Margin,
 }
 
@@ -66,12 +67,23 @@ impl Design {
         }
     }
 
-    /// The row above and below a prompt's: its band, or its rail alone.
-    pub(super) fn prompt_pad(self) -> Option<String> {
+    /// The rows above and below a prompt's, `width` columns wide: its band, its rail alone, or
+    /// a rule above it where a turn starts.
+    pub(super) fn prompt_pads(self, width: usize) -> (Option<String>, Option<String>) {
         match self {
-            Self::Panels => Some(Band::Prompt.mark().into()),
-            Self::Rails => Some(format!("{}▌{}", style::PROMPT_MARK, style::RESET)),
-            Self::Classic | Self::Margin => None,
+            Self::Panels => {
+                let band = Band::Prompt.mark().to_string();
+                (Some(band.clone()), Some(band))
+            }
+            Self::Rails => {
+                let rail = format!("{}▌{}", style::PROMPT_MARK, style::RESET);
+                (Some(rail.clone()), Some(rail))
+            }
+            Self::Margin => {
+                let rule = format!("{}{}{}", style::RAIL, "─".repeat(width), style::RESET);
+                (Some(rule), None)
+            }
+            Self::Classic => (None, None),
         }
     }
 
@@ -122,20 +134,24 @@ impl Design {
     }
 
     /// What goes before each row of a notice of the session's own (an error, a retry), whose
-    /// text is in `style`; `None`: nothing.
-    pub(super) fn notice(self, style: Style, marked: bool) -> Option<Gutter> {
+    /// text is in `style`, of the kind `kind` names in a word; `None`: nothing.
+    pub(super) fn notice(self, kind: &str, style: Style, marked: bool) -> Option<Gutter> {
         match self {
             Self::Rails => {
                 let mark = format!("{style}!{} ", style::RESET);
                 Some(Gutter::new(&mark, "  ", 2, None, marked))
             }
-            Self::Classic | Self::Panels | Self::Margin => None,
+            Self::Margin => {
+                let first = label(kind, style);
+                Some(Gutter::new(&first, MARGIN_BLANK, MARGIN, None, marked))
+            }
+            Self::Classic | Self::Panels => None,
         }
     }
 
     /// What goes before each row of a call's result, or of its output while it runs.
     pub(super) fn output(self, outcome: Outcome, marked: bool) -> Gutter {
-        let rail = |rail: &str, columns| {
+        let rail = |rail: &str| {
             let color = match outcome {
                 Outcome::Failed => style::RAIL_FAILED,
                 Outcome::Running => style::RAIL_RUNNING,
@@ -143,16 +159,16 @@ impl Design {
                 Outcome::Done => style::RAIL,
             };
             let rail = format!("{color}{rail}{} ", style::RESET);
-            Gutter::same(&rail, columns, None, marked)
+            Gutter::same(&rail, 2, None, marked)
         };
         match self {
             Self::Classic => Gutter {
                 blank: String::new(),
                 ..Gutter::same("  ", 2, None, marked)
             },
-            Self::Rails => rail("│", 2),
+            Self::Rails => rail("│"),
             Self::Panels => Gutter::same(" ", 1, Some(outcome.band()), marked),
-            Self::Margin => rail(&format!("{:>width$}", "│", width = MARGIN - 1), MARGIN),
+            Self::Margin => rail("▏"),
         }
     }
 
@@ -199,7 +215,11 @@ impl Design {
                     false => format!("{lead}{name_shown} "),
                 };
                 let columns = MARGIN + if full { 0 } else { name.chars().count() + 1 };
-                (lead, columns, took, None)
+                let right = match took {
+                    Some(took) => format!("{took} {glyph}"),
+                    None => glyph,
+                };
+                (lead, columns, Some(right), None)
             }
         };
         let band = band.map(Band::mark).map(String::from).unwrap_or_default();
@@ -457,16 +477,20 @@ mod tests {
         );
         assert_eq!(
             shown(Design::Margin, Outcome::Running, None),
-            ["  bash cargo test"]
+            ["  bash cargo test            ○"]
+        );
+        assert_eq!(
+            shown(Design::Margin, Outcome::Done, Some("3.0s")),
+            ["  bash cargo test       3.0s ✓"]
         );
         // A command's later lines go under its first.
         let heading = Design::Rails.heading("bash", "cd x\nmake", Outcome::Done, None, 30, false);
         assert_eq!(plain(&heading), "✓ bash cd x\n       make");
         // Long names have a short label, or show whole after a cut one.
-        let heading = Design::Margin.heading("subagent", "2 tasks", Outcome::Done, None, 40, false);
-        assert_eq!(plain(&heading), " agent 2 tasks");
-        let heading = Design::Margin.heading("mcp_search", "q", Outcome::Done, None, 40, false);
-        assert_eq!(plain(&heading), "mcp_s… mcp_search q");
+        let heading = Design::Margin.heading("subagent", "2 tasks", Outcome::Done, None, 20, false);
+        assert_eq!(plain(&heading), " agent 2 tasks     ✓");
+        let heading = Design::Margin.heading("mcp_search", "q", Outcome::Done, None, 22, false);
+        assert_eq!(plain(&heading), "mcp_s… mcp_search q  ✓");
     }
 
     #[test]
@@ -499,10 +523,42 @@ mod tests {
         assert!(done.first.contains(style::RAIL_DONE.get()));
         let reply = Design::Rails.reply(false).unwrap();
         assert_eq!(plain(&reply.row(true, "ok")), "▏ ok");
-        let notice = Design::Rails.notice(style::WARNING, false).unwrap();
+        let notice = Design::Rails
+            .notice("retry", style::WARNING, false)
+            .unwrap();
         assert_eq!(plain(&notice.row(true, "a")), "! a");
         assert_eq!(plain(&notice.row(false, "b")), "  b");
-        assert!(Design::Panels.notice(style::WARNING, false).is_none());
+        assert!(
+            Design::Panels
+                .notice("retry", style::WARNING, false)
+                .is_none()
+        );
+        // The margin labels a notice with its kind, in its color.
+        let notice = Design::Margin
+            .notice("retry", style::WARNING, false)
+            .unwrap();
+        assert_eq!(plain(&notice.row(true, "a")), " retry a");
+        assert_eq!(plain(&notice.row(false, "b")), "       b");
+        assert!(notice.first.contains(style::WARNING.get()));
+        // Its output keeps the width but for a thin rail in the color of how the call went.
+        let failed = Design::Margin.output(Outcome::Failed, false);
+        assert_eq!(
+            (plain(&failed.row(true, "x")), failed.columns),
+            ("▏ x".into(), 2)
+        );
+        assert!(failed.first.contains(style::RAIL_FAILED.get()));
+        assert!(
+            Design::Margin
+                .output(Outcome::Done, false)
+                .first
+                .contains(style::RAIL.get())
+        );
+        // A rule above a prompt says where a turn starts.
+        let (above, below) = Design::Margin.prompt_pads(5);
+        assert_eq!(
+            (above.as_deref().map(plain), below),
+            (Some("─".repeat(5)), None)
+        );
         let classic = Design::Classic.output(Outcome::Done, true);
         assert_eq!(classic.row(false, "x"), format!("  {FROM}x"));
         assert_eq!(classic.row(false, ""), "");

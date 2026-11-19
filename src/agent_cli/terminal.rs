@@ -402,10 +402,9 @@ impl Terminal {
         let took = (self.tool_started.take()).map(|started| at.saturating_duration_since(started));
         let style = match () {
             _ if !self.color => "",
-            // Panels say a call failed by its band, rails by the rail; red text is hard to read.
-            _ if failed && matches!(self.design, Design::Classic | Design::Margin) => {
-                style::TOOL_FAILED.get()
-            }
+            // The other looks say a call failed by its band, rail or label; red text is hard to
+            // read.
+            _ if failed && self.design == Design::Classic => style::TOOL_FAILED.get(),
             _ => style::TOOL_OUTPUT.get(),
         };
         let reset = if style.is_empty() { "" } else { style::RESET };
@@ -1010,7 +1009,7 @@ impl AgentUi for Terminal {
             visible(error),
             retrying(attempt, retries),
         );
-        self.notice_block(style::WARNING, &text);
+        self.notice_block("retry", style::WARNING, &text);
         self.show_countdown(retrying(attempt, retries), delay);
     }
     fn cooling(&mut self, delay: Duration) {
@@ -1182,7 +1181,9 @@ impl AgentUi for Terminal {
     }
     fn stopped(&mut self, error: Option<&str>) {
         match error {
-            Some(error) => self.notice_block(style::ERROR, &format!("Error: {}", visible(error))),
+            Some(error) => {
+                self.notice_block("error", style::ERROR, &format!("Error: {}", visible(error)))
+            }
             None => {
                 let text = self.dim("(cancelled)");
                 self.said(&text);
@@ -1278,7 +1279,7 @@ impl AgentUi for Terminal {
     }
     /// A block of its own, ending with a blank line as a tool block does.
     fn notice(&mut self, text: &str) {
-        self.notice_block(style::NOTICE, &visible(text));
+        self.notice_block("note", style::NOTICE, &visible(text));
     }
     fn next_step(&mut self, record: &str) {
         self.clear();
@@ -1411,13 +1412,13 @@ impl Terminal {
     }
     pub(super) fn compaction_error(&mut self, error: &str) {
         let text = format!("Error: automatic compaction failed: {error}");
-        self.notice_block(style::ERROR, &text);
+        self.notice_block("error", style::ERROR, &text);
     }
-    /// A notice of the session's own in `style`, wrapped, as a block of its own ending with a
-    /// blank line, with the look's mark for it.
-    fn notice_block(&mut self, style: Style, text: &str) {
+    /// A notice of the session's own of the `kind` a word names, in `style`, wrapped, as a block
+    /// of its own ending with a blank line, with the look's mark for it.
+    fn notice_block(&mut self, kind: &str, style: Style, text: &str) {
         self.clear();
-        let gutter = (self.design.notice(style, self.marked)).filter(|_| self.color);
+        let gutter = (self.design.notice(kind, style, self.marked)).filter(|_| self.color);
         let width = match (self.color, &gutter) {
             (false, _) => 0,
             (true, Some(gutter)) => self.width().saturating_sub(gutter.columns).max(10),
@@ -1693,14 +1694,15 @@ impl Terminal {
         } else {
             String::new()
         };
-        let pad = (self.design.prompt_pad()).map_or(String::new(), |pad| format!("{pad}{rule}\n"));
-        let mut block = pad.clone();
+        let (above, below) = self.design.prompt_pads(self.width());
+        let pad = |pad: Option<String>| pad.map_or(String::new(), |pad| format!("{pad}{rule}\n"));
+        let mut block = pad(above);
         for (index, row) in rows.iter().enumerate() {
             let text = format!("{}{}{}", style::PROMPT_TEXT, &row[2..], style::RESET);
             block += &gutter.row(index == 0, &text);
             block.push('\n');
         }
-        block += &pad;
+        block += &pad(below);
         self.err(&block);
     }
     /// `options` numbered under `title`, as `numbered_choice` asks.
