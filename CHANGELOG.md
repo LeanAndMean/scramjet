@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.278.0 — The timeline look
+
+### Added
+
+- A `timeline` look (`/settings` → Look), as `git log --graph` draws: one spine down the conversation, through the rows between its blocks, with a node on it for each event: `◆` before a prompt, `◇` before a reply, `○` (running), `●` (done) or `✗` (failed) before a call in its state's color, `!` before a notice; the spine is dotted beside reasoning and takes a running or failed call's color beside its output.
+
 ## 2.277.0 — The outline look
 
 ### Added

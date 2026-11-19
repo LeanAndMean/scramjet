@@ -3310,7 +3310,7 @@ or false; ignored"
             ["panels", "margin", "cards", "outline"]
         );
         // Then round to the first again, and on.
-        for _ in 0..4 {
+        for _ in 0..5 {
             settings.cycle(Row::Look).unwrap();
         }
         assert_eq!(

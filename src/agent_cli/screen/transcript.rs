@@ -1,11 +1,12 @@
 //! The conversation the screen shows, in parts that each render on their own.
 
 use crate::agent_cli::banner::Banner;
-use crate::agent_cli::design::Design;
+use crate::agent_cli::design::{self, Design};
 use crate::agent_cli::record::{self, Event};
 use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::settings::MarkdownReads;
 use crate::agent_cli::terminal::Terminal;
+use crate::agent_cli::text::plain;
 use scramjet::agent::{Purpose, StreamProgress};
 use std::sync::{Arc, atomic::AtomicBool};
 use std::time::Instant;
@@ -132,6 +133,9 @@ impl Part {
         // Each block ends with a blank line, which separates it from the next part.
         if !self.lines.is_empty() {
             self.lines.push(Line::default());
+        }
+        if look.design == Design::Timeline {
+            spined(&mut self.lines);
         }
         self.settled = (events > 0).then_some(Settled {
             look,
@@ -351,7 +355,26 @@ fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>, now: Ins
     if !lines.is_empty() {
         lines.push(Line::default());
     }
+    if look.design == Design::Timeline {
+        spined(&mut lines);
+    }
     lines
+}
+
+/// The timeline's spine carried on through the blank rows after a row on it, so that one line
+/// runs down the conversation from its first block on.
+fn spined(lines: &mut [Line]) {
+    for at in 1..lines.len() {
+        let (before, after) = lines.split_at_mut(at);
+        let (previous, line) = (&before[at - 1], &mut after[0]);
+        // A row on it has a gutter, unlike the banner's.
+        let gutter = previous
+            .copied(0, usize::MAX)
+            .is_some_and(|(from, _)| from >= 2);
+        if plain(&line.shown).is_empty() && gutter && design::on_spine(&plain(&previous.shown)) {
+            *line = selection::row(&design::spine(true));
+        }
+    }
 }
 
 /// `events` as `Terminal` renders them at the look's width.
@@ -381,7 +404,6 @@ mod tests {
     use super::*;
     use crate::agent_cli::design::Outcome;
     use crate::agent_cli::style::{self, Band};
-    use crate::agent_cli::text::plain;
     use std::time::{Duration, Instant};
 
     /// Rendered `width` columns wide, the tool results `whole` or cut.
@@ -798,6 +820,28 @@ mod tests {
                 "",
             ]
         );
+        // Timeline runs one spine down the conversation, through the rows between its blocks,
+        // with a node on it for each.
+        assert_eq!(
+            rows(&shown_in(Design::Timeline)),
+            [
+                "◆ fix the test",
+                "│",
+                "┊ Looking at it.",
+                "│",
+                "✗ bash cargo test                   2.0s",
+                "│ 1 failed",
+                "│ Command exited with code 101",
+                "│",
+                "◇ It fails.",
+                "│",
+                "◆ again",
+                "│",
+                "○ bash make",
+                "│ building",
+                "│",
+            ]
+        );
         // Panels put prompts on a band of their own, and each call on one for how it went; where
         // the theme has no such backgrounds, as these tests' 16 colors, an edge marks each band.
         let panels = shown_in(Design::Panels);
@@ -944,13 +988,7 @@ mod tests {
             failed.expect("the failed call's output").0
         };
         assert!(row(Design::Classic).contains(style::TOOL_FAILED.get()));
-        for design in [
-            Design::Panels,
-            Design::Rails,
-            Design::Margin,
-            Design::Cards,
-            Design::Outline,
-        ] {
+        for design in Design::ALL.into_iter().filter(|&d| d != Design::Classic) {
             let row = row(design);
             // What follows the gutter: the rails' own, and a panel's edge in 16 colors, are in
             // the error color.

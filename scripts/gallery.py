@@ -22,7 +22,7 @@ import sys
 from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LOOKS = ['panels', 'classic', 'rails', 'margin', 'cards', 'outline']
+LOOKS = ['panels', 'classic', 'rails', 'margin', 'cards', 'outline', 'timeline']
 THEMES = ['scramjet-dark', 'pi-light', 'terminal-colors']
 
 

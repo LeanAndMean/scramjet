@@ -28,16 +28,22 @@ pub(super) enum Design {
     /// verb for what it did, its output under a `└`, a `•` before each reply, and a rule saying
     /// how long a turn worked once it ends.
     Outline,
+    /// One spine down the conversation, as `git log --graph` draws: a node on it for each
+    /// event, `○`, `●` or `✗` for a call in the color of how it went, `◆` for a prompt, `◇`
+    /// for a reply, a dotted stretch beside reasoning, and the spine in a call's color beside
+    /// its output.
+    Timeline,
 }
 
 impl Design {
-    pub(super) const ALL: [Design; 6] = [
+    pub(super) const ALL: [Design; 7] = [
         Self::Classic,
         Self::Rails,
         Self::Panels,
         Self::Margin,
         Self::Cards,
         Self::Outline,
+        Self::Timeline,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -48,6 +54,7 @@ impl Design {
             Self::Margin => "margin",
             Self::Cards => "cards",
             Self::Outline => "outline",
+            Self::Timeline => "timeline",
         }
     }
 
@@ -95,6 +102,13 @@ impl Design {
                 None,
                 marked,
             )),
+            Self::Timeline => Some(Gutter::new(
+                &format!("{} ", mark("◆")),
+                &format!("{} ", mark("│")),
+                2,
+                None,
+                marked,
+            )),
         }
     }
 
@@ -118,7 +132,7 @@ impl Design {
                 let edge = |left, right| card_edge(style::PROMPT_MARK, left, right, width);
                 (Some(edge('╭', '╮')), Some(edge('╰', '╯')))
             }
-            Self::Classic | Self::Outline => (None, None),
+            Self::Classic | Self::Outline | Self::Timeline => (None, None),
         }
     }
 
@@ -132,7 +146,7 @@ impl Design {
     pub(super) fn reasoning(self, marked: bool) -> Option<Gutter> {
         match self {
             Self::Classic => None,
-            Self::Rails => {
+            Self::Rails | Self::Timeline => {
                 let rail = format!("{}┊{} ", style::RAIL, style::RESET);
                 Some(Gutter::same(&rail, 2, None, marked))
             }
@@ -179,6 +193,10 @@ impl Design {
                 let bullet = format!("{}•{} ", style::MUTED, style::RESET);
                 Some(Gutter::new(&bullet, "  ", 2, None, marked))
             }
+            Self::Timeline => {
+                let node = format!("{}◇{} ", style::MUTED, style::RESET);
+                Some(Gutter::new(&node, &spine_gutter(), 2, None, marked))
+            }
             Self::Classic => None,
         }
     }
@@ -199,6 +217,10 @@ impl Design {
                 let mark = format!("{style}■{} ", style::RESET);
                 Some(Gutter::new(&mark, "  ", 2, None, marked))
             }
+            Self::Timeline => {
+                let mark = format!("{style}!{} ", style::RESET);
+                Some(Gutter::new(&mark, &spine_gutter(), 2, None, marked))
+            }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
             Self::Classic => None,
         }
@@ -212,18 +234,14 @@ impl Design {
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
             Self::Rails | Self::Cards | Self::Outline => Some(Gutter::same("  ", 2, None, marked)),
             Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
+            Self::Timeline => Some(Gutter::same(&spine_gutter(), 2, None, marked)),
         }
     }
 
     /// What goes before each row of a call's result, or of its output while it runs, `width`
     /// columns wide; in cards, also what closes it at the right.
     pub(super) fn output(self, outcome: Outcome, width: usize, marked: bool) -> Gutter {
-        let color = match outcome {
-            Outcome::Failed => style::RAIL_FAILED,
-            Outcome::Running => style::RAIL_RUNNING,
-            Outcome::Done if self == Self::Rails => style::RAIL_DONE,
-            Outcome::Done => style::RAIL,
-        };
+        let color = self.rail(outcome);
         let rail = |rail: &str| {
             let rail = format!("{color}{rail}{} ", style::RESET);
             Gutter::same(&rail, 2, None, marked)
@@ -233,7 +251,7 @@ impl Design {
                 blank: String::new(),
                 ..Gutter::same("  ", 2, None, marked)
             },
-            Self::Rails => rail("│"),
+            Self::Rails | Self::Timeline => rail("│"),
             Self::Panels => Gutter::same(" ", 1, Some(outcome.band()), marked),
             Self::Margin => rail("▏"),
             Self::Cards => {
@@ -267,6 +285,14 @@ impl Design {
         let (lead, lead_columns, right, band) = match self {
             Self::Classic | Self::Rails => {
                 let lead = format!("{glyph} {name_shown} ");
+                (lead, name.chars().count() + 3, took, None)
+            }
+            Self::Timeline => {
+                let node = match outcome {
+                    Outcome::Done => '●',
+                    outcome => outcome.glyph(),
+                };
+                let lead = format!("{}{node}{} {name_shown} ", outcome.style(), style::RESET);
                 (lead, name.chars().count() + 3, took, None)
             }
             Self::Panels => {
@@ -331,6 +357,12 @@ impl Design {
             (Some(edge), _) => format!("{edge}{}", " ".repeat(indent_of(lead_columns, width) - 1)),
             (None, Some(border)) => format!(
                 "{border}│{}{}",
+                style::RESET,
+                " ".repeat(indent_of(lead_columns, width) - 1)
+            ),
+            (None, None) if self == Self::Timeline => format!(
+                "{}│{}{}",
+                self.rail(outcome),
                 style::RESET,
                 " ".repeat(indent_of(lead_columns, width) - 1)
             ),
@@ -434,6 +466,40 @@ impl Design {
         }
         rows.join("\n")
     }
+}
+
+impl Design {
+    /// The color of a rail beside a call's rows, for how it went.
+    fn rail(self, outcome: Outcome) -> Style {
+        match outcome {
+            Outcome::Failed => style::RAIL_FAILED,
+            Outcome::Running => style::RAIL_RUNNING,
+            Outcome::Done if self == Self::Rails => style::RAIL_DONE,
+            Outcome::Done => style::RAIL,
+        }
+    }
+}
+
+/// The timeline's spine and the space after it, as the gutter of rows on it without a node.
+fn spine_gutter() -> String {
+    format!("{}│{} ", style::RAIL, style::RESET)
+}
+
+/// The timeline's spine alone, as a blank row between its blocks shows it; a copy holds the row
+/// as empty.
+pub(super) fn spine(marked: bool) -> String {
+    let from = if marked {
+        FROM.to_string()
+    } else {
+        String::new()
+    };
+    format!("{}│{}{from}", style::RAIL, style::RESET)
+}
+
+/// Whether `shown`, a row's text without styles, is on the timeline's spine: it starts with a
+/// node or the spine.
+pub(super) fn on_spine(shown: &str) -> bool {
+    shown.starts_with(['│', '┊', '◆', '◇', '○', '●', '✗', '!'])
 }
 
 /// What outline's heading calls what tool `name` does, as it runs or once it ran; a tool with no
@@ -674,7 +740,7 @@ mod tests {
         }
         assert_eq!(Design::named("plain"), None);
         let mut design = Design::Classic;
-        let seen: Vec<_> = (0..6)
+        let seen: Vec<_> = (0..7)
             .map(|_| {
                 design = design.next();
                 design
@@ -688,6 +754,7 @@ mod tests {
                 Design::Margin,
                 Design::Cards,
                 Design::Outline,
+                Design::Timeline,
                 Design::Classic
             ]
         );
@@ -812,6 +879,49 @@ mod tests {
         let prompt = Design::Outline.prompt(30, false).unwrap();
         assert_eq!(plain(&prompt.row(true, "hi")), "› hi");
         assert_eq!(Design::Outline.prompt_pads(30), (None, None));
+    }
+
+    #[test]
+    fn timeline_puts_a_node_on_its_spine_for_each_event_and_the_spine_beside_the_rest() {
+        let shown = |outcome, took| {
+            plain(&Design::Timeline.heading("bash", "make", outcome, took, 30, true))
+        };
+        assert_eq!(
+            shown(Outcome::Running, Some("4s")),
+            format!("○ bash {FROM}make{UNTIL}{}4s", " ".repeat(17))
+        );
+        assert_eq!(shown(Outcome::Done, None), format!("● bash {FROM}make"));
+        assert_eq!(shown(Outcome::Failed, None), format!("✗ bash {FROM}make"));
+        let heading = Design::Timeline.heading("bash", "x", Outcome::Done, None, 30, false);
+        assert!(heading.starts_with(&format!("{}●", style::OUTCOME_DONE)));
+        // A command's later lines keep the spine, in the color of how it went.
+        let lines = Design::Timeline.heading("bash", "a\nb", Outcome::Failed, None, 30, false);
+        let below = format!("{}│{}      b", style::RAIL_FAILED, style::RESET);
+        assert!(lines.ends_with(&below), "{lines:?}");
+        let output = Design::Timeline.output(Outcome::Failed, 30, true);
+        assert_eq!(plain(&output.row(true, "a")), format!("│ {FROM}a"));
+        assert!(output.first.contains(&format!("{}│", style::RAIL_FAILED)));
+        let done = Design::Timeline.output(Outcome::Done, 30, false);
+        assert!(done.first.contains(&format!("{}│", style::RAIL)));
+        let prompt = Design::Timeline.prompt(30, false).unwrap();
+        assert_eq!(plain(&prompt.row(true, "hi")), "◆ hi");
+        assert_eq!(plain(&prompt.row(false, "there")), "│ there");
+        assert!(prompt.first.contains(&format!("{}◆", style::PROMPT_MARK)));
+        assert_eq!(Design::Timeline.prompt_pads(30), (None, None));
+        let reply = Design::Timeline.reply(false).unwrap();
+        assert_eq!(plain(&reply.row(true, "ok")), "◇ ok");
+        assert_eq!(plain(&reply.row(false, "")), "│ ");
+        let thought = Design::Timeline.reasoning(false).unwrap();
+        assert_eq!(plain(&thought.row(true, "hm")), "┊ hm");
+        let notice = Design::Timeline
+            .notice("retry", style::WARNING, false)
+            .unwrap();
+        assert_eq!(plain(&notice.row(true, "busy")), "! busy");
+        assert_eq!(plain(&notice.row(false, "again")), "│ again");
+        let message = Design::Timeline.message(false).unwrap();
+        assert_eq!(plain(&message.row(true, "(cancelled)")), "│ (cancelled)");
+        assert_eq!(plain(&spine(true)), format!("│{FROM}"));
+        assert!(on_spine("● bash make") && on_spine("│") && !on_spine("Scramjet"));
     }
 
     #[test]
