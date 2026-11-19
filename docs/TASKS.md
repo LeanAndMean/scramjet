@@ -8,7 +8,7 @@ Last steer: c7d5fbf
 
 Items 83's, 84's and 85's building is done; what is left of them is the user's pick from the gallery at a steer, including whether `tinted` (84) replaces panels as the default and `scramjet-light` (85) replaces `pi-light` on a light terminal. Then, from the third steer of 2026-11-17, in order: 76 (the sandbox policy: its design proposed on 2026-11-18 and not approved by the user at the steer of 2026-11-18; nothing of it is built until a steer signs a design off), then 77 (subagents that write, moderate priority). 62's pull request is ready for review (the user's ask, 2026-11-18); what its reviewers ask becomes fixes on the branch. 63, 51, 44 and 48 wait on the user.
 
-`v2.268.0` is the latest release (2026-11-18, the user's ask): rehearsal with the Windows tests 44387314630, release run 44389060843 (its macOS job got no runner in 15 minutes, macOS capacity; `gh run rerun --failed` passed). Rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else; a later alpha is the user's ask.
+`v2.281.0` is the latest release (2026-11-19, the user's ask): rehearsal with the Windows tests 44595396561, release run 44597089431, all jobs passing first time. Rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else; a later alpha is the user's ask.
 
 What needs the user (Tailscale, entering a device code for ChatGPT's and Copilot's live sign-ins, `/login` with the private package on their Windows) waits: do not ask mid-loop (2026-11-14).
 
