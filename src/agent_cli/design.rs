@@ -33,10 +33,14 @@ pub(super) enum Design {
     /// for a reply, a dotted stretch beside reasoning, and the spine in a call's color beside
     /// its output.
     Timeline,
+    /// No hue but a failure's, so that it holds without color: a call's state by its glyph
+    /// (`○`, `✓`, `✗`) and the rail beside its output (dashed while it runs, heavy and red once
+    /// it failed), a prompt by its bold `›` and text under a rule, notices by a bold `!`.
+    Mono,
 }
 
 impl Design {
-    pub(super) const ALL: [Design; 7] = [
+    pub(super) const ALL: [Design; 8] = [
         Self::Classic,
         Self::Rails,
         Self::Panels,
@@ -44,6 +48,7 @@ impl Design {
         Self::Cards,
         Self::Outline,
         Self::Timeline,
+        Self::Mono,
     ];
 
     pub(super) fn name(self) -> &'static str {
@@ -55,6 +60,7 @@ impl Design {
             Self::Cards => "cards",
             Self::Outline => "outline",
             Self::Timeline => "timeline",
+            Self::Mono => "mono",
         }
     }
 
@@ -109,6 +115,13 @@ impl Design {
                 None,
                 marked,
             )),
+            Self::Mono => Some(Gutter::new(
+                &format!("{}›{} ", style::MONO_MARK, style::RESET),
+                "  ",
+                2,
+                None,
+                marked,
+            )),
         }
     }
 
@@ -124,7 +137,7 @@ impl Design {
                 let rail = format!("{}▌{}", style::PROMPT_MARK, style::RESET);
                 (Some(rail.clone()), Some(rail))
             }
-            Self::Margin => {
+            Self::Margin | Self::Mono => {
                 let rule = format!("{}{}{}", style::RAIL, "─".repeat(width), style::RESET);
                 (Some(rule), None)
             }
@@ -151,7 +164,7 @@ impl Design {
                 Some(Gutter::same(&rail, 2, None, marked))
             }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Cards | Self::Outline => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Cards | Self::Outline | Self::Mono => Some(Gutter::same("  ", 2, None, marked)),
             Self::Margin => Some(Gutter::new(
                 &label("think", style::THOUGHT_LABEL),
                 MARGIN_BLANK,
@@ -197,6 +210,7 @@ impl Design {
                 let node = format!("{}◇{} ", style::MUTED, style::RESET);
                 Some(Gutter::new(&node, &spine_gutter(), 2, None, marked))
             }
+            Self::Mono => Some(Gutter::same("  ", 2, None, marked)),
             Self::Classic => None,
         }
     }
@@ -221,6 +235,10 @@ impl Design {
                 let mark = format!("{style}!{} ", style::RESET);
                 Some(Gutter::new(&mark, &spine_gutter(), 2, None, marked))
             }
+            Self::Mono => {
+                let mark = format!("{}!{} ", self.tone(style), style::RESET);
+                Some(Gutter::new(&mark, "  ", 2, None, marked))
+            }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
             Self::Classic => None,
         }
@@ -232,7 +250,9 @@ impl Design {
         match self {
             Self::Classic => None,
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Rails | Self::Cards | Self::Outline => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Rails | Self::Cards | Self::Outline | Self::Mono => {
+                Some(Gutter::same("  ", 2, None, marked))
+            }
             Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
             Self::Timeline => Some(Gutter::same(&spine_gutter(), 2, None, marked)),
         }
@@ -263,6 +283,11 @@ impl Design {
                 let elbow = format!("  {color}└{} ", style::RESET);
                 Gutter::new(&elbow, "    ", 4, None, marked)
             }
+            Self::Mono => rail(match outcome {
+                Outcome::Running => "┆",
+                Outcome::Done => "│",
+                Outcome::Failed => "┃",
+            }),
         }
     }
 
@@ -280,10 +305,15 @@ impl Design {
         marked: bool,
     ) -> String {
         let name_shown = format!("{}{name}{}", style::TOOL_NAME, style::RESET);
-        let glyph = format!("{}{}{}", outcome.style(), outcome.glyph(), style::RESET);
+        let glyph = format!(
+            "{}{}{}",
+            self.tone(outcome.style()),
+            outcome.glyph(),
+            style::RESET
+        );
         let took = took.map(|took| format!("{}{took}{}", style::MUTED, style::RESET));
         let (lead, lead_columns, right, band) = match self {
-            Self::Classic | Self::Rails => {
+            Self::Classic | Self::Rails | Self::Mono => {
                 let lead = format!("{glyph} {name_shown} ");
                 (lead, name.chars().count() + 3, took, None)
             }
@@ -385,6 +415,7 @@ impl Design {
         let room = width.saturating_sub(indent + right_columns).max(10);
         let summary = visible(summary.trim_end_matches('\n'));
         let path = matches!(name, "read" | "edit" | "write" | "ls" | "find" | "grep");
+        let (path_style, range_style) = (self.tone(style::TOOL_PATH), self.tone(style::TOOL_RANGE));
         let range = match name {
             "read" => line_range(&summary),
             _ => 0,
@@ -402,7 +433,7 @@ impl Design {
                         Some(cut) => format!(
                             "{} in {}{}{}",
                             &row[..cut],
-                            style::TOOL_PATH,
+                            path_style,
                             &row[cut + 4..],
                             style::RESET
                         ),
@@ -417,9 +448,9 @@ impl Design {
                         let (path, lines) = row.split_at(cut);
                         let lines = match lines.is_empty() {
                             true => String::new(),
-                            false => format!("{}{lines}{}", style::TOOL_RANGE, style::RESET),
+                            false => format!("{range_style}{lines}{}", style::RESET),
                         };
-                        format!("{}{path}{}{lines}", style::TOOL_PATH, style::RESET)
+                        format!("{path_style}{path}{}{lines}", style::RESET)
                     }
                 };
                 let row = row.as_str();
@@ -471,11 +502,36 @@ impl Design {
 impl Design {
     /// The color of a rail beside a call's rows, for how it went.
     fn rail(self, outcome: Outcome) -> Style {
+        if self == Self::Mono {
+            return match outcome {
+                Outcome::Failed => style::MONO_FAILED,
+                _ => style::RAIL,
+            };
+        }
         match outcome {
             Outcome::Failed => style::RAIL_FAILED,
             Outcome::Running => style::RAIL_RUNNING,
             Outcome::Done if self == Self::Rails => style::RAIL_DONE,
             Outcome::Done => style::RAIL,
+        }
+    }
+}
+
+impl Design {
+    /// `style` as this look shows the harness's own marks in it: in mono, a failure's bold in
+    /// the error color, a running call's bold, and every other without hue; in the others,
+    /// unchanged.
+    pub(super) fn tone(self, style: Style) -> Style {
+        if self != Self::Mono {
+            return style;
+        }
+        match style {
+            style::OUTCOME_FAILED | style::SUBAGENT_FAILED => style::MONO_FAILED,
+            style::OUTCOME_RUNNING | style::SUBAGENT_RUNNING => style::MONO_MARK,
+            style::OUTCOME_DONE | style::SUBAGENT_DONE | style::TOOL_PATH => style::MONO_TEXT,
+            style::TOOL_RANGE => style::MUTED,
+            style::WARNING | style::NOTICE | style::PROMPT_MARK => style::MONO_MARK,
+            style => style,
         }
     }
 }
@@ -740,7 +796,7 @@ mod tests {
         }
         assert_eq!(Design::named("plain"), None);
         let mut design = Design::Classic;
-        let seen: Vec<_> = (0..7)
+        let seen: Vec<_> = (0..8)
             .map(|_| {
                 design = design.next();
                 design
@@ -755,6 +811,7 @@ mod tests {
                 Design::Cards,
                 Design::Outline,
                 Design::Timeline,
+                Design::Mono,
                 Design::Classic
             ]
         );
@@ -922,6 +979,55 @@ mod tests {
         assert_eq!(plain(&message.row(true, "(cancelled)")), "│ (cancelled)");
         assert_eq!(plain(&spine(true)), format!("│{FROM}"));
         assert!(on_spine("● bash make") && on_spine("│") && !on_spine("Scramjet"));
+    }
+
+    #[test]
+    fn mono_shows_how_a_call_went_by_glyph_weight_and_rail_with_no_hue_but_a_failures() {
+        let reset = style::RESET;
+        let shown =
+            |outcome, took| plain(&Design::Mono.heading("bash", "make", outcome, took, 30, true));
+        assert_eq!(
+            shown(Outcome::Running, Some("4s")),
+            format!("○ bash {FROM}make{UNTIL}{}4s", " ".repeat(17))
+        );
+        assert_eq!(shown(Outcome::Done, None), format!("✓ bash {FROM}make"));
+        assert_eq!(shown(Outcome::Failed, None), format!("✗ bash {FROM}make"));
+        let heading = |outcome| Design::Mono.heading("read", "a.rs:3", outcome, None, 30, false);
+        assert!(heading(Outcome::Running).starts_with(&format!("{}○", style::MONO_MARK)));
+        assert!(heading(Outcome::Done).starts_with(&format!("{}✓", style::MONO_TEXT)));
+        assert!(heading(Outcome::Failed).starts_with(&format!("{}✗", style::MONO_FAILED)));
+        let path = format!("{}a.rs{reset}{}:3{reset}", style::MONO_TEXT, style::MUTED);
+        assert!(heading(Outcome::Done).contains(&path));
+        let rail = |outcome| Design::Mono.output(outcome, 30, false).first;
+        assert_eq!(rail(Outcome::Running), format!("{}┆{reset} ", style::RAIL));
+        assert_eq!(rail(Outcome::Done), format!("{}│{reset} ", style::RAIL));
+        assert_eq!(
+            rail(Outcome::Failed),
+            format!("{}┃{reset} ", style::MONO_FAILED)
+        );
+        let output = Design::Mono.output(Outcome::Done, 30, true);
+        assert_eq!(plain(&output.row(true, "a")), format!("│ {FROM}a"));
+        let prompt = Design::Mono.prompt(30, false).unwrap();
+        assert_eq!(plain(&prompt.row(true, "hi")), "› hi");
+        assert_eq!(plain(&prompt.row(false, "there")), "  there");
+        assert!(prompt.first.contains(&format!("{}›", style::MONO_MARK)));
+        let rule = format!("{}{}{reset}", style::RAIL, "─".repeat(30));
+        assert_eq!(Design::Mono.prompt_pads(30), (Some(rule), None));
+        let reply = Design::Mono.reply(false).unwrap();
+        assert_eq!(plain(&reply.row(true, "ok")), "  ok");
+        let thought = Design::Mono.reasoning(false).unwrap();
+        assert_eq!(plain(&thought.row(true, "hm")), "  hm");
+        let retry = Design::Mono.notice("retry", style::WARNING, false).unwrap();
+        assert_eq!(plain(&retry.row(true, "busy")), "! busy");
+        assert!(retry.first.starts_with(&format!("{}!", style::MONO_MARK)));
+        let error = Design::Mono.notice("error", style::ERROR, false).unwrap();
+        assert!(error.first.starts_with(&format!("{}!", style::ERROR)));
+        assert_eq!(Design::Mono.tone(style::WARNING), style::MONO_MARK);
+        assert_eq!(Design::Mono.tone(style::SUBAGENT_DONE), style::MONO_TEXT);
+        assert_eq!(Design::Mono.tone(style::ERROR), style::ERROR);
+        assert_eq!(Design::Panels.tone(style::WARNING), style::WARNING);
+        let message = Design::Mono.message(false).unwrap();
+        assert_eq!(plain(&message.row(true, "(cancelled)")), "  (cancelled)");
     }
 
     #[test]

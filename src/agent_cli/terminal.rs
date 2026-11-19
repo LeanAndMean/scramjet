@@ -1475,7 +1475,7 @@ impl Terminal {
     fn notice_block(&mut self, kind: &str, style: Style, text: &str) {
         self.clear();
         let gutter = (self.design.notice(kind, style, self.marked)).filter(|_| self.color);
-        let text = self.styled(style, text);
+        let text = self.styled(self.design.tone(style), text);
         self.said_with(&text, gutter);
     }
     /// An approval question as it stays on screen once answered.
@@ -1517,6 +1517,7 @@ impl Terminal {
             marked: self.marked,
             full: self.full,
             hint: self.expand_hint(),
+            design: self.design,
         }
     }
     pub(super) fn running_output(&mut self, output: &str) {

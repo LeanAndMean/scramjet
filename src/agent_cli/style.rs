@@ -97,6 +97,12 @@ styles! {
     LABEL_RUNNING: [BOLD] Warning;
     LABEL_DONE: [BOLD] Success;
     LABEL_FAILED: [BOLD] Error;
+    /// The mono look's marks, which take no hue but a failure's: a prompt's mark and a notice's
+    /// text, bold in the text's color; a call's glyph and a file tool's path, in the text's
+    /// color; a failed call's glyph and rail, bold in the error color.
+    MONO_MARK: [BOLD] Text;
+    MONO_TEXT: [] Text;
+    MONO_FAILED: [BOLD] Error;
     /// The banner a session starts with (`banner`): the name, its version, Scramjet's logo, a
     /// key and what it does, a heading over a list of what was loaded and the list, and the
     /// card's border and labels.

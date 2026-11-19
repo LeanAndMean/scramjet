@@ -2,6 +2,7 @@
 //! how it is going, its model and effort, then its latest tool calls and texts and its usage;
 //! whole, with its task and its result as markdown, once Ctrl+O expands results.
 
+use super::design::Design;
 use super::markdown::Markdown;
 use super::style::{
     self, MUTED, SUBAGENT_DONE, SUBAGENT_FAILED, SUBAGENT_NAME, SUBAGENT_RUNNING, Style,
@@ -26,6 +27,8 @@ pub(super) struct Look {
     pub(super) marked: bool,
     pub(super) full: bool,
     pub(super) hint: String,
+    /// The look, which may take the hue out of the glyphs.
+    pub(super) design: Design,
 }
 
 /// The rows showing `children`, running or ended.
@@ -65,7 +68,7 @@ struct Rows<'a> {
 impl Rows<'_> {
     fn paint(&self, style: Style, text: &str) -> String {
         match self.look.color && !text.is_empty() {
-            true => format!("{style}{text}{}", style::RESET),
+            true => format!("{}{text}{}", self.look.design.tone(style), style::RESET),
             false => text.to_owned(),
         }
     }
@@ -449,6 +452,7 @@ mod tests {
             marked: false,
             full,
             hint: ", Ctrl+O to expand".to_owned(),
+            design: Design::default(),
         };
         rows(children, &look)
     }
@@ -702,6 +706,7 @@ mod tests {
             marked: true,
             full: true,
             hint: String::new(),
+            design: Design::default(),
         };
         let rows = rows(&single, &look);
         assert!(

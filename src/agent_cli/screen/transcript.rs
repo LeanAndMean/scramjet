@@ -842,6 +842,29 @@ mod tests {
                 "│",
             ]
         );
+        // Mono tells a call's state by its glyph and rail: dashed while it runs, heavy once failed.
+        assert_eq!(
+            rows(&shown_in(Design::Mono)),
+            [
+                "─".repeat(40).as_str(),
+                "› fix the test",
+                "",
+                "  Looking at it.",
+                "",
+                "✗ bash cargo test                   2.0s",
+                "┃ 1 failed",
+                "┃ Command exited with code 101",
+                "",
+                "  It fails.",
+                "",
+                "─".repeat(40).as_str(),
+                "› again",
+                "",
+                "○ bash make",
+                "┆ building",
+                "",
+            ]
+        );
         // Panels put prompts on a band of their own, and each call on one for how it went; where
         // the theme has no such backgrounds, as these tests' 16 colors, an edge marks each band.
         let panels = shown_in(Design::Panels);

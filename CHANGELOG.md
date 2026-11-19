@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.279.0 — The mono look
+
+### Added
+
+- A `mono` look (`/settings` → Look) with no color but a failure's: a call shows how it went by its glyph (`○` bold while it runs, `✓`, `✗` in red) and the rail beside its output (dashed while it runs, thin once done, heavy and red once it failed); a prompt by its bold `›` and text under a rule; notices by a bold `!` and bold text, an error's in red. Replies keep the theme's colors for code and markdown.
+
 ## 2.278.0 — The timeline look
 
 ### Added
