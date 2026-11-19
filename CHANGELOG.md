@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.281.0 — A scramjet-light theme
+
+### Added
+
+- A built-in `scramjet-light` theme (`/settings` → Theme), the light companion of `scramjet-dark`: its hues, deepened for a light background it paints itself, every color within the contrast the theme editor calls readable. `pi-light` stays the default on a light terminal.
+
 ## 2.280.0 — Tinted cards
 
 ### Added

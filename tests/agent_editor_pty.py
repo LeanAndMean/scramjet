@@ -2813,7 +2813,7 @@ def theme_choice(read, until, send, output):
     assert note(rows) == 'The colors of the conversation and of everything around it.', rows
     send(b'\r')
     rows = on_screen('Theme  \u2191\u2193 move \u00b7 Enter use \u00b7 Esc back')
-    assert '\u203a terminal-colors \u2713' in rows and '  scramjet-dark' in rows and '  pi-light' in rows, rows
+    assert '\u203a terminal-colors \u2713' in rows and '  scramjet-dark' in rows and '  scramjet-light' in rows and '  pi-light' in rows, rows
     assert note(rows) == "The terminal's own 16 colors, which follow its color scheme.", rows
     # Chosen, everything shows in it at once, the conversation behind the list included.
     since = len(output)
@@ -2940,8 +2940,8 @@ def given_themes(given):
         send(b'\r')
         rows = on_screen('Theme  \u2191\u2193 move \u00b7 Enter use \u00b7 Esc back')
         title = next(at for at, row in enumerate(rows) if row.startswith('Theme  '))
-        names = [row[2:].strip() for row in rows[title + 1:title + 5]]
-        assert names == ['terminal-colors', 'scramjet-dark \u2713', 'pi-light', 'Given'], rows
+        names = [row[2:].strip() for row in rows[title + 1:title + 6]]
+        assert names == ['terminal-colors', 'scramjet-dark \u2713', 'scramjet-light', 'pi-light', 'Given'], rows
         assert 'Ocean' not in '\n'.join(rows), rows
         rows = select_row(read, shown, send, 'Given', b'\x1b[B')
         assert rows[-1] == '  From ' + given + '.', rows

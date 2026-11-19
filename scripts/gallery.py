@@ -23,7 +23,7 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOOKS = ['panels', 'classic', 'rails', 'margin', 'cards', 'tinted', 'outline', 'timeline', 'mono']
-THEMES = ['scramjet-dark', 'pi-light', 'terminal-colors']
+THEMES = ['scramjet-dark', 'scramjet-light', 'pi-light', 'terminal-colors']
 
 
 def capture(options, look, theme):

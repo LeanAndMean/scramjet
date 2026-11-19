@@ -389,7 +389,12 @@ pub(super) const TERMINAL_COLORS: &str = "terminal-colors";
 const BACKGROUND: &str = "background";
 
 /// The built-in themes' names, in the order `/settings` lists them.
-pub(super) const BUILT_IN: [&str; 3] = [TERMINAL_COLORS, "scramjet-dark", "pi-light"];
+pub(super) const BUILT_IN: [&str; 4] = [
+    TERMINAL_COLORS,
+    "scramjet-dark",
+    "scramjet-light",
+    "pi-light",
+];
 
 /// The theme shown when the settings name none, as Scramjet's `resolveThemeName` picks it:
 /// `pi-light` on a light background, `scramjet-dark` on a dark or unknown one.
@@ -435,6 +440,7 @@ impl Theme {
         let text = match name {
             TERMINAL_COLORS => return Some(terminal_colors()),
             "scramjet-dark" => include_str!("themes/scramjet-dark.json"),
+            "scramjet-light" => include_str!("themes/scramjet-light.json"),
             "pi-light" => include_str!("themes/pi-light.json"),
             _ => return None,
         };
@@ -704,6 +710,23 @@ mod tests {
     }
 
     #[test]
+    fn scramjet_light_keeps_every_role_within_the_theme_editors_contrast_band() {
+        let light = Theme::built_in("scramjet-light").unwrap();
+        let rgb = |color| match color {
+            Color::Rgb(r, g, b) => (r, g, b),
+            other => panic!("{other:?}"),
+        };
+        let background = rgb(light.background());
+        assert!(!super::super::palette::is_dark(background));
+        for &token in TOKENS {
+            let (kind, _) = super::super::palette::own(token);
+            let (low, high) = kind.band();
+            let ratio = super::super::palette::contrast(rgb(light.color(token)), background);
+            assert!((low..=high).contains(&ratio), "{token:?}: {ratio:.2}");
+        }
+    }
+
+    #[test]
     fn a_theme_follows_its_palette_and_says_what_is_wrong() {
         let all = |value: &str| {
             let colors: Vec<String> = (KEYS.iter())
@@ -772,8 +795,9 @@ mod tests {
         let own = |name| Theme::built_in(name).unwrap().background();
         assert_eq!(own(TERMINAL_COLORS), Color::Default);
         assert_eq!(own("scramjet-dark"), Color::Rgb(0x0c, 0x0c, 0x0c));
+        assert_eq!(own("scramjet-light"), Color::Rgb(0xf7, 0xf8, 0xfa));
         assert_eq!(own("pi-light"), Color::Rgb(0xf7, 0xf7, 0xf7));
-        for name in ["scramjet-dark", "pi-light"] {
+        for name in ["scramjet-dark", "scramjet-light", "pi-light"] {
             let theme = Theme::built_in(name).unwrap();
             assert!(
                 theme.colors.iter().all(|color| *color != Color::Default),
@@ -844,6 +868,7 @@ mod tests {
             [
                 "terminal-colors",
                 "scramjet-dark",
+                "scramjet-light",
                 "pi-light",
                 "Ocean",
                 "plain",
