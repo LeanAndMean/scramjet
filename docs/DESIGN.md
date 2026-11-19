@@ -46,7 +46,7 @@ User decisions from `/rs:steer` on 2026-11-03:
 
 ### Look and themes (2026-11-04)
 
-User decisions of 2026-11-04 and 2026-11-06 on the scrollbar, the editor's box, themes, a distinct look (`panels` and the `header` banner by default) and the theme editor: [THEMES.md](THEMES.md).
+User decisions of 2026-11-04 and 2026-11-06 on the scrollbar, the editor's box, themes, a distinct look (`panels` and the `header` banner by default) and the theme editor, and of 2026-11-19 on developing every look to panels' level, with new ones: [THEMES.md](THEMES.md).
 
 ### Copy, paste and keys (2026-11-04)
 
