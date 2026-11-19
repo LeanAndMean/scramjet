@@ -256,6 +256,10 @@ User decisions from the second `/rs:steer` of 2026-11-18:
 - **`/resume` opens fast:** the loaded sessions are kept while the list changes view, files are read in parallel, each file's summary is cached by its size and modification time, and the list opens at once with the newest sessions while the rest are read (the recent ones are almost always the one chosen).
 - **WSL interop stays open** in turns with the credential stores hidden: Windows programs keep working there, and the docs say the hiding does not cover what they read through `\\wsl.localhost\`.
 
+### /clear (2026-11-19)
+
+User decision from `/rs:steer` on 2026-11-19: **`/clear` (`/new`, `/reset`) lands on the screen `scramjet` opens with:** the launch banner and nothing else, not "New session started" and the session file's path (`/status` has the path). Line mode prints the plain banner. Notices shown only at start (the update check, import offer) are not repeated.
+
 ## Essential responsibilities and invariants
 
 ### Execution and authority
