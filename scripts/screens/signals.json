@@ -1,0 +1,190 @@
+{
+  "size": "100x100",
+  "settings": {
+    "theme": "scramjet-dark",
+    "retry": {
+      "baseDelayMs": 4000
+    }
+  },
+  "files": {
+    "Cargo.toml": "[package]\nname = \"words\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    "src/lib.rs": "/// Splits `text` into words.\npub fn words(text: &str) -> Vec<&str> {\n    text.split(' ').collect()\n}\n"
+  },
+  "prompt": "Why does words() keep empty words?",
+  "replies": [
+    [
+      {
+        "reasoning": "**Reading the splitter**\n\nIt must split on single spaces. I'll read it first."
+      },
+      {
+        "call": "read",
+        "arguments": {
+          "path": "src/lib.rs"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "seq 1 40 | sed 's/^/line /'"
+        }
+      }
+    ],
+    [
+      {
+        "call": "read",
+        "arguments": {
+          "path": "src/main.rs"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "sleep 3; echo checked"
+        }
+      }
+    ],
+    [
+      {
+        "call": "get_scramjet_user_input",
+        "arguments": {
+          "type": "select",
+          "message": "Should tabs split words too?",
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes, any whitespace"
+            },
+            {
+              "value": "no",
+              "label": "No, spaces only"
+            }
+          ]
+        }
+      }
+    ],
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "scramjet:explore",
+          "task": "Find every caller of words() and say what input it passes."
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "sleep 3; grep -rn 'words(' src"
+        }
+      }
+    ],
+    [
+      {
+        "text": "There is one caller, in src/lib.rs's own tests, and it passes plain words separated by single and double spaces."
+      }
+    ],
+    {
+      "status": 503,
+      "body": {
+        "error": {
+          "message": "The service is busy."
+        }
+      }
+    },
+    [
+      {
+        "text": "`words` uses `split(' ')`, which yields an empty piece between two spaces.\n\n## Fix\n\n- Use `split_whitespace()`: it skips runs of spaces, tabs and newlines.\n\n```rust\ntext.split_whitespace().collect()\n```"
+      }
+    ],
+    [
+      {
+        "reasoning": "A search for other splits on one space."
+      },
+      {
+        "call": "grep",
+        "arguments": {
+          "pattern": "split\\(' '\\)",
+          "path": "src"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Only `words` splits on one space."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "echo checked"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "running"
+    },
+    {
+      "until": "Should tabs split words too?"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "question"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "grep -rn"
+    },
+    {
+      "sleep": 1
+    },
+    {
+      "shot": "subagent"
+    },
+    {
+      "until": "busy"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "retry"
+    },
+    {
+      "until": "it skips runs of spaces"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "Anything else splitting on one space?\r"
+    },
+    {
+      "until": "Only words splits"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "end"
+    },
+    {
+      "type": "\u001b[<0;2;71M\u001b[<32;40;75M\u001b[<0;40;75m"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "selected"
+    }
+  ]
+}
