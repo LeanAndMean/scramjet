@@ -832,6 +832,28 @@ mod tests {
     }
 
     #[test]
+    fn the_classic_looks_mark_takes_how_a_call_went_and_a_sent_prompt_its_own_style() {
+        let styled = styled_in(Design::Classic);
+        let row = |start: &str| {
+            let found = styled.iter().find(|(row, _)| plain(row).starts_with(start));
+            found
+                .unwrap_or_else(|| panic!("{start:?} in {styled:?}"))
+                .0
+                .clone()
+        };
+        let mark = |outcome: Outcome| format!("{}●{}", outcome.style(), style::RESET);
+        assert!(row("● bash cargo").contains(&mark(Outcome::Failed)));
+        assert!(row("● bash make").contains(&mark(Outcome::Running)));
+        assert!(row("● bash make").contains(style::TOOL_NAME.get()));
+        let prompt = row("> again");
+        assert!(
+            prompt.contains(&format!("{}>", style::PROMPT_MARK)),
+            "{prompt:?}"
+        );
+        assert!(prompt.contains(style::PROMPT_TEXT.get()), "{prompt:?}");
+    }
+
+    #[test]
     fn a_copy_leaves_out_what_a_look_puts_before_the_rows() {
         let hide = Arc::new(AtomicBool::new(false));
         let mut transcript = Transcript::default();

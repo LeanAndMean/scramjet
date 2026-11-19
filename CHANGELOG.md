@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.270.0 — The classic look says how each call went
+
+### Changed
+
+- In the `classic` look, each call's `●` takes the color of how it went (running, done, failed) and the tool's name is bold; a sent prompt's `>` is in the accent and its text bold, so it no longer reads as the editor's draft. Printed output (`-p`) keeps its plain lines.
+
 ## 2.269.0 — `/clear` opens as `scramjet` does
 
 ### Changed

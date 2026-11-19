@@ -71,9 +71,9 @@ styles! {
     /// The line shown in place of hidden reasoning.
     THINKING_HIDDEN: [ITALIC] ThinkingText;
     /// In the looks other than the classic one (`design`): reasoning, and the margin's label
-    /// beside it; the mark beside a prompt, the margin's label and a prompt's text; the rails
-    /// beside reasoning and a call's result, a failed one's and a running one's; a call's tool;
-    /// how a call went, and the margin's label for it.
+    /// beside it; in every look, the mark beside a sent prompt and its text, and the margin's
+    /// label; the rails beside reasoning and a call's result, a failed one's and a running
+    /// one's; in every look, a call's tool and how it went; the margin's label for it.
     THOUGHT: [ITALIC] ThinkingText;
     THOUGHT_LABEL: [] Dim;
     PROMPT_MARK: [] Accent;

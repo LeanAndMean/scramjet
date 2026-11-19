@@ -1075,10 +1075,27 @@ impl AgentUi for Terminal {
             }
             None => (name, summary.to_owned()),
         };
-        let (outcome, took) = (self.outcomes.pop_front()).unwrap_or((Outcome::Running, None));
+        let known = self.outcomes.pop_front();
+        let (outcome, took) = known.unwrap_or((Outcome::Running, None));
         self.outcome = outcome;
         let line = match self.design {
-            Design::Classic => self.dim(&call_line(name, &summary, width, self.marked)),
+            // Printed output shows a call before it runs, so its mark tells nothing yet.
+            Design::Classic if known.is_none() || !self.color => {
+                self.dim(&call_line(name, &summary, width, self.marked))
+            }
+            Design::Classic => {
+                let line = call_line(name, &summary, width, self.marked);
+                let rest = line.strip_prefix("● ").unwrap_or(&line);
+                let rest = rest.strip_prefix(name).unwrap_or(rest);
+                format!(
+                    "{}●{} {}{name}{}{}",
+                    outcome.style(),
+                    style::RESET,
+                    style::TOOL_NAME,
+                    style::RESET,
+                    self.dim(rest)
+                )
+            }
             design => {
                 let took = (took.filter(|took| {
                     scramjet::agent::is_shell(tool) && *took >= Duration::from_secs(1)
@@ -1623,8 +1640,12 @@ impl Terminal {
             false => usize::MAX,
         };
         let Some(gutter) = self.design.prompt(self.marked) else {
+            // The editor's rows, its `>` in the accent and the text bold, unlike a draft's.
             for row in editor::prompt_rows(prompt, width, self.marked) {
-                self.err(&format!("{row}\n"));
+                let (mark, text) = row.split_at(row.len().min(2));
+                let mark = self.styled(style::PROMPT_MARK, mark);
+                let text = self.styled(style::PROMPT_TEXT, text);
+                self.err(&format!("{mark}{text}\n"));
             }
             return;
         };
@@ -2468,7 +2489,7 @@ It **breaks**\\u{{1b}}[2J.\n    ## Target\n    ![a](https://x.example/a.png) <!-
         ui.progress(&StreamProgress::Text(" of the reply that\nwraps.".into()));
         ui.assistant("The start of the reply that\nwraps.");
         assert_eq!(
-            ui.captured(),
+            plain(&ui.captured()),
             "> go\n\nThe start of the reply that\nwraps.\n\n"
         );
     }

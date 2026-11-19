@@ -1148,7 +1148,7 @@ fn hex(digits: &str) -> Option<Rgb> {
 fn about(token: Token) -> &'static str {
     use Token as T;
     match token {
-        T::Accent => "The main accent: the spinner, the mark of a list's selected row, the banner's name, a question's title, a file tool's path.",
+        T::Accent => "The main accent: the spinner, a selected row's mark, a sent prompt's >, the banner's name, a question's title, a file's path.",
         T::Border => "Borders: the rule under lists and dialogs, this editor's too, and around a question the model asks.",
         T::BorderAccent => "Highlighted borders: compactions in /tree.",
         T::BorderMuted => "Quiet borders: the rails beside reasoning and calls in the looks other than the classic one, the card banner's border.",
@@ -1161,14 +1161,14 @@ fn about(token: Token) -> &'static str {
         T::ThinkingText => "The reasoning a model shows.",
         T::SelectedBg => "Behind the selected row in /resume and /tree.",
         T::UserMessageBg => "Behind your prompts, in the panels look.",
-        T::UserMessageText => "Your prompts, in the looks other than the classic one.",
+        T::UserMessageText => "Your prompts once sent.",
         T::CustomMessageBg => "Behind compaction and branch summaries and what a command or skill sent.",
         T::CustomMessageText => "Compaction and branch summaries, and what a command or skill sent.",
         T::CustomMessageLabel => "The labels of compaction and branch summaries and of what a command or skill sent: [compaction].",
         T::ToolPendingBg => "Behind a call while it runs, in the panels look.",
         T::ToolSuccessBg => "Behind a call that went well, in the panels look.",
         T::ToolErrorBg => "Behind a call that failed, in the panels look.",
-        T::ToolTitle => "A subagent's name, and a call's tool in the looks other than the classic one.",
+        T::ToolTitle => "A subagent's name, and a call's tool.",
         T::ToolOutput => "What a call returned, under it.",
         T::MdHeading => "Headings in replies, and the banner's.",
         T::MdLink => "A link's text in replies.",

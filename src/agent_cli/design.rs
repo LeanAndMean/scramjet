@@ -7,7 +7,7 @@ use super::text::{FROM, UNTIL, Wrap, columns, visible};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) enum Design {
-    /// `>` before prompts, a dim `●` line for each call, dim reasoning.
+    /// `>` before prompts, a `●` line for each call in the color of how it went, dim reasoning.
     #[default]
     Classic,
     /// A rail down the left of each block: the accent's beside prompts, a dotted one beside
@@ -42,7 +42,7 @@ impl Design {
         Self::ALL[(at.unwrap_or(0) + 1) % Self::ALL.len()]
     }
 
-    /// What goes before a prompt's rows; `None`: the editor's own `>`.
+    /// What goes before a prompt's rows; `None`: the editor's own `>`, in the accent.
     pub(super) fn prompt(self, marked: bool) -> Option<Gutter> {
         let mark = |text: &str| format!("{}{text}{}", style::PROMPT_MARK, style::RESET);
         match self {
@@ -293,7 +293,7 @@ impl Outcome {
             Self::Failed => '✗',
         }
     }
-    fn style(self) -> Style {
+    pub(super) fn style(self) -> Style {
         match self {
             Self::Running => style::OUTCOME_RUNNING,
             Self::Done => style::OUTCOME_DONE,
