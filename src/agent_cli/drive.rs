@@ -287,8 +287,9 @@ pub(super) trait Front {
 /// What a session change brought besides another conversation.
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Change {
-    /// The prompts typed so far stay those Up recalls: a new session, a fork, a clone, a move
-    /// in the tree.
+    /// As `Kept`, an empty session, shown as one starting is.
+    New,
+    /// The prompts typed so far stay those Up recalls: a fork, a clone, a move in the tree.
     Kept,
     /// Another session's prompts are those Up recalls: a resumed or imported one.
     Loaded,
@@ -522,7 +523,7 @@ pub(super) fn new_session(front: &mut dyn Front) -> bool {
     match agent.new_session() {
         Ok(()) => {
             let saved = super::interactive::saved_line(agent);
-            front.session_changed(&format!("✓ New session started\n{saved}"), Change::Kept);
+            front.session_changed(&format!("✓ New session started\n{saved}"), Change::New);
             true
         }
         Err(error) => {

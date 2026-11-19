@@ -196,13 +196,7 @@ impl Interactive {
             false => false,
         };
         if !resumed {
-            let opening = self.opening();
-            match &self.screen {
-                Some(screen) => screen.event(Event::Banner(Box::new(opening))),
-                None => self.say(&banner::plain(&opening)),
-            }
-            // A tool block ends with a blank line; other output gets one before the prompt.
-            self.show_resumed();
+            self.show_banner();
         }
         notices.splice(0..0, self.problem_notices());
         if self.screen.is_some() {
@@ -529,6 +523,28 @@ impl Interactive {
         }
     }
 
+    /// The banner, then the earlier sessions of the chain, as the session starts.
+    fn show_banner(&mut self) {
+        let opening = self.opening();
+        match &self.screen {
+            Some(screen) => screen.event(Event::Banner(Box::new(opening))),
+            None => self.say(&banner::plain(&opening)),
+        }
+        // A tool block ends with a blank line; other output gets one before the prompt.
+        self.show_resumed();
+    }
+
+    /// A new session shown as `scramjet` opens, without the notices only a start gives.
+    fn started_again(&mut self) {
+        if let Some(screen) = &self.screen {
+            screen.clear();
+        }
+        self.show_banner();
+        if let Some(notice) = self.session.agent.saving_notice() {
+            self.say(&notice);
+        }
+    }
+
     /// What the banner tells of the session starting.
     fn opening(&self) -> Opening {
         let installed = self.session.agent.installed();
@@ -799,6 +815,9 @@ impl Front for Interactive {
     /// The conversation shown again; a resumed or imported session's prompts are those Up
     /// recalls, and one in another folder brings its themes, completions and problems.
     fn session_changed(&mut self, message: &str, change: Change) {
+        if change == Change::New {
+            return self.started_again();
+        }
         if change != Change::Kept {
             self.remember_prompts();
         }

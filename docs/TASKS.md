@@ -6,7 +6,7 @@ Last steer: 5831837
 
 ## Current focus
 
-Item 82 first (steer of 2026-11-19). Then, from the third steer of 2026-11-17, in order: 76 (the sandbox policy: its design proposed on 2026-11-18 and not approved by the user at the steer of 2026-11-18; nothing of it is built until a steer signs a design off), then 77 (subagents that write, moderate priority). 62's pull request is ready for review (the user's ask, 2026-11-18); what its reviewers ask becomes fixes on the branch. 63, 51, 44 and 48 wait on the user.
+From the third steer of 2026-11-17, in order: 76 (the sandbox policy: its design proposed on 2026-11-18 and not approved by the user at the steer of 2026-11-18; nothing of it is built until a steer signs a design off), then 77 (subagents that write, moderate priority). 62's pull request is ready for review (the user's ask, 2026-11-18); what its reviewers ask becomes fixes on the branch. 63, 51, 44 and 48 wait on the user.
 
 `v2.268.0` is the latest release (2026-11-18, the user's ask): rehearsal with the Windows tests 44387314630, release run 44389060843 (its macOS job got no runner in 15 minutes, macOS capacity; `gh run rerun --failed` passed). Rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else; a later alpha is the user's ask.
 
@@ -16,9 +16,8 @@ After that, the order of the steer of 2026-11-12: macOS (35), from testers' repo
 
 ## Next candidates
 
-Order agreed at the steers of 2026-11-19, 2026-11-18 and the third of 2026-11-17 (Current focus): 82, 76–77; then 62's review, 63, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
+Order agreed at the steers of 2026-11-19, 2026-11-18 and the third of 2026-11-17 (Current focus): 76–77; then 62's review, 63, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10.
 
-82. **`/clear` shows the launch screen** ([design](DESIGN.md#clear-2026-11-19)): after `drive::new_session` (`src/agent_cli/drive.rs`), the full screen clears and shows the same `Event::Banner(opening)` as at launch (`read_and_run` in `src/agent_cli/interactive.rs`), without "✓ New session started" and `saved_line`'s path; line mode prints `banner::plain`; start-only notices are not repeated. ACP keeps its own message. Check with a `scripts/screens/` scenario and `tests/agent_editor_pty.py`'s expectations of the old lines.
 76. **A sandbox policy** ([design](DESIGN.md#a-sandbox-policy-proposed-2026-11-18-for-sign-off)): proposed in `docs/DESIGN.md` (2026-11-18), with four questions (Open questions); not approved at the steer of 2026-11-18, so not built. Once a design is signed off, build it: the `sandbox` object and its `filesystem` lists (`src/agent_cli/settings.rs`), `denyRead`/`allowRead` through `Hidden` (`src/agent/sandbox.rs`), the project-only reach as tmpfs over `/home`, `/root`, `/mnt`, `/media` with the kept paths bound back (and Seatbelt's deny-then-allow), the file tools honoring it, `/sandbox` and `/settings` rows, `scripts/try-sandbox.py`'s checks, then the real tries the design lists.
 77. **Subagents that write** (moderate priority, from item 7): through 76's policy, a subagent allowed to write gets writable roots or a worktree; the shipped default stays read-only.
 

@@ -1969,8 +1969,11 @@ def new_session(read, until, send, output):
     send(b'one\r')
     on_screen('Error: provider: cannot connect')
     send(b'/clear\r')
-    rows = on_screen('\u2713 New session started')
-    assert ' \u203a one' not in rows, rows
+    # The screen scramjet opens with: the banner, without the session's path.
+    rows = on_screen(' \u203a one', gone=True)
+    text = '\n'.join(rows)
+    assert 'scramjet v' in text and 'cannot connect' not in text, rows
+    assert 'New session started' not in text and '.jsonl' not in text, rows
     send(b'two\r')
     on_screen('Error: provider: cannot connect')
     # Up recalls the prompts of the session before too.
@@ -3060,7 +3063,7 @@ def search_selectors(read, until, send, output):
     send(b'zebra stripes\r')
     on_screen('Reply one.')
     send(b'/new\r')
-    on_screen('New session')
+    on_screen('Reply one.', gone=True)
     send(b'other words\r')
     on_screen('Striped reply.')
     # Typed text filters the sessions by their prompts and replies, best first.
@@ -3100,7 +3103,7 @@ def manage_sessions(read, until, send, output):
     send(b'kiwi first\r')
     on_screen('Kiwi reply.')
     send(b'/new\r')
-    on_screen('New session')
+    on_screen('Kiwi reply.', gone=True)
     send(b'mango second\r')
     on_screen('Mango reply.')
     send(b'/resume\r')
@@ -3754,8 +3757,8 @@ def next_steps(read, until, send, output):
     # step that the project's edge chains without asking.
     rows = on_screen('Second done.')
     text = '\n'.join(rows)
-    assert ' \u203a /flow:step two' in rows and 'New session started' in text, rows
-    assert text.index('New session started') < text.index('Next step runs with gpt-6-sol \u00b7 thinking xhigh') \
+    assert ' \u203a /flow:step two' in rows and 'New session started' not in text, rows
+    assert text.index('Next step runs with gpt-6-sol \u00b7 thinking xhigh') \
         < text.index(' \u203a /flow:step two'), text
     rows = on_screen('All done.')
     text = '\n'.join(rows)
@@ -3771,7 +3774,7 @@ def next_steps(read, until, send, output):
     send(b'\x1b[5~' * 2)
     text = '\n'.join(on_screen('[session] /flow:step one \u00b7 '))
     block = text.index('[session] /flow:step one \u00b7 ')
-    assert block < text.index('Done.') < text.index('New session started'), text
+    assert block < text.index('Done.') < text.index('Next step runs with gpt-6-sol'), text
     assert '(Ctrl+O to show its' in text, text
     send(b'\x04')
 
@@ -4627,8 +4630,8 @@ def fullscreen_commands_during_turn(read, until, send, output):
     send(b'kept\r')
     on_screen('Steering: kept')
     send(b'/new\r')
-    rows = on_screen('\u2713 New session started')
-    assert 'Restored 1 queued message to editor' in '\n'.join(rows), rows
+    rows = on_screen('Restored 1 queued message to editor')
+    assert 'Switched.' not in '\n'.join(rows), rows
     assert rows[-1] == '> kept', rows
     send(b'\x15more\r')
     on_screen('Running 1s')

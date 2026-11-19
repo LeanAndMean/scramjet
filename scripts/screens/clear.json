@@ -1,0 +1,16 @@
+{
+  "size": "100x30",
+  "settings": {"theme": "scramjet-dark", "banner": "logo"},
+  "prompt": "Say hello.",
+  "replies": [
+    [{"text": "Hello."}]
+  ],
+  "steps": [
+    {"until": "Hello."},
+    {"sleep": 0.3},
+    {"shot": "before"},
+    {"type": "/clear\r"},
+    {"sleep": 0.8},
+    {"shot": "cleared"}
+  ]
+}

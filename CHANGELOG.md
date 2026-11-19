@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.269.0 — `/clear` opens as `scramjet` does
+
+### Changed
+
+- `/clear` (`/new`, `/reset`) and a next step's fresh session show the screen `scramjet` opens with, its banner and nothing else, in place of "New session started" and the session file's path (`/status` has it). Line mode prints the plain banner; notices shown only at start are not repeated. ACP clients still get their message.
+
 ## 2.268.0 — `/resume` shows before every session is read
 
 ### Changed
