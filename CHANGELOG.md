@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.273.0 — Panels in the terminal's own colors
+
+### Changed
+
+- In the `panels` look, where the theme gives prompts and calls no backgrounds of their own (as "Terminal colors"), a thin edge down each block's left side stands for its band: in the accent beside a prompt, and beside a call in the color of how it went (running, done, failed).
+
 ## 2.272.0 — The margin look says how each call went
 
 ### Changed

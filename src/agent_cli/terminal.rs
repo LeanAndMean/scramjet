@@ -2,7 +2,7 @@
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
 use super::banner::{self, Banner, Opening};
-use super::design::{Design, Gutter, Outcome};
+use super::design::{self, Design, Gutter, Outcome};
 use super::editor::NOTE_TIME;
 use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
@@ -640,7 +640,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         } else {
             String::new()
         };
-        format!("{}{rule}\n", outcome.band().mark())
+        format!("{}{rule}\n", design::pad_row(outcome.band()))
     }
     /// A call's `rows` under its heading, then its bottom pad: in panels, a pad between the
     /// heading and any rows.

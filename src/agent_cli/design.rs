@@ -72,7 +72,7 @@ impl Design {
     pub(super) fn prompt_pads(self, width: usize) -> (Option<String>, Option<String>) {
         match self {
             Self::Panels => {
-                let band = Band::Prompt.mark().to_string();
+                let band = pad_row(Band::Prompt);
                 (Some(band.clone()), Some(band))
             }
             Self::Rails => {
@@ -198,7 +198,8 @@ impl Design {
                     Some(took) => format!("{took} {glyph} "),
                     None => format!("{glyph} "),
                 };
-                let lead = format!(" {name_shown}  ");
+                let edge = edge(outcome.band()).unwrap_or_else(|| " ".into());
+                let lead = format!("{edge}{name_shown}  ");
                 (
                     lead,
                     name.chars().count() + 3,
@@ -222,6 +223,11 @@ impl Design {
                 (lead, columns, Some(right), None)
             }
         };
+        // Rows under the first keep a panel's edge.
+        let below = match band.and_then(edge) {
+            Some(edge) => format!("{edge}{}", " ".repeat(indent_of(lead_columns, width) - 1)),
+            None => " ".repeat(indent_of(lead_columns, width)),
+        };
         let band = band.map(Band::mark).map(String::from).unwrap_or_default();
         let from = if marked {
             FROM.to_string()
@@ -229,10 +235,7 @@ impl Design {
             String::new()
         };
         // What it was called with starts under the first line's when that leaves room.
-        let indent = match lead_columns < width / 2 {
-            true => lead_columns,
-            false => 2,
-        };
+        let indent = indent_of(lead_columns, width);
         let right_columns = right.as_deref().map_or(0, |right| columns(right) + 1);
         let room = width.saturating_sub(indent + right_columns).max(10);
         let summary = visible(summary.trim_end_matches('\n'));
@@ -293,12 +296,40 @@ impl Design {
                         };
                         format!("{band}{lead}{from}{row}{pad}")
                     }
-                    false => format!("{band}{}{from}{row}", " ".repeat(indent)),
+                    false => format!("{band}{below}{from}{row}"),
                 });
             }
         }
         rows.join("\n")
     }
+}
+
+/// Where the lines of a heading after its first start: under the first's text when that leaves
+/// room.
+fn indent_of(lead_columns: usize, width: usize) -> usize {
+    match lead_columns < width / 2 {
+        true => lead_columns,
+        false => 2,
+    }
+}
+
+/// Where the theme gives `band` no background of its own (as "Terminal colors"), the edge a
+/// panel shows in place of its first column, in the color of what it holds, so that its rows
+/// still read as one block.
+fn edge(band: Band) -> Option<String> {
+    let style = match band {
+        Band::Prompt => style::PROMPT_MARK,
+        Band::Running => style::OUTCOME_RUNNING,
+        Band::Done => style::OUTCOME_DONE,
+        Band::Failed => style::OUTCOME_FAILED,
+        Band::Selected | Band::Message => return None,
+    };
+    (!band.painted()).then(|| format!("{style}▎{}", style::RESET))
+}
+
+/// A row of `band` alone, as panels pad their blocks.
+pub(super) fn pad_row(band: Band) -> String {
+    format!("{}{}", band.mark(), edge(band).unwrap_or_default())
 }
 
 /// The length of the line range a read's summary ends with (`:3-10`, `:3`), or 0.
@@ -371,6 +402,11 @@ pub(super) struct Gutter {
 
 impl Gutter {
     fn new(first: &str, rest: &str, columns: usize, band: Option<Band>, marked: bool) -> Self {
+        let edged = |gutter: &str| match (band.and_then(edge), gutter.strip_prefix(' ')) {
+            (Some(edge), Some(rest)) => edge + rest,
+            _ => gutter.to_owned(),
+        };
+        let (first, rest) = (edged(first), edged(rest));
         let band = band.map(Band::mark).map(String::from).unwrap_or_default();
         let from = if marked {
             FROM.to_string()
@@ -473,7 +509,7 @@ mod tests {
         );
         assert_eq!(
             shown(Design::Panels, Outcome::Done, None),
-            ["\u{13} bash  cargo test           ✓ "]
+            ["\u{13}▎bash  cargo test           ✓ "]
         );
         assert_eq!(
             shown(Design::Margin, Outcome::Running, None),
@@ -486,6 +522,10 @@ mod tests {
         // A command's later lines go under its first.
         let heading = Design::Rails.heading("bash", "cd x\nmake", Outcome::Done, None, 30, false);
         assert_eq!(plain(&heading), "✓ bash cd x\n       make");
+        // A panel's edge, in 16 colors as here, runs down them too.
+        let heading = Design::Panels.heading("bash", "cd x\nmake", Outcome::Done, None, 30, false);
+        let rows: Vec<String> = heading.split('\n').map(plain).collect();
+        assert_eq!(rows[1], "\u{13}▎      make");
         // Long names have a short label, or show whole after a cut one.
         let heading = Design::Margin.heading("subagent", "2 tasks", Outcome::Done, None, 20, false);
         assert_eq!(plain(&heading), " agent 2 tasks     ✓");
@@ -563,8 +603,12 @@ mod tests {
         assert_eq!(classic.row(false, "x"), format!("  {FROM}x"));
         assert_eq!(classic.row(false, ""), "");
         let panels = Design::Panels.prompt(false).unwrap();
-        assert_eq!(plain(&panels.row(true, "hi")), "\u{11} › hi");
-        assert_eq!(plain(&panels.row(false, "")), "\u{11}   ");
+        // In 16 colors, as here, an edge in the accent stands for the prompt's band.
+        assert_eq!(plain(&panels.row(true, "hi")), "\u{11}▎› hi");
+        assert_eq!(plain(&panels.row(false, "")), "\u{11}▎  ");
+        assert!(panels.first.contains(&format!("{}▎", style::PROMPT_MARK)));
+        assert_eq!(plain(&pad_row(Band::Prompt)), "\u{11}▎");
+        assert_eq!(plain(&pad_row(Band::Message)), "\u{16}");
         let margin = Design::Margin.reasoning(false).unwrap();
         assert_eq!(plain(&margin.row(true, "a")), " think a");
         assert_eq!(plain(&margin.row(false, "b")), "       b");

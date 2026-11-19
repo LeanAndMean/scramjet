@@ -730,7 +730,8 @@ mod tests {
                 "",
             ]
         );
-        // Panels put prompts on a band of their own, and each call on one for how it went.
+        // Panels put prompts on a band of their own, and each call on one for how it went; where
+        // the theme has no such backgrounds, as these tests' 16 colors, an edge marks each band.
         let panels = shown_in(Design::Panels);
         let (prompt, failed, running) =
             (Some(Band::Prompt), Some(Band::Failed), Some(Band::Running));
@@ -740,30 +741,30 @@ mod tests {
                 .map(|(row, band)| (row.trim_end(), *band))
                 .collect::<Vec<_>>(),
             [
-                ("", prompt),
-                (" › fix the test", prompt),
-                ("", prompt),
+                ("▎", prompt),
+                ("▎› fix the test", prompt),
+                ("▎", prompt),
                 ("", None),
                 (" Looking at it.", None),
                 ("", None),
-                ("", failed),
-                (" bash  cargo test                2.0s ✗", failed),
-                ("", failed),
-                (" 1 failed", failed),
-                (" Command exited with code 101", failed),
-                ("", failed),
+                ("▎", failed),
+                ("▎bash  cargo test                2.0s ✗", failed),
+                ("▎", failed),
+                ("▎1 failed", failed),
+                ("▎Command exited with code 101", failed),
+                ("▎", failed),
                 ("", None),
                 (" It fails.", None),
                 ("", None),
-                ("", prompt),
-                (" › again", prompt),
-                ("", prompt),
+                ("▎", prompt),
+                ("▎› again", prompt),
+                ("▎", prompt),
                 ("", None),
-                ("", running),
-                (" bash  make                           ○", running),
-                ("", running),
-                (" building", running),
-                ("", running),
+                ("▎", running),
+                ("▎bash  make                           ○", running),
+                ("▎", running),
+                ("▎building", running),
+                ("▎", running),
                 ("", None),
             ]
         );
@@ -791,11 +792,11 @@ mod tests {
         assert_eq!(
             shown(&mut transcript),
             [
-                ("".into(), running),
-                (" get_scramjet_user_input              ○".into(), running),
-                ("".into(), running),
-                (" Delete it?".into(), running),
-                ("".into(), running),
+                ("▎".into(), running),
+                ("▎get_scramjet_user_input              ○".into(), running),
+                ("▎".into(), running),
+                ("▎Delete it?".into(), running),
+                ("▎".into(), running),
             ]
         );
         let answer = "Answer: Yes".into();
@@ -811,13 +812,13 @@ mod tests {
         assert_eq!(
             shown(&mut transcript),
             [
-                ("".into(), done),
-                (" get_scramjet_user_input              ✓".into(), done),
-                ("".into(), done),
-                (" Delete it?".into(), done),
-                ("".into(), done),
-                (" Answer: Yes".into(), done),
-                ("".into(), done),
+                ("▎".into(), done),
+                ("▎get_scramjet_user_input              ✓".into(), done),
+                ("▎".into(), done),
+                ("▎Delete it?".into(), done),
+                ("▎".into(), done),
+                ("▎Answer: Yes".into(), done),
+                ("▎".into(), done),
             ]
         );
     }
@@ -834,10 +835,12 @@ mod tests {
         assert!(row(Design::Classic).contains(style::TOOL_FAILED.get()));
         for design in [Design::Panels, Design::Rails, Design::Margin] {
             let row = row(design);
-            // What follows the gutter: the rails' own is in the error color.
+            // What follows the gutter: the rails' own, and a panel's edge in 16 colors, are in
+            // the error color.
             let row = ["│", "▏"].iter().fold(row, |row, rail| {
                 row.replace(&format!("{}{rail}{}", style::RAIL_FAILED, style::RESET), "")
             });
+            let row = row.replace(&format!("{}▎{}", style::OUTCOME_FAILED, style::RESET), "");
             assert!(row.contains(style::TOOL_OUTPUT.get()), "{row:?}");
             assert!(!row.contains(style::TOOL_FAILED.get()), "{row:?}");
         }
