@@ -119,15 +119,41 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
 }
 
 /// How each call among `events` went, in the order `replay` shows them: done or failed once
-/// its result came, with how long it ran, else still running.
-pub(super) fn outcomes(events: &[Event]) -> Vec<(Outcome, Option<Duration>)> {
+/// its result came, with how long it ran, else still running, for as long as it has by `now`.
+pub(super) fn outcomes(events: &[Event], now: Instant) -> Vec<(Outcome, Option<Duration>)> {
     let mut found = Vec::new();
-    scan(events, &mut found);
-    found
+    scan(events, now, None, &mut found);
+    found.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
-fn scan(events: &[Event], found: &mut Vec<(Outcome, Option<Duration>)>) {
+/// The whole seconds each call among `events` still running has run by `now`, and the event
+/// the first is in; `None` while none runs.
+pub(super) fn clock(events: &[Event], now: Instant) -> Option<(usize, Vec<u64>)> {
+    let mut found = Vec::new();
+    scan(events, now, None, &mut found);
+    let mut running = found.into_iter().filter_map(|(at, outcome)| match outcome {
+        (Outcome::Running, Some(took)) => Some((at, took.as_secs())),
+        _ => None,
+    });
+    let (first, seconds) = running.next()?;
+    Some((
+        first,
+        [seconds]
+            .into_iter()
+            .chain(running.map(|(_, s)| s))
+            .collect(),
+    ))
+}
+
+/// Each call's outcome, with the event of `events` it is in, or `top` for calls nested in it.
+fn scan(
+    events: &[Event],
+    now: Instant,
+    top: Option<usize>,
+    found: &mut Vec<(usize, (Outcome, Option<Duration>))>,
+) {
     for (index, event) in events.iter().enumerate() {
+        let at = top.unwrap_or(index);
         match event {
             Event::ToolCall(..) => {
                 let rest = &events[index + 1..];
@@ -136,24 +162,30 @@ fn scan(events: &[Event], found: &mut Vec<(Outcome, Option<Duration>)>) {
                     .position(|event| matches!(event, Event::ToolCall(..))))
                 .unwrap_or(rest.len());
                 let mut since = None;
-                let mut outcome = (Outcome::Running, None);
+                let mut outcome = None;
                 for event in &rest[..end] {
                     match event {
                         Event::ToolRunning(at) => since = Some(*at),
                         Event::ToolResult(_, _, _, failed, at) => {
                             let took = since.map(|since| at.saturating_duration_since(since));
-                            outcome = match failed {
+                            outcome = Some(match failed {
                                 true => (Outcome::Failed, took),
                                 false => (Outcome::Done, took),
-                            };
+                            });
                             break;
                         }
                         _ => {}
                     }
                 }
-                found.push(outcome);
+                let running = || {
+                    let took = since.map(|since| now.saturating_duration_since(since));
+                    (Outcome::Running, took)
+                };
+                found.push((at, outcome.unwrap_or_else(running)));
             }
-            Event::Calls(calls) => calls.iter().for_each(|call| scan(call, found)),
+            Event::Calls(calls) => calls
+                .iter()
+                .for_each(|call| scan(call, now, Some(at), found)),
             _ => {}
         }
     }

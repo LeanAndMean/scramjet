@@ -8,6 +8,7 @@ use crate::agent_cli::settings::MarkdownReads;
 use crate::agent_cli::terminal::Terminal;
 use scramjet::agent::{Purpose, StreamProgress};
 use std::sync::{Arc, atomic::AtomicBool};
+use std::time::Instant;
 
 /// How the conversation is rendered.
 #[derive(Clone, Copy, PartialEq)]
@@ -63,6 +64,9 @@ struct Part {
     settled: Option<Settled>,
     /// The first event changed since the part last rendered.
     changed: usize,
+    /// The whole seconds its calls still running had run when it last rendered, as their
+    /// headings show them.
+    clock: Option<Vec<u64>>,
 }
 
 struct Settled {
@@ -81,7 +85,14 @@ impl Part {
         self.changed = self.changed.min(from);
     }
 
-    fn render(&mut self, look: Look, hide_thinking: &Arc<AtomicBool>) {
+    fn render(&mut self, look: Look, hide_thinking: &Arc<AtomicBool>, now: Instant) {
+        // A running call's time goes on in its heading, a second at a time.
+        if let Some(shown) = &self.clock {
+            match record::clock(&self.events, now) {
+                Some((from, seconds)) if seconds != *shown => self.touch(from),
+                _ => {}
+            }
+        }
         if self.rendered == Some((look, self.version)) {
             return;
         }
@@ -101,7 +112,7 @@ impl Part {
         self.lines.truncate(rows);
         let cut = cut(&self.events, events);
         if cut > events {
-            let text = captured(&self.events[events..cut], look, hide_thinking.clone());
+            let text = captured(&self.events[events..cut], look, hide_thinking.clone(), now);
             if let Some((more, count)) = selection::settled(&text) {
                 if count > 0 {
                     self.lines.append(&mut pad);
@@ -112,7 +123,7 @@ impl Part {
                 (events, rows) = (cut, self.lines.len());
             }
         }
-        let text = captured(&self.events[events..], look, hide_thinking.clone());
+        let text = captured(&self.events[events..], look, hide_thinking.clone(), now);
         let shown = selection::lines(&text);
         if !shown.is_empty() {
             self.lines.extend(pad.iter().cloned());
@@ -130,10 +141,14 @@ impl Part {
         });
         self.rendered = Some((look, self.version));
         self.changed = usize::MAX;
+        self.clock = (look.design != Design::Classic)
+            .then(|| record::clock(&self.events, now))
+            .flatten()
+            .map(|(_, seconds)| seconds);
         #[cfg(test)]
         assert_eq!(
             self.lines,
-            render(&self.events, look, hide_thinking.clone()),
+            render(&self.events, look, hide_thinking.clone(), now),
             "a part rendered from its settled rows differs from one rendered whole"
         );
     }
@@ -245,8 +260,9 @@ impl Transcript {
     }
 
     pub(super) fn render(&mut self, look: Look, hide_thinking: &Arc<AtomicBool>) {
+        let now = Instant::now();
         for part in self.parts.iter_mut().chain([&mut self.tail.2]) {
-            part.render(look, hide_thinking);
+            part.render(look, hide_thinking, now);
         }
     }
 
@@ -329,8 +345,8 @@ fn cut(events: &[Event], from: usize) -> usize {
 
 /// The lines of `events` as `Terminal` renders them at the look's width.
 #[cfg(test)]
-fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<Line> {
-    let mut lines = selection::lines(&captured(events, look, hide_thinking));
+fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>, now: Instant) -> Vec<Line> {
+    let mut lines = selection::lines(&captured(events, look, hide_thinking, now));
     // Each block ends with a blank line, which separates it from the next part.
     if !lines.is_empty() {
         lines.push(Line::default());
@@ -339,12 +355,12 @@ fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> Vec<L
 }
 
 /// `events` as `Terminal` renders them at the look's width.
-fn captured(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>) -> String {
+fn captured(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>, now: Instant) -> String {
     let mut ui = Terminal::capture_shown(look.width, hide_thinking, look.whole);
     ui.markdown_reads = look.markdown_reads;
     ui.design = look.design;
     ui.banner = look.banner;
-    ui.outcomes = record::outcomes(events).into();
+    ui.outcomes = record::outcomes(events, now).into();
     for (index, event) in events.iter().enumerate() {
         record::replay(event, &mut ui);
         // Calls still running end their block before what was said under them.
@@ -924,15 +940,61 @@ mod tests {
             ]),
             call(),
         ];
+        // A call still running has run for as long as it has by then.
+        let later = started + Duration::from_secs(3);
         assert_eq!(
-            record::outcomes(&events),
+            record::outcomes(&events, later),
             [
                 (Outcome::Failed, Some(Duration::from_secs(1))),
                 (Outcome::Done, None),
-                (Outcome::Running, None),
+                (Outcome::Running, Some(Duration::from_secs(3))),
                 (Outcome::Running, None),
             ]
         );
+        assert_eq!(record::clock(&events, later), Some((3, vec![3])));
+        assert_eq!(record::clock(&events[..3], later), None);
+    }
+
+    #[test]
+    fn a_running_commands_time_goes_on_in_its_heading_once_a_second() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let started = Instant::now();
+        let mut transcript = Transcript::default();
+        transcript.push(Event::UserPrompt("build".into()));
+        transcript.push(Event::ToolCall("bash".into(), "make".into(), None));
+        transcript.push(Event::ToolRunning(started));
+        transcript.push(Event::ToolOutput("building".into()));
+        let heading = |transcript: &mut Transcript, design, seconds: f64| {
+            let look = Look {
+                design,
+                ..look(40, false)
+            };
+            let part = &mut transcript.parts[0];
+            part.render(look, &hide, started + Duration::from_secs_f64(seconds));
+            let rows: Vec<String> = part.lines.iter().map(|line| plain(&line.shown)).collect();
+            let row = rows.iter().find(|row| row.contains("make")).cloned();
+            (row.unwrap_or_else(|| panic!("{rows:?}")), part.version)
+        };
+        // None under a second, as when it ends.
+        let (row, version) = heading(&mut transcript, Design::Panels, 0.5);
+        assert!(row.trim_end().ends_with('○'), "{row}");
+        assert!(!row.contains("0s"), "{row}");
+        let (row, after) = heading(&mut transcript, Design::Panels, 2.4);
+        assert!(row.contains("2s ○"), "{row}");
+        assert_eq!(after, version + 1);
+        // Within the same second, it is not rendered again.
+        let (row, same) = heading(&mut transcript, Design::Panels, 2.9);
+        assert!(row.contains("2s ○"), "{row}");
+        assert_eq!(same, after);
+        let (row, _) = heading(&mut transcript, Design::Margin, 12.0);
+        assert!(row.contains("12s ○"), "{row}");
+        // Once it ends, its time is what it took.
+        let ended = started + Duration::from_millis(13_200);
+        let result = Event::ToolResult("bash".into(), "built".into(), None, false, ended);
+        transcript.push(result);
+        let (row, _) = heading(&mut transcript, Design::Panels, 20.0);
+        assert!(row.contains("13.2s ✓"), "{row}");
+        assert_eq!(transcript.parts[0].clock, None);
     }
 
     #[test]

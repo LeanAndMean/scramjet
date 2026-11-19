@@ -1176,7 +1176,7 @@ def running_shows_output(read, until, send, output):
     assert ' second' not in rows, rows
     rows = on_screen('\n second')
     text = '\n'.join(rows)
-    assert re.search(' bash  echo first; sleep 1.5; echo second; sleep 30 +\u25cb\n\n first\n second', text), text
+    assert re.search(' bash  echo first; sleep 1.5; echo second; sleep 30 +(\\d+s )?\u25cb\n\n first\n second', text), text
     send(b'\x1b')
     on_screen('(cancelled)')
     send(b'\x04')

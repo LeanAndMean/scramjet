@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.275.0 — A running command's time
+
+### Changed
+
+- In the `panels`, `rails` and `margin` looks, a shell command that has run for a second or more shows its time so far at its heading's right, in whole seconds, counting up each second until it ends and shows what it took.
+
 ## 2.274.0 — Notices at the text's edge
 
 ### Changed

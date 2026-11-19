@@ -1114,7 +1114,11 @@ impl AgentUi for Terminal {
                 let took = (took.filter(|took| {
                     scramjet::agent::is_shell(tool) && *took >= Duration::from_secs(1)
                 }))
-                .map(|took| format!("{:.1}s", took.as_secs_f64()));
+                .map(|took| match outcome {
+                    // Whole seconds while it runs, so that its heading changes once a second.
+                    Outcome::Running => format!("{}s", took.as_secs()),
+                    _ => format!("{:.1}s", took.as_secs_f64()),
+                });
                 design.heading(name, &summary, outcome, took.as_deref(), width, self.marked)
             }
         };
@@ -1629,7 +1633,7 @@ impl Terminal {
         let block = self.message_box("session", &heading, earlier.summary.as_deref());
         self.err(&format!("{block}\n"));
         if self.full {
-            let outcomes = record::outcomes(&earlier.events).into();
+            let outcomes = record::outcomes(&earlier.events, Instant::now()).into();
             let outcomes = std::mem::replace(&mut self.outcomes, outcomes);
             for event in &earlier.events {
                 record::replay(event, self);
