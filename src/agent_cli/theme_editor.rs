@@ -1148,11 +1148,11 @@ fn hex(digits: &str) -> Option<Rgb> {
 fn about(token: Token) -> &'static str {
     use Token as T;
     match token {
-        T::Accent => "The main accent: the spinner, a selected row's mark, a sent prompt's >, the banner's name, a question's title, a file's path.",
+        T::Accent => "The main accent: the spinner, a selected row's mark, a sent prompt's > or card, the banner's name, a question's title, a path.",
         T::Border => "Borders: the rule under lists and dialogs, this editor's too, and around a question the model asks.",
         T::BorderAccent => "Highlighted borders: compactions in /tree.",
         T::BorderMuted => "Quiet borders: the rails beside reasoning, a finished call in the margin look and the rule above a prompt; the card banner's.",
-        T::Success => "Success: calls and subagents that went well, their rail or label in rails and margin, the current session or model, models on.",
+        T::Success => "Success: calls and subagents that went well, their rail, label or card, the current session or model, models on.",
         T::Error => "Errors: failed calls, commands and subagents, a turn's error, a full context, what a list's key cannot do.",
         T::Warning => "Warnings: retries, notices, running calls and subagents, a filling context, labels and named sessions, a read's lines.",
         T::Muted => "Secondary text: the status line, notes such as Took 1.4s, hints, next steps, headings in lists.",

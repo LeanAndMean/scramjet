@@ -4944,9 +4944,9 @@ def fullscreen_copy_into_the_dock(read, until, send, output):
     # The prompt's last row, over the footer.
     bottom = len(rows)
     # At the end, a drag goes on into the dock: the blank status line, not the rule, and the
-    # prompt's text as typed.
+    # prompt's text as typed, shown selected without the columns before it, as copied.
     send(b'\x1b[<0;1;%dM\x1b[<32;30;%dM\x1b[<32;60;%dM\x1b[<0;60;%dm' % (reply, reply + 2, bottom, bottom))
-    until(b'\x1b[7m  alpha alpha end')
+    until(b'\x1b[7malpha alpha end')
     send(b'\x03')
     copied(full_width + '\n\n\n' + draft)
     # A triple click in the dock selects its row.
@@ -5026,7 +5026,7 @@ def fullscreen_paste_and_clicks(read, until, send, output):
     send(b'\x03')
     copied('reply')
     send(b'\x1b[<0;16;%dM\x1b[<0;16;%dm' % (row, row) * 3)
-    until(b'\x1b[7m Row 30 of the reply.')
+    until(b'\x1b[7mRow 30 of the reply.')
     send(b'\x03')
     copied('Row 30 of the reply.')
     # The selection goes once the screen sees the copy end, after the stand-in has written it;
@@ -5086,7 +5086,7 @@ def fullscreen_copy_on_select(read, until, send, output):
     # Switched off, a selection waits for Ctrl+C or a right click.
     mark = len(output)
     send(b'\x1b[<0;1;%dM\x1b[<32;8;%dM\x1b[<0;8;%dm' % (row, row, row))
-    until(b'\x1b[7m Row 30', mark)
+    until(b'\x1b[7mRow 30', mark)
     read(.8)
     assert open(copies).read().count('\n') == 3, open(copies).read()
     send(b'\x1b[<2;5;5M\x1b[<2;5;5m')

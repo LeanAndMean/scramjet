@@ -395,7 +395,7 @@ impl Terminal {
             true => Outcome::Failed,
             false => Outcome::Done,
         };
-        let gutter = self.design.output(outcome, self.marked);
+        let gutter = self.design.output(outcome, self.width(), self.marked);
         let width = self.width().saturating_sub(gutter.columns).max(20);
         let full = self.full;
         let compact = std::mem::take(&mut self.compact);
@@ -655,8 +655,24 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             block += &gutter.row(index == 0, row);
             block.push('\n');
         }
-        block += &pad;
+        block += &self.bottom(outcome);
         self.err(&block);
+    }
+    /// The row that ends a call's block: a card's bottom edge, a panel's pad; a copy leaves it
+    /// out.
+    fn bottom(&self, outcome: Outcome) -> String {
+        match self.design.bottom(outcome, self.width()) {
+            Some(edge) if self.marked => format!("{edge}{RULE}\n"),
+            Some(edge) => format!("{edge}\n"),
+            None => self.pad(outcome),
+        }
+    }
+    /// Ends the block of a call asking a question not yet answered, as its result will.
+    pub(super) fn asking(&mut self) {
+        if self.design.bottom(self.outcome, 0).is_some() {
+            let bottom = self.bottom(self.outcome);
+            self.err(&bottom);
+        }
     }
     /// The model's `text` as it may go where `kind` goes: on a terminal, its control characters
     /// as escapes, so that a reply cannot set the clipboard (OSC 52) or rewrite the screen; to a
@@ -1294,7 +1310,7 @@ impl AgentUi for Terminal {
     /// As Scramjet shows the message in the tool's row: markdown, under the call line.
     fn question(&mut self, message: &str) {
         self.clear();
-        let gutter = self.design.output(self.outcome, self.marked);
+        let gutter = self.design.output(self.outcome, self.width(), self.marked);
         let width = match self.color {
             true => self.width().saturating_sub(gutter.columns).max(20),
             false => 0,
@@ -1459,7 +1475,7 @@ impl Terminal {
     /// when the results are shown whole.
     /// The rows of a running `subagent` call's children, as its result shows them.
     pub(super) fn running_subagents(&mut self, shown: &Children) {
-        let gutter = self.design.output(self.outcome, self.marked);
+        let gutter = self.design.output(self.outcome, self.width(), self.marked);
         let width = self.width().saturating_sub(gutter.columns).max(20);
         let rows = children::rows(shown, &self.look(width));
         self.padded(self.outcome, &gutter, &rows);
@@ -1486,7 +1502,7 @@ impl Terminal {
         if let Some((command, include)) = self.command.take() {
             return self.command_block(&command, include, output, None);
         }
-        let gutter = self.design.output(self.outcome, self.marked);
+        let gutter = self.design.output(self.outcome, self.width(), self.marked);
         let width = self.width().saturating_sub(gutter.columns).max(20);
         let shown = match self.full {
             true => Shown::All,
@@ -1680,7 +1696,7 @@ impl Terminal {
             true => self.width(),
             false => usize::MAX,
         };
-        let Some(gutter) = self.design.prompt(self.marked) else {
+        let Some(gutter) = self.design.prompt(self.width(), self.marked) else {
             // The editor's rows, its `>` in the accent and the text bold, unlike a draft's.
             for row in editor::prompt_rows(prompt, width, self.marked) {
                 let (mark, text) = row.split_at(row.len().min(2));

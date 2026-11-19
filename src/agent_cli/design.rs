@@ -3,7 +3,7 @@
 //! (`-p`) keeps the classic look.
 
 use super::style::{self, Band, Style};
-use super::text::{FROM, UNTIL, Wrap, columns, visible};
+use super::text::{FROM, UNTIL, Wrap, columns, plain, visible};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) enum Design {
@@ -21,10 +21,19 @@ pub(super) enum Design {
     /// went, or the kind of notice; a rule above each prompt, and a call's output under a thin
     /// rail at the left edge, so that it keeps its width.
     Margin,
+    /// Rounded cards: one around each prompt in the accent, and around each call in the color
+    /// of how it went, its tool, glyph and time on the top edge; a `✦` before each reply.
+    Cards,
 }
 
 impl Design {
-    pub(super) const ALL: [Design; 4] = [Self::Classic, Self::Rails, Self::Panels, Self::Margin];
+    pub(super) const ALL: [Design; 5] = [
+        Self::Classic,
+        Self::Rails,
+        Self::Panels,
+        Self::Margin,
+        Self::Cards,
+    ];
 
     pub(super) fn name(self) -> &'static str {
         match self {
@@ -32,6 +41,7 @@ impl Design {
             Self::Rails => "rails",
             Self::Panels => "panels",
             Self::Margin => "margin",
+            Self::Cards => "cards",
         }
     }
 
@@ -44,8 +54,9 @@ impl Design {
         Self::ALL[(at.unwrap_or(0) + 1) % Self::ALL.len()]
     }
 
-    /// What goes before a prompt's rows; `None`: the editor's own `>`, in the accent.
-    pub(super) fn prompt(self, marked: bool) -> Option<Gutter> {
+    /// What goes before a prompt's rows, `width` columns wide; `None`: the editor's own `>`, in
+    /// the accent.
+    pub(super) fn prompt(self, width: usize, marked: bool) -> Option<Gutter> {
         let mark = |text: &str| format!("{}{text}{}", style::PROMPT_MARK, style::RESET);
         match self {
             Self::Classic => None,
@@ -64,6 +75,13 @@ impl Design {
                 None,
                 marked,
             )),
+            Self::Cards => {
+                let side = format!("{}│{}", style::PROMPT_MARK, style::RESET);
+                let first = format!("{side} {} ", mark("›"));
+                // Its side at the right takes 2 of the 6 columns.
+                let gutter = Gutter::new(&first, &format!("{side}   "), 6, None, marked);
+                Some(gutter.closed(&format!(" {side}"), width))
+            }
         }
     }
 
@@ -83,8 +101,18 @@ impl Design {
                 let rule = format!("{}{}{}", style::RAIL, "─".repeat(width), style::RESET);
                 (Some(rule), None)
             }
+            Self::Cards => {
+                let edge = |left, right| card_edge(style::PROMPT_MARK, left, right, width);
+                (Some(edge('╭', '╮')), Some(edge('╰', '╯')))
+            }
             Self::Classic => (None, None),
         }
+    }
+
+    /// The row a call's block ends with, `width` columns wide, where the look closes it: a
+    /// card's bottom edge.
+    pub(super) fn bottom(self, outcome: Outcome, width: usize) -> Option<String> {
+        (self == Self::Cards).then(|| card_edge(outcome.style(), '╰', '╯', width))
     }
 
     /// What goes before each row of reasoning; `None`: nothing.
@@ -96,6 +124,7 @@ impl Design {
                 Some(Gutter::same(&rail, 2, None, marked))
             }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
+            Self::Cards => Some(Gutter::same("  ", 2, None, marked)),
             Self::Margin => Some(Gutter::new(
                 &label("think", style::THOUGHT_LABEL),
                 MARGIN_BLANK,
@@ -129,6 +158,10 @@ impl Design {
                 let rail = format!("{}▏{} ", style::REPLY_RAIL, style::RESET);
                 Some(Gutter::same(&rail, 2, None, marked))
             }
+            Self::Cards => {
+                let star = format!("{}✦{} ", style::PROMPT_MARK, style::RESET);
+                Some(Gutter::new(&star, "  ", 2, None, marked))
+            }
             Self::Classic => None,
         }
     }
@@ -137,7 +170,7 @@ impl Design {
     /// text is in `style`, of the kind `kind` names in a word; `None`: nothing.
     pub(super) fn notice(self, kind: &str, style: Style, marked: bool) -> Option<Gutter> {
         match self {
-            Self::Rails => {
+            Self::Rails | Self::Cards => {
                 let mark = format!("{style}!{} ", style::RESET);
                 Some(Gutter::new(&mark, "  ", 2, None, marked))
             }
@@ -156,13 +189,14 @@ impl Design {
         match self {
             Self::Classic => None,
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Rails => Some(Gutter::same("  ", 2, None, marked)),
+            Self::Rails | Self::Cards => Some(Gutter::same("  ", 2, None, marked)),
             Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
         }
     }
 
-    /// What goes before each row of a call's result, or of its output while it runs.
-    pub(super) fn output(self, outcome: Outcome, marked: bool) -> Gutter {
+    /// What goes before each row of a call's result, or of its output while it runs, `width`
+    /// columns wide; in cards, also what closes it at the right.
+    pub(super) fn output(self, outcome: Outcome, width: usize, marked: bool) -> Gutter {
         let rail = |rail: &str| {
             let color = match outcome {
                 Outcome::Failed => style::RAIL_FAILED,
@@ -181,6 +215,11 @@ impl Design {
             Self::Rails => rail("│"),
             Self::Panels => Gutter::same(" ", 1, Some(outcome.band()), marked),
             Self::Margin => rail("▏"),
+            Self::Cards => {
+                let side = format!("{}│{}", outcome.style(), style::RESET);
+                let gutter = Gutter::same(&format!("{side} "), 4, None, marked);
+                gutter.closed(&format!(" {side}"), width)
+            }
         }
     }
 
@@ -234,11 +273,32 @@ impl Design {
                 };
                 (lead, columns, Some(right), None)
             }
+            Self::Cards => {
+                let border = outcome.style();
+                let lead = format!("{border}╭─{} {glyph} {name_shown} ", style::RESET);
+                let right = match took {
+                    Some(took) => format!(" {took} {border}─╮{}", style::RESET),
+                    None => format!("{border}─╮{}", style::RESET),
+                };
+                (lead, name.chars().count() + 6, Some(right), None)
+            }
         };
+        // A card's top edge runs on to its right, and its sides down the rows under it.
+        let card = (self == Self::Cards).then(|| outcome.style());
         // Rows under the first keep a panel's edge.
-        let below = match band.and_then(edge) {
-            Some(edge) => format!("{edge}{}", " ".repeat(indent_of(lead_columns, width) - 1)),
-            None => " ".repeat(indent_of(lead_columns, width)),
+        let below = match (band.and_then(edge), card) {
+            (Some(edge), _) => format!("{edge}{}", " ".repeat(indent_of(lead_columns, width) - 1)),
+            (None, Some(border)) => format!(
+                "{border}│{}{}",
+                style::RESET,
+                " ".repeat(indent_of(lead_columns, width) - 1)
+            ),
+            (None, None) => " ".repeat(indent_of(lead_columns, width)),
+        };
+        let until = if marked {
+            UNTIL.to_string()
+        } else {
+            String::new()
         };
         let band = band.map(Band::mark).map(String::from).unwrap_or_default();
         let from = if marked {
@@ -294,21 +354,40 @@ impl Design {
                     true => {
                         let used = lead_columns + columns(row);
                         // A copy of the row ends before what is at its right.
-                        let pad = match &right {
-                            Some(right) => {
+                        let pad = match (&right, card) {
+                            (Some(right), Some(border)) => {
                                 let pad = width.saturating_sub(used + columns(right));
-                                let until = if marked {
-                                    UNTIL.to_string()
-                                } else {
-                                    String::new()
+                                // The lead's space parts the rule from a call without a summary.
+                                let fill = match (pad, row.is_empty()) {
+                                    (0, _) => String::new(),
+                                    (_, true) => {
+                                        format!("{border}{}{}", "─".repeat(pad), style::RESET)
+                                    }
+                                    (_, false) => {
+                                        let rule = "─".repeat(pad - 1);
+                                        format!(" {border}{rule}{}", style::RESET)
+                                    }
                                 };
-                                until + &" ".repeat(pad) + right
+                                format!("{}{until}{fill}{right}", style::RESET)
                             }
-                            None => String::new(),
+                            (Some(right), None) => {
+                                let pad = width.saturating_sub(used + columns(right));
+                                until.clone() + &" ".repeat(pad) + right
+                            }
+                            (None, _) => String::new(),
                         };
                         format!("{band}{lead}{from}{row}{pad}")
                     }
-                    false => format!("{band}{below}{from}{row}"),
+                    false => match card {
+                        Some(border) => {
+                            let used = indent + cells(row) + 2;
+                            let pad = " ".repeat(width.saturating_sub(used));
+                            let side = format!("{border}│{}", style::RESET);
+                            let reset = style::RESET;
+                            format!("{below}{from}{row}{reset}{until}{pad} {side}")
+                        }
+                        None => format!("{band}{below}{from}{row}"),
+                    },
                 });
             }
         }
@@ -342,6 +421,24 @@ fn edge(band: Band) -> Option<String> {
 /// A row of `band` alone, as panels pad their blocks.
 pub(super) fn pad_row(band: Band) -> String {
     format!("{}{}", band.mark(), edge(band).unwrap_or_default())
+}
+
+/// A card's top or bottom edge, `width` columns wide, between its `left` and `right` corners, in
+/// `style`; a copy leaves it out.
+fn card_edge(style: Style, left: char, right: char, width: usize) -> String {
+    let rule = "─".repeat(width.saturating_sub(2));
+    format!("{style}{left}{rule}{right}{}", style::RESET)
+}
+
+/// The cells `text` takes on screen: its marks for the full screen take none.
+fn cells(text: &str) -> usize {
+    use unicode_width::UnicodeWidthChar;
+    let shown = plain(text);
+    shown
+        .chars()
+        .filter(|c| !c.is_control())
+        .map(|c| c.width().unwrap_or(0))
+        .sum()
 }
 
 /// The length of the line range a read's summary ends with (`:3-10`, `:3`), or 0.
@@ -410,6 +507,10 @@ pub(super) struct Gutter {
     /// What an empty row of the block shows.
     pub(super) blank: String,
     pub(super) columns: usize,
+    /// What closes each row at the right, after `fill` columns of text, as a card's side.
+    right: String,
+    fill: usize,
+    marked: bool,
 }
 
 impl Gutter {
@@ -430,7 +531,22 @@ impl Gutter {
             rest: format!("{band}{rest}{from}"),
             blank: format!("{band}{rest}{from}"),
             columns,
+            right: String::new(),
+            fill: 0,
+            marked,
         }
+    }
+    /// The gutter with `right` closing each row of a block `width` wide, its columns among the
+    /// gutter's.
+    fn closed(self, right: &str, width: usize) -> Self {
+        let fill = width.saturating_sub(self.columns);
+        let mut gutter = Self {
+            right: right.to_owned(),
+            fill,
+            ..self
+        };
+        gutter.blank = gutter.row(false, " ");
+        gutter
     }
     fn same(gutter: &str, columns: usize, band: Option<Band>, marked: bool) -> Self {
         Self::new(gutter, gutter, columns, band, marked)
@@ -441,11 +557,22 @@ impl Gutter {
     }
     /// Row `row` of the block, the first if `first`.
     pub(super) fn row(&self, first: bool, row: &str) -> String {
-        match (row.is_empty(), first) {
-            (true, _) => self.blank.clone(),
-            (false, true) => format!("{}{row}", self.first),
-            (false, false) => format!("{}{row}", self.rest),
+        let lead = match (row.is_empty(), first) {
+            (true, _) => return self.blank.clone(),
+            (false, true) => &self.first,
+            (false, false) => &self.rest,
+        };
+        if self.right.is_empty() {
+            return format!("{lead}{row}");
         }
+        // A copy of the row ends before the padding and the side.
+        let until = if self.marked {
+            UNTIL.to_string()
+        } else {
+            String::new()
+        };
+        let pad = " ".repeat(self.fill.saturating_sub(cells(row)));
+        format!("{lead}{row}{}{until}{pad}{}", style::RESET, self.right)
     }
 }
 
@@ -483,7 +610,6 @@ fn margin_label(name: &str) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_cli::text::plain;
 
     #[test]
     fn each_look_has_a_name_and_the_next_follows_in_turn() {
@@ -492,7 +618,7 @@ mod tests {
         }
         assert_eq!(Design::named("plain"), None);
         let mut design = Design::Classic;
-        let seen: Vec<_> = (0..4)
+        let seen: Vec<_> = (0..5)
             .map(|_| {
                 design = design.next();
                 design
@@ -504,6 +630,7 @@ mod tests {
                 Design::Rails,
                 Design::Panels,
                 Design::Margin,
+                Design::Cards,
                 Design::Classic
             ]
         );
@@ -546,6 +673,53 @@ mod tests {
     }
 
     #[test]
+    fn a_card_has_its_call_on_the_top_edge_and_its_sides_down_each_row() {
+        let heading = Design::Cards.heading("bash", "cd x\nmake", Outcome::Done, None, 24, true);
+        let rows: Vec<String> = heading.split('\n').map(plain).collect();
+        // A copy of each row holds the command alone, without the edge or the side.
+        assert_eq!(
+            rows,
+            [
+                format!("╭─ ✓ bash {FROM}cd x{UNTIL} ────────╮"),
+                format!("│         {FROM}make{UNTIL}         │"),
+            ]
+        );
+        assert!(heading.contains(&format!("{}╭─", style::OUTCOME_DONE)));
+        let heading =
+            Design::Cards.heading("bash", "make", Outcome::Failed, Some("2.0s"), 24, false);
+        assert_eq!(plain(&heading), "╭─ ✗ bash make ─ 2.0s ─╮");
+        let output = Design::Cards.output(Outcome::Running, 12, true);
+        assert_eq!(
+            plain(&output.row(true, "ab")),
+            format!("│ {FROM}ab{UNTIL}       │")
+        );
+        assert_eq!(plain(&output.blank), format!("│ {FROM} {UNTIL}        │"));
+        assert!(
+            output
+                .first
+                .contains(&format!("{}│", style::OUTCOME_RUNNING))
+        );
+        // A row too long for the card keeps its text whole.
+        assert_eq!(
+            plain(&output.row(false, "abcdefghij")),
+            format!("│ {FROM}abcdefghij{UNTIL} │")
+        );
+        let prompt = Design::Cards.prompt(12, false).unwrap();
+        assert_eq!(
+            (plain(&prompt.row(true, "hi")), prompt.columns),
+            ("│ › hi     │".into(), 6)
+        );
+        let (above, below) = Design::Cards.prompt_pads(6);
+        assert_eq!(
+            (above.as_deref().map(plain), below.as_deref().map(plain)),
+            (Some("╭────╮".into()), Some("╰────╯".into()))
+        );
+        assert_eq!(Design::Panels.bottom(Outcome::Done, 6), None);
+        let bottom = Design::Cards.bottom(Outcome::Failed, 6).unwrap();
+        assert!(bottom.starts_with(&format!("{}╰────╯", style::OUTCOME_FAILED)));
+    }
+
+    #[test]
     fn a_file_tools_path_takes_the_accent_and_a_reads_lines_the_warning_color() {
         let (path, range, reset) = (style::TOOL_PATH, style::TOOL_RANGE, style::RESET);
         let heading =
@@ -566,12 +740,12 @@ mod tests {
 
     #[test]
     fn gutters_go_before_each_row_and_blank_rows_keep_rails_and_bands() {
-        let rails = Design::Rails.output(Outcome::Failed, true);
+        let rails = Design::Rails.output(Outcome::Failed, 40, true);
         assert_eq!(plain(&rails.row(true, "x")), format!("│ {FROM}x"));
         // A copy of an empty row holds nothing of its rail.
         assert_eq!(plain(&rails.blank), format!("│ {FROM}"));
         assert!(rails.first.contains(style::RAIL_FAILED.get()));
-        let done = Design::Rails.output(Outcome::Done, false);
+        let done = Design::Rails.output(Outcome::Done, 40, false);
         assert!(done.first.contains(style::RAIL_DONE.get()));
         let reply = Design::Rails.reply(false).unwrap();
         assert_eq!(plain(&reply.row(true, "ok")), "▏ ok");
@@ -602,7 +776,7 @@ mod tests {
         assert_eq!(plain(&notice.row(false, "b")), "       b");
         assert!(notice.first.contains(style::WARNING.get()));
         // Its output keeps the width but for a thin rail in the color of how the call went.
-        let failed = Design::Margin.output(Outcome::Failed, false);
+        let failed = Design::Margin.output(Outcome::Failed, 40, false);
         assert_eq!(
             (plain(&failed.row(true, "x")), failed.columns),
             ("▏ x".into(), 2)
@@ -610,7 +784,7 @@ mod tests {
         assert!(failed.first.contains(style::RAIL_FAILED.get()));
         assert!(
             Design::Margin
-                .output(Outcome::Done, false)
+                .output(Outcome::Done, 40, false)
                 .first
                 .contains(style::RAIL.get())
         );
@@ -620,10 +794,10 @@ mod tests {
             (above.as_deref().map(plain), below),
             (Some("─".repeat(5)), None)
         );
-        let classic = Design::Classic.output(Outcome::Done, true);
+        let classic = Design::Classic.output(Outcome::Done, 40, true);
         assert_eq!(classic.row(false, "x"), format!("  {FROM}x"));
         assert_eq!(classic.row(false, ""), "");
-        let panels = Design::Panels.prompt(false).unwrap();
+        let panels = Design::Panels.prompt(40, false).unwrap();
         // In 16 colors, as here, an edge in the accent stands for the prompt's band.
         assert_eq!(plain(&panels.row(true, "hi")), "\u{11}▎› hi");
         assert_eq!(plain(&panels.row(false, "")), "\u{11}▎  ");

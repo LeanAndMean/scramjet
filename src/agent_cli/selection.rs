@@ -26,6 +26,12 @@ pub(super) struct Line {
 }
 
 impl Line {
+    /// The columns within `left..right` that a copy of it holds, which a selection shows: none
+    /// of a rule, nor of its gutter or what is at its right.
+    pub(super) fn copied(&self, left: usize, right: usize) -> Option<(usize, usize)> {
+        let right = right.min(self.until.unwrap_or(usize::MAX));
+        (!self.rule).then_some((left.max(self.from), right))
+    }
     /// `shown`, a rule that a copy leaves out.
     pub(super) fn rule(shown: &str) -> Self {
         Self {
@@ -381,6 +387,15 @@ pub(super) fn text(lines: &[Line], left: usize, right: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_selection_shows_over_what_a_copy_holds_alone() {
+        let card = lines(&format!("│ {FROM}ab{UNTIL}   │\n╰─────╯{RULE}"));
+        assert_eq!(card[0].copied(0, usize::MAX), Some((2, 4)));
+        assert_eq!(card[0].copied(3, 9), Some((3, 4)));
+        assert_eq!(card[1].copied(0, usize::MAX), None);
+        assert_eq!(row("plain").copied(1, 3), Some((1, 3)));
+    }
 
     #[test]
     fn presses_fall_on_the_start_of_a_cell() {

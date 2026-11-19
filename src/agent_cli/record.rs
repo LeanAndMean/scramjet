@@ -207,6 +207,7 @@ pub(super) fn running(last: Option<&Event>, ui: &mut Terminal) {
             ui.running_output("")
         }
         Some(Event::Subagents(shown)) => ui.running_subagents(shown),
+        Some(Event::Question(_)) => ui.asking(),
         _ => {}
     }
 }

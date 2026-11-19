@@ -527,7 +527,8 @@ impl App {
         let selected = self.selected();
         // A row on a band is erased and painted on it rather than on the base.
         let shown = |line: &Line, at: usize| {
-            let shown = match selected.as_ref().and_then(|s| s.columns(at)) {
+            let columns = selected.as_ref().and_then(|s| s.columns(at));
+            let shown = match columns.and_then(|(left, right)| line.copied(left, right)) {
                 Some((left, right)) => {
                     let mut shown = selection::highlight(&line.shown, left, right);
                     let used = selection::width(&line.shown);

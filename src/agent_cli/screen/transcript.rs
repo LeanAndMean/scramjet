@@ -746,6 +746,33 @@ mod tests {
                 "",
             ]
         );
+        // Cards frame prompts in the accent and calls in the color of how they went.
+        assert_eq!(
+            rows(&shown_in(Design::Cards)),
+            [
+                "╭──────────────────────────────────────╮",
+                "│ › fix the test                       │",
+                "╰──────────────────────────────────────╯",
+                "",
+                "  Looking at it.",
+                "",
+                "╭─ ✗ bash cargo test ─────────── 2.0s ─╮",
+                "│ 1 failed                             │",
+                "│ Command exited with code 101         │",
+                "╰──────────────────────────────────────╯",
+                "",
+                "✦ It fails.",
+                "",
+                "╭──────────────────────────────────────╮",
+                "│ › again                              │",
+                "╰──────────────────────────────────────╯",
+                "",
+                "╭─ ○ bash make ────────────────────────╮",
+                "│ building                             │",
+                "╰──────────────────────────────────────╯",
+                "",
+            ]
+        );
         // Panels put prompts on a band of their own, and each call on one for how it went; where
         // the theme has no such backgrounds, as these tests' 16 colors, an edge marks each band.
         let panels = shown_in(Design::Panels);
@@ -840,6 +867,49 @@ mod tests {
     }
 
     #[test]
+    fn a_card_is_closed_while_its_question_is_asked_and_holds_the_answer_once_given() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        let call = Event::ToolCall("get_scramjet_user_input".into(), String::new(), None);
+        transcript.push(call);
+        transcript.push(Event::ToolRunning(Instant::now()));
+        transcript.push(Event::Question("Delete it?".into()));
+        let shown = |transcript: &mut Transcript| {
+            let look = Look {
+                design: Design::Cards,
+                ..look(36, false)
+            };
+            transcript.render(look, &hide);
+            let lines = transcript.window(0, 100).into_iter();
+            let rows = lines.map(|line| plain(&line.shown).trim_end().to_owned());
+            rows.filter(|row| !row.is_empty()).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            shown(&mut transcript),
+            [
+                "╭─ ○ get_scramjet_user_input ──────╮",
+                "│ Delete it?                       │",
+                "│                                  │",
+                "╰──────────────────────────────────╯",
+            ]
+        );
+        let answer = "Answer: Yes".into();
+        let at = Instant::now();
+        let result = Event::ToolResult("get_scramjet_user_input".into(), answer, None, false, at);
+        transcript.push(result);
+        assert_eq!(
+            shown(&mut transcript),
+            [
+                "╭─ ✓ get_scramjet_user_input ──────╮",
+                "│ Delete it?                       │",
+                "│                                  │",
+                "│ Answer: Yes                      │",
+                "╰──────────────────────────────────╯",
+            ]
+        );
+    }
+
+    #[test]
     fn a_failed_calls_output_is_red_but_where_a_band_rail_or_label_says_it_failed() {
         let row = |design| {
             let styled = styled_in(design);
@@ -849,14 +919,19 @@ mod tests {
             failed.expect("the failed call's output").0
         };
         assert!(row(Design::Classic).contains(style::TOOL_FAILED.get()));
-        for design in [Design::Panels, Design::Rails, Design::Margin] {
+        for design in [Design::Panels, Design::Rails, Design::Margin, Design::Cards] {
             let row = row(design);
             // What follows the gutter: the rails' own, and a panel's edge in 16 colors, are in
             // the error color.
             let row = ["│", "▏"].iter().fold(row, |row, rail| {
                 row.replace(&format!("{}{rail}{}", style::RAIL_FAILED, style::RESET), "")
             });
-            let row = row.replace(&format!("{}▎{}", style::OUTCOME_FAILED, style::RESET), "");
+            let row = ["▎", "│"].iter().fold(row, |row, edge| {
+                row.replace(
+                    &format!("{}{edge}{}", style::OUTCOME_FAILED, style::RESET),
+                    "",
+                )
+            });
             assert!(row.contains(style::TOOL_OUTPUT.get()), "{row:?}");
             assert!(!row.contains(style::TOOL_FAILED.get()), "{row:?}");
         }
@@ -903,7 +978,7 @@ mod tests {
         transcript.push(retry);
         let reply = "One fails: compaction, in the agent's tests.\n\nRun it alone.";
         transcript.push(Event::Assistant(reply.into()));
-        for design in [Design::Rails, Design::Panels, Design::Margin] {
+        for design in [Design::Rails, Design::Panels, Design::Margin, Design::Cards] {
             let look = Look {
                 design,
                 ..look(24, true)

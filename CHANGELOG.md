@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.276.0 — The cards look
+
+### Added
+
+- A `cards` look (`/settings` → Look): each call in a rounded card in the color of how it went (running, done, failed), its tool, `○`/`✓`/`✗` and time on the top edge; each prompt in a card in the accent, and a `✦` before each reply.
+
+### Changed
+
+- In the full screen, a selection is shown only over what a copy holds: not over a look's gutters, rails, rules and pads, nor over a call's time and glyph at the right.
+
 ## 2.275.0 — A running command's time
 
 ### Changed
