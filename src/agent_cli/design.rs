@@ -283,6 +283,76 @@ impl Design {
         }
     }
 
+    /// How a message of the harness's own (a summary, what a command sent, an earlier session),
+    /// labeled `label` (`compaction`; empty for none), is framed, `width` columns wide; `None`:
+    /// at the left edge, unframed, as the classic look shows one where the theme paints no box
+    /// or outside the full screen (`marked`).
+    pub(super) fn frame(self, label: &str, width: usize, marked: bool) -> Option<Frame> {
+        let band = Band::Message;
+        let border = self.tone(style::MESSAGE_RULE);
+        let rule = |columns: usize| format!("{border}{}{}", "─".repeat(columns), style::RESET);
+        let frame = |gutter, above, below, titled| Frame {
+            above,
+            gutter,
+            below,
+            titled,
+        };
+        let mark = |mark: &str, rest: &str| {
+            let first = format!("{border}{mark}{} ", style::RESET);
+            Gutter::new(&first, rest, 2, None, marked)
+        };
+        Some(match self {
+            Self::Classic if !(marked && band.painted()) => return None,
+            Self::Classic | Self::Panels => {
+                let pad = Some(pad_row(band));
+                // A column at each side of the text, as Scramjet's box.
+                let gutter = Gutter {
+                    columns: 2,
+                    ..Gutter::boxed(band, marked)
+                };
+                frame(gutter, pad.clone(), pad, false)
+            }
+            Self::Cards | Self::Tinted | Self::Ribbons => {
+                let tint = self.tint(band);
+                let side = self.side(band, border);
+                let gutter = Gutter::same(&format!("{side} "), 4, None, marked);
+                let gutter = gutter.closed(&format!(" {side}"), width, tint);
+                let (left, right) = (self.corner(band, '╭'), self.corner(band, '╮'));
+                let title = match label.is_empty() {
+                    true => String::new(),
+                    false => format!(" {}{label}{} ", style::MESSAGE_LABEL, style::RESET),
+                };
+                let used = columns(&title) + 3;
+                let top = format!(
+                    "{border}{left}─{}{title}{}{border}{right}{}",
+                    style::RESET,
+                    rule(width.saturating_sub(used)),
+                    style::RESET
+                );
+                let (left, right) = (self.corner(band, '╰'), self.corner(band, '╯'));
+                let bottom = card_edge(tint, border, left, right, width);
+                frame(gutter, Some(tinted(&top, tint)), Some(bottom), true)
+            }
+            Self::Rails => frame(
+                mark("┃", &format!("{border}┃{} ", style::RESET)),
+                None,
+                None,
+                false,
+            ),
+            Self::Margin => {
+                let label = self::label(&margin_message(label), style::MESSAGE_LABEL);
+                let gutter = Gutter::new(&label, MARGIN_BLANK, MARGIN, None, marked);
+                frame(gutter, None, None, true)
+            }
+            Self::Outline => frame(mark("▸", "  "), None, None, false),
+            Self::Timeline => frame(mark("◈", &spine_gutter()), None, None, false),
+            Self::Mono => {
+                let gutter = Gutter::same("  ", 2, None, marked);
+                frame(gutter, Some(rule(width)), Some(rule(width)), false)
+            }
+        })
+    }
+
     /// What goes before each row of a call's result, or of its output while it runs, `width`
     /// columns wide; in cards, also what closes it at the right.
     pub(super) fn output(self, outcome: Outcome, width: usize, marked: bool) -> Gutter {
@@ -587,7 +657,10 @@ impl Design {
             style::OUTCOME_RUNNING | style::SUBAGENT_RUNNING => style::MONO_MARK,
             style::OUTCOME_DONE | style::SUBAGENT_DONE | style::TOOL_PATH => style::MONO_TEXT,
             style::TOOL_RANGE => style::MUTED,
-            style::WARNING | style::NOTICE | style::PROMPT_MARK => style::MONO_MARK,
+            style::WARNING | style::NOTICE | style::PROMPT_MARK | style::MESSAGE_LABEL => {
+                style::MONO_MARK
+            }
+            style::MESSAGE_RULE => style::RAIL,
             style => style,
         }
     }
@@ -612,7 +685,7 @@ pub(super) fn spine(marked: bool) -> String {
 /// Whether `shown`, a row's text without styles, is on the timeline's spine: it starts with a
 /// node or the spine.
 pub(super) fn on_spine(shown: &str) -> bool {
-    shown.starts_with(['│', '┊', '◆', '◇', '○', '●', '✗', '!'])
+    shown.starts_with(['│', '┊', '◆', '◇', '◈', '○', '●', '✗', '!'])
 }
 
 /// What outline's heading calls what tool `name` does, as it runs or once it ran; a tool with no
@@ -743,6 +816,27 @@ impl Outcome {
             Self::Done => Band::Done,
             Self::Failed => Band::Failed,
         }
+    }
+}
+
+/// How a look frames a message of the harness's own: the rows above and below its text, which a
+/// copy leaves out, and the gutter before each row of it.
+pub(super) struct Frame {
+    pub(super) above: Option<String>,
+    pub(super) gutter: Gutter,
+    pub(super) below: Option<String>,
+    /// Whether the frame shows the label, which the text then leaves out.
+    pub(super) titled: bool,
+}
+
+/// The margin's label for a message of the harness's own labeled `label`.
+fn margin_message(label: &str) -> String {
+    match label {
+        "session" => "chain".into(),
+        "command" => "cmd".into(),
+        "compaction" => "recap".into(),
+        "release notes" => "notes".into(),
+        label => label.chars().take(MARGIN - 1).collect(),
     }
 }
 

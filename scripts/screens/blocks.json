@@ -1,0 +1,118 @@
+{
+  "size": "100x44",
+  "files": {
+    "README.md": "Project\n",
+    ".scramjet/flow/commands/flow:step.md": "---\nnext:\n  mode: closed\n  candidates:\n    - name: flow:step\n---\nStep $1.\n"
+  },
+  "prompt": "/flow:step one",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo first step"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The first step is done."
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Ran the **first** step and checked its output.",
+          "next_steps": [
+            {
+              "message": "/flow:step two",
+              "fresh_session": true,
+              "reason": "Do the second."
+            }
+          ],
+          "recommended_next_step": 0
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The second step is done."
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Ran the second step."
+        }
+      }
+    ],
+    [
+      {
+        "text": "## Goal\n\nRun the flow's steps.\n\n## Progress\n\n- The first and second steps ran.\n- Nothing was changed."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "Select next step"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "second step is done"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "chain"
+    },
+    {
+      "type": "/compact\r"
+    },
+    {
+      "until": "Run the flow"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "blocks"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "blocks-expanded"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "size": "56x44"
+    },
+    {
+      "shot": "blocks-narrow"
+    }
+  ]
+}

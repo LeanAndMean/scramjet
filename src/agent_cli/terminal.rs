@@ -2,13 +2,13 @@
 //! line under it on a terminal, or captured for the full screen to show; and the terminal modes
 //! of a `-p` turn.
 use super::banner::{self, Banner, Opening};
-use super::design::{self, Design, Gutter, Outcome};
+use super::design::{self, Design, Frame, Gutter, Outcome};
 use super::editor::NOTE_TIME;
 use super::highlight::{self, Highlighter};
 use super::interactive::thinking;
 use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
-use super::style::{self, Band, Style};
+use super::style::{self, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, columns, printable, style_at, visible};
 use super::{children, console, diff, editor, job, markdown, record};
 use scramjet::agent::{
@@ -1280,8 +1280,13 @@ impl AgentUi for Terminal {
             return;
         }
         let body = command_body(sent);
+        let frame = self.frame("");
         let shown = if self.full {
-            let width = if self.color { self.box_width() } else { 0 };
+            let width = if self.color {
+                self.frame_width(&frame)
+            } else {
+                0
+            };
             Some(self.summary_block(body, width))
         } else if self.expandable {
             let lines = lines(body);
@@ -1290,7 +1295,7 @@ impl AgentUi for Terminal {
             None
         };
         match shown {
-            Some(shown) if self.boxed() => self.err(&boxed(&shown)),
+            Some(shown) if frame.is_some() => self.err(&self.framed(frame, &shown)),
             Some(shown) if self.full => self.err(&format!("\n{shown}\n")),
             Some(shown) => self.err(&format!("{shown}\n")),
             None => {}
@@ -1640,21 +1645,31 @@ impl Terminal {
             None => self.out(&format!("\r\x1b[{rows}A\x1b[J")),
         }
     }
-    /// A message of the harness's own in Scramjet's box: `label` in bold before `heading`, then
-    /// after a blank row `body` as a summary, wrapped to `box_width`; in `boxed` rows on the full
-    /// screen. Ends with its last row's newline.
+    /// A message of the harness's own in its look's frame (`Design::frame`): `label` in bold
+    /// before `heading` where the frame does not show it, then after a blank row `body` as a
+    /// summary, wrapped to the frame. Ends with its last row's newline.
     fn message_box(&self, label: &str, heading: &str, body: Option<&str>) -> String {
-        let width = self.box_width();
-        let label = self.styled(style::MESSAGE_LABEL, &format!("[{label}]"));
+        let frame = self.frame(label);
+        let width = self.frame_width(&frame);
+        let first = match frame.as_ref().is_some_and(|frame| frame.titled) {
+            true => heading.to_owned(),
+            false => {
+                let label = self.styled(
+                    self.design.tone(style::MESSAGE_LABEL),
+                    &format!("[{label}]"),
+                );
+                format!("{label} {heading}")
+            }
+        };
         let mut wrap = self.wrapper(width);
-        let mut text = wrap.push(&format!("{label} {heading}")) + &wrap.finish();
+        let mut text = wrap.push(&first) + &wrap.finish();
         if let Some(body) = body {
             text += "\n\n";
             text += &self.summary_block(body, width);
         }
-        match self.boxed() {
-            true => boxed(&text),
-            false => text + "\n",
+        match frame {
+            Some(_) => self.framed(frame, &text),
+            None => text + "\n",
         }
     }
     /// An earlier session of the chain: a block with what ran and its summary, then, once tool
@@ -1680,17 +1695,36 @@ impl Terminal {
             self.outcomes = outcomes;
         }
     }
-    /// The full screen shows messages in a box on the theme's `customMessageBg`, if it has one.
-    fn boxed(&self) -> bool {
-        self.marked && Band::Message.painted()
+    /// How the look frames a message labeled `label`; none without color.
+    fn frame(&self, label: &str) -> Option<Frame> {
+        let frame = self.design.frame(label, self.width(), self.marked);
+        frame.filter(|_| self.color)
     }
-    /// The columns a message's text takes: the terminal's, but a column at each side of a box.
-    fn box_width(&self) -> usize {
-        match (self.color, self.boxed()) {
+    /// The columns a message's text takes in `frame`: the terminal's, but its gutter's.
+    fn frame_width(&self, frame: &Option<Frame>) -> usize {
+        match (self.color, frame) {
             (false, _) => 0,
-            (true, false) => self.width(),
-            (true, true) => self.width().saturating_sub(2).max(20),
+            (true, None) => self.width(),
+            (true, Some(frame)) => self.width().saturating_sub(frame.gutter.columns).max(20),
         }
+    }
+    /// The rows of `text` in `frame`, its rows above and below left out of a copy.
+    fn framed(&self, frame: Option<Frame>, text: &str) -> String {
+        let Some(frame) = frame else {
+            return format!("{text}\n");
+        };
+        let rule = if self.marked {
+            RULE.to_string()
+        } else {
+            String::new()
+        };
+        let pad = |pad: Option<String>| pad.map_or(String::new(), |pad| format!("{pad}{rule}\n"));
+        let mut block = pad(frame.above);
+        for (index, row) in text.split('\n').enumerate() {
+            block += &frame.gutter.row(index == 0, row);
+            block.push('\n');
+        }
+        block + &pad(frame.below)
     }
     /// A message's text as Scramjet shows a compaction's summary: markdown in the message's
     /// color, wrapped to `width`. Its first lines while tool results are cut, as Scramjet
@@ -1889,19 +1923,6 @@ pub(super) fn framed(sent: &str) -> Option<Framed<'_>> {
         name,
         body: body.trim_end(),
     })
-}
-
-/// The full screen's rows of `text` in Scramjet's box: on the theme's `customMessageBg`, with a
-/// column at each side and a row above and below, which a copy leaves out.
-fn boxed(text: &str) -> String {
-    let gutter = Gutter::boxed(Band::Message, true);
-    let pad = format!("{}{RULE}\n", Band::Message.mark());
-    let mut block = pad.clone();
-    for row in text.split('\n') {
-        block += &gutter.row(false, row);
-        block.push('\n');
-    }
-    block + &pad
 }
 
 /// How many lines `text` has, in words.
@@ -2418,13 +2439,19 @@ to expand\n(exit 2)"
 
     #[test]
     fn a_message_box_is_on_its_band_with_padding_a_copy_leaves_out() {
-        let rows = boxed("\x1b[1m[branch]\x1b[0m Went\n\nThere");
+        let mut ui = Terminal::capture_shown(20, Arc::new(AtomicBool::new(false)), true);
+        ui.design = Design::Panels;
+        let rows = ui.framed(ui.frame("branch"), "\x1b[1m[branch]\x1b[0m Went\n\nThere");
         assert_eq!(
             rows,
             "\x16\x1c\n\x16 \x1d\x1b[1m[branch]\x1b[0m Went\n\x16 \x1d\n\x16 \x1dThere\n\x16\x1c\n"
         );
         let lines = selection::lines(&rows);
-        assert!(lines.iter().all(|line| line.band == Some(Band::Message)));
+        assert!(
+            lines
+                .iter()
+                .all(|line| line.band == Some(style::Band::Message))
+        );
         assert_eq!(
             lines
                 .iter()
@@ -2432,6 +2459,48 @@ to expand\n(exit 2)"
                 .collect::<Vec<_>>(),
             ["", " [branch] Went", " ", " There", ""]
         );
+    }
+
+    #[test]
+    fn each_look_frames_the_harnesss_messages_and_a_copy_holds_their_text_alone() {
+        let shown = |design| {
+            let mut ui = Terminal::capture_shown(30, Arc::new(AtomicBool::new(false)), true);
+            ui.design = design;
+            ui.compaction_summary("Kept **this**.");
+            let lines = selection::lines(&ui.captured());
+            let copy = selection::text(&lines, 0, usize::MAX);
+            let rows: Vec<String> = lines.iter().map(|line| plain(&line.shown)).collect();
+            (rows, copy)
+        };
+        let heading = "The earlier conversation";
+        // The terminal's colors paint no fills, so tinted cards and ribbons are drawn as cards.
+        for design in [Design::Cards, Design::Tinted, Design::Ribbons] {
+            let (rows, copy) = shown(design);
+            assert_eq!(rows[0], "╭─ compaction ───────────────╮", "{design:?}");
+            assert_eq!(rows[1], format!("│ {heading}   │"));
+            assert_eq!(rows.last().unwrap(), &format!("╰{}╯", "─".repeat(28)));
+            assert_eq!(copy, "The earlier conversation is summarized\n\nKept this.");
+        }
+        let (rows, copy) = shown(Design::Margin);
+        assert_eq!(rows[0], " recap The earlier");
+        assert_eq!(copy, "The earlier conversation is summarized\n\nKept this.");
+        let (rows, copy) = shown(Design::Timeline);
+        assert_eq!(rows[0], "◈ [compaction] The earlier");
+        assert_eq!(rows[1], "│ conversation is summarized");
+        assert!(copy.starts_with("[compaction] The earlier conversation is"));
+        let (rows, _) = shown(Design::Rails);
+        assert_eq!(rows[1], "┃ conversation is summarized");
+        let (rows, _) = shown(Design::Outline);
+        assert_eq!(rows[0], "▸ [compaction] The earlier");
+        let (rows, copy) = shown(Design::Mono);
+        assert_eq!(
+            (rows[0].as_str(), rows[1].as_str()),
+            (&*"─".repeat(30), "  [compaction] The earlier")
+        );
+        assert!(!copy.contains('─'));
+        // The classic look keeps Scramjet's box, which these colors do not paint.
+        let (rows, _) = shown(Design::Classic);
+        assert_eq!(rows[0], "[compaction] The earlier");
     }
 
     #[test]

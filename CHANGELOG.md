@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.288.0 — The harness's own blocks in each look
+
+### Changed
+
+- An earlier session's summary, what a command or skill sent, compaction and branch summaries and the release notes are drawn in the look's own language rather than always in Scramjet's box: a card with the label on its top edge in `cards`, rules on the message's fill in `tinted` and `ribbons`, the look's mark before them in `rails`, `timeline` and `outline`, the label in the margin in `margin`, rules in `mono`; `classic` and `panels` keep the box.
+
 ## 2.287.0 — Tinted cards without sides
 
 ### Changed

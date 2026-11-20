@@ -132,6 +132,8 @@ styles! {
     /// branch summaries, what a command or skill sent) and its bold label (`[compaction]`).
     SUMMARY: [] CustomMessageText;
     MESSAGE_LABEL: [BOLD] CustomMessageLabel;
+    /// The frame the looks other than the classic one and panels draw around such a message.
+    MESSAGE_RULE: [] BorderAccent;
     /// A section heading in an information block such as `/session`'s.
     INFO_HEADING: [BOLD];
     /// A day's bar in `/usage`.
