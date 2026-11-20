@@ -3761,6 +3761,26 @@ def questions(read, until, send, output):
     send(b'\x04')
 
 
+def typed_answer(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'commit\r')
+    on_screen('Commit now?')
+    on_screen('Type something.')
+    read(.6)
+    # Up from the first option wraps to the last row; typing there opens its field.
+    send(b'\x1b[A')
+    on_screen('\u2192 Type something.')
+    send(b'after lunch')
+    on_screen('\u2192 after lunch')
+    on_screen('Enter send')
+    send(b'\r')
+    on_screen('Answer: after lunch')
+    on_screen('Later then.')
+    ended(read, output)
+    send(b'\x04')
+
+
 def questions_resumed(read, until, send, output):
     shown, on_screen = full_screen(rows=40)(read, output)
     rows = on_screen('Cancelled')
@@ -4098,9 +4118,19 @@ def package_stores_kept_by_reload(read, until, send, output):
 def printed_question(read, until, send, output):
     # Without the full screen, a question's options are numbered and answered by a line, which shows.
     mark = until(b'  2. Beta \xe2\x80\x94 the second [recommended]\r\n', until(b'Choose an option'))
-    mark = until(b'Choice [1-2, Enter = 2]: ', mark)
+    mark = until(b'  3. Type something.\r\n', mark)
+    mark = until(b'Choice [1-3, Enter = 2]: ', mark)
     send(b'1\r')
     until(b'Chose alpha.', until(b'1\r\n', mark))
+
+
+def printed_typed(read, until, send, output):
+    # The last row reads an answer of the user's own from the next line.
+    mark = until(b'Choice [1-3, Enter = 2]: ', until(b'  3. Type something.\r\n'))
+    send(b'3\r')
+    mark = until(b'Answer: ', mark)
+    send(b'Gamma, the third\r')
+    until(b'Chose gamma.', mark)
 
 greet = os.path.join(project, '.scramjet', 'demo', 'commands')
 os.makedirs(greet)
@@ -4210,6 +4240,14 @@ run(['--continue'], questions_resumed, rows=40)
 (asked,) = set(session_files()) - known
 outputs = [line['output'] for line in map(json.loads, open(asked)) if line.get('type') == 'function_call_output']
 assert outputs == ['{"selected":"a"}', '{"cancelled":true}'], outputs
+known = set(session_files())
+run([], typed_answer, serve_items([
+    [tool_call('call_1', 'get_scramjet_user_input', {'type': 'confirm', 'message': 'Commit now?'})],
+    [message('Later then.')],
+]))
+(typed,) = set(session_files()) - known
+outputs = [line['output'] for line in map(json.loads, open(typed)) if line.get('type') == 'function_call_output']
+assert outputs == ['{"typed":"after lunch"}'], outputs
 flow = os.path.join(project, '.scramjet', 'flow', 'commands')
 os.makedirs(flow)
 with open(os.path.join(flow, 'flow:step.md'), 'w') as file:
@@ -4410,6 +4448,16 @@ run(['-p', 'pick'], printed_question, serve_items([
 (printed,) = set(session_files()) - known
 outputs = [line['output'] for line in map(json.loads, open(printed)) if line.get('type') == 'function_call_output']
 assert outputs == ['{"selected":"a"}'], outputs
+known = set(session_files())
+run(['-p', 'pick'], printed_typed, serve_items([
+    [tool_call('call_1', 'get_scramjet_user_input', {
+        'type': 'select', 'message': 'Pick one.', 'recommended': 1,
+        'options': [{'value': 'a', 'label': 'Alpha'}, {'value': 'b', 'label': 'Beta'}]})],
+    [message('Chose gamma.')],
+]))
+(printed,) = set(session_files()) - known
+outputs = [line['output'] for line in map(json.loads, open(printed)) if line.get('type') == 'function_call_output']
+assert outputs == ['{"typed":"Gamma, the third"}'], outputs
 
 
 def publications(read, until, send, output):

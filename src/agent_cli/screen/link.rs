@@ -16,7 +16,7 @@ use crate::agent_cli::theme_editor::ThemeEditor;
 use crate::agent_cli::{clipboard, console, spelling};
 use scramjet::agent::{
     self, AgentError, AgentUi, AutoCompaction, Children, Choice, CompactRead, Compaction,
-    EffortCycle, Purpose, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
+    EffortCycle, Purpose, Reply, Shell, StreamProgress, Tokens, ToolDetail, UserCommand,
 };
 use std::{
     cell::Cell,
@@ -608,6 +608,20 @@ impl AgentUi for Link {
     ) -> Option<usize> {
         self.pick_timed(Picker::question(title, options, recommended))
             .map(|(row, ..)| row)
+    }
+    fn reply(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+        _: bool,
+    ) -> Option<Reply> {
+        let picker = Picker::question(title, options, recommended).typing();
+        match self.open(Dialog::Pick(Box::new(picker)), None, true)? {
+            Answer::Picked(row) => row.map(Reply::Chosen),
+            Answer::Text(typed) => typed.map(Reply::Typed),
+            _ => None,
+        }
     }
 }
 

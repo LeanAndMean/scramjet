@@ -2677,7 +2677,10 @@ fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
         .unwrap();
     assert_eq!(params["toolCallId"], call["params"]["update"]["toolCallId"]);
     let schema = &params["requestedSchema"];
-    assert_eq!(schema["required"], serde_json::json!(["answer"]));
+    // Either answers: an option, or the text field for an answer of the user's own.
+    assert_eq!(schema["required"], serde_json::json!([]));
+    assert_eq!(schema["properties"]["typed"]["type"], "string", "{schema}");
+    assert_eq!(schema["properties"]["typed"]["title"], "Type something.");
     let property = &schema["properties"]["answer"];
     assert_eq!(property["type"], "string", "{property}");
     assert_eq!(property["default"], "b");
@@ -2689,6 +2692,20 @@ fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
     assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
     assert!(
         bodies[0].contains(r#"{\"selected\":\"b\"}"#),
+        "{}",
+        bodies[0]
+    );
+    // A typed answer goes to the model in place of the option the form also gave.
+    let (_, ended, _, bodies) = acp_asked(
+        "get_scramjet_user_input",
+        select.clone(),
+        &[],
+        forms.clone(),
+        |_| serde_json::json!({"action": "accept", "content": {"answer": "b", "typed": " Gamma "}}),
+    );
+    assert_eq!(ended["result"]["stopReason"], "end_turn", "{ended}");
+    assert!(
+        bodies[0].contains(r#"{\"typed\":\"Gamma\"}"#),
         "{}",
         bodies[0]
     );

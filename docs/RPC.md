@@ -100,7 +100,7 @@ The core asks the user at six points. Each becomes a request to the client, whos
 | `--ask` approvals | `session/request_permission` with the call (`toolCallId`, `title`, `kind`, `rawInput`, `locations`) and options `allow_once` "Allow", `allow_always` "Allow all calls this session", `reject_once` "Deny" | Every client has it. |
 | Publication approvals | `session/request_permission` on the publication's call, its whole preview (repository, title, body) as text content | As above. |
 | Project agents' consent | `session/request_permission` on the `subagent` call, naming the agents | As above. |
-| The agent's select and confirm questions | `elicitation/create`, form mode: a select is a required string property with `oneOf` (`const` and `title` per option, the recommended one as `default`), a confirm a required boolean | Asked as a freetext question: the turn ends and the next prompt answers. |
+| The agent's select and confirm questions | `elicitation/create`, form mode: a select is a string property `answer` with `oneOf` (`const` and `title` per option, the recommended one as `default`), a confirm a boolean `answer`, each beside an optional string `typed` ("Type something.") for an answer of the user's own, which wins when given; neither is required | Asked as a freetext question: the turn ends and the next prompt answers. |
 | A status report's abandon question | `elicitation/create`, a confirm | As above. |
 | Next-step and suggestion lists | `_io.github.leanandmean.scramjet/next_step` (below) | The list goes out as an agent message; forced steps and autopilot still run. |
 

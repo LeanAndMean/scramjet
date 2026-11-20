@@ -753,7 +753,8 @@ impl Interactive {
                 | Picked::Read(_)
                 | Picked::Toggle(..)
                 | Picked::Label(_)
-                | Picked::Placed(..) => {
+                | Picked::Placed(..)
+                | Picked::Typed(_) => {
                     return screen.dismiss();
                 }
             };

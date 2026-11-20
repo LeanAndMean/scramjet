@@ -2,7 +2,7 @@
 //! conversation replayed as its turns showed.
 use super::tools::{self, Call};
 use super::{
-    Agent, AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, SUBAGENTS,
+    Agent, AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, Reply, SUBAGENTS,
     StreamProgress, TYPED, Tokens, compaction, message_text, publish, question, status,
 };
 use serde::{Deserialize, Serialize};
@@ -191,6 +191,22 @@ pub trait AgentUi {
         recommended: Option<usize>,
     ) -> Option<usize> {
         self.choose(title, options, recommended)
+    }
+    /// A model's select (`confirm` false) or confirm question: one of `options`, or an answer
+    /// the user types in a row after them (`TYPE_SOMETHING`) where the interface has one;
+    /// `None` when they cancel.
+    fn reply(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+        confirm: bool,
+    ) -> Option<Reply> {
+        let chosen = match confirm {
+            true => self.confirm(title, options, recommended),
+            false => self.choose(title, options, recommended),
+        };
+        chosen.map(Reply::Chosen)
     }
     /// `choose` for allowing what `question` just showed, `options`' last denying it.
     fn permit(&mut self, title: &str, options: &[Choice]) -> Option<usize> {

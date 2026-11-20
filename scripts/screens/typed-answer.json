@@ -1,0 +1,73 @@
+{
+  "size": "100x30",
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Paint the shed",
+  "replies": [
+    [
+      {
+        "call": "get_scramjet_user_input",
+        "arguments": {
+          "type": "select",
+          "message": "Which color?",
+          "recommended": 0,
+          "options": [
+            {
+              "value": "red",
+              "label": "Red",
+              "description": "As it was"
+            },
+            {
+              "value": "blue",
+              "label": "Blue"
+            }
+          ]
+        }
+      }
+    ],
+    [
+      {
+        "text": "Green with white trim, then."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "Type something."
+    },
+    {
+      "sleep": 0.6
+    },
+    {
+      "shot": "asked"
+    },
+    {
+      "type": "\u001b[A"
+    },
+    {
+      "sleep": 0.2
+    },
+    {
+      "type": "Green, with white trim"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "typing"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "white trim, then"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "answered"
+    }
+  ]
+}

@@ -8,10 +8,11 @@ pub const NAME: &str = "get_scramjet_user_input";
 /// Listed under the available tools.
 pub(super) const SNIPPET: &str = "You have access to `get_scramjet_user_input` for asking the \
 user something mid-turn: confirm (yes/no) and select (one of your options) return their answer \
-as the tool result; freetext ends the turn, and they reply in the editor. During a Scramjet \
-command, ask through this tool rather than with a question in prose, which gets a status check \
-instead of an answer. The question stays visible in the tool row; give the context it needs in \
-its message or in prose just before.";
+as the tool result; freetext ends the turn, and they reply in the editor. Confirm and select \
+always end with a row where the user can type an answer of their own, returned as `typed`, so \
+add no \"Other\" option. During a Scramjet command, ask through this tool rather than with a \
+question in prose, which gets a status check instead of an answer. The question stays visible in \
+the tool row; give the context it needs in its message or in prose just before.";
 
 pub(super) fn definition() -> Value {
     let kind = |value: &str| json!({"const": value, "type": "string"});
@@ -19,8 +20,9 @@ pub(super) fn definition() -> Value {
         "description":"Request structured input from the user. Supports confirm (yes/no), select \
 (pick from options), and freetext (open-ended input). Confirm and select block until the user \
 responds and return their answer as the tool result; freetext terminates the turn so the user \
-replies in the standard editor. The placeholder parameter is accepted for compatibility but unused \
-by freetext.",
+replies in the standard editor. Confirm and select always end with a row where the user can type \
+an answer of their own instead, returned as {\"typed\": text}; do not add an \"Other\" option. \
+The placeholder parameter is accepted for compatibility but unused by freetext.",
         "parameters":{"type":"object","properties":{
             "type":{"anyOf":[kind("confirm"),kind("select"),kind("freetext")],
                 "description":"The interaction type: confirm, select, or freetext."},
@@ -37,6 +39,18 @@ in prose just before, the question alone will do."},
             "placeholder":{"type":"string","description":"For freetext type: placeholder hint text \
 shown in the input. Accepted for compatibility but unused by freetext."}},
           "required":["type","message"]}})
+}
+
+/// The row a select or confirm question ends with, which opens a field to type an answer in.
+pub const TYPE_SOMETHING: &str = "Type something.";
+
+/// The user's answer to a select or confirm question.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reply {
+    /// The option at this index.
+    Chosen(usize),
+    /// An answer of their own, typed in the row after the options (`TYPE_SOMETHING`).
+    Typed(String),
 }
 
 /// One option to choose.
@@ -157,12 +171,17 @@ and 'label'."
     /// What the model receives for the user's choice (`None`: cancelled), and whether the turn
     /// ends there, as Scramjet ends it after a freetext question or a cancelled one. `parked`:
     /// a freetext question left the active command waiting for the reply.
-    pub fn answer(&self, chosen: Option<usize>, parked: bool) -> (String, bool) {
-        let (answer, ends) = match (&self.kind, chosen) {
+    pub fn answer(&self, reply: Option<&Reply>, parked: bool) -> (String, bool) {
+        let (answer, ends) = match (&self.kind, reply) {
             (Kind::Freetext, _) => (json!({ "parked": parked }), true),
             (_, None) => (json!({"cancelled": true}), true),
-            (Kind::Confirm, Some(index)) => (json!({"confirmed": index == 0}), false),
-            (Kind::Select, Some(index)) => (json!({"selected": self.options[index].value}), false),
+            (_, Some(Reply::Typed(text))) => (json!({ "typed": text }), false),
+            (Kind::Confirm, Some(&Reply::Chosen(index))) => {
+                (json!({"confirmed": index == 0}), false)
+            }
+            (Kind::Select, Some(&Reply::Chosen(index))) => {
+                (json!({"selected": self.options[index].value}), false)
+            }
         };
         (answer.to_string(), ends)
     }
@@ -203,6 +222,15 @@ pub fn shown(arguments: &Value, output: &str) -> Option<(String, String)> {
                 .join("\n")
         }
         _ if answer["cancelled"] == true => "Cancelled".to_owned(),
+        _ if let Some(typed) = answer["typed"].as_str() => match question.kind {
+            Kind::Select => {
+                let options = question.options.iter().map(|o| format!("  {}", option(o)));
+                (options.chain([format!("Answer: {typed}")]))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            _ => format!("Answer: {typed}"),
+        },
         Kind::Confirm => match answer["confirmed"].as_bool()? {
             true => "Answer: Yes".to_owned(),
             false => "Answer: No".to_owned(),
@@ -263,7 +291,7 @@ mod tests {
             "options":[{"value":"a","label":"Alpha","description":"first"},{"value":"b","label":"Beta"}]});
         let question = Question::parse(&select).unwrap();
         assert_eq!(question.recommended, Some(1));
-        let (chosen, ends) = question.answer(Some(1), false);
+        let (chosen, ends) = question.answer(Some(&Reply::Chosen(1)), false);
         assert_eq!((chosen.as_str(), ends), (r#"{"selected":"b"}"#, false));
         assert_eq!(
             shown(&select, &chosen).unwrap(),
@@ -275,16 +303,37 @@ mod tests {
             shown(&select, &cancelled).unwrap().1,
             "Options:\n- Alpha — first\n- Beta\nCancelled"
         );
+        let typed = Reply::Typed("Gamma, \"the third\"".into());
+        let (answer, ends) = question.answer(Some(&typed), false);
+        assert_eq!(answer, r#"{"typed":"Gamma, \"the third\""}"#);
+        assert!(!ends);
+        assert_eq!(
+            shown(&select, &answer).unwrap().1,
+            "  Alpha — first\n  Beta\nAnswer: Gamma, \"the third\""
+        );
 
         let confirm = json!({"type":"confirm","message":"Go?"});
         let question = Question::parse(&confirm).unwrap();
         assert_eq!(question.options.len(), 2);
         for (chosen, sent, text) in [
-            (Some(0), r#"{"confirmed":true}"#, "Answer: Yes"),
-            (Some(1), r#"{"confirmed":false}"#, "Answer: No"),
+            (
+                Some(Reply::Chosen(0)),
+                r#"{"confirmed":true}"#,
+                "Answer: Yes",
+            ),
+            (
+                Some(Reply::Chosen(1)),
+                r#"{"confirmed":false}"#,
+                "Answer: No",
+            ),
+            (
+                Some(Reply::Typed("Later".into())),
+                r#"{"typed":"Later"}"#,
+                "Answer: Later",
+            ),
             (None, r#"{"cancelled":true}"#, "Cancelled"),
         ] {
-            let (answer, ends) = question.answer(chosen, false);
+            let (answer, ends) = question.answer(chosen.as_ref(), false);
             assert_eq!((answer.as_str(), ends), (sent, chosen.is_none()));
             assert_eq!(shown(&confirm, &answer).unwrap().1, text);
         }

@@ -12,8 +12,8 @@ use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
     Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose,
-    Remembered, Reopened, SandboxMode, SessionChoice, Shell, StreamProgress, Tokens, ToolDetail,
-    TreeEntry, TreeItem, UserCommand,
+    Remembered, Reopened, Reply, SandboxMode, SessionChoice, Shell, StreamProgress, TYPE_SOMETHING,
+    Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -3529,10 +3529,14 @@ impl Updates {
     /// The answer the client's form gives for `property`, asked with what `question` showed;
     /// `None` when declined or cancelled.
     fn elicit(&mut self, title: &str, property: Value) -> Option<Value> {
+        let properties = json!({"answer": property});
+        Some(self.form(title, properties, &["answer"])?["answer"].take())
+    }
+    /// A form with `properties`, of which `required` must be given; what the client accepted.
+    fn form(&mut self, title: &str, properties: Value, required: &[&str]) -> Option<Value> {
         lock(&self.log).question = None;
         let message = self.asked.take().unwrap_or_else(|| title.to_owned());
-        let schema = json!({"type": "object", "properties": {"answer": property},
-            "required": ["answer"]});
+        let schema = json!({"type": "object", "properties": properties, "required": required});
         let params = json!({
             "sessionId": self.session,
             "toolCallId": self.call_id(),
@@ -3542,7 +3546,7 @@ impl Updates {
         });
         let mut result = self.ask("elicitation/create", params, &self.cancel.clone())?;
         match result["action"] == "accept" {
-            true => Some(result["content"]["answer"].take()),
+            true => Some(result["content"].take()),
             false => None,
         }
     }
@@ -3558,6 +3562,19 @@ impl Updates {
             labels.join("\n")
         ));
         None
+    }
+    /// The option a form's `answer` gave: a value of `options`, or for a yes-or-no question
+    /// (`confirm`) a boolean, `true` the first.
+    fn chosen(&self, answer: &Value, options: &[Choice], confirm: bool) -> Option<usize> {
+        let chosen = match (confirm, answer) {
+            (true, Value::Bool(yes)) => Some(if *yes { 0 } else { 1 }),
+            (true, _) => None,
+            (false, answer) => (options.iter()).position(|option| *answer == option.value.as_str()),
+        };
+        if chosen.is_none() {
+            self.refused(answer);
+        }
+        chosen
     }
     fn refused(&self, answer: &Value) {
         self.say(
@@ -3584,6 +3601,33 @@ impl Updates {
             false => eprintln!("scramjet: {text}"),
         }
     }
+}
+
+/// A form's string property with an option per value of `options`, the recommended one the default.
+fn one_of(title: &str, options: &[Choice], recommended: Option<usize>) -> Value {
+    let one_of: Vec<Value> = (options.iter())
+        .map(|option| {
+            let mut one = json!({"const": option.value, "title": option.label});
+            if let Some(description) = &option.description {
+                one["description"] = json!(description);
+            }
+            one
+        })
+        .collect();
+    let mut property = json!({"type": "string", "title": title, "oneOf": one_of});
+    if let Some(option) = recommended.and_then(|index| options.get(index)) {
+        property["default"] = json!(option.value);
+    }
+    property
+}
+
+/// A form's boolean property, `true` for yes.
+fn yes_or_no(title: &str, recommended: Option<usize>) -> Value {
+    let mut property = json!({"type": "boolean", "title": title});
+    if let Some(recommended) = recommended {
+        property["default"] = json!(recommended == 0);
+    }
+    property
 }
 
 /// `offer` as text, for a client that does not know `next_step`.
@@ -4008,25 +4052,8 @@ impl AgentUi for Updates {
         if !self.forms {
             return self.unanswered(title, options);
         }
-        let one_of: Vec<Value> = (options.iter())
-            .map(|option| {
-                let mut one = json!({"const": option.value, "title": option.label});
-                if let Some(description) = &option.description {
-                    one["description"] = json!(description);
-                }
-                one
-            })
-            .collect();
-        let mut property = json!({"type": "string", "title": title, "oneOf": one_of});
-        if let Some(option) = recommended.and_then(|index| options.get(index)) {
-            property["default"] = json!(option.value);
-        }
-        let answer = self.elicit(title, property)?;
-        let chosen = (options.iter()).position(|option| answer == option.value.as_str());
-        if chosen.is_none() {
-            self.refused(&answer);
-        }
-        chosen
+        let answer = self.elicit(title, one_of(title, options, recommended))?;
+        self.chosen(&answer, options, false)
     }
     /// A form with a boolean, `true` the first of `options`.
     fn confirm(
@@ -4038,17 +4065,34 @@ impl AgentUi for Updates {
         if !self.forms {
             return self.unanswered(title, options);
         }
-        let mut property = json!({"type": "boolean", "title": title});
-        if let Some(recommended) = recommended {
-            property["default"] = json!(recommended == 0);
+        let answer = self.elicit(title, yes_or_no(title, recommended))?;
+        self.chosen(&answer, options, true)
+    }
+    /// A form with the options and a text field for an answer of the user's own, either given.
+    fn reply(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+        confirm: bool,
+    ) -> Option<Reply> {
+        if !self.forms {
+            return self.unanswered(title, options).map(Reply::Chosen);
         }
-        match self.elicit(title, property)? {
-            Value::Bool(yes) => Some(if yes { 0 } else { 1 }),
-            answer => {
-                self.refused(&answer);
-                None
-            }
+        let answer = match confirm {
+            true => yes_or_no(title, recommended),
+            false => one_of(title, options, recommended),
+        };
+        let typed = json!({"type": "string", "title": TYPE_SOMETHING,
+            "description": "An answer of your own, in place of the options"});
+        let mut content = self.form(title, json!({"answer": answer, "typed": typed}), &[])?;
+        if let Some(typed) = content["typed"].as_str().map(str::trim)
+            && !typed.is_empty()
+        {
+            return Some(Reply::Typed(typed.to_owned()));
         }
+        let answer = content["answer"].take();
+        self.chosen(&answer, options, confirm).map(Reply::Chosen)
     }
     /// A permission request: the first option allows once, the last denies, any between
     /// allows for longer.

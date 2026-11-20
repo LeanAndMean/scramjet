@@ -281,7 +281,10 @@ impl Agent {
                     self.suggestion = suggest::Pending::Reply;
                 } else if answer["cancelled"] == true {
                     self.lifecycle.wait();
-                } else if answer.get("confirmed").is_some() || answer.get("selected").is_some() {
+                } else if ["confirmed", "selected", "typed"]
+                    .iter()
+                    .any(|field| answer.get(field).is_some())
+                {
                     self.lifecycle.answered();
                 }
             }
@@ -737,14 +740,17 @@ fn ask(
         }
     };
     ui.question(&question.message);
-    let chosen = match question.kind {
+    let reply = match question.kind {
         question::Kind::Freetext => None,
-        question::Kind::Confirm => ui.confirm("Confirm", &question.options, None),
-        question::Kind::Select => {
-            ui.choose("Choose an option", &question.options, question.recommended)
-        }
+        question::Kind::Confirm => ui.reply("Confirm", &question.options, None, true),
+        question::Kind::Select => ui.reply(
+            "Choose an option",
+            &question.options,
+            question.recommended,
+            false,
+        ),
     };
-    let parked = match (&question.kind, chosen) {
+    let parked = match (&question.kind, &reply) {
         (question::Kind::Freetext, _) => lifecycle.wait(),
         (_, None) => {
             lifecycle.wait();
@@ -755,7 +761,7 @@ fn ask(
             false
         }
     };
-    let (text, ends) = question.answer(chosen, parked);
+    let (text, ends) = question.answer(reply.as_ref(), parked);
     let detail = question::shown(arguments, &text).map(|(_, shown)| ToolDetail::Answer(shown));
     ui.tool_result(question::NAME, &text, detail.as_ref(), false);
     let output = Output {

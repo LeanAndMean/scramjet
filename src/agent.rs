@@ -75,7 +75,7 @@ pub use mcp::{
 pub use problem::{Problem, ProblemFile};
 pub use providers::{KeyFrom, Providers, Sources, unmet_engine};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
-pub use question::Choice;
+pub use question::{Choice, Reply, TYPE_SOMETHING};
 pub use request::{CacheRetention, set_cache_retention};
 pub use sandbox::{Remembered, Sandbox, SandboxMode};
 pub use session::{

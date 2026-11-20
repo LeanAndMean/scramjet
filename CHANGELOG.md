@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.291.0 — Type an answer of your own
+
+### Added
+
+- A question the agent asks with options ends with a "Type something." row, as Claude Code's: Enter or typing there opens a field, and Enter sends what you typed as your answer, and the turn goes on. In `-p` it is the last numbered option, read from the next line; in ACP, an optional text field beside the options in the client's form.
+
 ## 2.290.0 — Tinted and bar by default
 
 ### Changed

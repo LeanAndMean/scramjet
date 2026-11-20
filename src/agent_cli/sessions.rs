@@ -263,7 +263,9 @@ impl Interactive {
                     continue;
                 }
                 // Not keys of this list (`Picker::tree`, `Picker::placing`).
-                select::Picked::Label(_) | select::Picked::Placed(..) => {
+                select::Picked::Label(_)
+                | select::Picked::Placed(..)
+                | select::Picked::Typed(_) => {
                     screen.dismiss();
                     return None;
                 }

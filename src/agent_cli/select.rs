@@ -12,7 +12,7 @@ use super::settings::scramjet_level;
 use super::style::{self, Band, Style};
 use super::text;
 use super::tree::{Filter, View};
-use scramjet::agent::{Choice, FRESH_MARK, Label, ModelOption};
+use scramjet::agent::{Choice, FRESH_MARK, Label, ModelOption, TYPE_SOMETHING};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -262,6 +262,14 @@ impl Route {
     }
 }
 
+/// The answer of their own a user types in a question's last row (`Picker::typing`), and whether
+/// the row is open for typing.
+#[derive(Default)]
+struct Field {
+    text: String,
+    open: bool,
+}
+
 /// What a key ended a list with.
 #[derive(Debug, PartialEq)]
 pub(super) enum Picked {
@@ -278,6 +286,8 @@ pub(super) enum Picked {
     Label(usize),
     /// The row chosen with Enter in a list that is shown again after it (`Picker::placing`).
     Placed(usize, Spot),
+    /// An answer typed in a question's last row (`Picker::typing`).
+    Typed(String),
 }
 
 /// A list for a screen that draws it and passes it the keys; it returns the row chosen with
@@ -336,6 +346,8 @@ enum Shape {
         recommended: Option<usize>,
         /// A next step's model and effort (`routing`).
         route: Option<Route>,
+        /// The answer typed in the last row (`typing`).
+        field: Option<Field>,
     },
     /// `/tree`'s entries, which its keys filter, search and fold, and the entry selected last,
     /// which the selection goes back to after a filter or a query that showed none.
@@ -388,6 +400,7 @@ impl Picker {
                 options: options.to_vec(),
                 recommended,
                 route: None,
+                field: None,
             },
             deadline: None,
             held: false,
@@ -400,6 +413,28 @@ impl Picker {
             status_at: None,
             reading: None,
         }
+    }
+
+    /// Ends a question's options with a row (`TYPE_SOMETHING`) where Enter or typing opens a field
+    /// for an answer of the user's own, which Enter sends.
+    pub(super) fn typing(mut self) -> Self {
+        if let Shape::Question {
+            options,
+            recommended,
+            field,
+            ..
+        } = &mut self.shape
+        {
+            options.push(Choice {
+                label: TYPE_SOMETHING.to_owned(),
+                description: None,
+                value: TYPE_SOMETHING.to_owned(),
+            });
+            let visible = question_visible(options);
+            self.list = List::new(options.len(), recommended.unwrap_or(0), visible);
+            *field = Some(Field::default());
+        }
+        self
     }
 
     /// Scramjet's tree selector: the entries `view` shows, at most `visible` at once, from
@@ -767,6 +802,16 @@ impl Picker {
         {
             return None;
         }
+        if let Shape::Question {
+            options,
+            field: Some(field),
+            ..
+        } = &mut self.shape
+            && row == Some(options.len() - 1)
+            && let Some(picked) = field_key(field, key)
+        {
+            return picked;
+        }
         let scoped = [
             (Binding::SelectConfirm, Act::Toggle),
             (Binding::ModelsEnableAll, Act::EnableAll),
@@ -927,11 +972,16 @@ impl Picker {
                 options,
                 recommended,
                 route,
+                field,
             } => {
                 let selected = self.list.rows[self.list.selected];
                 let mut tail =
                     (route.as_ref()).map_or_else(Vec::new, |route| route.lines(selected));
-                let keys = hint("select", &[], "cancel");
+                let typing = field.as_ref().filter(|field| field.open);
+                let keys = match typing {
+                    Some(_) => hint("send", &[], "cancel"),
+                    None => hint("select", &[], "cancel"),
+                };
                 let hint = match self.deadline {
                     Some(deadline) => {
                         let left = deadline.saturating_duration_since(Instant::now());
@@ -945,10 +995,46 @@ impl Picker {
                 tail.push(hint);
                 let question = (title.as_str(), options.as_slice(), *recommended);
                 let fresh = |row| route.as_ref().is_some_and(|route| route.is_fresh(row));
-                question_lines(question, &tail, &self.list, size, &fresh)
+                let field = field
+                    .as_ref()
+                    .map(|field| (field.text.as_str(), field.open));
+                question_lines(question, &tail, &self.list, size, &fresh, field)
             }
         }
     }
+}
+
+/// What `key` does on a question's last row (`Picker::typing`): Enter opens its field, and once
+/// open sends what is typed; typing opens it too, and edits it; Escape cancels the question.
+/// `None`: the list's own keys take it, as Up and Down, which leave the field as it is.
+fn field_key(field: &mut Field, key: &Key) -> Option<Option<Picked>> {
+    match key {
+        Key::Text(text) | Key::Paste(text) => {
+            let text = text
+                .chars()
+                .map(|ch| if ch.is_whitespace() { ' ' } else { ch });
+            field.text.extend(text.filter(|ch| !ch.is_control()));
+            field.open = true;
+        }
+        _ if !field.open && key.is(Binding::SelectConfirm) => field.open = true,
+        _ if !field.open => return None,
+        _ if key.is(Binding::SelectConfirm) => {
+            let typed = field.text.trim();
+            return Some((!typed.is_empty()).then(|| Picked::Typed(typed.to_owned())));
+        }
+        _ if key.is(Binding::DeleteCharBackward) => drop(field.text.pop()),
+        _ if key.is(Binding::DeleteWordBackward) => {
+            let kept = (field.text.trim_end()).trim_end_matches(|c: char| !c.is_whitespace());
+            field.text.truncate(kept.len());
+        }
+        _ if key.is(Binding::SelectUp) || key.is(Binding::SelectDown) => {
+            field.open = false;
+            return None;
+        }
+        _ if key.is(Binding::SelectCancel) => return Some(Some(Picked::Row(None))),
+        _ => {}
+    }
+    Some(None)
 }
 
 /// What a key does in Scramjet's tree selector: typing searches, Ctrl+D, Ctrl+T, Ctrl+U, Ctrl+L
@@ -1342,14 +1428,30 @@ fn question_lines(
     list: &List,
     (width, height): (usize, usize),
     fresh: &dyn Fn(usize) -> bool,
+    field: Option<(&str, bool)>,
 ) -> Vec<String> {
-    use style::{MUTED, QUESTION_BORDER, QUESTION_TITLE, RESET};
+    use style::{MUTED, QUESTION_BORDER, QUESTION_SELECTED, QUESTION_TITLE, RESET, SEARCH_CURSOR};
     let width = width.saturating_sub(1).max(8);
     let count = options.len();
     let selected = list.rows[list.selected];
     let rows: Vec<Vec<String>> = (0..count)
         .map(|index| {
             let option = &options[index];
+            if let Some((typed, open)) = field.filter(|_| index == count - 1) {
+                if open {
+                    let typed = self::tail(typed, width.saturating_sub(3));
+                    let row = format!("{QUESTION_SELECTED}→ {typed}{RESET}{SEARCH_CURSOR} {RESET}");
+                    return vec![row];
+                }
+                if !typed.is_empty() {
+                    let typed = Choice {
+                        label: typed.to_owned(),
+                        description: None,
+                        value: String::new(),
+                    };
+                    return option_rows(&typed, index == selected, false, width);
+                }
+            }
             let marked;
             let option = match fresh(index) {
                 true => {
@@ -1748,6 +1850,7 @@ mod tests {
                 &list,
                 (31, 24),
                 &|_| false,
+                None,
             )),
             [
                 "─".repeat(30).as_str(),
@@ -1773,6 +1876,7 @@ mod tests {
             &first,
             (31, 8),
             &|_| false,
+            None,
         ));
         assert_eq!(
             short[1..6],
@@ -1784,6 +1888,47 @@ mod tests {
                 "  (1/3)"
             ]
         );
+    }
+
+    #[test]
+    fn a_question_ends_with_a_row_to_type_an_answer_in() {
+        let options = ["Red", "Blue"].map(|label| Choice {
+            label: label.into(),
+            description: None,
+            value: label.into(),
+        });
+        let mut picker = Picker::question("Choose an option", &options, Some(0)).typing();
+        let rows = |picker: &Picker| plain(picker.lines((40, 24)))[2..6].to_vec();
+        assert_eq!(rows(&picker)[..3], ["→ Red", "  Blue", "  Type something."]);
+        // Enter opens the field on the last row, and with nothing typed sends nothing.
+        assert_eq!(picker.key(&key("up")), None);
+        assert_eq!(picker.key(&key("enter")), None);
+        assert_eq!(picker.key(&key("enter")), None);
+        assert_eq!(rows(&picker)[2], "→  ");
+        assert_eq!(rows(&picker)[3], "↑↓ move · Enter send · Esc cancel");
+        for text in ["Gree", "x"] {
+            assert_eq!(picker.key(&Key::Text(text.into())), None);
+        }
+        assert_eq!(picker.key(&key("backspace")), None);
+        assert_eq!(picker.key(&Key::Paste("n\nish ".into())), None);
+        assert_eq!(rows(&picker)[2], "→ Green ish  ");
+        // Up leaves the typed answer in the row, and typing there opens it again.
+        assert_eq!(picker.key(&key("up")), None);
+        assert_eq!(rows(&picker)[..3], ["  Red", "→ Blue", "  Green ish"]);
+        assert_eq!(picker.key(&key("down")), None);
+        assert_eq!(picker.key(&Key::Text("!".into())), None);
+        assert_eq!(
+            picker.key(&key("enter")),
+            Some(Picked::Typed("Green ish !".into()))
+        );
+        // Escape in the field cancels the question.
+        let mut picker = Picker::question("Confirm", &options, None).typing();
+        assert_eq!(picker.key(&key("up")), None);
+        assert_eq!(picker.key(&Key::Text("no".into())), None);
+        assert_eq!(picker.key(&key("escape")), Some(Picked::Row(None)));
+        // Without `typing` there is no such row.
+        let picker = Picker::question("Confirm", &options, None);
+        assert_eq!(plain(picker.lines((40, 24)))[4], HINT);
     }
 
     #[test]

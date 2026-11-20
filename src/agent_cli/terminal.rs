@@ -13,8 +13,9 @@ use super::text::{FROM, RULE, Wrap, call_line, clip, columns, printable, style_a
 use super::{children, console, diff, editor, job, markdown, record};
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
-    DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE,
-    StreamProgress, ToolDetail, UserCommand, publication_choices, read_line_too_long,
+    DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE, Reply,
+    StreamProgress, TYPE_SOMETHING, ToolDetail, UserCommand, publication_choices,
+    read_line_too_long,
 };
 use std::{
     borrow::Cow,
@@ -1363,6 +1364,35 @@ impl AgentUi for Terminal {
         recommended: Option<usize>,
     ) -> Option<usize> {
         self.numbered(title, options, recommended, recommended.unwrap_or(0))
+    }
+    /// The options numbered with `TYPE_SOMETHING` last, which reads the answer from the next line.
+    fn reply(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+        _: bool,
+    ) -> Option<Reply> {
+        let typing = Choice {
+            label: TYPE_SOMETHING.to_owned(),
+            description: None,
+            value: TYPE_SOMETHING.to_owned(),
+        };
+        let offered = [options, &[typing]].concat();
+        let row = self.numbered(title, &offered, recommended, recommended.unwrap_or(0))?;
+        if row < options.len() {
+            return Some(Reply::Chosen(row));
+        }
+        let terminal = std::io::stdin().is_terminal();
+        let _answer = terminal.then(InputMode::answer);
+        eprint!("Answer: ");
+        let mut typed = String::new();
+        let read = std::io::stdin().lock().read_line(&mut typed).unwrap_or(0);
+        if !terminal || read == 0 {
+            eprintln!();
+        }
+        let typed = typed.trim();
+        (!typed.is_empty()).then(|| Reply::Typed(typed.to_owned()))
     }
     /// Unlike a question's, an empty line cancels: in piped input it may not be an answer.
     fn approve_publication(&mut self, title: &str) -> bool {

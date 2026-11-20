@@ -4,7 +4,7 @@
 //! (`AgentUi::running_calls`), else as if they ran one after another, what a call shows waiting
 //! until the calls before it have ended.
 use super::tools::{self, Call, Output};
-use super::{AgentUi, Answer, Children, Choice, CompactRead, ToolDetail, Usage};
+use super::{AgentUi, Answer, Children, Choice, CompactRead, Reply, ToolDetail, Usage};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -382,6 +382,17 @@ impl AgentUi for Relay {
     ) -> Option<usize> {
         let (title, options) = (title.to_owned(), options.to_vec());
         self.ask(move |ui| ui.confirm(&title, &options, recommended))
+            .flatten()
+    }
+    fn reply(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+        confirm: bool,
+    ) -> Option<Reply> {
+        let (title, options) = (title.to_owned(), options.to_vec());
+        self.ask(move |ui| ui.reply(&title, &options, recommended, confirm))
             .flatten()
     }
     fn permit(&mut self, title: &str, options: &[Choice]) -> Option<usize> {
