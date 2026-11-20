@@ -60,6 +60,9 @@ styles! {
     FOOTER: [] Dim;
     FOOTER_NEARLY_FULL: [] Warning;
     FOOTER_FULL: [] Error;
+    /// The figures a bottom other than Scramjet's keeps prominent: the output rate, and how
+    /// full the context is up to 70%.
+    FOOTER_FIGURE: [] Text;
     /// Secondary notes: `Took 1.2s`, `(cancelled)`, why a compaction ran, editor hints.
     MUTED: [] Muted;
     /// A tool's result preview.

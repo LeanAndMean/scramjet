@@ -4,6 +4,7 @@
 
 use super::transcript::Look;
 use super::{ALLOW, App, Open, Shown};
+use crate::agent_cli::bottom::{self, Bottom};
 use crate::agent_cli::editor::{Draft, Note, terminal_size};
 use crate::agent_cli::keymap::{self, Binding};
 use crate::agent_cli::record::Event;
@@ -11,7 +12,7 @@ use crate::agent_cli::selection::{self, Line};
 use crate::agent_cli::settings::{Layout, scramjet_level};
 use crate::agent_cli::style::{self, Band};
 use crate::agent_cli::terminal::{COOLING, elapsed, retrying, spinner, waiting_for};
-use crate::agent_cli::text::{Wrap, clip, columns, one_line, plain, visible};
+use crate::agent_cli::text::{Wrap, clip, columns, one_line, visible};
 use scramjet::agent::{Purpose, StreamProgress};
 use std::{
     fmt::Write as _,
@@ -122,28 +123,38 @@ impl Activity {
     }
 }
 
-/// Adds the prompt's rows to `rows`, at most the `layout`'s share of `room` around the cursor,
-/// then its completion list; returns where the cursor is. With `spelled`, misspelled words are
-/// marked.
+/// The prompt's rows, at most the `layout`'s share of `room` around the cursor, then its
+/// completion list; where the cursor is in them, and how many of the draft's rows are hidden
+/// above and below. With `spelled`, misspelled words are marked.
 fn prompt_rows(
     draft: &Draft,
-    rows: &mut Vec<Line>,
     (width, room): (usize, usize),
     layout: Layout,
     spelled: bool,
-) -> (Option<(usize, usize)>, (usize, usize)) {
+) -> (Vec<String>, (usize, usize), (usize, usize)) {
     let (text, row, column) = draft.rows(width, spelled);
     let most = (room * layout.editor_share / 100).max(1);
     draft.shown(most);
     let shown = most.min(text.len());
     let top = (row + 1).saturating_sub(shown).min(text.len() - shown);
-    let start = rows.len();
-    rows.extend(selection::rows(&text[top..top + shown]));
-    rows.extend(selection::rows(
-        &draft.completion_rows(width, layout.completion_rows),
-    ));
+    let mut rows = text[top..top + shown].to_vec();
+    rows.extend(draft.completion_rows(width, layout.completion_rows));
     let hidden = (top, text.len() - top - shown);
-    (Some((start + row - top, column)), hidden)
+    (rows, (row - top, column), hidden)
+}
+
+/// What the dock shows in the prompt's place, or the prompt, each row in at most `width - 1`
+/// columns of the width it was made for.
+struct Held {
+    /// A dialog's title, over its rows.
+    title: Option<String>,
+    rows: Vec<String>,
+    /// Where the cursor is in `rows`.
+    cursor: Option<(usize, usize)>,
+    /// For the prompt, its border's style and how many of its rows are hidden above and below.
+    prompt: Option<(style::Style, (usize, usize))>,
+    /// The style of the rule under a dialog.
+    rule: style::Style,
 }
 
 /// The prompt's rule, `width` columns of it, saying how many of the draft's rows are hidden
@@ -226,11 +237,6 @@ fn status_rows(
         .collect()
 }
 
-/// A dock row of `text` in the muted style.
-fn muted(text: &str) -> Line {
-    selection::row(&format!("{}{text}{}", style::MUTED, style::RESET))
-}
-
 impl App {
     /// The status line: what a running turn does and the note, and how far the view is from
     /// the end.
@@ -280,73 +286,75 @@ impl App {
         }
     }
 
-    /// The rows under the conversation, and where the cursor goes in them.
-    fn dock(&self, (width, height): (usize, usize)) -> (Vec<Line>, Option<(usize, usize)>) {
-        let mut rows = Vec::new();
+    /// The queued messages' rows and the key that edits them, after the last one where it
+    /// fits there when `beside`.
+    fn queued(&self, width: usize, beside: bool) -> Vec<String> {
+        let room = width.saturating_sub(1);
         let queue = self.queue();
-        rows.extend(selection::rows(&self.status(width)));
         let queued = [
             ("Steering", &queue.messages.steering),
             ("Follow-up", &queue.messages.follow_ups),
         ];
+        let mut rows = Vec::new();
         for (kind, messages) in queued {
             for message in messages {
-                let line = clip(
-                    &format!("{kind}: {}", one_line(message)),
-                    width.saturating_sub(1),
-                );
-                rows.push(muted(&line));
+                rows.push(clip(&format!("{kind}: {}", one_line(message)), room));
             }
         }
         for command in &queue.commands {
-            let line = clip(
-                &format!("Command: {}", one_line(command)),
-                width.saturating_sub(1),
-            );
-            rows.push(muted(&line));
+            rows.push(clip(&format!("Command: {}", one_line(command)), room));
         }
         if !queue.messages.is_empty()
             && let Some(key) = keymap::key(Binding::Dequeue)
         {
-            let hint = format!("↳ {key} to edit all queued messages");
-            rows.push(muted(&clip(&hint, width.saturating_sub(1))));
+            let edit = format!("{key} to edit all queued messages");
+            match rows.last_mut() {
+                Some(last) if beside && columns(last) + 2 + columns(&edit) <= room => {
+                    *last += &" ".repeat(room - columns(last) - columns(&edit));
+                    *last += &edit;
+                }
+                _ => rows.push(clip(&format!("↳ {edit}"), room)),
+            }
         }
-        drop(queue);
-        let footer = self.footer.lines(width);
-        // The rule above the footer, and the footer.
-        let under = 1 + footer.len();
-        let room = height.saturating_sub(rows.len() + 1 + under).max(1);
-        let cursor = match &self.dialog {
+        (rows.iter())
+            .map(|row| format!("{}{row}{}", style::MUTED, style::RESET))
+            .collect()
+    }
+
+    /// What the dock shows in the prompt's place, made for `width` columns, in `room` rows.
+    fn held(&self, width: usize, room: usize) -> Held {
+        let mut held = Held {
+            title: None,
+            rows: Vec::new(),
+            cursor: None,
+            prompt: None,
+            rule: style::DIALOG_RULE,
+        };
+        match &self.dialog {
             Some(Open {
                 shown: Shown::Pick(picker),
                 ..
-            }) => {
-                rows.extend(selection::rows(&picker.lines((width, room))));
-                None
-            }
+            }) => held.rows = picker.lines((width, room)),
             Some(Open {
                 shown: Shown::Theme(editor),
                 ..
             }) => {
-                rows.extend(selection::rows(&editor.lines((width, room))));
-                None
+                held.rows = editor.lines((width, room));
+                held.rule = editor.rule();
             }
             Some(Open {
                 shown: Shown::Report(view),
                 ..
-            }) => {
-                rows.extend(selection::rows(&view.lines(width)));
-                None
-            }
+            }) => held.rows = view.lines(width),
             Some(Open {
                 shown: Shown::Approve(question),
                 ..
             }) => {
                 let mut wrap = Wrap::new(width.saturating_sub(1).max(10)).marking(true);
                 let text = wrap.push(&visible(question)) + &wrap.finish();
-                rows.extend(selection::rows(&text.split('\n').collect::<Vec<_>>()));
-                rows.push(selection::row(&format!("{ALLOW} ")));
-                Some((rows.len() - 1, ALLOW.len() + 1))
+                held.rows = text.split('\n').map(str::to_owned).collect();
+                held.rows.push(format!("{ALLOW} "));
+                held.cursor = Some((held.rows.len() - 1, ALLOW.len() + 1));
             }
             Some(Open {
                 shown: Shown::Text(text),
@@ -364,8 +372,9 @@ impl App {
                     style::MUTED,
                     style::RESET
                 );
-                rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
-                prompt_rows(&text.draft, &mut rows, (width, room), self.layout, false).0
+                held.title = Some(clip(&title, width.saturating_sub(1)));
+                let (rows, cursor, _) = prompt_rows(&text.draft, (width, room), self.layout, false);
+                (held.rows, held.cursor) = (rows, Some(cursor));
             }
             Some(Open {
                 shown: Shown::Press(title, note) | Shown::Wait(title, note),
@@ -386,47 +395,118 @@ impl App {
                     style::MUTED,
                     style::RESET
                 );
-                rows.push(selection::row(&clip(&title, width.saturating_sub(1))));
+                held.title = Some(clip(&title, width.saturating_sub(1)));
                 let mut wrap = Wrap::new(width.saturating_sub(3).max(10));
                 let note = wrap.push(&visible(note)) + &wrap.finish();
-                for line in note.split('\n') {
-                    let line = format!("  {}{line}{}", style::MUTED, style::RESET);
-                    rows.push(selection::row(&line));
-                }
-                None
+                held.rows = (note.split('\n'))
+                    .map(|line| format!("  {}{line}{}", style::MUTED, style::RESET))
+                    .collect();
             }
             None => {
                 let border = prompt_border(self.footer.shown.effort.as_deref(), &self.draft);
-                let top = rows.len();
-                rows.push(prompt_rule(border, width, None));
-                let (cursor, (above, below)) =
-                    prompt_rows(&self.draft, &mut rows, (width, room), self.layout, true);
-                rows[top] = prompt_rule(border, width, Some(('↑', above)));
-                rows.push(prompt_rule(border, width, Some(('↓', below))));
-                cursor
+                let (rows, cursor, hidden) =
+                    prompt_rows(&self.draft, (width, room), self.layout, true);
+                (held.rows, held.cursor) = (rows, Some(cursor));
+                held.prompt = Some((border, hidden));
             }
-        };
-        // As Scramjet's editor and its lists end with a rule over the footer.
-        let ruled = self.dialog.is_none()
-            || (rows.last()).is_some_and(|row| {
-                let text = plain(&row.shown);
-                !text.is_empty() && text.chars().all(|c| c == '─')
-            });
-        if !ruled {
-            let color = match &self.dialog {
-                Some(Open {
-                    shown: Shown::Theme(editor),
-                    ..
-                }) => editor.rule(),
-                _ => style::DIALOG_RULE,
-            };
-            rows.push(Line::rule(&format!(
-                "{}{}{}",
-                color,
-                "─".repeat(width.saturating_sub(1)),
-                style::RESET
-            )));
         }
+        held
+    }
+
+    /// The rows under the conversation, and where the cursor goes in them.
+    pub(super) fn dock(
+        &self,
+        (width, height): (usize, usize),
+    ) -> (Vec<Line>, Option<(usize, usize)>) {
+        let mut rows = selection::rows(&self.status(width));
+        rows.extend(selection::rows(
+            &self.queued(width, self.bottom != Bottom::Pi),
+        ));
+        match self.bottom {
+            Bottom::Pi => self.pi(rows, (width, height)),
+            Bottom::Boxed => self.boxed(rows, (width, height)),
+        }
+    }
+
+    /// Scramjet's dock: the prompt between rules, or a dialog over a rule, then the footer.
+    fn pi(
+        &self,
+        mut rows: Vec<Line>,
+        (width, height): (usize, usize),
+    ) -> (Vec<Line>, Option<(usize, usize)>) {
+        let footer = self.footer.lines(width);
+        // The rule above the footer, and the footer.
+        let under = 1 + footer.len();
+        let room = height.saturating_sub(rows.len() + 1 + under).max(1);
+        let held = self.held(width, room);
+        if let Some(title) = &held.title {
+            rows.push(selection::row(title));
+        }
+        let start = rows.len() + usize::from(held.prompt.is_some());
+        let cursor = held.cursor.map(|(row, column)| (start + row, column));
+        match held.prompt {
+            Some((border, (above, below))) => {
+                rows.push(prompt_rule(border, width, Some(('↑', above))));
+                rows.extend(selection::rows(&held.rows));
+                rows.push(prompt_rule(border, width, Some(('↓', below))));
+            }
+            None => {
+                rows.extend(selection::rows(&held.rows));
+                // As Scramjet's lists end with a rule over the footer.
+                if !(rows.last()).is_some_and(|row| bottom::is_rule(&row.shown)) {
+                    rows.push(Line::rule(&format!(
+                        "{}{}{}",
+                        held.rule,
+                        "─".repeat(width.saturating_sub(1)),
+                        style::RESET
+                    )));
+                }
+            }
+        }
+        rows.extend(selection::rows(&footer));
+        (rows, cursor)
+    }
+
+    /// The prompt or a dialog in a rounded box, then the footer's parts spread over rows.
+    fn boxed(
+        &self,
+        mut rows: Vec<Line>,
+        (width, height): (usize, usize),
+    ) -> (Vec<Line>, Option<(usize, usize)>) {
+        let room = width.saturating_sub(1);
+        let parts = self.footer.parts();
+        let mut footer = bottom::spread(&parts.place, &parts.modes, room);
+        footer.extend(bottom::spread(&parts.figures, &[parts.model], room));
+        let space = height.saturating_sub(rows.len() + 2 + footer.len()).max(1);
+        let held = self.held(width.saturating_sub(4), space);
+        let (border, (above, below)) = held.prompt.unwrap_or((held.rule, (0, 0)));
+        let more = |arrow, count| match count {
+            0 => String::new(),
+            count => format!("{arrow} {count} more"),
+        };
+        // The box's edges take the place of a dialog's own rules at its ends.
+        let mut content = &held.rows[..];
+        let mut skipped = 0;
+        while content.first().is_some_and(|row| bottom::is_rule(row)) {
+            (content, skipped) = (&content[1..], skipped + 1);
+        }
+        while content.last().is_some_and(|row| bottom::is_rule(row)) {
+            content = &content[..content.len() - 1];
+        }
+        let label = held.title.clone().unwrap_or_else(|| more('↑', above));
+        rows.push(Line::rule(&bottom::edge(border, ('╭', '╮'), &label, room)));
+        let start = rows.len();
+        for row in content {
+            rows.push(match bottom::is_rule(row) {
+                true => Line::rule(&bottom::edge(border, ('├', '┤'), "", room)),
+                false => selection::row(&bottom::sides(border, std::slice::from_ref(row), room)[0]),
+            });
+        }
+        let label = more('↓', below);
+        rows.push(Line::rule(&bottom::edge(border, ('╰', '╯'), &label, room)));
+        let cursor = (held.cursor)
+            .filter(|(row, _)| *row >= skipped)
+            .map(|(row, column)| (start + row - skipped, column + 2));
         rows.extend(selection::rows(&footer));
         (rows, cursor)
     }
@@ -597,6 +677,7 @@ fn painted(row: &str, base: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent_cli::text::plain;
     use scramjet::agent::AutoCompaction;
 
     #[test]
@@ -689,10 +770,9 @@ mod tests {
         let editor = Editor::dialog(Arc::new(AtomicBool::new(false)));
         let lines: Vec<String> = (1..=10).map(|n| format!("line {n}")).collect();
         let draft = editor.draft(lines.join("\n"));
-        let mut rows = Vec::new();
-        let (_, hidden) = prompt_rows(&draft, &mut rows, (40, 10), Layout::default(), false);
+        let (rows, _, hidden) = prompt_rows(&draft, (40, 10), Layout::default(), false);
         assert_eq!(hidden, (7, 0));
-        assert_eq!(plain(&rows[0].shown).trim(), "line 8");
+        assert_eq!(plain(&selection::row(&rows[0]).shown).trim(), "line 8");
         let rule = |hidden, width| plain(&prompt_rule(style::PROMPT_OFF, width, hidden).shown);
         assert_eq!(
             rule(Some(('↑', 7)), 20),

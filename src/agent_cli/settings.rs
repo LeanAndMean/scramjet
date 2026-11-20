@@ -2,6 +2,7 @@
 //! under `~/.config`), apart from Scramjet's, in its format and with its key names where the
 //! behavior matches.
 use super::banner::Banner;
+use super::bottom::Bottom;
 use super::design::Design;
 use super::keymap::{self, Binding};
 use super::packages::{self, Source};
@@ -158,6 +159,7 @@ pub(super) enum Row {
     Theme,
     Look,
     Banner,
+    Bottom,
     Steering,
     FollowUp,
     DoubleEscape,
@@ -196,6 +198,7 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::Theme,
             Row::Look,
             Row::Banner,
+            Row::Bottom,
             Row::RetainTranscript,
             Row::Changelog,
             Row::TerminalProgress,
@@ -267,6 +270,7 @@ impl Row {
             Self::Theme => "Theme",
             Self::Look => "Look",
             Self::Banner => "Banner",
+            Self::Bottom => "Bottom",
             Self::Steering => "Steering messages",
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
@@ -337,6 +341,10 @@ impl Row {
                     "What a session shows as it starts: header, as Scramjet 1's, or plain, card \
                      or logo, Scramjet 1's logo.{then}"
                 );
+            }
+            Self::Bottom => {
+                "How the status row, the prompt and the footer look: pi, as Scramjet 1's, or \
+                 boxed, the prompt and dialogs in a box."
             }
             Self::Steering => {
                 let with = with(Binding::Submit, " with ");
@@ -500,6 +508,8 @@ pub(super) struct Settings {
     pub(super) look: Design,
     /// `banner`: what the full screen shows as a session starts.
     pub(super) banner: Banner,
+    /// `bottom`: how the status row, the prompt and the footer look.
+    pub(super) bottom: Bottom,
     /// `defaultThinkingLevel`, named as requests send levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultProvider` and `defaultModel`: the model last chosen in any project, as Scramjet
@@ -649,6 +659,7 @@ impl Settings {
             theme: None,
             look: Design::Panels,
             banner: Banner::Header,
+            bottom: Bottom::Pi,
             default_thinking_level: None,
             default_provider: None,
             default_model: None,
@@ -862,6 +873,14 @@ impl Settings {
             Some(_) => wrong(
                 "banner",
                 &Banner::ALL.map(|b| format!("\"{}\"", b.name())).join(", "),
+            ),
+        }
+        match object.get("bottom").map(|value| value.as_str()) {
+            None => {}
+            Some(Some(name)) if let Some(bottom) = Bottom::named(name) => self.bottom = bottom,
+            Some(_) => wrong(
+                "bottom",
+                &Bottom::ALL.map(|b| format!("\"{}\"", b.name())).join(", "),
             ),
         }
         match object
@@ -1822,6 +1841,7 @@ impl Settings {
             Row::Theme => self.theme_name().to_owned(),
             Row::Look => self.look.name().into(),
             Row::Banner => self.banner.name().into(),
+            Row::Bottom => self.bottom.name().into(),
             Row::StartupModel => match self.startup_model {
                 StartupModel::PerDirectory => "last chosen here",
                 StartupModel::Global => "last chosen anywhere",
@@ -1944,6 +1964,10 @@ impl Settings {
             Row::Banner => {
                 self.banner = self.banner.next();
                 self.save("banner", json!(self.banner.name()))
+            }
+            Row::Bottom => {
+                self.bottom = self.bottom.next();
+                self.save("bottom", json!(self.bottom.name()))
             }
             Row::MarkdownReads => {
                 let (reads, name) = match self.markdown_reads {
@@ -2342,7 +2366,7 @@ mod tests {
         let count = rows.len();
         rows.sort_by_key(|row| format!("{row:?}"));
         rows.dedup();
-        assert_eq!((rows.len(), count), (32, 32));
+        assert_eq!((rows.len(), count), (33, 33));
     }
 
     struct Scratch(PathBuf);
@@ -2963,10 +2987,11 @@ or false; ignored"
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big",
+                "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big", "bottom": "tall",
                 "defaultShell": "zsh"}"#,
         );
         assert_eq!(settings.banner, Banner::Header);
+        assert_eq!(settings.bottom, Bottom::Pi);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.resume_chains, Chains::Flat);
@@ -2990,6 +3015,7 @@ or false; ignored"
                 format!(r#"{path}: markdown.toolDisplay must be "rendered" or "source"; ignored"#),
                 format!("{path}: theme must be a theme's name; ignored"),
                 format!(r#"{path}: banner must be "plain", "header", "card", "logo"; ignored"#),
+                format!(r#"{path}: bottom must be "pi", "boxed"; ignored"#),
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
@@ -3319,6 +3345,10 @@ or false; ignored"
         );
         settings.cycle(Row::Banner).unwrap();
         settings.cycle(Row::Banner).unwrap();
+        assert_eq!(
+            seen(Row::Bottom, &mut settings),
+            ["pi", "boxed", "pi", "boxed"]
+        );
         let (default, other) = match cfg!(target_os = "macos") {
             true => ("on", "off"),
             false => ("off", "on"),
@@ -3445,6 +3475,7 @@ or false; ignored"
                 "theme": "scramjet-dark",
                 "look": "margin",
                 "banner": "card",
+                "bottom": "boxed",
             })
         );
         let reread = Settings::read(Some(path.clone()));

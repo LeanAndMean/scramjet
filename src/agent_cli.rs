@@ -16,6 +16,7 @@ mod acp;
 mod args;
 mod background;
 mod banner;
+mod bottom;
 mod catalog;
 mod changelog;
 mod children;

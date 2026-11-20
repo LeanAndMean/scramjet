@@ -3,8 +3,9 @@
 //! session's tokens with the model's output rate, the cost, how full the context is, and the
 //! model with its provider and effort.
 
+use super::bottom::Segment;
 use super::settings::scramjet_level;
-use super::style::{FOOTER, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
+use super::style::{FOOTER, FOOTER_FIGURE, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
 use super::terminal::{dollars, rate, tokens};
 use super::text::{clip, one_line, visible};
 use scramjet::agent::{Agent, Children, Tokens};
@@ -153,10 +154,7 @@ impl Footer {
     /// screen's other rows.
     pub(super) fn lines(&self, width: usize) -> [String; 2] {
         let room = width.saturating_sub(1);
-        let mut place = self.directory.clone();
-        if let Some(branch) = &self.branch {
-            place += &format!(" ({branch})");
-        }
+        let mut place = self.directory();
         if let Some(name) = &self.shown.name {
             place += &format!(" • {name}");
         }
@@ -168,6 +166,92 @@ impl Footer {
         }
         let place = clip(&visible(&one_line(&place)), room);
         [format!("{FOOTER}{place}{RESET}"), self.stats(room)]
+    }
+
+    /// The project's directory with its branch.
+    fn directory(&self) -> String {
+        match &self.branch {
+            Some(branch) => format!("{} ({branch})", self.directory),
+            None => self.directory.clone(),
+        }
+    }
+
+    /// What the footer tells, for a bottom that lays it out its own way (`Bottom`).
+    pub(super) fn parts(&self) -> Parts {
+        let shown = &self.shown;
+        let safe = |text: &str| visible(&one_line(text));
+        let place = [Some(self.directory()), shown.name.clone()];
+        let modes = [
+            shown.sandbox.map(|mode| format!("sandbox {mode}")),
+            shown.autopilot.then(|| "autopilot".to_owned()),
+        ];
+        let mut figures = Vec::new();
+        if let Some(r) = shown.rate.filter(|_| shown.tokens.output > 0) {
+            figures.push((rate(r), FOOTER_FIGURE));
+        }
+        let (full, percent) = self.fill("");
+        let style = match percent {
+            Some(percent) if percent > 90.0 => FOOTER_FULL,
+            Some(percent) if percent > 70.0 => FOOTER_NEARLY_FULL,
+            _ => FOOTER_FIGURE,
+        };
+        figures.push((full, style));
+        figures.extend(self.spent().map(|cost| (cost, FOOTER)));
+        let model = match &shown.provider {
+            Some(provider) => format!("({provider}) {}", self.model()),
+            None => self.model(),
+        };
+        Parts {
+            place: place
+                .into_iter()
+                .flatten()
+                .map(|text| (safe(&text), FOOTER))
+                .collect(),
+            modes: modes
+                .into_iter()
+                .flatten()
+                .map(|text| (text, FOOTER))
+                .collect(),
+            figures,
+            model: (safe(&model), FOOTER),
+        }
+    }
+
+    /// What was spent, the running calls' spending in it, when anything was priced.
+    fn spent(&self) -> Option<String> {
+        let (cost, unpriced) = (self.shown.tokens.cost, self.shown.tokens.unpriced);
+        let running: f64 = self.running.iter().map(|(cost, _)| cost).sum();
+        let running_unpriced = self.running.iter().any(|(_, unpriced)| *unpriced);
+        dollars(cost + running, unpriced || running_unpriced, 3)
+    }
+
+    /// How full the context is, `auto` after the share where compaction runs by itself, and
+    /// the share.
+    fn fill(&self, auto: &str) -> (String, Option<f64>) {
+        let shown = &self.shown;
+        let auto = if shown.auto_compact { auto } else { "" };
+        match (shown.context, shown.window) {
+            (count, Some(window @ 1..)) => {
+                let percent = count.map(|count| count as f64 * 100.0 / window as f64);
+                let count = count.map_or_else(|| "?".to_owned(), tokens);
+                let shown = percent.map_or_else(|| "?".to_owned(), |p| format!("{p:.1}"));
+                let window = tokens(window);
+                (format!("{count}/{window} ({shown}%{auto})"), percent)
+            }
+            (Some(count), _) => (tokens(count), None),
+            (None, _) => (String::new(), None),
+        }
+    }
+
+    /// The model with its effort.
+    fn model(&self) -> String {
+        let shown = &self.shown;
+        let model = match shown.effort.as_deref().map(scramjet_level) {
+            Some("off") => format!("{} • thinking off", shown.model),
+            Some(level) => format!("{} • {level}", shown.model),
+            None => shown.model.clone(),
+        };
+        one_line(&model)
     }
 
     /// As Scramjet's: the tokens that are not zero, the output's with the model's rate, what was
@@ -188,22 +272,8 @@ impl Footer {
                 counts.push(format!("{mark}{}{after}", tokens(count)));
             }
         }
-        let (cost, unpriced) = (shown.tokens.cost, shown.tokens.unpriced);
-        let running: f64 = self.running.iter().map(|(cost, _)| cost).sum();
-        let running_unpriced = self.running.iter().any(|(_, unpriced)| *unpriced);
-        counts.extend(dollars(cost + running, unpriced || running_unpriced, 3));
-        let auto = if shown.auto_compact { ", auto" } else { "" };
-        let (full, percent) = match (shown.context, shown.window) {
-            (count, Some(window @ 1..)) => {
-                let percent = count.map(|count| count as f64 * 100.0 / window as f64);
-                let count = count.map_or_else(|| "?".to_owned(), tokens);
-                let shown = percent.map_or_else(|| "?".to_owned(), |p| format!("{p:.1}"));
-                let window = tokens(window);
-                (format!("{count}/{window} ({shown}%{auto})"), percent)
-            }
-            (Some(count), _) => (tokens(count), None),
-            (None, _) => (String::new(), None),
-        };
+        counts.extend(self.spent());
+        let (full, percent) = self.fill(", auto");
         let before = match (counts.is_empty(), full.is_empty()) {
             (true, _) => String::new(),
             (false, true) => counts.join(" "),
@@ -213,12 +283,7 @@ impl Footer {
         if left.width() > room {
             return format!("{FOOTER}{}{RESET}", clip(&left, room));
         }
-        let model = match shown.effort.as_deref().map(scramjet_level) {
-            Some("off") => format!("{} • thinking off", shown.model),
-            Some(level) => format!("{} • {level}", shown.model),
-            None => shown.model.clone(),
-        };
-        let model = one_line(&model);
+        let model = self.model();
         let named =
             (shown.provider.as_deref()).map(|provider| one_line(&format!("({provider}) {model}")));
         let right = match room.checked_sub(left.width() + 2) {
@@ -240,6 +305,15 @@ impl Footer {
         };
         format!("{FOOTER}{before}{RESET}{full_style}{full}{RESET}{FOOTER}{padding}{right}{RESET}")
     }
+}
+
+/// What the footer tells, in parts: where the session is, its modes, the figures (the output
+/// rate, how full the context is, the cost) and the model with its provider and effort.
+pub(super) struct Parts {
+    pub(super) place: Vec<Segment>,
+    pub(super) modes: Vec<Segment>,
+    pub(super) figures: Vec<Segment>,
+    pub(super) model: Segment,
 }
 
 /// `text`'s first characters that fit in `width` columns, as Scramjet cuts the model's name.

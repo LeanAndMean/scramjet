@@ -24,7 +24,8 @@ A scenario (scripts/screens/*.json) holds:
     "config":   more files beside the settings, by name, such as "words.txt";
     "model":    the scripted server's model (default gpt-6-luna);
     "window":   its context window, unknown unless given;
-    "total":    the total tokens each response reports, so the context's size is known;
+    "total":    the total tokens each response reports, so the context's size is known, its input
+                tokens what the 310 output tokens leave, all but 1104 of them cached;
     "provider": more of its provider's fields, such as "api" and "apiKey";
     "headers":  more headers its responses carry, by name;
     "providers": more models.json providers, listed after the scripted server's ("screens");
@@ -34,6 +35,7 @@ A scenario (scripts/screens/*.json) holds:
     "servers":  programs to run first in the repository, each {"run": [ARGUMENTS...], "port": PORT},
                 waited for until PORT on 127.0.0.1 takes connections, and stopped at the end;
     "env":      more environment for scramjet-rs, `{root}` in a value being the repository;
+    "arguments": more command-line arguments for scramjet-rs, such as "--ask";
     "prompt":   the first message;
     "replies":  each response's items, in turn: {"reasoning": TEXT}, {"text": TEXT} or
                 {"call": NAME, "arguments": {...}}; the tools run for real; a text with
@@ -41,7 +43,8 @@ A scenario (scripts/screens/*.json) holds:
                 {"status": CODE, "body": JSON, "headers": {NAME: TEXT}}, its headers replacing
                 "headers";
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
-                {"sleep": SECONDS}, {"shot": NAME} writes NAME.ansi and NAME.png.
+                {"sleep": SECONDS}, {"size": COLUMNSxROWS} resizes the terminal, {"shot": NAME} writes
+                NAME.ansi and NAME.png.
 
 Each request's body is written to requests.jsonl in OUTDIR, a line each.
 
@@ -118,7 +121,8 @@ def stream(output, paces=(), total=None):
     """The stream of `output`, in pieces each with the seconds to wait before it."""
     usage = {'input_tokens': 5200, 'output_tokens': 310, 'input_tokens_details': {'cached_tokens': 4096}}
     if total is not None:
-        usage['total_tokens'] = total
+        usage.update(total_tokens=total, input_tokens=total - 310,
+                     input_tokens_details={'cached_tokens': max(total - 310 - 1104, 0)})
     events = [{'type': 'response.created', 'response': {'id': 'resp', 'status': 'in_progress', 'output': []}}]
     for index, item in enumerate(output):
         events += item_events(index, item, paces[index] if index < len(paces) else None)
@@ -431,7 +435,7 @@ def main():
 
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
-        arguments = [options.binary, '--model', model]
+        arguments = [options.binary, '--model', model] + scenario.get('arguments', [])
         if 'prompt' in scenario:
             arguments.append(scenario['prompt'])
         process = subprocess.Popen(arguments, cwd=project, env=env, stdin=slave, stdout=slave, stderr=slave,
@@ -485,6 +489,13 @@ def main():
                 os.write(master, step['type'].encode())
             elif 'sleep' in step:
                 time.sleep(step['sleep'])
+            elif 'size' in step:
+                columns, rows = map(int, step['size'].split('x'))
+                with lock:
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack('HHHH', rows, columns, 0, 0))
+                    screen.resize(rows, columns)
+                # Until the next frame, drawn at the new size.
+                time.sleep(.5)
             elif 'shot' in step:
                 base = os.path.join(options.outdir, options.name + step['shot'])
                 with lock:

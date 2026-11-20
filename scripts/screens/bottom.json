@@ -1,0 +1,296 @@
+{
+  "size": "100x30",
+  "arguments": [
+    "--ask"
+  ],
+  "total": 176000,
+  "settings": {
+    "theme": "scramjet-dark",
+    "sandbox": "read-only"
+  },
+  "providers": {
+    "other": {
+      "baseUrl": "http://127.0.0.1:9/v1",
+      "api": "openai-responses",
+      "apiKey": "unused",
+      "models": [
+        {
+          "id": "other-model"
+        }
+      ]
+    }
+  },
+  "files": {
+    "Cargo.toml": "[package]\nname = \"words\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    "src/lib.rs": "/// Splits `text` into words.\npub fn words(text: &str) -> Vec<&str> {\n    text.split(' ').collect()\n}\n"
+  },
+  "replies": [
+    [
+      {
+        "reasoning": "**Reading the splitter**\n\nIt must split on single spaces.",
+        "pace": 0.25
+      },
+      {
+        "text": "Let me look at how the words are split and where the empty ones come from.",
+        "pace": 0.04
+      },
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "seq 1 30 | sed 's/^/line /'"
+        }
+      }
+    ],
+    [
+      {
+        "reasoning": "It should run long enough to watch the queue fill up while it waits.",
+        "pace": 0.15
+      },
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "sleep 6; echo checked"
+        }
+      }
+    ],
+    [
+      {
+        "call": "get_scramjet_user_input",
+        "arguments": {
+          "type": "select",
+          "message": "Should tabs split words too?",
+          "options": [
+            {
+              "value": "yes",
+              "label": "Yes, any whitespace"
+            },
+            {
+              "value": "no",
+              "label": "No, spaces only"
+            }
+          ]
+        }
+      }
+    ],
+    [
+      {
+        "text": "`words` uses `split(' ')`, which yields an empty piece between two spaces: `split_whitespace()` skips them.",
+        "pace": 0.12
+      }
+    ],
+    [
+      {
+        "reasoning": "Running the tests now, to make sure the change holds up.",
+        "pace": 0.15
+      },
+      {
+        "text": "The tests pass.",
+        "pace": 0.03
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "gpt-6-luna"
+    },
+    {
+      "type": "/name Refactor words\r"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "/autopilot on\r"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "Why does words() keep empty words?\r"
+    },
+    {
+      "until": "Allow?"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "approval"
+    },
+    {
+      "type": "a"
+    },
+    {
+      "until": "sleep 6"
+    },
+    {
+      "type": "Use split_whitespace instead\r"
+    },
+    {
+      "sleep": 0.6
+    },
+    {
+      "type": "Then run the tests\u001b\r"
+    },
+    {
+      "sleep": 0.6
+    },
+    {
+      "type": "\u001b[<64;20;5M"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "running"
+    },
+    {
+      "size": "60x30"
+    },
+    {
+      "shot": "running-narrow"
+    },
+    {
+      "size": "100x30"
+    },
+    {
+      "type": "\u001b[<65;20;5M\u001b[<65;20;5M"
+    },
+    {
+      "until": "Should tabs split words too?"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "question"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "The tests pass."
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "idle"
+    },
+    {
+      "type": "/"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "completion"
+    },
+    {
+      "type": "\u0003First line of a long prompt\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth\nninth\ntenth"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "long-prompt"
+    },
+    {
+      "type": "\u0003"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "/settings\r"
+    },
+    {
+      "until": "Thinking level"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "settings"
+    },
+    {
+      "type": "\u001b[B\u001b[B\u001b[B\u001b[B\r"
+    },
+    {
+      "until": "New theme"
+    },
+    {
+      "type": "\u001b[F\u001b[A\r"
+    },
+    {
+      "until": "Theme editor"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "theme-editor"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "Name the theme"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "text-dialog"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "size": "60x30"
+    },
+    {
+      "shot": "idle-narrow"
+    }
+  ],
+  "provider": {
+    "models": [
+      {
+        "id": "gpt-6-luna",
+        "reasoning": true,
+        "input": [
+          "text",
+          "image"
+        ],
+        "contextWindow": 200000,
+        "cost": {
+          "input": 1.25,
+          "output": 10,
+          "cacheRead": 0.125,
+          "cacheWrite": 0
+        }
+      }
+    ]
+  }
+}

@@ -2718,7 +2718,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\x1b[B\r' + b'\x1b[B' * 8 + b'\r')
+    send(b'\x1b[B\x1b[B\r' + b'\x1b[B' * 9 + b'\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
@@ -2744,7 +2744,7 @@ def settings_menu(read, until, send, output):
     assert 'Command: ' not in '\n'.join(rows), rows
     # A list the user opened leaves the status row on what the turn does.
     assert any(' Running ' in row for row in rows), rows
-    send(b'\x1b[B' * 23 + b'\r')
+    send(b'\x1b[B' * 24 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find; switc…'))

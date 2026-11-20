@@ -181,6 +181,7 @@ impl Link {
             terminal_progress: settings.terminal_progress,
             design: settings.look,
             banner: settings.banner,
+            bottom: settings.bottom,
         });
     }
     pub(in crate::agent_cli) fn moved(&self, root: PathBuf) {
@@ -353,7 +354,7 @@ impl Handle {
         let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
         let (layout, terminal_progress) = (settings.layout, settings.terminal_progress);
         let retain_transcript = settings.retain_transcript;
-        let (design, banner) = (settings.look, settings.banner);
+        let (design, banner, bottom) = (settings.look, settings.banner, settings.bottom);
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
         let (woken, wake) = io::pipe()?;
@@ -383,6 +384,7 @@ impl Handle {
                     terminal_progress,
                     design,
                     banner,
+                    bottom,
                     ..app
                 };
                 app.run(raw, &messages, woken)

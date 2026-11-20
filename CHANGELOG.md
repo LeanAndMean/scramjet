@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.283.0 — A boxed bottom
+
+### Added
+
+- A `bottom` setting (`/settings` → Bottom) for the status row, the prompt and the footer. `pi`, as before, stays the default. `boxed` puts the prompt in a rounded box in the thinking level's color and each dialog in a box of its own; under it, where the session is with its modes, then the output rate and the context's fill in the text's color, the cost and the model, going onto more rows rather than cutting any of them on a narrow screen. It leaves out the session's token counts and `auto`, which `/usage` and `/status` show.
+
 ## 2.282.0 — scramjet-light's cyan and orange
 
 ### Changed

@@ -9,6 +9,7 @@
 
 use super::background;
 use super::banner::Banner;
+use super::bottom::Bottom;
 use super::completion::Completions;
 use super::design::Design;
 use super::drive::Messages;
@@ -107,6 +108,7 @@ enum ToScreen {
         terminal_progress: bool,
         design: Design,
         banner: Banner,
+        bottom: Bottom,
     },
     /// `/resume` moved to another project's session: the project's directory, where `@`
     /// completes paths and `!` commands run, and whose branch the footer shows.
@@ -330,6 +332,8 @@ struct App {
     design: Design,
     /// The banner the session started with (`banner`).
     banner: Banner,
+    /// How the status row, the prompt and the footer look (`bottom`).
+    bottom: Bottom,
     /// A completed mouse selection is copied (`copyOnSelect`).
     copy_on_select: bool,
     /// The wheel's step, the prompt's height and the completion list's rows.
@@ -403,6 +407,7 @@ impl App {
             markdown_reads: MarkdownReads::Rendered,
             design: Design::Classic,
             banner: Banner::Plain,
+            bottom: Bottom::Pi,
             copy_on_select: false,
             layout: Layout::default(),
             retain_transcript: false,
@@ -670,6 +675,7 @@ impl App {
                 terminal_progress,
                 design,
                 banner,
+                bottom,
             } => {
                 self.editor.reloaded(completions, double_escape);
                 self.markdown_reads = markdown_reads;
@@ -679,6 +685,7 @@ impl App {
                 self.terminal_progress = terminal_progress;
                 self.design = design;
                 self.banner = banner;
+                self.bottom = bottom;
             }
             ToScreen::Moved(root) => {
                 self.editor.set_root(root.clone());
@@ -1324,6 +1331,69 @@ mod tests {
         assert_eq!(prompts(&from), ["one"]);
         // Its turn takes the other.
         assert_eq!(app.queue().messages.take(), ["two"]);
+    }
+
+    #[test]
+    fn the_boxed_bottom_keeps_all_the_footer_tells_however_narrow() {
+        use super::footer::Shown;
+        let (mut app, _from) = app();
+        app.bottom = Bottom::Boxed;
+        app.footer.show(Shown {
+            name: Some("Refactor".into()),
+            tokens: scramjet::agent::Tokens {
+                input: 12_000,
+                output: 3_400,
+                cache_read: 104_000,
+                cost: 0.0531,
+                ..Default::default()
+            },
+            context: Some(176_000),
+            window: Some(200_000),
+            auto_compact: true,
+            rate: Some(52.4),
+            model: "gpt-6-luna".into(),
+            provider: Some("screens".into()),
+            effort: Some("medium".into()),
+            sandbox: Some("read-only"),
+            autopilot: true,
+        });
+        app.queue()
+            .messages
+            .steering
+            .push("Use split_whitespace".into());
+        for width in [100, 60, 36] {
+            let (rows, cursor) = app.dock((width, 30));
+            let text: Vec<String> = rows
+                .iter()
+                .map(|row| crate::agent_cli::text::plain(&row.shown))
+                .collect();
+            let all = text.join("\n");
+            for told in [
+                "Refactor",
+                "sandbox read-only",
+                "autopilot",
+                "52tok/s",
+                "176k/200k (88.0%)",
+                "$0.053",
+                "(screens) gpt-6-luna • medium",
+                "Steering: Use split_whitespace",
+            ] {
+                assert!(all.contains(told), "{told} at {width}:\n{all}");
+            }
+            // Cache reads and `auto` inform no decision: they stay in `/usage` and `/status`.
+            assert!(!all.contains("R104k") && !all.contains("auto)"), "{all}");
+            assert!(
+                text.iter()
+                    .all(|row| crate::agent_cli::text::columns(row) < width),
+                "{all}"
+            );
+            let (row, column) = cursor.unwrap();
+            assert!(
+                text[row - 1].starts_with('╭') && text[row].starts_with("│ >"),
+                "{all}"
+            );
+            assert_eq!(column, 4);
+        }
     }
 
     #[test]

@@ -22,7 +22,7 @@ Other differences:
 - A command's status is `completed` or `abandoned` (only after you confirm); there is no `blocked`, `incomplete` or `continuing`. A reply that ends without a report gets a short status check, at most 3 in a row.
 - Subagents run read-only, and the main agent's commands can run in a [sandbox](configuration.md#the-sandbox) and with [credential stores hidden](configuration.md#credentials).
 - `edit` changes only the text it matched, also when it matched with trailing whitespace or typographic quotes aside (Scramjet 1 then rewrites the whole file normalized).
-- Themes, looks and banners: Scramjet 1's themes and theme files, with a main background and a theme editor in `/settings` ([themes](configuration.md#themes-looks-and-banners)). Keys: `keybindings.json` in Scramjet 1's format ([keys](sessions.md#keys)).
+- Themes, looks, banners and bottoms: Scramjet 1's themes and theme files, with a main background and a theme editor in `/settings` ([themes](configuration.md#themes-looks-banners-and-bottoms)). Keys: `keybindings.json` in Scramjet 1's format ([keys](sessions.md#keys)).
 - Command lines: Scramjet 1's options work as they did, `--provider P --model M`, `--cache-retention` (and `SCRAMJET_CACHE_RETENTION`), `--api-key` and `update --extensions`, `--extension` and `--force` included; `--verbose`, `--mode text`, `--no-extensions` and `--no-prompt-templates` change nothing. Those with nothing to do in Scramjet 2 (`--mode json` and `rpc`, `--extension`, `--prompt-template`, `--model-definition`) stop it, saying why.
 - Not yet: images shown in the terminal, GitLab publications, `--mode json` and `rpc`.
 

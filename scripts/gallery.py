@@ -5,12 +5,15 @@
 """A scripted session's screens in every look and theme, for the user to compare the looks.
 
     uv run scripts/gallery.py OUTDIR [--scenario scripts/screens/signals.json]
-                              [--looks classic,rails,...] [--themes scramjet-dark,...]
-                              [--binary target/release/scramjet]
+                              [--looks classic,rails,...] [--bottoms pi,boxed,...]
+                              [--themes scramjet-dark,...] [--binary target/release/scramjet]
 
 Each look and theme's shots are written by scripts/screens.py under OUTDIR/LOOK/THEME/; then
 OUTDIR/LOOK-SHOT.png puts a shot's themes side by side, and OUTDIR/index.html shows them all,
-a look to a section."""
+a look to a section. With bottoms other than pi, each look and bottom is a section of its own,
+LOOK-BOTTOM; scripts/screens/bottom.json shows the bottom busy:
+
+    uv run scripts/gallery.py OUTDIR --scenario scripts/screens/bottom.json --looks panels --bottoms all"""
 import argparse
 import concurrent.futures
 import html
@@ -23,16 +26,19 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOOKS = ['panels', 'classic', 'rails', 'margin', 'cards', 'tinted', 'outline', 'timeline', 'mono']
+BOTTOMS = ['pi', 'boxed']
 THEMES = ['scramjet-dark', 'scramjet-light', 'pi-light', 'terminal-colors']
 
 
-def capture(options, look, theme):
-    outdir = os.path.join(options.outdir, look, theme)
+def capture(options, section, theme):
+    look, _, bottom = section.partition('-')
+    outdir = os.path.join(options.outdir, section, theme)
     command = ['uv', 'run', '-q', os.path.join(ROOT, 'scripts/screens.py'), options.scenario, outdir,
-               '--binary', options.binary, '--set', 'look=' + look, '--set', 'theme=' + theme]
+               '--binary', options.binary, '--set', 'look=' + look, '--set', 'bottom=' + (bottom or 'pi'),
+               '--set', 'theme=' + theme]
     run = subprocess.run(command, capture_output=True, text=True)
     if run.returncode:
-        sys.exit('gallery: %s in %s failed:\n%s%s' % (look, theme, run.stdout[-3000:], run.stderr[-3000:]))
+        sys.exit('gallery: %s in %s failed:\n%s%s' % (section, theme, run.stdout[-3000:], run.stderr[-3000:]))
 
 
 def main():
@@ -40,10 +46,13 @@ def main():
     parser.add_argument('outdir')
     parser.add_argument('--scenario', default=os.path.join(ROOT, 'scripts/screens/signals.json'))
     parser.add_argument('--looks', default=','.join(LOOKS))
+    parser.add_argument('--bottoms', default='pi', help='"all" for every one')
     parser.add_argument('--themes', default=','.join(THEMES))
     parser.add_argument('--binary', default=os.path.join(ROOT, 'target/release/scramjet'))
     options = parser.parse_args()
     looks, themes = options.looks.split(','), options.themes.split(',')
+    bottoms = BOTTOMS if options.bottoms == 'all' else options.bottoms.split(',')
+    looks = looks if bottoms == ['pi'] else ['%s-%s' % (look, bottom) for look in looks for bottom in bottoms]
     shots = [step['shot'] for step in json.load(open(options.scenario))['steps'] if 'shot' in step]
     with concurrent.futures.ThreadPoolExecutor(4) as pool:
         for done in [pool.submit(capture, options, look, theme) for look in looks for theme in themes]:
