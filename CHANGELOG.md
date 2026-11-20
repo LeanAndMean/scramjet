@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.286.0 — A bar bottom without backgrounds
+
+### Changed
+
+- The `bar` bottom's footer puts no background behind its text: the output rate, the context's fill with its gauge, the cost and the model keep their own colors, apart by ` · `, the model after its mark in the thinking level's color.
+
 ## 2.285.0 — A status-bar bottom
 
 ### Added

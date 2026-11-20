@@ -25,9 +25,9 @@ pub(super) enum Bottom {
     /// wrapped onto more rows rather than cut.
     Composer,
     /// After status bars' segments: the prompt and dialogs as pi's; under them where the
-    /// session is with its modes, and at the right chips of the output rate, the context's fill
-    /// with a gauge, the cost and the model after a mark in the thinking level's color, wrapped
-    /// onto more rows rather than cut.
+    /// session is with its modes, and at the right the output rate, the context's fill with a
+    /// gauge, the cost and the model after a mark in the thinking level's color, on no
+    /// background, wrapped onto more rows rather than cut.
     Bar,
 }
 
@@ -91,15 +91,6 @@ fn joined(row: &[Segment], between: &str) -> (String, usize) {
 /// the last of them, two columns apart at least, or where they do not fit there on rows of their
 /// own at the right.
 pub(super) fn spread(left: &[Segment], right: &[Segment], room: usize) -> Vec<String> {
-    spread_apart(left, (right, BETWEEN), room)
-}
-
-/// As `spread`, with `between` between `right`'s segments.
-fn spread_apart(
-    left: &[Segment],
-    (right, between): (&[Segment], &str),
-    room: usize,
-) -> Vec<String> {
     let mut rows: Vec<String> = Vec::new();
     let mut last = 0;
     for row in pack(left, room, BETWEEN) {
@@ -107,10 +98,10 @@ fn spread_apart(
         rows.push(shown);
         last = width;
     }
-    let right = pack(right, room, between);
+    let right = pack(right, room, BETWEEN);
     let beside = rows.len() == 1 || right.len() == 1;
     for (index, row) in right.iter().enumerate() {
-        let (shown, width) = joined(row, between);
+        let (shown, width) = joined(row, BETWEEN);
         match rows.last_mut() {
             Some(previous) if index == 0 && beside && last > 0 && last + 2 + width <= room => {
                 *previous += &" ".repeat(room - last - width);
@@ -139,47 +130,34 @@ fn gauge(percent: f64, cells: usize) -> (String, String) {
     (filled, "━".repeat(cells - full - half))
 }
 
-/// `pieces` as a chip on `on`, a background's sequence, with a column of it either side, but
-/// on the left when the first piece is its `edge`; as they are where `on` is empty, the theme
-/// painting no backgrounds.
-fn chip(on: &str, pieces: &[(&str, Style)], edge: bool) -> Segment {
-    let pad = if on.is_empty() { "" } else { " " };
-    let mut shown = format!("{on}{}", if edge { "" } else { pad });
-    for (text, style) in pieces {
-        shown += &format!("{RESET}{on}{style}{text}");
-    }
-    shown += &format!("{RESET}{on}{pad}");
+/// `pieces` as one segment, each in its own style.
+fn joined_pieces(pieces: &[(&str, Style)]) -> Segment {
+    let shown = (pieces.iter())
+        .map(|(text, style)| format!("{style}{text}{RESET}"))
+        .collect::<String>();
     (shown, style::NONE)
 }
 
 /// The footer as a status bar, rows `room` columns wide: where the session is and its modes,
-/// then at the right the chips of the output rate, how full the context is with its gauge, the
-/// cost and the model, after a mark in `level`, the thinking level's style.
+/// then at the right the output rate, how full the context is with its gauge, the cost and the
+/// model, after a mark in `level`, the thinking level's style; nothing on a background.
 pub(super) fn bar(parts: &Parts, level: Style, room: usize) -> Vec<String> {
-    let on = match Band::Selected.painted() {
-        true => Band::Selected.get(),
-        false => "",
-    };
-    let mut chips: Vec<Segment> = Vec::new();
+    let mut right: Vec<Segment> = Vec::new();
     if let Some((rate, style)) = &parts.rate {
-        chips.push(chip(on, &[(rate, *style)], false));
+        right.push((rate.clone(), *style));
     }
     let (context, style) = &parts.context;
     if !context.is_empty() {
-        let plain = chip(on, &[(context, *style)], false);
-        chips.push(match parts.fill {
+        let plain = (context.clone(), *style);
+        right.push(match parts.fill {
             Some(fill) => {
                 let (filled, rest) = gauge(fill, CELLS);
-                let gauged = chip(
-                    on,
-                    &[
-                        (&filled, *style),
-                        (&rest, style::FOOTER),
-                        (" ", style::NONE),
-                        (context, *style),
-                    ],
-                    false,
-                );
+                let gauged = joined_pieces(&[
+                    (&filled, *style),
+                    (&rest, style::FOOTER),
+                    (" ", style::NONE),
+                    (context, *style),
+                ]);
                 match columns(&gauged.0) <= room {
                     true => gauged,
                     false => plain,
@@ -189,24 +167,16 @@ pub(super) fn bar(parts: &Parts, level: Style, room: usize) -> Vec<String> {
         });
     }
     if let Some((cost, style)) = &parts.cost {
-        chips.push(chip(on, &[(cost, *style)], false));
+        right.push((cost.clone(), *style));
     }
     let (model, _) = &parts.model;
-    chips.push(chip(
-        on,
-        &[
-            ("▌", level),
-            (" ", style::NONE),
-            (model, style::FOOTER_FIGURE),
-        ],
-        true,
-    ));
-    let between = match on.is_empty() {
-        true => BETWEEN,
-        false => " ",
-    };
+    right.push(joined_pieces(&[
+        ("▌", level),
+        (" ", style::NONE),
+        (model, style::FOOTER_FIGURE),
+    ]));
     let left: Vec<Segment> = parts.place.iter().chain(&parts.modes).cloned().collect();
-    spread_apart(&left, (&chips, between), room)
+    spread(&left, &right, room)
 }
 
 /// A box's top or bottom edge `width` columns wide in `border`, from `left` to `right`, with
@@ -373,7 +343,6 @@ mod tests {
             cost: Some(("$0.053".into(), style::FOOTER)),
             model: ("gpt-6-luna • medium".into(), style::FOOTER),
         };
-        // The terminal's colors paint no chips: the parts as the other bottoms show them.
         let rows = shown(&bar(&parts, style::PROMPT_MEDIUM, 110));
         let gauge = "━".repeat(10);
         let right = format!("52tok/s · {gauge} 92k/1.0M (9.2%) · $0.053 · ▌ gpt-6-luna • medium");
@@ -383,7 +352,7 @@ mod tests {
             rows[0].ends_with(&right) && columns(&rows[0]) == 110,
             "{rows:?}"
         );
-        // Narrower, the chips go on a row of their own, then onto more, and the gauge goes
+        // Narrower, the figures go on a row of their own, then onto more, and the gauge goes
         // before the figure is cut.
         let rows = shown(&bar(&parts, style::PROMPT_MEDIUM, 60));
         assert_eq!(rows.len(), 3, "{rows:?}");
