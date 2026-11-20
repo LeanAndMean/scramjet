@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.282.0 — scramjet-light's cyan and orange
+
+### Changed
+
+- `scramjet-light`'s colors are brighter and more saturated: its cyan and orange read as cyan and orange rather than teal and brown, the other accents follow, and the backgrounds of prompts and calls carry more of their tint.
+
 ## 2.281.0 — A scramjet-light theme
 
 ### Added
