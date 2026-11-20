@@ -24,10 +24,12 @@ pub(super) enum Design {
     /// Rounded cards: one around each prompt in the accent, and around each call in the color
     /// of how it went, its tool, glyph and time on the top edge; a `✦` before each reply.
     Cards,
-    /// Cards filled with the background of what they hold: a prompt's, and a call's for how it
-    /// went, so that a done card's border is muted; where the theme paints no such backgrounds,
-    /// as cards.
+    /// Cards filled with the background of what they hold, a prompt's and a call's for how it
+    /// went, without sides: a rule above carrying the call, inset a column, and one below, in the
+    /// color of what the fill holds; where the theme paints no such backgrounds, as cards.
     Tinted,
+    /// As tinted, its rules running the fill's full width.
+    Ribbons,
     /// A log of actions, after Codex: a `•` before each call in the color of how it went, a bold
     /// verb for what it did, its output under a `└`, a `•` before each reply, and a rule saying
     /// how long a turn worked once it ends.
@@ -44,13 +46,14 @@ pub(super) enum Design {
 }
 
 impl Design {
-    pub(super) const ALL: [Design; 9] = [
+    pub(super) const ALL: [Design; 10] = [
         Self::Classic,
         Self::Rails,
         Self::Panels,
         Self::Margin,
         Self::Cards,
         Self::Tinted,
+        Self::Ribbons,
         Self::Outline,
         Self::Timeline,
         Self::Mono,
@@ -64,6 +67,7 @@ impl Design {
             Self::Margin => "margin",
             Self::Cards => "cards",
             Self::Tinted => "tinted",
+            Self::Ribbons => "ribbons",
             Self::Outline => "outline",
             Self::Timeline => "timeline",
             Self::Mono => "mono",
@@ -100,8 +104,8 @@ impl Design {
                 None,
                 marked,
             )),
-            Self::Cards | Self::Tinted => {
-                let side = format!("{}│{}", self.prompt_border(), style::RESET);
+            Self::Cards | Self::Tinted | Self::Ribbons => {
+                let side = self.side(Band::Prompt, style::PROMPT_MARK);
                 let first = format!("{side} {} ", mark("›"));
                 // Its side at the right takes 2 of the 6 columns.
                 let gutter = Gutter::new(&first, &format!("{side}   "), 6, None, marked);
@@ -147,9 +151,15 @@ impl Design {
                 let rule = format!("{}{}{}", style::RAIL, "─".repeat(width), style::RESET);
                 (Some(rule), None)
             }
-            Self::Cards | Self::Tinted => {
+            Self::Cards | Self::Tinted | Self::Ribbons => {
                 let tint = self.tint(Band::Prompt);
-                let edge = |left, right| card_edge(tint, self.prompt_border(), left, right, width);
+                let edge = |left, right| {
+                    let (left, right) = (
+                        self.corner(Band::Prompt, left),
+                        self.corner(Band::Prompt, right),
+                    );
+                    card_edge(tint, style::PROMPT_MARK, left, right, width)
+                };
                 (Some(edge('╭', '╮')), Some(edge('╰', '╯')))
             }
             Self::Classic | Self::Outline | Self::Timeline => (None, None),
@@ -159,9 +169,10 @@ impl Design {
     /// The row a call's block ends with, `width` columns wide, where the look closes it: a
     /// card's bottom edge.
     pub(super) fn bottom(self, outcome: Outcome, width: usize) -> Option<String> {
-        let (tint, border) = (self.tint(outcome.band()), self.card_border(outcome));
+        let band = outcome.band();
+        let (left, right) = (self.corner(band, '╰'), self.corner(band, '╯'));
         self.carded()
-            .then(|| card_edge(tint, border, '╰', '╯', width))
+            .then(|| card_edge(self.tint(band), outcome.style(), left, right, width))
     }
 
     /// What goes before each row of reasoning; `None`: nothing.
@@ -173,7 +184,7 @@ impl Design {
                 Some(Gutter::same(&rail, 2, None, marked))
             }
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Cards | Self::Tinted | Self::Outline | Self::Mono => {
+            Self::Cards | Self::Tinted | Self::Ribbons | Self::Outline | Self::Mono => {
                 Some(Gutter::same("  ", 2, None, marked))
             }
             Self::Margin => Some(Gutter::new(
@@ -209,7 +220,7 @@ impl Design {
                 let rail = format!("{}▏{} ", style::REPLY_RAIL, style::RESET);
                 Some(Gutter::same(&rail, 2, None, marked))
             }
-            Self::Cards | Self::Tinted => {
+            Self::Cards | Self::Tinted | Self::Ribbons => {
                 let star = format!("{}✦{} ", style::PROMPT_MARK, style::RESET);
                 Some(Gutter::new(&star, "  ", 2, None, marked))
             }
@@ -230,7 +241,7 @@ impl Design {
     /// text is in `style`, of the kind `kind` names in a word; `None`: nothing.
     pub(super) fn notice(self, kind: &str, style: Style, marked: bool) -> Option<Gutter> {
         match self {
-            Self::Rails | Self::Cards | Self::Tinted => {
+            Self::Rails | Self::Cards | Self::Tinted | Self::Ribbons => {
                 let mark = format!("{style}!{} ", style::RESET);
                 Some(Gutter::new(&mark, "  ", 2, None, marked))
             }
@@ -261,9 +272,12 @@ impl Design {
         match self {
             Self::Classic => None,
             Self::Panels => Some(Gutter::same(" ", 1, None, marked)),
-            Self::Rails | Self::Cards | Self::Tinted | Self::Outline | Self::Mono => {
-                Some(Gutter::same("  ", 2, None, marked))
-            }
+            Self::Rails
+            | Self::Cards
+            | Self::Tinted
+            | Self::Ribbons
+            | Self::Outline
+            | Self::Mono => Some(Gutter::same("  ", 2, None, marked)),
             Self::Margin => Some(Gutter::same(MARGIN_BLANK, MARGIN, None, marked)),
             Self::Timeline => Some(Gutter::same(&spine_gutter(), 2, None, marked)),
         }
@@ -285,8 +299,8 @@ impl Design {
             Self::Rails | Self::Timeline => rail("│"),
             Self::Panels => Gutter::same(" ", 1, Some(outcome.band()), marked),
             Self::Margin => rail("▏"),
-            Self::Cards | Self::Tinted => {
-                let side = format!("{}│{}", self.card_border(outcome), style::RESET);
+            Self::Cards | Self::Tinted | Self::Ribbons => {
+                let side = self.side(outcome.band(), outcome.style());
                 let gutter = Gutter::same(&format!("{side} "), 4, None, marked);
                 gutter.closed(&format!(" {side}"), width, self.tint(outcome.band()))
             }
@@ -365,12 +379,16 @@ impl Design {
                 };
                 (lead, columns, Some(right), None)
             }
-            Self::Cards | Self::Tinted => {
-                let border = self.card_border(outcome);
-                let lead = format!("{border}╭─{} {glyph} {name_shown} ", style::RESET);
+            Self::Cards | Self::Tinted | Self::Ribbons => {
+                let border = outcome.style();
+                let (left, end) = (
+                    self.corner(outcome.band(), '╭'),
+                    self.corner(outcome.band(), '╮'),
+                );
+                let lead = format!("{border}{left}─{} {glyph} {name_shown} ", style::RESET);
                 let right = match took {
-                    Some(took) => format!(" {took} {border}─╮{}", style::RESET),
-                    None => format!("{border}─╮{}", style::RESET),
+                    Some(took) => format!(" {took} {border}─{end}{}", style::RESET),
+                    None => format!("{border}─{end}{}", style::RESET),
                 };
                 (lead, name.chars().count() + 6, Some(right), None)
             }
@@ -392,14 +410,11 @@ impl Design {
             }
         };
         // A card's top edge runs on to its right, and its sides down the rows under it.
-        let card = self.carded().then(|| self.card_border(outcome));
+        let card = self.carded().then(|| outcome.style());
+        let side = self.side(outcome.band(), outcome.style());
         // Rows under the first keep a panel's edge.
         let below = match (band.and_then(edge), card) {
-            (_, Some(border)) => format!(
-                "{border}│{}{}",
-                style::RESET,
-                " ".repeat(indent_of(lead_columns, width) - 1)
-            ),
+            (_, Some(_)) => format!("{side}{}", " ".repeat(indent_of(lead_columns, width) - 1)),
             (Some(edge), None) => {
                 format!("{edge}{}", " ".repeat(indent_of(lead_columns, width) - 1))
             }
@@ -496,10 +511,9 @@ impl Design {
                         format!("{band}{lead}{from}{row}{pad}")
                     }
                     false => match card {
-                        Some(border) => {
+                        Some(_) => {
                             let used = indent + cells(row) + 2;
                             let pad = " ".repeat(width.saturating_sub(used));
-                            let side = format!("{border}│{}", style::RESET);
                             let reset = style::RESET;
                             format!("{below}{from}{row}{reset}{until}{pad} {side}")
                         }
@@ -517,25 +531,30 @@ impl Design {
 impl Design {
     /// Whether the look draws cards around prompts and calls.
     fn carded(self) -> bool {
-        matches!(self, Self::Cards | Self::Tinted)
+        matches!(self, Self::Cards | Self::Tinted | Self::Ribbons)
     }
     /// The band a card holding `band`'s rows is filled with: in tinted cards, that one.
     fn tint(self, band: Band) -> Option<Band> {
-        (self == Self::Tinted).then_some(band)
+        matches!(self, Self::Tinted | Self::Ribbons).then_some(band)
     }
-    /// The color of a call's card for how it went: in tinted cards on a painted fill, a done
-    /// one's muted, as its fill says it.
-    fn card_border(self, outcome: Outcome) -> Style {
-        match outcome {
-            Outcome::Done if self == Self::Tinted && Band::Done.painted() => style::RAIL,
-            outcome => outcome.style(),
+    /// Whether a card around `band`'s rows is open, without sides: a tinted one on a painted fill.
+    fn open(self, band: Band) -> bool {
+        self.tint(band).is_some_and(Band::painted)
+    }
+    /// What takes a card's `corner` around `band`'s rows: in an open card, the rule where it runs
+    /// the full width, else a space.
+    fn corner(self, band: Band, corner: char) -> char {
+        match (self.open(band), self) {
+            (false, _) => corner,
+            (true, Self::Ribbons) => '─',
+            (true, _) => ' ',
         }
     }
-    /// The color of a prompt's card: the accent, or in tinted cards on a painted fill muted.
-    fn prompt_border(self) -> Style {
-        match self == Self::Tinted && Band::Prompt.painted() {
-            true => style::RAIL,
-            false => style::PROMPT_MARK,
+    /// A card's side beside `band`'s rows, in `border`: in an open card, a space.
+    fn side(self, band: Band, border: Style) -> String {
+        match self.open(band) {
+            true => " ".into(),
+            false => format!("{border}│{}", style::RESET),
         }
     }
     /// The color of a rail beside a call's rows, for how it went.
@@ -852,7 +871,7 @@ mod tests {
         }
         assert_eq!(Design::named("plain"), None);
         let mut design = Design::Classic;
-        let seen: Vec<_> = (0..9)
+        let seen: Vec<_> = (0..10)
             .map(|_| {
                 design = design.next();
                 design
@@ -866,6 +885,7 @@ mod tests {
                 Design::Margin,
                 Design::Cards,
                 Design::Tinted,
+                Design::Ribbons,
                 Design::Outline,
                 Design::Timeline,
                 Design::Mono,

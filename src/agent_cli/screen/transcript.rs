@@ -798,6 +798,7 @@ mod tests {
         );
         // Tinted cards show as cards where the theme paints no backgrounds, as these tests'.
         assert_eq!(styled_in(Design::Tinted), styled_in(Design::Cards));
+        assert_eq!(styled_in(Design::Ribbons), styled_in(Design::Cards));
         // Outline puts a bold verb after how each call went, its output under an elbow, and says
         // how long a turn worked once it ends; no other look shows that.
         assert_eq!(

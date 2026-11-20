@@ -3337,7 +3337,7 @@ or false; ignored"
             ["panels", "margin", "cards", "tinted"]
         );
         // Then round to the first again, and on.
-        for _ in 0..7 {
+        for _ in 0..8 {
             settings.cycle(Row::Look).unwrap();
         }
         assert_eq!(

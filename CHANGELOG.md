@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.287.0 — Tinted cards without sides
+
+### Changed
+
+- The `tinted` look's cards have no left or right sides: a rule above carrying the call and one below, inset a column, with the fill between, each in the color of what the fill holds (a done call's green, a failed one's red, a running one's amber, a prompt's accent).
+
+### Added
+
+- A `ribbons` look (`/settings` → Look): `tinted` with its rules running the fill's full width.
+
 ## 2.286.0 — A bar bottom without backgrounds
 
 ### Changed
