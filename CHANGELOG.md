@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.289.0 — The branch's pull request in the footer
+
+### Added
+
+- Every bottom shows the branch's open pull request after the branch, as `PR #N`, as Scramjet 1's footer did: when `origin` is on GitHub and `gh` finds exactly one open from the branch. It is looked up off the screen's thread, at the start, when the branch changes and after each turn or command.
+
 ## 2.288.0 — The harness's own blocks in each look
 
 ### Changed

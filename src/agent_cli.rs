@@ -51,6 +51,7 @@ mod markdown;
 mod packages;
 mod palette;
 mod programs;
+mod pull_request;
 mod record;
 mod report;
 mod sandbox_menu;

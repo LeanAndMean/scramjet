@@ -1,9 +1,10 @@
 //! The two lines under the prompt, as Scramjet's footer: the project's directory with its Git
-//! branch, the session's name, the sandbox's mode and whether autopilot is on, then the
+//! branch and the branch's open pull request, the session's name, the sandbox's mode and whether autopilot is on, then the
 //! session's tokens with the model's output rate, the cost, how full the context is, and the
 //! model with its provider and effort.
 
 use super::bottom::Segment;
+use super::pull_request::PullRequest;
 use super::settings::scramjet_level;
 use super::style::{FOOTER, FOOTER_FIGURE, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
 use super::terminal::{dollars, rate, tokens};
@@ -75,6 +76,7 @@ pub(super) struct Footer {
     head: Option<Head>,
     branch: Option<String>,
     checked: Instant,
+    pull_request: PullRequest,
     pub(super) shown: Shown,
     /// What each running `subagent` call's children spent so far, in dollars, and whether some
     /// child's cost is not known, by the call's place among those running at the same time:
@@ -89,12 +91,17 @@ impl Footer {
         let folder = (root.file_name()).map_or(directory.clone(), |name| {
             name.to_string_lossy().into_owned()
         });
+        let mut pull_request = PullRequest::new(root);
+        if head.is_some() {
+            pull_request.look_now();
+        }
         Self {
             directory,
             folder,
             branch: head.as_ref().and_then(Head::branch),
             head,
             checked: Instant::now(),
+            pull_request,
             shown: Shown::default(),
             running: Vec::new(),
         }
@@ -104,6 +111,9 @@ impl Footer {
     pub(super) fn show(&mut self, shown: Shown) {
         self.shown = shown;
         self.running.clear();
+        if self.head.is_some() {
+            self.pull_request.look();
+        }
     }
 
     /// The session's tokens, how full its context is and the model's output rate after a
@@ -135,7 +145,11 @@ impl Footer {
         if let Some(head) = &self.head
             && self.checked.elapsed() >= BRANCH_CHECK
         {
-            self.branch = head.branch();
+            let branch = head.branch();
+            if branch != self.branch {
+                self.pull_request.look_now();
+            }
+            self.branch = branch;
             self.checked = Instant::now();
         }
     }
@@ -155,6 +169,9 @@ impl Footer {
     pub(super) fn lines(&self, width: usize) -> [String; 2] {
         let room = width.saturating_sub(1);
         let mut place = self.directory();
+        if let Some(pull) = self.pull() {
+            place += &format!(" • {pull}");
+        }
         if let Some(name) = &self.shown.name {
             place += &format!(" • {name}");
         }
@@ -176,11 +193,17 @@ impl Footer {
         }
     }
 
+    /// The branch's open pull request, as `PR #N`.
+    fn pull(&self) -> Option<String> {
+        let number = self.pull_request.of(self.branch.as_deref()?)?;
+        Some(format!("PR #{number}"))
+    }
+
     /// What the footer tells, for a bottom that lays it out its own way (`Bottom`).
     pub(super) fn parts(&self) -> Parts {
         let shown = &self.shown;
         let safe = |text: &str| visible(&one_line(text));
-        let place = [Some(self.directory()), shown.name.clone()];
+        let place = [Some(self.directory()), self.pull(), shown.name.clone()];
         let modes = [
             shown.sandbox.map(|mode| format!("sandbox {mode}")),
             shown.autopilot.then(|| "autopilot".to_owned()),
@@ -418,6 +441,7 @@ mod tests {
             head: None,
             branch: Some("main".into()),
             checked: Instant::now(),
+            pull_request: PullRequest::new(Path::new("/")),
             shown,
             running: Vec::new(),
         }
@@ -463,6 +487,21 @@ mod tests {
         };
         let [place, _] = footer(autopilot).lines(67).map(|line| plain(&line));
         assert_eq!(place, "~/repos/project (main) • Refactor • autopilot");
+        // The branch's pull request follows it, in every bottom, and not another branch's.
+        let pulled = footer(opus());
+        pulled.pull_request.found("main", Some(72));
+        let [place, _] = pulled.lines(67).map(|line| plain(&line));
+        assert_eq!(place, "~/repos/project (main) • PR #72 • Refactor");
+        let texts: Vec<_> = pulled
+            .parts()
+            .place
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect();
+        assert_eq!(texts, ["~/repos/project (main)", "PR #72", "Refactor"]);
+        pulled.pull_request.found("other", Some(72));
+        let [place, _] = pulled.lines(67).map(|line| plain(&line));
+        assert_eq!(place, "~/repos/project (main) • Refactor");
         assert_eq!(
             stats,
             "↑12k ↓3.4k R104k 53k/1.0M (5.3%, auto)      claude-opus-5-5 • high"
