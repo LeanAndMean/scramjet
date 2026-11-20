@@ -3,7 +3,7 @@
 //! pick from, each keeping all that the footer and the status row tell.
 
 use super::selection;
-use super::style::{self, RESET, Style};
+use super::style::{self, Band, RESET, Style};
 use super::text::{FROM, UNTIL, clip, columns, plain};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -17,15 +17,22 @@ pub(super) enum Bottom {
     /// the right, then the output rate, the context's fill and the cost with the model at the
     /// right, wrapped onto more rows rather than cut where they do not fit.
     Boxed,
+    /// After Codex's composer: the prompt, or a dialog in its place, on the prompt's background
+    /// with a row of it above and below, a `▎` edge down its left in the thinking level's
+    /// color (which alone marks it in a theme without backgrounds); under it the figures the
+    /// user reads most with the model at the right, then where the session is with its modes,
+    /// wrapped onto more rows rather than cut.
+    Composer,
 }
 
 impl Bottom {
-    pub(super) const ALL: [Bottom; 2] = [Self::Pi, Self::Boxed];
+    pub(super) const ALL: [Bottom; 3] = [Self::Pi, Self::Boxed, Self::Composer];
 
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::Pi => "pi",
             Self::Boxed => "boxed",
+            Self::Composer => "composer",
         }
     }
 
@@ -141,6 +148,29 @@ pub(super) fn sides(border: Style, rows: &[String], width: usize) -> Vec<String>
         .collect()
 }
 
+/// `rows`, each at most `width - 3` columns, on the prompt's band after a `▎` edge in `edge`,
+/// with a row of the band above and below holding `above` and `below` at their right, `width`
+/// columns wide; a copy of a row leaves the edge out.
+pub(super) fn tinted(
+    edge: Style,
+    rows: &[String],
+    (above, below): (&str, &str),
+    width: usize,
+) -> Vec<String> {
+    let band = Band::Prompt.mark();
+    let side = format!("{band}{edge}▎{RESET} ");
+    let padding = |label: &str| {
+        let room = width.saturating_sub(2);
+        let label = clip(label, room);
+        let gap = " ".repeat(room.saturating_sub(columns(&label)));
+        format!("{side}{gap}{}{label}{RESET}", style::MUTED)
+    };
+    let mut shown = vec![padding(above)];
+    shown.extend(rows.iter().map(|row| format!("{side}{FROM}{row}")));
+    shown.push(padding(below));
+    shown
+}
+
 /// Whether `row` is a rule, all `─`.
 pub(super) fn is_rule(row: &str) -> bool {
     let text = plain(row);
@@ -170,7 +200,8 @@ mod tests {
         }
         assert_eq!(Bottom::named("tall"), None);
         assert_eq!(Bottom::Pi.next(), Bottom::Boxed);
-        assert_eq!(Bottom::Boxed.next(), Bottom::Pi);
+        assert_eq!(Bottom::Boxed.next(), Bottom::Composer);
+        assert_eq!(Bottom::Composer.next(), Bottom::Pi);
         assert_eq!(Bottom::default(), Bottom::Pi);
     }
 
@@ -226,6 +257,19 @@ mod tests {
         assert_eq!(plain(&line.shown), "│ > hello          │");
         assert_eq!(line.copied(0, usize::MAX), Some((2, 18)));
         assert!(is_rule("\x1b[2m──────\x1b[0m"));
+        let rows = tinted(style::FOOTER, &["> hi".into()], ("", "↓ 2 more"), 20);
+        let lines: Vec<_> = rows.iter().map(|row| selection::row(row)).collect();
+        let shown: Vec<_> = lines.iter().map(|line| plain(&line.shown)).collect();
+        assert_eq!(
+            shown,
+            [
+                format!("▎{}", " ".repeat(19)),
+                "▎ > hi".into(),
+                format!("▎{}↓ 2 more", " ".repeat(11))
+            ]
+        );
+        assert!(lines.iter().all(|line| line.band == Some(Band::Prompt)));
+        assert_eq!(lines[1].copied(0, usize::MAX), Some((2, usize::MAX)));
         assert!(!is_rule("── a ──") && !is_rule(""));
     }
 }

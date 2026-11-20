@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.284.0 — A composer bottom
+
+### Added
+
+- A `composer` bottom (`/settings` → Bottom), after Codex's: the prompt, or a dialog in its place, on the prompt's background with a row of it above and below and an edge in the thinking level's color, `›` before the text as before a sent prompt; under it the output rate, the context's fill, the cost and the model, then where the session is with its modes, going onto more rows rather than cutting any of them.
+
 ## 2.283.0 — A boxed bottom
 
 ### Added

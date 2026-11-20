@@ -155,6 +155,8 @@ struct Held {
     prompt: Option<(style::Style, (usize, usize))>,
     /// The style of the rule under a dialog.
     rule: style::Style,
+    /// Whether `rows` are a draft's, the first with the editor's `> `.
+    typed: bool,
 }
 
 /// The prompt's rule, `width` columns of it, saying how many of the draft's rows are hidden
@@ -329,6 +331,7 @@ impl App {
             cursor: None,
             prompt: None,
             rule: style::DIALOG_RULE,
+            typed: false,
         };
         match &self.dialog {
             Some(Open {
@@ -374,7 +377,7 @@ impl App {
                 );
                 held.title = Some(clip(&title, width.saturating_sub(1)));
                 let (rows, cursor, _) = prompt_rows(&text.draft, (width, room), self.layout, false);
-                (held.rows, held.cursor) = (rows, Some(cursor));
+                (held.rows, held.cursor, held.typed) = (rows, Some(cursor), true);
             }
             Some(Open {
                 shown: Shown::Press(title, note) | Shown::Wait(title, note),
@@ -406,7 +409,7 @@ impl App {
                 let border = prompt_border(self.footer.shown.effort.as_deref(), &self.draft);
                 let (rows, cursor, hidden) =
                     prompt_rows(&self.draft, (width, room), self.layout, true);
-                (held.rows, held.cursor) = (rows, Some(cursor));
+                (held.rows, held.cursor, held.typed) = (rows, Some(cursor), true);
                 held.prompt = Some((border, hidden));
             }
         }
@@ -425,6 +428,7 @@ impl App {
         match self.bottom {
             Bottom::Pi => self.pi(rows, (width, height)),
             Bottom::Boxed => self.boxed(rows, (width, height)),
+            Bottom::Composer => self.composer(rows, (width, height)),
         }
     }
 
@@ -504,6 +508,54 @@ impl App {
         }
         let label = more('↓', below);
         rows.push(Line::rule(&bottom::edge(border, ('╰', '╯'), &label, room)));
+        let cursor = (held.cursor)
+            .filter(|(row, _)| *row >= skipped)
+            .map(|(row, column)| (start + row - skipped, column + 2));
+        rows.extend(selection::rows(&footer));
+        (rows, cursor)
+    }
+
+    /// The prompt or a dialog on the prompt's band, then the footer's figures and place.
+    fn composer(
+        &self,
+        mut rows: Vec<Line>,
+        (width, height): (usize, usize),
+    ) -> (Vec<Line>, Option<(usize, usize)>) {
+        // As the prompt's text in the conversation, two columns in.
+        let room = width.saturating_sub(3);
+        let parts = self.footer.parts();
+        let mut footer = bottom::spread(&parts.figures, &[parts.model], room);
+        footer.extend(bottom::spread(&parts.place, &parts.modes, room));
+        let footer: Vec<String> = footer.iter().map(|row| format!("  {row}")).collect();
+        let space = height.saturating_sub(rows.len() + 2 + footer.len()).max(1);
+        let held = self.held(width.saturating_sub(2), space);
+        let (edge, (above, below)) = held.prompt.unwrap_or((held.rule, (0, 0)));
+        let more = |arrow, count| match count {
+            0 => String::new(),
+            count => format!("{arrow} {count} more"),
+        };
+        let mut content: Vec<String> = held.title.clone().into_iter().collect();
+        let mut skipped = 0;
+        let mut own = &held.rows[..];
+        while own.first().is_some_and(|row| bottom::is_rule(row)) {
+            (own, skipped) = (&own[1..], skipped + 1);
+        }
+        while own.last().is_some_and(|row| bottom::is_rule(row)) {
+            own = &own[..own.len() - 1];
+        }
+        let titled = content.len();
+        content.extend(own.iter().cloned());
+        // The prompt's mark, as a sent prompt's.
+        if held.typed
+            && let Some(first) = content.get_mut(titled)
+            && let Some(rest) = first.strip_prefix("> ")
+        {
+            *first = format!("{}›{} {rest}", style::PROMPT_MARK, style::RESET);
+        }
+        let labels = (more('↑', above), more('↓', below));
+        let start = rows.len() + 1 + titled;
+        let tinted = bottom::tinted(edge, &content, (&labels.0, &labels.1), room + 2);
+        rows.extend(selection::rows(&tinted));
         let cursor = (held.cursor)
             .filter(|(row, _)| *row >= skipped)
             .map(|(row, column)| (start + row - skipped, column + 2));

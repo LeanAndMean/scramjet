@@ -26,7 +26,7 @@ from PIL import Image
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOOKS = ['panels', 'classic', 'rails', 'margin', 'cards', 'tinted', 'outline', 'timeline', 'mono']
-BOTTOMS = ['pi', 'boxed']
+BOTTOMS = ['pi', 'boxed', 'composer']
 THEMES = ['scramjet-dark', 'scramjet-light', 'pi-light', 'terminal-colors']
 
 

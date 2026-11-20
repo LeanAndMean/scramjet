@@ -1334,10 +1334,9 @@ mod tests {
     }
 
     #[test]
-    fn the_boxed_bottom_keeps_all_the_footer_tells_however_narrow() {
+    fn the_bottoms_other_than_pi_keep_all_the_footer_tells_however_narrow() {
         use super::footer::Shown;
         let (mut app, _from) = app();
-        app.bottom = Bottom::Boxed;
         app.footer.show(Shown {
             name: Some("Refactor".into()),
             tokens: scramjet::agent::Tokens {
@@ -1361,7 +1360,11 @@ mod tests {
             .messages
             .steering
             .push("Use split_whitespace".into());
-        for width in [100, 60, 36] {
+        for (bottom, width) in [Bottom::Boxed, Bottom::Composer]
+            .into_iter()
+            .flat_map(|bottom| [100, 60, 36].map(|width| (bottom, width)))
+        {
+            app.bottom = bottom;
             let (rows, cursor) = app.dock((width, 30));
             let text: Vec<String> = rows
                 .iter()
@@ -1378,7 +1381,10 @@ mod tests {
                 "(screens) gpt-6-luna • medium",
                 "Steering: Use split_whitespace",
             ] {
-                assert!(all.contains(told), "{told} at {width}:\n{all}");
+                assert!(
+                    all.contains(told),
+                    "{told} in {bottom:?} at {width}:\n{all}"
+                );
             }
             // Cache reads and `auto` inform no decision: they stay in `/usage` and `/status`.
             assert!(!all.contains("R104k") && !all.contains("auto)"), "{all}");
@@ -1388,10 +1394,12 @@ mod tests {
                 "{all}"
             );
             let (row, column) = cursor.unwrap();
-            assert!(
-                text[row - 1].starts_with('╭') && text[row].starts_with("│ >"),
-                "{all}"
-            );
+            let (edge, prompt) = match bottom {
+                Bottom::Composer => ("▎ ", "▎ › "),
+                _ => ("╭", "│ > "),
+            };
+            assert!(text[row - 1].starts_with(edge), "{all}");
+            assert!(text[row].starts_with(prompt), "{all}");
             assert_eq!(column, 4);
         }
     }
