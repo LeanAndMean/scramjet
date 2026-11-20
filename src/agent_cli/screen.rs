@@ -1360,7 +1360,7 @@ mod tests {
             .messages
             .steering
             .push("Use split_whitespace".into());
-        for (bottom, width) in [Bottom::Boxed, Bottom::Composer]
+        for (bottom, width) in [Bottom::Boxed, Bottom::Composer, Bottom::Bar]
             .into_iter()
             .flat_map(|bottom| [100, 60, 36].map(|width| (bottom, width)))
         {
@@ -1394,13 +1394,14 @@ mod tests {
                 "{all}"
             );
             let (row, column) = cursor.unwrap();
-            let (edge, prompt) = match bottom {
-                Bottom::Composer => ("▎ ", "▎ › "),
-                _ => ("╭", "│ > "),
+            let (edge, prompt, at) = match bottom {
+                Bottom::Composer => ("▎ ", "▎ › ", 4),
+                Bottom::Bar => ("─", "> ", 2),
+                _ => ("╭", "│ > ", 4),
             };
             assert!(text[row - 1].starts_with(edge), "{all}");
             assert!(text[row].starts_with(prompt), "{all}");
-            assert_eq!(column, 4);
+            assert_eq!(column, at);
         }
     }
 

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.285.0 — A status-bar bottom
+
+### Added
+
+- A `bar` bottom (`/settings` → Bottom): the prompt and dialogs as `pi`'s, and the footer as a status bar: where the session is with its modes, then at the right chips for the output rate, the context's fill with a gauge in its warning and error colors, the cost and the model after a mark in the thinking level's color, going onto more rows rather than cutting any of them.
+
 ## 2.284.0 — A composer bottom
 
 ### Added

@@ -179,6 +179,12 @@ fn prompt_border(effort: Option<&str>, draft: &Draft) -> style::Style {
     if draft.text().trim_start().starts_with('!') {
         return style::PROMPT_COMMAND;
     }
+    level_style(effort)
+}
+
+/// The style of the thinking level `effort`, off for a model that does not reason or a level
+/// Scramjet does not know.
+fn level_style(effort: Option<&str>) -> style::Style {
     match effort.map(scramjet_level) {
         Some("minimal") => style::PROMPT_MINIMAL,
         Some("low") => style::PROMPT_LOW,
@@ -429,16 +435,27 @@ impl App {
             Bottom::Pi => self.pi(rows, (width, height)),
             Bottom::Boxed => self.boxed(rows, (width, height)),
             Bottom::Composer => self.composer(rows, (width, height)),
+            Bottom::Bar => self.bar(rows, (width, height)),
         }
     }
 
     /// Scramjet's dock: the prompt between rules, or a dialog over a rule, then the footer.
     fn pi(
         &self,
-        mut rows: Vec<Line>,
+        rows: Vec<Line>,
         (width, height): (usize, usize),
     ) -> (Vec<Line>, Option<(usize, usize)>) {
-        let footer = self.footer.lines(width);
+        self.held_over(rows, self.footer.lines(width).to_vec(), (width, height))
+    }
+
+    /// After `rows`, the prompt between rules or a dialog over a rule, as Scramjet's, then
+    /// `footer`.
+    fn held_over(
+        &self,
+        mut rows: Vec<Line>,
+        footer: Vec<String>,
+        (width, height): (usize, usize),
+    ) -> (Vec<Line>, Option<(usize, usize)>) {
         // The rule above the footer, and the footer.
         let under = 1 + footer.len();
         let room = height.saturating_sub(rows.len() + 1 + under).max(1);
@@ -471,6 +488,17 @@ impl App {
         (rows, cursor)
     }
 
+    /// Scramjet's prompt between rules, or a dialog over a rule, then the footer as a status bar.
+    fn bar(
+        &self,
+        rows: Vec<Line>,
+        (width, height): (usize, usize),
+    ) -> (Vec<Line>, Option<(usize, usize)>) {
+        let level = level_style(self.footer.shown.effort.as_deref());
+        let footer = bottom::bar(&self.footer.parts(), level, width.saturating_sub(1));
+        self.held_over(rows, footer, (width, height))
+    }
+
     /// The prompt or a dialog in a rounded box, then the footer's parts spread over rows.
     fn boxed(
         &self,
@@ -480,7 +508,11 @@ impl App {
         let room = width.saturating_sub(1);
         let parts = self.footer.parts();
         let mut footer = bottom::spread(&parts.place, &parts.modes, room);
-        footer.extend(bottom::spread(&parts.figures, &[parts.model], room));
+        footer.extend(bottom::spread(
+            &parts.figures(),
+            std::slice::from_ref(&parts.model),
+            room,
+        ));
         let space = height.saturating_sub(rows.len() + 2 + footer.len()).max(1);
         let held = self.held(width.saturating_sub(4), space);
         let (border, (above, below)) = held.prompt.unwrap_or((held.rule, (0, 0)));
@@ -524,7 +556,7 @@ impl App {
         // As the prompt's text in the conversation, two columns in.
         let room = width.saturating_sub(3);
         let parts = self.footer.parts();
-        let mut footer = bottom::spread(&parts.figures, &[parts.model], room);
+        let mut footer = bottom::spread(&parts.figures(), std::slice::from_ref(&parts.model), room);
         footer.extend(bottom::spread(&parts.place, &parts.modes, room));
         let footer: Vec<String> = footer.iter().map(|row| format!("  {row}")).collect();
         let space = height.saturating_sub(rows.len() + 2 + footer.len()).max(1);

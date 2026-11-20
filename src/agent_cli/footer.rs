@@ -185,18 +185,14 @@ impl Footer {
             shown.sandbox.map(|mode| format!("sandbox {mode}")),
             shown.autopilot.then(|| "autopilot".to_owned()),
         ];
-        let mut figures = Vec::new();
-        if let Some(r) = shown.rate.filter(|_| shown.tokens.output > 0) {
-            figures.push((rate(r), FOOTER_FIGURE));
-        }
-        let (full, percent) = self.fill("");
-        let style = match percent {
+        let rate =
+            (shown.rate.filter(|_| shown.tokens.output > 0)).map(|r| (rate(r), FOOTER_FIGURE));
+        let (full, fill) = self.fill("");
+        let style = match fill {
             Some(percent) if percent > 90.0 => FOOTER_FULL,
             Some(percent) if percent > 70.0 => FOOTER_NEARLY_FULL,
             _ => FOOTER_FIGURE,
         };
-        figures.push((full, style));
-        figures.extend(self.spent().map(|cost| (cost, FOOTER)));
         let model = match &shown.provider {
             Some(provider) => format!("({provider}) {}", self.model()),
             None => self.model(),
@@ -212,7 +208,10 @@ impl Footer {
                 .flatten()
                 .map(|text| (text, FOOTER))
                 .collect(),
-            figures,
+            rate,
+            context: (full, style),
+            fill,
+            cost: self.spent().map(|cost| (cost, FOOTER)),
             model: (safe(&model), FOOTER),
         }
     }
@@ -312,8 +311,23 @@ impl Footer {
 pub(super) struct Parts {
     pub(super) place: Vec<Segment>,
     pub(super) modes: Vec<Segment>,
-    pub(super) figures: Vec<Segment>,
+    pub(super) rate: Option<Segment>,
+    /// How full the context is, in the warning color past 70% and the error color past 90%,
+    /// and as a share where the window is known (`fill`).
+    pub(super) context: Segment,
+    pub(super) fill: Option<f64>,
+    pub(super) cost: Option<Segment>,
     pub(super) model: Segment,
+}
+
+impl Parts {
+    /// The output rate, how full the context is and the cost.
+    pub(super) fn figures(&self) -> Vec<Segment> {
+        let rate = self.rate.iter().cloned();
+        rate.chain([self.context.clone()])
+            .chain(self.cost.clone())
+            .collect()
+    }
 }
 
 /// `text`'s first characters that fit in `width` columns, as Scramjet cuts the model's name.

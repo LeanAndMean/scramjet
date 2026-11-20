@@ -344,7 +344,8 @@ impl Row {
             }
             Self::Bottom => {
                 "How the status row, the prompt and the footer look: pi, as Scramjet 1's, \
-                 boxed, the prompt and dialogs in a box, or composer, on the prompt's background."
+                 boxed, the prompt and dialogs in a box, composer, on the prompt's background, \
+                 or bar, the footer a status bar."
             }
             Self::Steering => {
                 let with = with(Binding::Submit, " with ");
@@ -3015,7 +3016,7 @@ or false; ignored"
                 format!(r#"{path}: markdown.toolDisplay must be "rendered" or "source"; ignored"#),
                 format!("{path}: theme must be a theme's name; ignored"),
                 format!(r#"{path}: banner must be "plain", "header", "card", "logo"; ignored"#),
-                format!(r#"{path}: bottom must be "pi", "boxed", "composer"; ignored"#),
+                format!(r#"{path}: bottom must be "pi", "boxed", "composer", "bar"; ignored"#),
                 format!(
                     r#"{path}: defaultThinkingLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#
                 ),
@@ -3347,7 +3348,7 @@ or false; ignored"
         settings.cycle(Row::Banner).unwrap();
         assert_eq!(
             seen(Row::Bottom, &mut settings),
-            ["pi", "boxed", "composer", "pi"]
+            ["pi", "boxed", "composer", "bar"]
         );
         let (default, other) = match cfg!(target_os = "macos") {
             true => ("on", "off"),
@@ -3475,7 +3476,7 @@ or false; ignored"
                 "theme": "scramjet-dark",
                 "look": "margin",
                 "banner": "card",
-                "bottom": "pi",
+                "bottom": "bar",
             })
         );
         let reread = Settings::read(Some(path.clone()));
