@@ -892,7 +892,9 @@ async fn run(
 ) -> Result<RunningService<RoleClient, ClientConfig>, String> {
     let path = (env.iter().rev()).find(|(key, _)| key.eq_ignore_ascii_case("PATH"));
     let path = path.map(|(_, path)| std::ffi::OsStr::new(path));
-    let mut command = tokio::process::Command::new(crate::os::program(program, path));
+    // Started by std and held at once, then given to tokio: tokio's own start fails after the
+    // process exists when the runtime is shutting down, and drops it unheld.
+    let mut command = std::process::Command::new(crate::os::program(program, path));
     command
         .args(args)
         .envs(env.iter().map(|(key, value)| (key, value)))
@@ -900,13 +902,11 @@ async fn run(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::os::own_group_async(&mut command);
+    crate::os::own_group(&mut command);
     let (mut child, group) = Group::started(|| {
         let child = command.spawn()?;
-        crate::os::hold_group_async(&child);
-        let id = child
-            .id()
-            .ok_or_else(|| std::io::Error::other("it ended at once"))?;
+        crate::os::hold_group(&child);
+        let id = child.id();
         Ok((child, id))
     })
     .map_err(|error| format!("could not run {program}: {error}"))?;
@@ -914,13 +914,43 @@ async fn run(
         let mut held = lock(&server.group);
         if server.killed.load(Ordering::Relaxed) {
             group.kill();
+            tokio::task::spawn_blocking(move || child.wait());
             return Err("it was stopped as it started".to_owned());
         }
         *held = Some(group);
     }
-    let (Some(stdin), Some(stdout), Some(stderr)) =
-        (child.stdin.take(), child.stdout.take(), child.stderr.take())
-    else {
+    let pipes = (child.stdin.take(), child.stdout.take(), child.stderr.take());
+    let ended = Arc::new(AtomicBool::new(false));
+    let (watched, watcher) = (server.clone(), ended.clone());
+    *lock(&server.watcher) = Some(tokio::spawn(async move {
+        let status = tokio::task::spawn_blocking(move || child.wait()).await;
+        watcher.store(true, Ordering::Relaxed);
+        // Its process was waited for, so its group's id may go to another once the group is
+        // empty: what is left of it is killed now, and never later.
+        watched.kill();
+        let why = match status {
+            Ok(Ok(status)) => format!("it ended ({status})"),
+            Ok(Err(error)) => format!("it ended: {error}"),
+            Err(error) => format!("it ended: {error}"),
+        };
+        // One still starting fails on the closed connection and says so.
+        let ready = matches!(*lock(&watched.state), Status::Ready(_));
+        if ready {
+            watched.set(Status::Failed(why));
+        }
+    }));
+    let (Some(stdin), Some(stdout), Some(stderr)) = pipes else {
+        server.kill();
+        return Err("its standard input and output could not be read".to_owned());
+    };
+    let pipes = (|| {
+        Ok::<_, std::io::Error>((
+            tokio::process::ChildStdin::from_std(stdin)?,
+            tokio::process::ChildStdout::from_std(stdout)?,
+            tokio::process::ChildStderr::from_std(stderr)?,
+        ))
+    })();
+    let Ok((stdin, stdout, stderr)) = pipes else {
         server.kill();
         return Err("its standard input and output could not be read".to_owned());
     };
@@ -941,24 +971,6 @@ async fn run(
             reader.keep(&line);
         }
     });
-    let ended = Arc::new(AtomicBool::new(false));
-    let (watched, watcher) = (server.clone(), ended.clone());
-    *lock(&server.watcher) = Some(tokio::spawn(async move {
-        let status = child.wait().await;
-        watcher.store(true, Ordering::Relaxed);
-        // Its process was waited for, so its group's id may go to another once the group is
-        // empty: what is left of it is killed now, and never later.
-        watched.kill();
-        let why = match status {
-            Ok(status) => format!("it ended ({status})"),
-            Err(error) => format!("it ended: {error}"),
-        };
-        // One still starting fails on the closed connection and says so.
-        let ready = matches!(*lock(&watched.state), Status::Ready(_));
-        if ready {
-            watched.set(Status::Failed(why));
-        }
-    }));
     match client
         .serve_with_lifecycle((stdout, stdin), lifecycle)
         .await

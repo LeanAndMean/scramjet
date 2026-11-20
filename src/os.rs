@@ -539,16 +539,6 @@ pub fn hold_group(child: &std::process::Child) {
     let _ = child;
 }
 
-/// `hold_group` for tokio's children, started by `own_group_async`.
-pub fn hold_group_async(child: &tokio::process::Child) {
-    #[cfg(windows)]
-    if let (Some(id), Some(handle)) = (child.id(), child.raw_handle()) {
-        windows::hold(id, handle);
-    }
-    #[cfg(unix)]
-    let _ = child;
-}
-
 /// Stops keeping track of the group `hold_group` held as `id`; what still runs in it goes on.
 pub fn release_group(id: u32) {
     #[cfg(windows)]

@@ -8,7 +8,7 @@ Last steer: 91387ae
 
 From the third steer of 2026-11-17, in order: 76 (the sandbox policy, proposed on 2026-11-18 and not approved; nothing of it is built until a steer signs a design off), then 77 (subagents that write, moderate priority). The user's pick from the gallery of the other looks (83), bottoms (86) and `scramjet-light` (85) comes at a later steer. 62's pull request is ready for review (2026-11-18); what its reviewers ask becomes fixes on the branch. 63, 51, 44 and 48 wait on the user.
 
-`v2.291.0` is the latest release (2026-11-20, the user's ask): rehearsal with the Windows tests 44825757797 (its `windows-tests` job failed once on the MCP start race in `docs/ISSUES.md`; its rerun passed), release run 44827995629. Rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else; a later alpha is the user's ask.
+`v2.291.0` is the latest release (2026-11-20, the user's ask): rehearsal with the Windows tests 44825757797 (its `windows-tests` job failed once on an MCP server left running as it started, fixed in 2.291.1; its rerun passed), release run 44827995629. Rehearse with `-f windows-tests=true` before an alpha, as the unit tests run on Windows nowhere else; a later alpha is the user's ask.
 
 What needs the user (Tailscale, device codes for ChatGPT's and Copilot's live sign-ins, `/login` with the private package on Windows) waits: do not ask mid-loop (2026-11-14).
 

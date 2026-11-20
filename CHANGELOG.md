@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.291.1 — No MCP server left running as it starts
+
+### Fixed
+
+- An MCP server whose start was under way as its servers were stopped (Scramjet exiting, `/mcp reconnect`) could be left running: tokio gave up on it after creating its process. Its process is now held from its start and stopped with the others.
+
 ## 2.291.0 — Type an answer of your own
 
 ### Added
