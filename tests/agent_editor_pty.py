@@ -402,6 +402,16 @@ with open(waiting_script, 'w') as script_file:
 os.chmod(waiting_script, 0o755)
 
 
+def exited(process, read):
+    """`process`'s status once it exits within 10 seconds, reading its terminal meanwhile: what
+    it writes as it leaves can outgrow the terminal's buffer, and a write nobody reads blocks."""
+    end = time.monotonic() + 10
+    while process.poll() is None:
+        assert time.monotonic() < end, 'still running after 10 seconds'
+        read(.05)
+    return process.returncode
+
+
 def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, rows=24, forget_models=True,
         signal=None):
     """Runs the agent in `project` on a terminal for `script`, then sends it `signal` if given.
@@ -442,7 +452,7 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
     script(read, until, send, output)
     if signal:
         child.send_signal(signal)
-    assert child.wait(timeout=10) == status, bytes(output[-2000:])
+    assert exited(child, read) == status, bytes(output[-2000:])
     if forget_models and os.path.exists(remembered_models):
         os.remove(remembered_models)
     read(.2)
@@ -498,7 +508,7 @@ def run_in_shell(script, endpoint, arguments=''):
     send(b'stty -g > ../mode; %s %s\r' % (agent(endpoint)[0].encode(), arguments.encode()))
     script(read, until, send, output)
     send(b'exit\r')
-    assert shell.wait(timeout=10) == 0, bytes(output[-2000:])
+    assert exited(shell, read) == 0, bytes(output[-2000:])
     os.close(master)
 
 

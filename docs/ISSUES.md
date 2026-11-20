@@ -8,7 +8,6 @@ Not scheduled; fix them when they matter. Moved out of [TASKS.md](TASKS.md) on 2
 - In `-p` output on a terminal, a reply rewritten in place after a lossy stream (`text_rows`) counts rows from before a stop.
 - The terminal's answers to the full screen's color questions (OSC 11, 10, 4) arrive as typed text in whatever reads the terminal next when the screen is left within a slow link's round trip (ssh). Not seen locally.
 - A SIGKILL leaves a `--no-session` run's directory (`scramjet-unsaved-PID-N`) in the temporary directory. Removing those of dead runs at start would need a lock held per run, as `kept.rs` does, and is a destructive operation to review.
-- The PTY journeys' `reply_then_exit` timed out once waiting 10 s for the program to exit during the full `cargo test` run (2026-11-18), and passed alone: likely load; raise the wait if it recurs.
 - A selector with room for three rows or fewer still cuts its keys to one line.
 - `/resume` moves into another folder's session without asking, and forks one whose folder is gone without asking where it should go: it will do for now, low priority to improve (user, 2026-11-09).
 - The GPT overflow wording through the proxy is unverified (needs over 1.05M tokens). deepseek-v4.1-flash's gateway answers an overflow with HTTP 400 `This model's maximum context length is 327680 tokens…` (its card says 320000).
