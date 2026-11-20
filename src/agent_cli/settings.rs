@@ -658,9 +658,9 @@ impl Settings {
             resume_chains: Chains::Flat,
             markdown_reads: MarkdownReads::Rendered,
             theme: None,
-            look: Design::Panels,
+            look: Design::Tinted,
             banner: Banner::Header,
-            bottom: Bottom::Pi,
+            bottom: Bottom::Bar,
             default_thinking_level: None,
             default_provider: None,
             default_model: None,
@@ -2992,7 +2992,7 @@ or false; ignored"
                 "defaultShell": "zsh"}"#,
         );
         assert_eq!(settings.banner, Banner::Header);
-        assert_eq!(settings.bottom, Bottom::Pi);
+        assert_eq!(settings.bottom, Bottom::Bar);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.resume_chains, Chains::Flat);
@@ -3334,7 +3334,7 @@ or false; ignored"
         );
         assert_eq!(
             seen(Row::Look, &mut settings),
-            ["panels", "margin", "cards", "tinted"]
+            ["tinted", "ribbons", "outline", "timeline"]
         );
         // Then round to the first again, and on.
         for _ in 0..8 {
@@ -3348,7 +3348,7 @@ or false; ignored"
         settings.cycle(Row::Banner).unwrap();
         assert_eq!(
             seen(Row::Bottom, &mut settings),
-            ["pi", "boxed", "composer", "bar"]
+            ["bar", "pi", "boxed", "composer"]
         );
         let (default, other) = match cfg!(target_os = "macos") {
             true => ("on", "off"),
@@ -3474,9 +3474,9 @@ or false; ignored"
                 "followUpMode": "all",
                 "tools": tools_off,
                 "theme": "scramjet-dark",
-                "look": "margin",
+                "look": "ribbons",
                 "banner": "card",
-                "bottom": "bar",
+                "bottom": "composer",
             })
         );
         let reread = Settings::read(Some(path.clone()));

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.290.0 — Tinted and bar by default
+
+### Changed
+
+- The full screen's look is `tinted` and its bottom `bar` by default, where they were `panels` and `pi`. Both of those stay offered in `/settings` → Display, and a `look` or `bottom` already in your settings is kept.
+
 ## 2.289.0 — The branch's pull request in the footer
 
 ### Added

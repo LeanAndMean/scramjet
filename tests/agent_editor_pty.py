@@ -352,6 +352,11 @@ forking = serve_replies([(['Reply one.'], 'Reply one.'), (['Reply two.'], 'Reply
 calling = serve_call('setsid sleep 5 & sleep 30')
 # Prints a line, then another after the first second of running.
 talking = serve_call('echo first; sleep 1.5; echo second; sleep 30')
+# The look and bottom the journeys were written against, which are not the defaults: `pi`'s footer
+# shows the token counts they check.
+PINNED = {'look': 'panels', 'bottom': 'pi'}
+
+
 # A command whose raw text would show only `echo hello` on a terminal.
 disguised = serve_call('rm -rf scratch\r\x1b[2Kecho hello')
 approved = serve_call('echo approved-$((6*7)); sleep 30')
@@ -376,6 +381,8 @@ for name in ['WT_SESSION', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'LC_TERMINAL'
 scratch = os.path.join(work, 'tmp')
 os.mkdir(scratch)
 os.makedirs(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet'))
+with open(os.path.join(env['XDG_CONFIG_HOME'], 'scramjet', 'settings.json'), 'w') as settings_file:
+    json.dump(PINNED, settings_file)
 # Checks its argument, the prompt file's mode and text, then writes a new text; exits 0.
 edit_script = os.path.join(work, 'edit.sh')
 with open(edit_script, 'w') as script_file:
@@ -506,11 +513,16 @@ def session_files():
     return glob.glob(os.path.join(work, 'state', 'scramjet', 'sessions', '*', '*.jsonl'))
 
 
-def config_home(name, settings=None):
+def config_home(name, settings=None, pinned=True):
     """A directory for XDG_CONFIG_HOME of its own, with `settings` (text) as the settings file if
-    given."""
+    given, `PINNED` added where `settings` is a JSON object or none and `pinned`."""
     path = os.path.join(work, 'config-' + name)
     os.makedirs(os.path.join(path, 'scramjet'))
+    if pinned:
+        try:
+            settings = json.dumps({**PINNED, **json.loads(settings or '{}')})
+        except ValueError:
+            pass
     if settings is not None:
         with open(settings_path(path), 'w') as file:
             file.write(settings)
@@ -525,6 +537,9 @@ def saved(home):
     """The settings saved in `home`, but the version the full screen's first start records."""
     settings = json.load(open(settings_path(home)))
     settings.pop('lastChangelogVersion', None)
+    for key, value in PINNED.items():
+        if settings.get(key) == value:
+            del settings[key]
     return settings
 
 
@@ -2687,6 +2702,19 @@ def setting(label, value):
     return label.ljust(len('Follow-up messages')) + '  ' + value
 
 
+def defaults_shown(read, until, send, output):
+    shown, on_screen = full_screen(80, 30)(read, output)
+    # bar's mark in the thinking level's color before the model, under pi's prompt.
+    on_screen('\u258c gpt-6-luna \u2022 medium')
+    send(b'/settings\r')
+    rows = on_screen('Settings  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc close')
+    assert '  ' + setting('Look', 'tinted') in rows, rows
+    assert '  ' + setting('Bottom', 'bar') in rows, rows
+    send(b'\x1b')
+    on_screen('Settings  \u2191\u2193', gone=True)
+    send(b'\x04')
+
+
 def settings_menu(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -3004,7 +3032,8 @@ def double_escape_does_nothing(read, until, send, output):
 def broken_settings_are_kept(read, until, send, output):
     shown, on_screen = full_screen(200)(read, output)
     rows = on_screen('\u2500' * 20)
-    assert (' settings: ' + settings_path(broken) + ': EOF while parsing a value at line 1 column 25; using the '
+    # Broken settings leave the defaults, tinted's `!` before a notice among them.
+    assert ('! settings: ' + settings_path(broken) + ': EOF while parsing a value at line 1 column 25; using the '
             'defaults') in rows, rows
     send(b'\x14')
     on_screen('Thinking blocks: hidden')
@@ -3349,6 +3378,7 @@ run(['--models', 'luna,haiku'], model_list_in_a_scope,
 run([], started_without_thinking, serve_replies([], models=[model('gpt-6-luna')]), variables=in_levels)
 menu_home = config_home('menu', '{"quietStartup": true, "branchSummary": {"reserveTokens": 16384}}')
 bodies = []
+run([], defaults_shown, variables={'XDG_CONFIG_HOME': config_home('defaults', pinned=False)}, columns=80, rows=30)
 run([], settings_menu, serve_items([[tool_call('call_1', 'bash', {'command': 'sleep 2'})], [message('Replied.')]],
                                    models=effort_models, bodies=bodies), variables={'XDG_CONFIG_HOME': menu_home})
 # Each change is used at once: the next request has the level and the tools chosen.
@@ -3511,7 +3541,7 @@ def reloads(read, until, send, output):
     with open(fresh_command, 'w') as file:
         file.write('---\ndescription: Say hi\n---\nSay hi to $ARGUMENTS.\n')
     with open(settings_path(reloading), 'w') as file:
-        file.write('{"tools": ["read", "bash"], "followUpMode": "each"}')
+        json.dump({**PINNED, 'tools': ['read', 'bash'], 'followUpMode': 'each'}, file)
     send(b'/reload\r')
     rows = on_screen('Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files')
     assert (' settings: %s: followUpMode must be "all" or "one-at-a-time"; ignored'
