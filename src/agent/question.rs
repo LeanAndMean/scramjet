@@ -12,7 +12,8 @@ as the tool result; freetext ends the turn, and they reply in the editor. Confir
 always end with a row where the user can type an answer of their own, returned as `typed`, so \
 add no \"Other\" option. During a Scramjet command, ask through this tool rather than with a \
 question in prose, which gets a status check instead of an answer. The question stays visible in \
-the tool row; give the context it needs in its message or in prose just before.";
+the tool row; give the context it needs in its message: some providers return the text written \
+before a tool call only as a short summary of it.";
 
 pub(super) fn definition() -> Value {
     let kind = |value: &str| json!({"const": value, "type": "string"});
@@ -28,8 +29,8 @@ The placeholder parameter is accepted for compatibility but unused by freetext."
                 "description":"The interaction type: confirm, select, or freetext."},
             "message":{"type":"string","description":"What you are asking, with what someone \
 who has not followed your work needs to answer it: the situation, why you need their input, and \
-what they could do, even if you are unsure (say so). Markdown renders. If you gave that context \
-in prose just before, the question alone will do."},
+what they could do, even if you are unsure (say so). Markdown renders. Put that context here, not \
+in text before the call, which the user may see only as a short summary."},
             "options":{"type":"array","description":"Required for select type. The list of options to present.",
                 "items":{"type":"object","properties":{
                     "value":{"type":"string"},"label":{"type":"string"},"description":{"type":"string"}},

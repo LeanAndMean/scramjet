@@ -413,6 +413,7 @@ to a larger-context model)"
             let last = reply.items.len().saturating_sub(1);
             let saved = saved_usage(&reply);
             let timing = reply.timing.as_ref().map(saved_timing);
+            let unspoken = status::unspoken_answer(&reply.items);
             for (index, mut item) in reply.items.into_iter().enumerate() {
                 if let Some(object) = item.as_object_mut() {
                     object.insert(PRODUCER.into(), json!(model));
@@ -432,6 +433,9 @@ to a larger-context model)"
                     _ => {}
                 }
                 self.add_shown(item, ui)?;
+            }
+            if let Some(answer) = &unspoken {
+                ui.assistant(answer);
             }
             self.say_saving(ui);
             ui.usage(
@@ -779,7 +783,8 @@ mod tests {
             .unwrap()
             .clone();
         assert!((check["content"].as_str().unwrap()).starts_with("Status check for `/rs:work`: "));
-        assert_eq!(ui.replies, ["worked"]);
+        // The report's response had no text, so its summary is the answer.
+        assert_eq!(ui.replies, ["worked", "Done."]);
         assert_eq!(agent.prompts(), ["/rs:work go"]);
     }
 

@@ -31,7 +31,9 @@ pub(super) const SNIPPET: &str = "You have access to `report_scramjet_command_st
 an active Scramjet command. A command keeps running until its part is over: keep working while \
 there is more you can do, and ask the user with `get_scramjet_user_input` when you need something \
 from them. When its part is over, deliver your complete answer, then report `completed` with a \
-summary of the work; reporting ends the turn. If the user wants to stop before then, report \
+summary of the work; reporting ends the turn. Some providers return the text written before a \
+tool call only as a short summary of it: when the report's response has no text of its own, the \
+user reads the report's summary as your answer, so make it complete. If the user wants to stop before then, report \
 `abandoned`, as the only tool call in its response: the user reads your summary and confirms. A \
 response that ends without either gets a status check. Do not call this tool for ordinary user \
 tasks.";
@@ -43,6 +45,23 @@ pub(super) fn completed_summary(items: &[Value]) -> Option<String> {
         .filter_map(|item| serde_json::from_str::<Value>(item["arguments"].as_str()?).ok())
         .find(|arguments| arguments["status"] == "completed")
         .and_then(|arguments| arguments["summary"].as_str().map(str::to_owned))
+}
+
+/// The summary of a `completed` report among one response's `items` when the response has no
+/// text: Claude's newer models return text before a tool call as a progress-update thinking
+/// block, of which providers give only a short summary, so the report's summary stands in for it.
+pub(super) fn unspoken_answer(items: &[Value]) -> Option<String> {
+    let spoke = (items.iter())
+        .any(|item| item["type"] == "message" && !super::message_text(item).trim().is_empty());
+    if spoke {
+        return None;
+    }
+    (items.iter())
+        .filter(|item| item["type"] == "function_call" && item["name"] == NAME)
+        .filter_map(|item| serde_json::from_str::<Value>(item["arguments"].as_str()?).ok())
+        .find(|arguments| arguments["status"] == "completed")
+        .and_then(|arguments| arguments["summary"].as_str().map(str::to_owned))
+        .filter(|summary| !summary.trim().is_empty())
 }
 
 /// How many status checks in a row, without the user's input, before the command waits for them.
@@ -64,7 +83,8 @@ ordinary user tasks.",
             "summary":{"type":"string","minLength":1,"pattern":"\\S",
                 "description":"What the command did. For `abandoned`, the user reads it before \
 confirming: cover the whole command (what was done, what remains and why stop), the essentials \
-first."},
+first. For `completed`, the user is shown it as your answer when the response has no text of its \
+own."},
             "status":{"anyOf":[status("completed"),status("abandoned")],
                 "description":"completed = this command's part is over and your final answer was \
 delivered. It does not mean the overall task succeeded: never claim a success that did not \

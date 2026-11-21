@@ -479,7 +479,19 @@ pub fn show_entries(
             }
         }
     };
+    // The items of one response, whose first is at `reply`.
+    let replied = |item: &Value| {
+        item["role"] != "user"
+            && matches!(
+                item["type"].as_str(),
+                Some("reasoning" | "message" | "function_call")
+            )
+    };
+    let mut reply = 0;
     for (at, item) in items.iter().enumerate() {
+        if replied(item) && (at == 0 || !replied(&items[at - 1])) {
+            reply = at;
+        }
         let failed = item[FAILED] == true;
         let line = lines.get(at).copied().flatten();
         if !matches!(
@@ -592,6 +604,12 @@ pub fn show_entries(
                 }
             }
             _ => {}
+        }
+        if replied(item)
+            && !items.get(at + 1).is_some_and(replied)
+            && let Some(answer) = status::unspoken_answer(&items[reply..=at])
+        {
+            ui.assistant(&answer);
         }
     }
     unanswered(&mut calls, ui);
@@ -716,6 +734,53 @@ Comment\\n\\n```\\nMe too.\\n```\")",
         let mut replay = Recorder::default();
         agent.show_conversation(&mut replay);
         assert_eq!(calls(&replay.shown), compact);
+    }
+
+    #[test]
+    fn a_report_without_text_shows_its_summary_as_the_answer_live_and_resumed() {
+        let report = json!({"status":"completed","summary":"All three fixed."});
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", status::NAME, report.clone()),
+            stream(&fixture::text_events("ok", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "unspoken-answer");
+        let mut ui = Recorder::default();
+        agent.turn("fix", &mut ui, &AtomicBool::new(false)).unwrap();
+        server.join().unwrap();
+        let shown = |shown: &[String]| -> Vec<String> {
+            let shown = shown.iter().filter(|shown| !shown.starts_with("result "));
+            shown
+                .filter(|shown| *shown != "prompt fix")
+                .cloned()
+                .collect()
+        };
+        let answered = [
+            "reply All three fixed.",
+            "call report_scramjet_command_status completed",
+            "reply ok",
+        ];
+        assert_eq!(shown(&ui.shown), answered);
+        let mut replay = Recorder::default();
+        agent.show_conversation(&mut replay);
+        assert_eq!(shown(&replay.shown), answered);
+
+        // With text of its own, the response shows that alone.
+        let items = [
+            json!({"role":"user","content":"fix"}),
+            json!({"type":"reasoning","summary":[],"signature":"s"}),
+            json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixed."}]}),
+            json!({"type":"function_call","call_id":"c1","name":status::NAME,"arguments":report.to_string()}),
+            json!({"type":"function_call_output","call_id":"c1","output":"Recorded."}),
+        ];
+        let mut replay = Recorder::default();
+        show_items(&items, None, &mut replay);
+        assert_eq!(
+            shown(&replay.shown),
+            [
+                "reply Fixed.",
+                "call report_scramjet_command_status completed"
+            ]
+        );
     }
 
     #[test]

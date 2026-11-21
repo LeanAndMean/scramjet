@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.291.2 — A command's answer no longer lost to a summary
+
+### Fixed
+
+- On Claude Opus 5.5 and other newer Claude models, the text written just before a tool call comes back only as a one- or two-sentence summary, shown as thinking: a command's final answer, or the explanation before a question, could be lost. A command's completed report now shows its summary as the answer when the response had no text of its own, live and when the session is resumed, and the model is told to put a question's context in the question itself.
+
 ## 2.291.1 — No MCP server left running as it starts
 
 ### Fixed
