@@ -3436,7 +3436,10 @@ to see full lines]",
             .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
             .unwrap();
         assert_eq!(shown(&hidden.text), expected);
-        let listed = format!("pgrep -lf scramjet-bash- >/dev/null || echo unlisted\n{command}");
+        let listed = format!(
+            "sleep 1{marker} & sleep 0.2; pgrep -lf 'sleep 1{marker}' >/dev/null || echo unlisted; \
+             kill $!\n{command}"
+        );
         let sandboxed = run_sandboxed(
             &root,
             &listed,

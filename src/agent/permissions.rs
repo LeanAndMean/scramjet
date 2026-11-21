@@ -262,10 +262,11 @@ no file but in a private /tmp"
             "{text}"
         );
         assert!(
-            text.contains(
-                "Commands have no network.\nWhen the task needs to write elsewhere, \
-ask the user with `request_permissions`"
-            ),
+            text.contains(&format!(
+                "Commands have no network.{}\nWhen the task needs to write elsewhere, \
+ask the user with `request_permissions`",
+                super::super::sandbox::UNRUNNABLE
+            )),
             "{text}"
         );
         sandbox.grant(&root, "docs").unwrap();
