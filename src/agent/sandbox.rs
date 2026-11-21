@@ -25,6 +25,15 @@ pub(super) const PROGRAM: &str = "the low-integrity helper";
 #[cfg(not(any(target_os = "macos", windows)))]
 pub(super) const PROGRAM: &str = "bwrap";
 
+/// What a sandboxed command cannot run on this system, for the agent's instructions: Seatbelt
+/// refuses setuid programs, `ps` among them.
+pub(super) const UNRUNNABLE: &str = match cfg!(target_os = "macos") {
+    true => {
+        " `ps` cannot run in it (macOS refuses setuid programs there): `pgrep -lf` lists processes."
+    }
+    false => "",
+};
+
 /// Why `--sandbox` is refused on Windows, where scramjet-rs has only subagents' read-only one.
 #[cfg(windows)]
 const UNAVAILABLE: &str = "Scramjet has no sandbox for the main agent on Windows yet";

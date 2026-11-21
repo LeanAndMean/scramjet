@@ -375,9 +375,16 @@ pub(super) fn child(
             true => "- Commands run at Windows' low integrity level: no file on this computer's \
 disks can be changed, except in a TEMP of their own discarded after each command"
                 .to_owned(),
-            false => "- bash runs in a read-only sandbox without network, whose only writable \
-directory is a private /tmp discarded after each command"
-                .to_owned(),
+            false => format!(
+                "- bash runs in a read-only sandbox without network, whose only writable \
+directory is a private /tmp discarded after each command{}{}",
+                if super::sandbox::UNRUNNABLE.is_empty() {
+                    ""
+                } else {
+                    "."
+                },
+                super::sandbox::UNRUNNABLE
+            ),
         });
     }
     guidelines.push("- No file can be changed: you only read and report".to_owned());

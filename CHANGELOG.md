@@ -4,11 +4,17 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.291.4 — The agent knows `ps` cannot run in the macOS sandbox
+
+### Fixed
+
+- On macOS, `ps` cannot run inside the sandbox (Seatbelt refuses setuid programs): the agent and subagents are told so, and to list processes with `pgrep -lf`.
+
 ## 2.291.3 — ps and pkill in the macOS sandbox
 
 ### Fixed
 
-- On macOS, `ps`, `pgrep` and `pkill` failed inside `--sandbox` and in subagents' shells (`sysmond service not found`). They now work; as on Linux, they can signal only the sandbox's own processes, but they list every process, with its command line.
+- On macOS, `pgrep` and `pkill` failed inside `--sandbox` and in subagents' shells (`sysmond service not found`). They now work; as on Linux, `pkill` stops only the sandbox's own processes, but `pgrep` lists every process, with its command line.
 
 ## 2.291.2 — A command's answer no longer lost to a summary
 

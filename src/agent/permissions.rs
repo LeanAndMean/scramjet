@@ -91,6 +91,7 @@ command): {}.",
         true => " Commands reach the network.",
         false => " Commands have no network.",
     };
+    text += super::sandbox::UNRUNNABLE;
     text + &format!(
         "\nWhen the task needs to write elsewhere, ask the user with `{NAME}`, naming the \
 directories and why; do not work around the sandbox."
