@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.291.5 — A `pgrep` hint that works
+
+### Fixed
+
+- On macOS, the sandbox's hint for listing processes named `pgrep -lf` without a pattern, which only prints a usage error; it now says `pgrep -lf <pattern>`.
+
 ## 2.291.4 — The agent knows `ps` cannot run in the macOS sandbox
 
 ### Fixed

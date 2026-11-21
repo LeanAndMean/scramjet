@@ -29,7 +29,8 @@ pub(super) const PROGRAM: &str = "bwrap";
 /// refuses setuid programs, `ps` among them.
 pub(super) const UNRUNNABLE: &str = match cfg!(target_os = "macos") {
     true => {
-        " `ps` cannot run in it (macOS refuses setuid programs there): `pgrep -lf` lists processes."
+        " `ps` cannot run in the sandbox (macOS refuses setuid programs there): `pgrep -lf <pattern>` \
+lists the processes matching it."
     }
     false => "",
 };
