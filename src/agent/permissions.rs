@@ -66,14 +66,15 @@ pub(super) fn section(sandbox: &Sandbox, root: &Path) -> String {
     let mut text = match roots.is_empty() {
         true => format!(
             "\n\n# Sandbox\n\nYour tools run in a sandbox ({}): write and edit, and the commands \
-you run, can change no file but in a private /tmp discarded after each command.",
-            sandbox.mode.name()
+you run, can change no file but in {}.",
+            sandbox.mode.name(),
+            super::sandbox::TEMPORARY
         ),
         false => format!(
             "\n\n# Sandbox\n\nYour tools run in a sandbox ({}): write and edit, and the commands \
-you run, can change files only in these directories (and a private /tmp discarded after each \
-command): {}.",
+you run, can change files only in these directories (and in {}): {}.",
             sandbox.mode.name(),
+            super::sandbox::TEMPORARY,
             listed(&roots)
         ),
     };
@@ -255,10 +256,11 @@ mod tests {
         };
         let text = section(&sandbox, &root);
         assert!(
-            text.contains(
+            text.contains(&format!(
                 "(read-only): write and edit, and the commands you run, can change \
-no file but in a private /tmp"
-            ),
+no file but in {}.",
+                super::super::sandbox::TEMPORARY
+            )),
             "{text}"
         );
         assert!(

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.291.6 — The macOS sandbox's /tmp told as it is
+
+### Fixed
+
+- On macOS, the sandbox's descriptions for the agent and subagents said commands write only to a private `/tmp` discarded after each command; Seatbelt leaves `/tmp`, `/var/tmp` and `$TMPDIR` writable, shared with other programs and kept, and they now say so. `--help` says it too.
+
 ## 2.291.5 — A `pgrep` hint that works
 
 ### Fixed

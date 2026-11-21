@@ -251,7 +251,7 @@ fn definition(name: &str, sandboxed: bool) -> Value {
           "required":["path","edits"]}}),
         "bash" => json!({"type":"function","name":"bash","strict":false,
          "description":match sandboxed && !cfg!(windows) {
-            true => "Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in a private /tmp that is discarded when the command ends. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.".to_owned(),
+            true => format!("Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in {}. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.", super::sandbox::TEMPORARY),
             false => format!("Run a bash command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output."),
          },
          "parameters":{"type":"object","properties":{

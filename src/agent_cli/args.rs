@@ -116,8 +116,9 @@ but to NO_PROXY's hosts and this machine.
                          unless --sandbox says so.
   -s, --sandbox MODE     confine the agent's tools, as Codex's modes do (default: the
                          settings' sandbox, else danger-full-access): read-only runs bash with
-                         every file read-only, a private /tmp, its own processes and the
-                         credential stores hidden, and refuses write and edit;
+                         every file read-only, a private /tmp (on macOS /tmp and TMPDIR
+                         shared), its own processes and the credential stores hidden, and
+                         refuses write and edit;
                          workspace-write lets both change the project but its .git,
                          .scramjet and .agents. Commands reach the network unless the
                          setting sandboxNetwork is false. It needs bubblewrap (bwrap) and

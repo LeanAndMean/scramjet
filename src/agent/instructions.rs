@@ -376,8 +376,8 @@ pub(super) fn child(
 disks can be changed, except in a TEMP of their own discarded after each command"
                 .to_owned(),
             false => format!(
-                "- bash runs in a read-only sandbox without network, whose only writable \
-directory is a private /tmp discarded after each command{}{}",
+                "- bash runs in a read-only sandbox without network, writable only in {}{}{}",
+                super::sandbox::TEMPORARY,
                 if super::sandbox::UNRUNNABLE.is_empty() {
                     ""
                 } else {

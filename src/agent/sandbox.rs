@@ -35,6 +35,15 @@ lists the processes matching it."
     false => "",
 };
 
+/// Where a sandboxed command can write whatever the mode: bubblewrap mounts a private `/tmp`,
+/// while Seatbelt leaves the system's temporary directories open (`seatbelt::temporary`).
+pub(super) const TEMPORARY: &str = match cfg!(target_os = "macos") {
+    true => {
+        "/tmp, /var/tmp and $TMPDIR, which are shared with other programs and kept after the command"
+    }
+    false => "a private /tmp discarded after each command",
+};
+
 /// Why `--sandbox` is refused on Windows, where scramjet-rs has only subagents' read-only one.
 #[cfg(windows)]
 const UNAVAILABLE: &str = "Scramjet has no sandbox for the main agent on Windows yet";
