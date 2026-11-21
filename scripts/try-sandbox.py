@@ -171,6 +171,9 @@ def main():
             ('/tmp is writable', 'echo hi > /tmp/%s && echo T""MP-OK' % tmp, lambda o: 'TMP-OK' in o, None),
             ('a store is unreadable', 'cat ~/.ssh/id_fake ~/.netrc 2>&1', secret_hidden, None),
             ('the network is off', curl, lambda o: 'NET-REACHED' not in o, None),
+            ('ps and pkill find its own processes',
+             'sleep 61 & ps -o pid= -p $! >/dev/null && pkill -f "^sleep 61$" && wait $!; echo PS-""OK $?',
+             lambda o: 'PS-OK 143' in o, None),
         ]),
         ('--sandbox workspace-write, no Git repository', ['--sandbox', 'workspace-write'], {}, False, False, [
             ('the project is writable', 'echo hi > f && echo PRO""JECT-OK', lambda o: 'PROJECT-OK' in o, None),

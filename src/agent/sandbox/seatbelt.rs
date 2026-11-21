@@ -15,7 +15,9 @@ pub(super) const PROGRAM: &str = "/usr/bin/sandbox-exec";
 
 /// What a closed profile lets processes do besides reading files: run programs, signal and
 /// inspect each other, the system queries common tools make (user lookups, preferences,
-/// semaphores, `/dev/null`, pseudo-terminals they open themselves).
+/// semaphores, `/dev/null`, pseudo-terminals they open themselves). `sysmond` lists processes
+/// for `ps`, `pgrep` and `pkill`, every process (Codex's profile leaves it out, and they fail);
+/// signals still reach only the sandbox's own.
 const BASE: &str = r#"(version 1)
 (deny default)
 (allow process-exec process-fork)
@@ -31,6 +33,7 @@ const BASE: &str = r#"(version 1)
 (allow mach-lookup
   (global-name "com.apple.system.opendirectoryd.libinfo")
   (global-name "com.apple.PowerManagement.control")
+  (global-name "com.apple.sysmond")
   (global-name "com.apple.cfprefsd.daemon")
   (global-name "com.apple.cfprefsd.agent")
   (local-name "com.apple.cfprefsd.agent"))

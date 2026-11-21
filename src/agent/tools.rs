@@ -3436,13 +3436,12 @@ to see full lines]",
             .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
             .unwrap();
         assert_eq!(shown(&hidden.text), expected);
-        // Seatbelt shows a command no process outside it, as Codex's: `pkill` finds none.
-        if cfg!(target_os = "macos") {
-            return;
-        }
+        let listed = format!(
+            "[ $(ps -o pid= -p $$) = $$ ] && pgrep -f scramjet-bash- >/dev/null || echo unlisted\n{command}"
+        );
         let sandboxed = run_sandboxed(
             &root,
-            &command,
+            &listed,
             &Hidden::default(),
             None,
             &cancel,
