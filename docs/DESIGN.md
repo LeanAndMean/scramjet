@@ -187,12 +187,12 @@ User decisions from the third `/rs:steer` of 2026-11-17:
 - **The harness's own tools can be turned off** in `tools` and `/settings`, as the coding tools can.
 - **Built-in `explore` and `general-purpose` agents,** there without any command set, read-only as every subagent. The main agent gives a task, not a role: the role is the agent's definition, as in Claude Code and Codex. `explore` is written after comparing Claude Code's Explore prompt with Mach 12's `structural-mapper` and `code-explorer`: the user finds the mapper's framing (bounded current-state evidence, with its limits) better about 90% of the time.
 - **`/bug`,** Claude Code's name, with `/feedback` (Codex's, and Claude Code's alias) and `/report-issue` accepted: the agent drafts an issue for `LeanAndMean/scramjet` (version, platform, terminal, steps) anonymized: home paths as `~`, no user, host or company names, private repositories, internal URLs or code, nothing from the session without the user's agreement, and the whole draft shown before it is posted.
-- **A sandbox policy,** designed for the user's sign-off before it is built: writable roots, paths that cannot be read (Claude Code's `denyRead` and `allowRead`, by the credential stores' hiding, which `read`, `grep` and `find` honor too) and the network, set apart for the main agent and for subagents. Subagents ship read-only. A **project-only reach** in one setting: the home directory, other users' and mounted drives (`/mnt/*`) hidden but for the project, `/add-dir`'s directories, the directories on `PATH` and what git needs to commit as the user (`~/.gitconfig`: commits must keep working); system directories outside home stay readable. It holds only with the sandbox on; Windows cannot hide reads, and says so there.
+- **A sandbox policy** (signed off at the steer of 2026-11-23, below): writable roots, paths that cannot be read (Claude Code's `denyRead` and `allowRead`, by the credential stores' hiding, which `read`, `grep` and `find` honor too) and the network, set apart for the main agent and for subagents. Subagents ship read-only. A **project-only reach** in one setting: the home directory, other users' and mounted drives (`/mnt/*`) hidden but for the project, `/add-dir`'s directories, the directories on `PATH` and what git needs to commit as the user (`~/.gitconfig`: commits must keep working); system directories outside home stay readable. It holds only with the sandbox on; Windows cannot hide reads, and says so there.
 - **Subagents that write:** moderate priority, up from item 7's lowest; the shipped default stays read-only.
 
-### A sandbox policy (proposed 2026-11-18, for sign-off)
+### A sandbox policy (signed off 2026-11-23)
 
-The design the steer of 2026-11-17 asked for before item 76 is built. Nothing here is agreed until a steer says so: the user did not approve it at the steer of 2026-11-18; the questions it needs answered are at its end.
+The design the steer of 2026-11-17 asked for before item 76 is built, proposed on 2026-11-18 and approved by the user at the steer of 2026-11-23 with its four answers at its end.
 
 **What there is today.** `sandbox` (`read-only`, `workspace-write`, `off`) and `sandboxNetwork` set the main agent's sandbox; `/add-dir` and `/sandbox add` grant more writable directories for the session, and a granted write can be kept always in a project (`sandbox-grants.json`, in the user's configuration, never read from a repository); `hideCredentials` hides the credential stores (`HIDDEN_FILES`, `HIDDEN_DIRECTORIES`, packages' `credentialFiles`) from commands and from `read`, `grep` and `find`. Subagents always run read-only, off the network, with the stores hidden; nothing sets them.
 
@@ -233,12 +233,14 @@ Hidden: the rest of the home directory, the other users' homes (`/home`, `/root`
 
 **How it is checked.** `scripts/try-sandbox.py` gains the project-only checks (home, `/mnt/c` and another user's home unreadable; `PATH`'s programs, git's identity and the kept directories readable). For real, in a scratch clone of this repository with the reach on and `.git` granted: `cargo build` and `cargo test`, `node`, `codex --version`, `uv run`, `claude --version`, `git commit`; and a subagent's `read` of a skill. What fails there becomes a kept path or a known gap, not a new rule. Tried by hand with bubblewrap on 2026-11-18 (`/home` and `/mnt` a tmpfs, the project and the kept paths above bound back read-only): `cargo`, `rustc`, `node`, `codex`, `claude`, `uv`, `python3` and `git log` with the user's identity all ran, and `/mnt` was empty.
 
-**For the user to answer at the steer:**
+**Answered at the steer of 2026-11-23:**
 
-1. The shape: `sandbox` as an object with Claude Code's `filesystem` names (recommended), or flat keys beside today's (`sandboxAllowWrite`, `sandboxDenyRead`), or Codex's path-to-access profiles.
-2. The name: Claude Code's `blockReadsOutsideWorkingDirectories` (recommended, though ours keeps more than Claude Code's), or a shorter one of our own such as `sandbox.filesystem.projectOnly`.
-3. File tools honoring the reach even with the sandbox off, as Claude Code's do (recommended), or only with it on, as the 2026-11-17 decision could be read.
-4. Subagents inheriting the main agent's `denyRead`, `allowRead` and reach unless `subagents` gives its own (recommended), or set only by `subagents`.
+1. The shape: `sandbox` as an object with Claude Code's `filesystem` names ("let's try this").
+2. The name: Claude Code's `blockReadsOutsideWorkingDirectories`, the loop's judgment; the user expects use to show whether it fits, and the loop may change it then.
+3. File tools honor the reach even with the sandbox off, as Claude Code's do.
+4. Subagents inherit the main agent's `denyRead`, `allowRead` and reach unless `subagents` gives its own.
+
+**Processes on macOS** (steer of 2026-11-23): as Codex's, the Seatbelt profile does not reach `com.apple.sysmond`, so a sandboxed command cannot list other processes or read their command lines (bubblewrap's process namespace hides them on Linux). `ps`, `pgrep` and `pkill` fail there, as in Codex; the agent is pointed to `$!`, `jobs -p` and `kill` for its own jobs. This reverses 2.291.3.
 
 ### What the context holds, shown (2026-11-17)
 
