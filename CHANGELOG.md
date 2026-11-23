@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.293.0 — `scramjet-light` on a light terminal
+
+### Changed
+
+- On a light terminal background, with no theme chosen, the default theme is now `scramjet-light`, the light companion of `scramjet-dark`, in place of `pi-light`, which stays offered in `/settings`.
+
 ## 2.292.0 — The macOS sandbox hides other processes again
 
 ### Changed

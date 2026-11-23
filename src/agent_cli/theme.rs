@@ -397,10 +397,10 @@ pub(super) const BUILT_IN: [&str; 4] = [
 ];
 
 /// The theme shown when the settings name none, as Scramjet's `resolveThemeName` picks it:
-/// `pi-light` on a light background, `scramjet-dark` on a dark or unknown one.
+/// `scramjet-light` on a light background, `scramjet-dark` on a dark or unknown one.
 pub(super) fn following(background: Option<(u8, u8, u8)>) -> &'static str {
     match background.map(super::palette::luminance) {
-        Some(luminance) if luminance >= 0.2 => "pi-light",
+        Some(luminance) if luminance >= 0.2 => "scramjet-light",
         _ => "scramjet-dark",
     }
 }
@@ -690,8 +690,8 @@ mod tests {
         assert_eq!(following(None), "scramjet-dark");
         assert_eq!(following(Some((12, 12, 12))), "scramjet-dark");
         assert_eq!(following(Some((118, 118, 118))), "scramjet-dark");
-        assert_eq!(following(Some((128, 128, 128))), "pi-light");
-        assert_eq!(following(Some((250, 244, 227))), "pi-light");
+        assert_eq!(following(Some((128, 128, 128))), "scramjet-light");
+        assert_eq!(following(Some((250, 244, 227))), "scramjet-light");
     }
 
     #[test]
