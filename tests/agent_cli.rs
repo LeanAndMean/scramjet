@@ -1894,6 +1894,10 @@ fn the_settings_sandbox_hides_what_deny_read_names_but_allow_read_and_writes_whe
     );
     assert!(result.contains("SHARED-ok"), "{result} {stderr}");
     assert!(!result.contains("PRIVATE"), "{result}");
+    // Windows hides nothing from commands.
+    if cfg!(windows) {
+        return;
+    }
     let script = "cat a.txt; ls -A private; cat private/plan.md private/shared/ok.md; echo done";
     let (result, stderr) = run("bash", serde_json::json!({"command": script}), denied);
     if result.contains("bwrap") {
@@ -2075,6 +2079,62 @@ fn subagents_reach_keeps_the_main_agents_writable_roots() {
     assert!(answered.contains("DONE-2"), "{answered} {stderr}");
     assert!(answered.contains("EXTRA-note"), "{answered}");
     assert!(!answered.contains("OTHER-note"), "{answered}");
+}
+
+#[test]
+fn the_file_tools_keep_to_the_reach_without_a_sandbox() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-file-reach-{}", std::process::id())),
+    );
+    let home = scratch.0.join("home");
+    let (project, other) = (home.join("project"), home.join("other"));
+    for directory in [&project, &other] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::write(project.join("kept.md"), "MARK-kept\n").unwrap();
+    std::fs::write(other.join("away.md"), "MARK-away\n").unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let mut replies = call_events("grep", serde_json::json!({"pattern": "MARK", "path": home}));
+    replies.splice(
+        1..1,
+        call_events(
+            "find",
+            serde_json::json!({"pattern": "*.md", "path": other}),
+        ),
+    );
+    replies.remove(2);
+    let (port, bodies) = serve_events(replies);
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({"blockReadsOutsideWorkingDirectories": true});
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session", "-p", "hi"])
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("not hidden"), "{stderr}");
+    let mut bodies = (0..3).map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap());
+    let refused = "outside the project, which the user's settings keep from the agent";
+    let found = bodies.nth(1).unwrap();
+    assert!(found.contains(refused), "{found}");
+    assert!(!found.contains("MARK-away"), "{found}");
+    let listed = bodies.next().unwrap();
+    assert_eq!(listed.matches(refused).count(), 2, "{listed}");
+    assert!(!listed.contains("away.md"), "{listed}");
 }
 
 #[test]

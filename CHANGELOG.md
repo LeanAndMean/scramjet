@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.303.0 — The project-only reach on Windows
+
+### Fixed
+
+- On Windows, `grep` and `find` keep to `blockReadsOutsideWorkingDirectories` and hide the credential stores, as `read` does; they had searched everywhere, as if they were commands.
+
+### Changed
+
+- On Windows the project-only reach hides the other users' profiles too and keeps the temporary directory readable, and the first command says once that commands are not kept to it.
+
 ## 2.302.1 — Subagents read the writable directories
 
 ### Fixed

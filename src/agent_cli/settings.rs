@@ -2666,13 +2666,16 @@ mod tests {
             [
                 home.join("scratch"),
                 scratch.0.join("own"),
-                PathBuf::from("/w")
+                std::path::absolute("/w").unwrap()
             ]
         );
         assert_eq!(
             object.reads(),
             scramjet::agent::Reads {
-                deny: vec![home.join("notes/private"), PathBuf::from("/abs")],
+                deny: vec![
+                    home.join("notes/private"),
+                    std::path::absolute("/abs").unwrap()
+                ],
                 allow: vec![home.join("notes/private/ok")],
                 project_only: true,
             }
@@ -2698,6 +2701,7 @@ mod tests {
                 reads: main.clone(),
             }
         );
+        let absolute = |path: &str| std::path::absolute(path).unwrap();
         let own = settings_with(
             &scratch,
             r#"{"permissions": {"blockReadsOutsideWorkingDirectories": true},
@@ -2706,15 +2710,15 @@ mod tests {
                     "filesystem": {"denyRead": ["/child"]}}}}"#,
         );
         assert!(own.warnings.is_empty(), "{:?}", own.warnings);
-        assert_eq!(own.reads().deny, [PathBuf::from("/main")]);
+        assert_eq!(own.reads().deny, [absolute("/main")]);
         assert!(own.reads().project_only);
         assert_eq!(
             own.subagents(),
             scramjet::agent::Subagents {
                 network: true,
                 reads: scramjet::agent::Reads {
-                    deny: vec![PathBuf::from("/child")],
-                    allow: vec![PathBuf::from("/main/ok")],
+                    deny: vec![absolute("/child")],
+                    allow: vec![absolute("/main/ok")],
                     project_only: false,
                 },
             }

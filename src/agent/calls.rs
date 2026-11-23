@@ -630,10 +630,14 @@ impl Tools<'_> {
                 };
                 let mut hide =
                     self.hide_credentials || self.sandbox.is_some() || reads.project_only;
-                let command = shell || ["grep", "find"].contains(&call.name);
-                if hide && self.sandbox.is_none() && !tools::HIDES_COMMANDS && command {
-                    not_hidden(ui);
-                    hide = false;
+                if shell && self.sandbox.is_none() && !tools::HIDES_COMMANDS {
+                    if self.parent.reads.project_only {
+                        not_kept(ui);
+                    }
+                    if hide {
+                        not_hidden(ui);
+                        hide = false;
+                    }
                 }
                 let root = self.parent.root;
                 let writable = self.sandbox.map(|sandbox| sandbox.writable_roots(root));
@@ -719,6 +723,18 @@ fn not_hidden(ui: &mut dyn AgentUi) {
         ui.notice(
             "Commands run with the credential stores not hidden: Scramjet has no sandbox \
              on Windows yet (setting hideCredentials)",
+        );
+    }
+}
+
+/// Says once that commands are not kept to the project-only reach, which only the file tools
+/// keep to where no sandbox can hide reads from commands.
+fn not_kept(ui: &mut dyn AgentUi) {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        ui.notice(
+            "Commands can read outside the project: Scramjet has no sandbox on Windows yet, \
+             so only read, grep and find keep to it (setting blockReadsOutsideWorkingDirectories)",
         );
     }
 }

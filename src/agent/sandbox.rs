@@ -538,9 +538,14 @@ impl Reads {
 }
 
 /// What the project-only reach hides: the home directory, the other users' homes and the mounted
-/// drives (WSL's Windows drives among them).
+/// drives (WSL's Windows drives among them); on Windows the home directory and the profiles
+/// directory holding the others.
 fn outside_roots(home: &Path) -> Vec<PathBuf> {
     let mut roots = vec![home.to_owned()];
+    if cfg!(windows) {
+        roots.extend(home.parent().map(Path::to_owned));
+        return roots;
+    }
     let common = ["/home", "/root", "/mnt", "/media"];
     let apple = ["/Users", "/Volumes"];
     let named = common.iter().chain(
@@ -606,6 +611,10 @@ fn kept_in_reach(
     let config = set("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
     kept.push(config.join("git"));
     kept.extend(set("GIT_CONFIG_GLOBAL"));
+    // Windows' temporary directory is in the home directory, where /tmp is not.
+    if cfg!(windows) {
+        kept.push(std::env::temp_dir());
+    }
     kept.sort();
     kept.dedup();
     kept
