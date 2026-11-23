@@ -343,6 +343,7 @@ pub(super) fn child(
     skills: &Skills,
     agent_directory: Option<&Path>,
     hidden: &Hidden,
+    network: bool,
 ) -> String {
     let listed: Vec<&str> = tools
         .iter()
@@ -376,7 +377,8 @@ pub(super) fn child(
 disks can be changed, except in a TEMP of their own discarded after each command"
                 .to_owned(),
             false => format!(
-                "- bash runs in a read-only sandbox without network, writable only in {}{}{}",
+                "- bash runs in a read-only sandbox {}, writable only in {}{}{}",
+                super::sandbox::network_said(network),
                 super::sandbox::TEMPORARY,
                 if super::sandbox::UNRUNNABLE.is_empty() {
                     ""
@@ -1026,6 +1028,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             &Skills::in_directory(&scratch),
             None,
             &hidden,
+            false,
         );
         assert!(text.contains("Kept.") && !text.contains("SECRET"), "{text}");
     }
@@ -1047,6 +1050,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             &skills,
             None,
             &Hidden::default(),
+            false,
         );
         let listed = "Be brief.\n\nThe following skills provide specialized instructions for \
 specific tasks.\n";
@@ -1057,7 +1061,7 @@ specific tasks.\n";
         );
         assert!(text.contains(&end), "{text}");
         assert!(
-            !child(cwd, &["bash"], "", &skills, None, &Hidden::default())
+            !child(cwd, &["bash"], "", &skills, None, &Hidden::default(), false)
                 .contains("<available_skills>")
         );
     }

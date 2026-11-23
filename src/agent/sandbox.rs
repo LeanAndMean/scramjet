@@ -525,6 +525,22 @@ impl Reads {
     }
 }
 
+/// How subagents' read-only tools are confined (the settings' `sandbox.subagents`): whether their
+/// commands reach the network, and the paths hidden from them and re-opened.
+#[derive(Default, Clone, PartialEq, Debug)]
+pub struct Subagents {
+    pub network: bool,
+    pub reads: Reads,
+}
+
+/// How a subagent's tools describe the network its read-only sandbox has.
+pub(super) fn network_said(network: bool) -> &'static str {
+    match network {
+        true => "with network access",
+        false => "without network",
+    }
+}
+
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
 /// as empty and a hidden directory has no entries, both read-only.
 #[derive(Default, Clone)]
@@ -882,9 +898,20 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
     }
 }
 
-/// `bash -c command` in `root`, confined.
-pub(super) fn command(root: &Path, command: &str, hidden: &Hidden) -> Result<Command, String> {
-    let mut process = confined(root, hidden, None)?;
+/// `bash -c command` in `root`, confined, and on the network if `network` says so (on Windows
+/// the low integrity level never keeps it off).
+pub(super) fn command(
+    root: &Path,
+    command: &str,
+    hidden: &Hidden,
+    network: bool,
+) -> Result<Command, String> {
+    let read_only = Sandbox {
+        mode: SandboxMode::ReadOnly,
+        network,
+        writable: Vec::new(),
+    };
+    let mut process = confined(root, hidden, (network && cfg!(unix)).then_some(&read_only))?;
     process.arg(super::tools::shell_program()?);
     super::tools::bash_runs(&mut process, command);
     Ok(process)
@@ -1256,6 +1283,7 @@ pub(super) fn available() -> Result<(), String> {
         Path::new("/"),
         "true",
         &Hidden::current(&[], &Default::default()),
+        false,
     )?
     .stdin(Stdio::null())
     .output()
@@ -1295,6 +1323,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
             &root,
             &script,
             &super::Hidden::current(&[], &Default::default()),
+            false,
             None,
             &cancel,
             &mut |_| {},
@@ -1822,6 +1851,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             &home.join("project"),
             script,
             &super::Hidden::under(&home, Vec::new()),
+            false,
         )
         .unwrap()
         .output()
@@ -1865,7 +1895,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let script = "cat a.txt; ls -A ../.config; cat ../token.txt ../.ssh/named; grep -r SECRET ..; echo done";
         let root = home.join("project");
         for mut process in [
-            super::command(&root, script, &hidden).unwrap(),
+            super::command(&root, script, &hidden, false).unwrap(),
             super::hiding(&root, script, &hidden).unwrap(),
         ] {
             let output = process.output().unwrap();
@@ -1907,7 +1937,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let script = "cat a.txt; ls -A ../notes; cat ../diary.txt; grep -r PRIVATE ..; echo done";
         let root = home.join("project");
         for mut process in [
-            super::command(&root, script, &hidden).unwrap(),
+            super::command(&root, script, &hidden, false).unwrap(),
             super::hiding(&root, script, &hidden).unwrap(),
         ] {
             let output = process.output().unwrap();
@@ -1968,7 +1998,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             echo done";
         let root = home.join("project");
         for (mut process, wrote) in [
-            (super::command(&root, script, &hidden).unwrap(), ""),
+            (super::command(&root, script, &hidden, false).unwrap(), ""),
             (super::hiding(&root, script, &hidden).unwrap(), "wrote\n"),
         ] {
             let output = process.output().unwrap();
@@ -2057,7 +2087,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         // Subagents': the project alone re-opened, read-only.
         let reading = hidden(&denied.opening([root.clone()]));
         let script = "cat a.txt; ls -A ..; echo w > w || echo refused; echo done";
-        let output = super::command(&root, script, &reading)
+        let output = super::command(&root, script, &reading, false)
             .unwrap()
             .output()
             .unwrap();
@@ -2392,7 +2422,7 @@ TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 30
             own.display(),
             reached.display()
         );
-        let output = super::command(&own, &script, &hidden)
+        let output = super::command(&own, &script, &hidden, false)
             .unwrap()
             .output()
             .unwrap();
@@ -2436,6 +2466,7 @@ TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 30
                 std::path::Path::new("/"),
                 &command,
                 &super::Hidden::current(&[], &Default::default()),
+                false,
                 None,
                 &cancel,
                 &mut |_| {},

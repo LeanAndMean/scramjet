@@ -484,6 +484,7 @@ fn start(
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
     agent.set_reads(settings.reads());
+    agent.set_subagents(settings.subagents());
     if let Some(skipped) = interactive::skipped_lines(&agent) {
         let path = agent.session_path().display();
         warnings.push(format!("session {path}: {skipped}"));

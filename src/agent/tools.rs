@@ -183,7 +183,7 @@ pub(super) fn offered(
 /// The definitions of the tools `offered` names, in the order `offered` gives them.
 pub(super) fn definitions(offered: &[&str]) -> Value {
     let mut tools: Vec<Value> = (CODING_TOOLS.iter())
-        .map(|tool| definition(tool, false))
+        .map(|tool| definition(tool, false, false))
         .collect();
     tools.push(super::status::definition());
     tools.extend(super::publish::definitions());
@@ -200,11 +200,11 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
 
 /// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls` and the
 /// shells.
-pub(super) fn child_definitions(names: &[&str]) -> Value {
+pub(super) fn child_definitions(names: &[&str], network: bool) -> Value {
     let tools = ["read", "grep", "find", "ls", "bash", "powershell", "cmd"]
         .into_iter()
         .filter(|tool| names.contains(tool))
-        .map(|tool| definition(tool, true));
+        .map(|tool| definition(tool, true, network));
     Value::Array(tools.collect())
 }
 
@@ -214,8 +214,8 @@ files on this computer's disks, except in a TEMP of its own that is discarded wh
 ends.";
 
 /// Pi's definition of the coding tool `name`; `sandboxed`: a shell that runs in the read-only
-/// sandbox.
-fn definition(name: &str, sandboxed: bool) -> Value {
+/// sandbox, on the network if `network` says so.
+fn definition(name: &str, sandboxed: bool, network: bool) -> Value {
     let confined = match sandboxed && cfg!(windows) {
         true => format!(" {LOW_INTEGRITY}"),
         false => String::new(),
@@ -251,7 +251,7 @@ fn definition(name: &str, sandboxed: bool) -> Value {
           "required":["path","edits"]}}),
         "bash" => json!({"type":"function","name":"bash","strict":false,
          "description":match sandboxed && !cfg!(windows) {
-            true => format!("Run a bash command in the working directory, in a read-only sandbox without network: no file can be changed, except in {}. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.", super::sandbox::TEMPORARY),
+            true => format!("Run a bash command in the working directory, in a read-only sandbox {}: no file can be changed, except in {}. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.", super::sandbox::network_said(network), super::sandbox::TEMPORARY),
             false => format!("Run a bash command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output."),
          },
          "parameters":{"type":"object","properties":{
@@ -538,11 +538,12 @@ impl<'a> Call<'a> {
     }
 
     /// As `run` for a subagent's tools, none of which changes a file or shows the credential
-    /// stores `hidden`: bash runs in the read-only sandbox.
+    /// stores `hidden`: bash runs in the read-only sandbox, on the network if `network` says so.
     pub fn run_read_only(
         &self,
         root: &Path,
         hidden: &Hidden,
+        network: bool,
         cancel: &AtomicBool,
     ) -> Result<Output, String> {
         self.check_path(root, hidden)?;
@@ -556,6 +557,7 @@ impl<'a> Call<'a> {
                     root,
                     self.str("command")?,
                     hidden,
+                    network,
                     timeout(self),
                     cancel,
                     &mut |_| {},
@@ -2030,16 +2032,17 @@ fn cmd_runs(process: &mut Command, command: &str) {
     process.env(COMMAND_VARIABLE, format!("\"{unset}{command}\""));
 }
 
-/// As `run_command`, inside the read-only sandbox.
+/// As `run_command`, inside the read-only sandbox, on the network if `network` says so.
 pub(super) fn run_sandboxed(
     root: &Path,
     command: &str,
     hidden: &Hidden,
+    network: bool,
     timeout: Option<Duration>,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
-    let process = sandbox::command(root, command, hidden)?;
+    let process = sandbox::command(root, command, hidden, network)?;
     run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress)
 }
 
@@ -2492,7 +2495,12 @@ disjoint regions."
         let cancel = AtomicBool::new(false);
         let read = |path: &str| {
             call("read", json!({"path":path}))
-                .run_read_only(&root, &Hidden::current(&[], &Default::default()), &cancel)
+                .run_read_only(
+                    &root,
+                    &Hidden::current(&[], &Default::default()),
+                    false,
+                    &cancel,
+                )
                 .unwrap()
         };
         let shot = read("shot.png");
@@ -2869,6 +2877,7 @@ inline image size limit.]",
             call(name, arguments).run_read_only(
                 &root,
                 &Hidden::current(&[], &Default::default()),
+                false,
                 &cancel,
             )
         };
@@ -3014,7 +3023,7 @@ to see full lines]",
         let hidden = Hidden::under(&home, Vec::new());
         let cancel = AtomicBool::new(false);
         let run = |name: &str, arguments: Value| {
-            let ran = call(name, arguments).run_read_only(&home, &hidden, &cancel);
+            let ran = call(name, arguments).run_read_only(&home, &hidden, false, &cancel);
             ran.unwrap().text.replace('\\', "/")
         };
         assert_eq!(
@@ -3454,6 +3463,7 @@ to see full lines]",
             &root,
             &listed,
             &Hidden::default(),
+            false,
             None,
             &cancel,
             &mut |_| {},
@@ -3516,7 +3526,7 @@ to see full lines]",
         let cancel = AtomicBool::new(false);
         let run = |name: &str, arguments: Value| {
             call(name, arguments)
-                .run_read_only(&root, &hidden, &cancel)
+                .run_read_only(&root, &hidden, false, &cancel)
                 .map(|output| output.text)
         };
         let refused = |path: &str| format!("{path}: hidden, as it holds credentials");

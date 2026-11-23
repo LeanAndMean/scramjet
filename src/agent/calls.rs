@@ -126,6 +126,7 @@ impl Agent {
             },
             hide_credentials: self.hide_credentials,
             reads: self.reads.clone(),
+            subagents: self.subagents.clone(),
             sandbox: self.config.sandbox.clone(),
             mcp: self.mcp.clone(),
         }
@@ -539,6 +540,7 @@ struct Kit {
     coding_tools: Vec<String>,
     hide_credentials: bool,
     reads: sandbox::Reads,
+    subagents: sandbox::Subagents,
     sandbox: Option<Sandbox>,
     mcp: Option<Arc<mcp::Servers>>,
 }
@@ -565,6 +567,7 @@ impl Kit {
                 rates: self.rates.as_deref(),
                 tools: &self.coding_tools,
                 reads: &self.reads,
+                subagents: &self.subagents,
             },
             hide_credentials: self.hide_credentials,
             sandbox: self.sandbox.as_ref(),

@@ -536,6 +536,12 @@ pub(super) struct Settings {
     deny_read: Vec<String>,
     /// `sandbox.filesystem.allowRead`, as written.
     allow_read: Vec<String>,
+    /// `sandbox.subagents.network`.
+    subagent_network: bool,
+    /// `sandbox.subagents.filesystem.denyRead`, as written; `None`: the main agent's.
+    subagent_deny_read: Option<Vec<String>>,
+    /// `sandbox.subagents.filesystem.allowRead`, as written; `None`: the main agent's.
+    subagent_allow_read: Option<Vec<String>>,
     pub(super) steering_mode: Delivery,
     pub(super) follow_up_mode: Delivery,
     /// The directories of the installed command sets: `commandSets`' (a relative one is
@@ -680,6 +686,9 @@ impl Settings {
             allow_write: Vec::new(),
             deny_read: Vec::new(),
             allow_read: Vec::new(),
+            subagent_network: false,
+            subagent_deny_read: None,
+            subagent_allow_read: None,
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
@@ -1123,9 +1132,55 @@ impl Settings {
                 }
                 Some(_) => wrong.push(("sandbox.filesystem", "an object")),
             }
+            match sandbox.get("subagents") {
+                None => {}
+                Some(Value::Object(subagents)) => self.apply_subagents(path, subagents),
+                Some(_) => wrong.push(("sandbox.subagents", "an object")),
+            }
         }
         for (key, expected) in wrong {
             (self.warnings).push(format!("{path}: {key} must be {expected}; ignored"));
+        }
+    }
+
+    /// `sandbox.subagents`: their network, off unless it says, and the `denyRead` and `allowRead`
+    /// that replace, each given, the main agent's for them.
+    fn apply_subagents(&mut self, path: &str, subagents: &Map<String, Value>) {
+        const READ_ONLY: &str = "is not taken: subagents are read-only";
+        let mut wrong = |key: &str, why: &str| {
+            (self.warnings).push(format!("{path}: sandbox.subagents.{key} {why}; ignored"))
+        };
+        match subagents.get("network") {
+            None => {}
+            Some(Value::Bool(network)) => self.subagent_network = *network,
+            Some(_) => wrong("network", "must be true or false"),
+        }
+        if subagents.contains_key("mode") {
+            wrong("mode", READ_ONLY);
+        }
+        let filesystem = match subagents.get("filesystem") {
+            None => return,
+            Some(Value::Object(filesystem)) => filesystem,
+            Some(_) => return wrong("filesystem", "must be an object"),
+        };
+        for key in ["denyRead", "allowRead"] {
+            if !filesystem.contains_key(key) {
+                continue;
+            }
+            match paths(filesystem, key) {
+                Ok(entries) => match key {
+                    "denyRead" => &mut self.subagent_deny_read,
+                    _ => &mut self.subagent_allow_read,
+                }
+                .get_or_insert_default()
+                .extend(entries),
+                Err(()) => wrong(&format!("filesystem.{key}"), "must be a list of paths"),
+            }
+        }
+        for key in ["allowWrite", "writable_roots"] {
+            if filesystem.contains_key(key) {
+                wrong(&format!("filesystem.{key}"), READ_ONLY);
+            }
         }
     }
 
@@ -1143,6 +1198,22 @@ impl Settings {
         scramjet::agent::Reads {
             deny: resolved(&self.deny_read),
             allow: resolved(&self.allow_read),
+        }
+    }
+
+    /// How subagents' tools are confined: `sandbox.subagents`, its `denyRead` and `allowRead`
+    /// each the main agent's unless it gives its own.
+    pub(super) fn subagents(&self) -> scramjet::agent::Subagents {
+        let resolved = |own: &Option<Vec<String>>, main: &[String]| {
+            let list = own.as_deref().unwrap_or(main);
+            list.iter().map(|entry| self.resolve(entry)).collect()
+        };
+        scramjet::agent::Subagents {
+            network: self.subagent_network,
+            reads: scramjet::agent::Reads {
+                deny: resolved(&self.subagent_deny_read, &self.deny_read),
+                allow: resolved(&self.subagent_allow_read, &self.allow_read),
+            },
         }
     }
 
@@ -2557,6 +2628,46 @@ mod tests {
             .map(|warning| warning.rsplit(": ").next().unwrap())
             .collect();
         assert_eq!(wrong.len(), 3, "{wrong:?}");
+
+        // Subagents take each list from the main agent unless they give their own.
+        let main = object.reads();
+        assert_eq!(
+            object.subagents(),
+            scramjet::agent::Subagents {
+                network: false,
+                reads: main.clone(),
+            }
+        );
+        let own = settings_with(
+            &scratch,
+            r#"{"sandbox": {"filesystem": {"denyRead": ["/main"], "allowRead": ["/main/ok"]},
+                "subagents": {"network": true, "filesystem": {"denyRead": ["/child"]}}}}"#,
+        );
+        assert!(own.warnings.is_empty(), "{:?}", own.warnings);
+        assert_eq!(own.reads().deny, [PathBuf::from("/main")]);
+        assert_eq!(
+            own.subagents(),
+            scramjet::agent::Subagents {
+                network: true,
+                reads: scramjet::agent::Reads {
+                    deny: vec![PathBuf::from("/child")],
+                    allow: vec![PathBuf::from("/main/ok")],
+                },
+            }
+        );
+        let wrong = settings_with(
+            &scratch,
+            r#"{"sandbox": {"subagents": {"network": "yes", "mode": "workspace-write",
+                "filesystem": {"allowRead": "~", "allowWrite": ["/w"]}}}}"#,
+        );
+        assert_eq!(wrong.subagents(), scramjet::agent::Subagents::default());
+        assert_eq!(wrong.warnings.len(), 4, "{:?}", wrong.warnings);
+        let wrong = settings_with(&scratch, r#"{"sandbox": {"subagents": []}}"#);
+        assert!(
+            wrong.warnings[0].ends_with("sandbox.subagents must be an object; ignored"),
+            "{:?}",
+            wrong.warnings
+        );
     }
 
     #[test]

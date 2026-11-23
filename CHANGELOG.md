@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.299.0 — Subagents' own sandbox settings
+
+### Added
+
+- `sandbox.subagents` in the settings: `"network": true` lets subagents' commands reach the network (still read-only), and its `filesystem.denyRead` and `filesystem.allowRead`, each given, replace the main agent's lists for subagents, which otherwise take the main agent's. Subagents' `mode` and `allowWrite` are not taken yet, and say so.
+
 ## 2.298.1 — A project denyRead names stays hidden from commands
 
 ### Fixed

@@ -641,8 +641,10 @@ pub(super) struct Parent<'a> {
     pub rates: Option<&'a Path>,
     /// The agent's coding tools, whose read-only ones a child whose file lists none has.
     pub tools: &'a [String],
-    /// The paths the user's settings hide and re-open, which children's tools follow too.
+    /// The paths the user's settings hide and re-open for the agent's own tools.
     pub reads: &'a sandbox::Reads,
+    /// How children's tools are confined: their network, and what is hidden and re-opened.
+    pub subagents: &'a sandbox::Subagents,
 }
 
 /// A task given to an agent, ready to run.
@@ -1246,7 +1248,8 @@ fn run_child(
     };
     let info = &job.info;
     let effort = &job.effort;
-    let reads = parent.reads.opening([parent.root.to_owned()]);
+    let network = parent.subagents.network;
+    let reads = parent.subagents.reads.opening([parent.root.to_owned()]);
     let instructions = instructions::child(
         &job.cwd,
         tools,
@@ -1254,6 +1257,7 @@ fn run_child(
         parent.skills,
         parent.agent_directory,
         &sandbox::Hidden::stores(parent.providers.credential_files(), &reads),
+        network,
     );
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
@@ -1265,7 +1269,7 @@ fn run_child(
             "model": info.id,
             "instructions": instructions,
             "input": input,
-            "tools": tools::child_definitions(tools),
+            "tools": tools::child_definitions(tools, network),
             "tool_choice": "auto",
             "parallel_tool_calls": true,
             "stream": true,
@@ -1348,7 +1352,7 @@ fn run_child(
                     }));
                     match tools.contains(&call.name) {
                         true => call
-                            .run_read_only(&job.cwd, &hidden, cancel)
+                            .run_read_only(&job.cwd, &hidden, network, cancel)
                             .map(|output| output.sent())
                             .unwrap_or_else(|error| json!(format!("Error: {error}"))),
                         false => json!(tools::not_found(call.name, tools)),
@@ -1715,7 +1719,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
                 "powershell, cmd: left out, as the read-only sandbox is unavailable (x)"
             ]
         );
-        let described = tools::child_definitions(&["bash", "powershell", "cmd"]);
+        let described = tools::child_definitions(&["bash", "powershell", "cmd"], false);
         for tool in described.as_array().unwrap() {
             let description = tool["description"].as_str().unwrap();
             assert!(description.contains(tools::LOW_INTEGRITY), "{description}");

@@ -1943,6 +1943,79 @@ fn the_settings_sandbox_hides_what_deny_read_names_but_allow_read_and_writes_whe
 }
 
 #[test]
+#[cfg(unix)]
+fn subagents_take_the_main_agents_hidden_paths_and_their_own_network_from_the_settings() {
+    let binary = &binary();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-children-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(project.join("private")).unwrap();
+    std::fs::write(project.join("private/plan.md"), "PRIVATE-plan\n").unwrap();
+    let config = scratch.0.join("config");
+    let agents = config.join("scramjet/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let agent = "---\nname: helper\ndescription: Helps.\ntools: Read, Bash\n---\n\nHelp.\n";
+    std::fs::write(agents.join("helper.md"), agent).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let target = listener.local_addr().unwrap().port();
+    // What the child's command prints differs from its text, which its next request repeats.
+    let script = format!(
+        "cat private/plan.md; (exec 3<>/dev/tcp/127.0.0.1/{target}) 2>/dev/null \
+         && echo NET-$((1+1)) || echo OFF-$((2+2))"
+    );
+    let run = |sandbox: serde_json::Value| {
+        let task = serde_json::json!({"agent": "helper", "task": "look"});
+        let mut replies = call_events("subagent", task);
+        let child = call_events("bash", serde_json::json!({"command": script}));
+        replies.splice(1..1, child);
+        let (port, bodies) = serve_events(replies);
+        let models = serde_json::json!({"providers": {"test": {
+            "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+            "models": [{"id": "claude-test"}],
+        }}});
+        std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+        let settings = serde_json::json!({"sandbox": sandbox});
+        std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+        let output = program(binary)
+            .args(["--retries", "0", "--no-session", "-p", "hi"])
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{stderr}");
+        let mut bodies = (0..4).map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap());
+        let child: Vec<String> = bodies.by_ref().skip(1).take(2).collect();
+        (child[0].clone(), child[1].clone(), stderr)
+    };
+    let hidden = serde_json::json!([project.join("private")]);
+    let (asked, answered, stderr) = run(serde_json::json!({"filesystem": {"denyRead": hidden},
+        "subagents": {"network": true}}));
+    assert!(
+        asked.contains("read-only sandbox with network access"),
+        "{asked}"
+    );
+    assert!(answered.contains("NET-2"), "{answered} {stderr}");
+    assert!(!answered.contains("PRIVATE"), "{answered}");
+    // Their own list replaces the main agent's; the network stays off by default.
+    let (asked, answered, stderr) = run(serde_json::json!({"filesystem": {"denyRead": hidden},
+        "subagents": {"filesystem": {"denyRead": []}, "mode": "workspace-write"}}));
+    assert!(
+        asked.contains("read-only sandbox without network"),
+        "{asked}"
+    );
+    assert!(answered.contains("OFF-4"), "{answered} {stderr}");
+    assert!(answered.contains("PRIVATE-plan"), "{answered}");
+    assert!(
+        stderr.contains("sandbox.subagents.mode is not taken: subagents are read-only; ignored"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
     let binary = &binary();
     let scratch =

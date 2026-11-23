@@ -77,7 +77,7 @@ pub use providers::{KeyFrom, Providers, Sources, unmet_engine};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::{Choice, Reply, TYPE_SOMETHING};
 pub use request::{CacheRetention, set_cache_retention};
-pub use sandbox::{Reads, Remembered, Sandbox, SandboxMode};
+pub use sandbox::{Reads, Remembered, Sandbox, SandboxMode, Subagents};
 pub use session::{
     Branch, Found, Label, ModelChange, Reading, Removal, Session, SessionInfo,
     directory as session_directory, projects_directory, read_branch, read_conversation,
@@ -649,6 +649,8 @@ pub struct Agent {
     hide_credentials: bool,
     /// The paths the user's settings hide as the credential stores are, and re-open (`set_reads`).
     reads: Reads,
+    /// How subagents' tools are confined (`set_subagents`).
+    subagents: Subagents,
     /// Whether the turn runs with no one to answer a question (`set_unattended`).
     unattended: bool,
     /// Harness tools this run cannot use, not offered (`leave_out_idle_tools`).
@@ -815,6 +817,7 @@ impl Agent {
             model_scope: Vec::new(),
             hide_credentials: false,
             reads: Reads::default(),
+            subagents: Subagents::default(),
             unattended: false,
             left_out: Vec::new(),
             autopilot,
@@ -1856,13 +1859,19 @@ impl Agent {
     }
 
     /// Hides `reads.deny` (the settings' `sandbox.filesystem.denyRead`) but what `reads.allow`
-    /// re-opens in it wherever the credential stores are hidden, from subagents too, and leaves
-    /// context files hidden out of the instructions.
+    /// re-opens in it wherever the credential stores are hidden, for the agent's own tools (its
+    /// subagents' are `set_subagents`'), and leaves context files hidden out of the instructions.
     pub fn set_reads(&mut self, reads: Reads) {
         if self.reads != reads {
             self.reads = reads;
             self.instruct();
         }
+    }
+
+    /// How subagents' read-only tools are confined (the settings' `sandbox.subagents`): their
+    /// commands' network, and the paths hidden from them and re-opened.
+    pub fn set_subagents(&mut self, subagents: Subagents) {
+        self.subagents = subagents;
     }
 
     /// Whether the turns that follow run with no one to answer (`-p`, a step autopilot runs):
