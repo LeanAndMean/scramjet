@@ -281,7 +281,10 @@ impl Interactive {
         let (word, rest) = argument.split_once(' ').unwrap_or((argument, ""));
         let rest = rest.trim();
         let change = match (word, rest) {
-            ("", "") => return self.say(&sandbox_info(&self.session.agent)),
+            ("", "") => {
+                let allow_write = self.session.settings.allow_write();
+                return self.say(&sandbox_info(&self.session.agent, &allow_write));
+            }
             ("add", directory) => return self.add_dir(directory),
             ("network", "on" | "off") => SandboxChange::Network(rest == "on"),
             ("remove", directory) if !directory.is_empty() => {
@@ -644,72 +647,125 @@ const SANDBOX_USAGE: &str = "Usage: /sandbox [read-only|workspace-write|off | ne
 | add DIR | remove DIR], or /add-dir DIR";
 
 /// What `/sandbox` shows: the mode, the network, what is writable and what stays read-only in it.
-fn sandbox_info(agent: &Agent) -> String {
+fn sandbox_info(agent: &Agent, allow_write: &[PathBuf]) -> String {
     let mut info = format!("{}\n\n", style::mark(style::INFO_HEADING, "Sandbox"));
-    let Some(sandbox) = agent.sandbox() else {
-        info += "None: the agent's tools run with your access, the credential stores hidden as \
-the hideCredentials setting says.\n";
-        return info + &format!("\n{SANDBOX_USAGE}");
-    };
-    let mode = sandbox.mode.name().to_owned();
-    let network = if sandbox.network { "on" } else { "off" };
-    let rows = [("Mode:", mode), ("Network:", network.to_owned())];
-    for (label, value) in rows.into_iter().chain(sandbox_paths(agent)) {
+    let mut rows = Vec::new();
+    match agent.sandbox() {
+        None => {
+            info += "None: the agent's tools run with your access, the credential stores hidden \
+as the hideCredentials setting says.\n";
+        }
+        Some(sandbox) => {
+            let network = if sandbox.network { "on" } else { "off" };
+            rows.push(("Mode:", sandbox.mode.name().to_owned()));
+            rows.push(("Network:", network.to_owned()));
+        }
+    }
+    rows.extend(sandbox_paths(agent, allow_write));
+    if agent.sandbox().is_none() && !rows.is_empty() {
+        info += "\n";
+    }
+    for (label, value) in rows {
         info += &format!("{} {value}\n", style::mark(style::MUTED, label));
+    }
+    if let Some(note) = unconfined_note(agent) {
+        info += &format!("\n{note}\n");
     }
     info + &format!("\n{SANDBOX_USAGE}")
 }
 
-/// What `/sandbox`'s list says under its mode: what is writable and what stays read-only in it.
-pub(super) fn sandbox_summary(agent: &Agent) -> String {
-    (sandbox_paths(agent).into_iter())
+/// What `/sandbox`'s list says under its mode: what is writable, what stays read-only in it,
+/// and what is hidden from the agent's tools.
+pub(super) fn sandbox_summary(agent: &Agent, allow_write: &[PathBuf]) -> String {
+    (sandbox_paths(agent, allow_write).into_iter())
         .filter(|(label, _)| *label != "Always here:")
         .map(|(label, value)| format!("{label} {value}."))
+        .chain(unconfined_note(agent))
         .collect::<Vec<_>>()
         .join(" ")
 }
 
+/// Without a sandbox, that commands are not kept to what the settings hide as the file tools
+/// are: on Windows to none of it, elsewhere not to the project-only reach.
+fn unconfined_note(agent: &Agent) -> Option<String> {
+    let reads = agent.reads();
+    if agent.sandbox().is_some() {
+        return None;
+    }
+    match cfg!(windows) {
+        true if reads.project_only || !reads.deny.is_empty() => Some(
+            "Commands are not kept to what is hidden: Windows cannot hide files from them; only \
+read, grep and find are."
+                .to_owned(),
+        ),
+        false if reads.project_only => Some(
+            "Commands are not kept to the reach without a sandbox, only read, grep and find are; \
+/sandbox workspace-write keeps them to it too."
+                .to_owned(),
+        ),
+        _ => None,
+    }
+}
+
 /// The sandbox's paths, labeled: writable, granted but gone, always granted here, and read-only
-/// in the writable ones; none without a sandbox.
-fn sandbox_paths(agent: &Agent) -> Vec<(&'static str, String)> {
-    let Some(sandbox) = agent.sandbox() else {
-        return Vec::new();
-    };
+/// in the writable ones; then what the settings hide from the agent's tools and re-open, with
+/// or without a sandbox.
+fn sandbox_paths(agent: &Agent, allow_write: &[PathBuf]) -> Vec<(&'static str, String)> {
     let root = agent.root();
-    let mut rows = Vec::new();
-    let writable = sandbox.writable_roots(root);
     let project = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
-    let listed = |paths: &[std::path::PathBuf]| match paths.is_empty() {
+    let from_settings: Vec<PathBuf> = (allow_write.iter())
+        .filter_map(|path| std::fs::canonicalize(path).ok())
+        .collect();
+    let listed = |paths: &[PathBuf]| match paths.is_empty() {
         true => "none".to_owned(),
         false => (paths.iter())
-            .map(|path| match *path == project {
-                true => format!("{} (the project)", path.display()),
-                false => path.display().to_string(),
+            .map(|path| match path {
+                path if *path == project => format!("{} (the project)", path.display()),
+                path if from_settings.contains(path) => {
+                    format!("{} (allowWrite)", path.display())
+                }
+                path => path.display().to_string(),
             })
             .collect::<Vec<_>>()
             .join(", "),
     };
-    rows.push(("Writable:", listed(&writable)));
-    let missing: Vec<_> = (sandbox.writable.iter())
-        .filter(|path| !path.is_dir())
-        .cloned()
-        .collect();
-    if !missing.is_empty() {
-        rows.push(("Granted, gone:", listed(&missing)));
+    let mut rows = Vec::new();
+    if let Some(sandbox) = agent.sandbox() {
+        let writable = sandbox.writable_roots(root);
+        rows.push(("Writable:", listed(&writable)));
+        let missing: Vec<_> = (sandbox.writable.iter())
+            .filter(|path| !path.is_dir())
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            rows.push(("Granted, gone:", listed(&missing)));
+        }
+        if let Some(always) = Remembered::user().and_then(|kept| kept.of(root).ok())
+            && !always.is_empty()
+        {
+            rows.push(("Always here:", listed(&always)));
+        }
+        let mut kept = sandbox.protected_paths(root);
+        if sandbox.read_only_project(root).is_some()
+            && (writable.iter()).any(|path| project.starts_with(path) && *path != project)
+        {
+            kept.insert(0, project.clone());
+        }
+        if !kept.is_empty() {
+            rows.push(("Read-only in them:", listed(&kept)));
+        }
     }
-    if let Some(always) = Remembered::user().and_then(|kept| kept.of(root).ok())
-        && !always.is_empty()
-    {
-        rows.push(("Always here:", listed(&always)));
+    let reads = agent.reads();
+    if !reads.deny.is_empty() {
+        rows.push(("Hidden:", listed(&reads.deny)));
     }
-    let mut kept = sandbox.protected_paths(root);
-    if sandbox.read_only_project(root).is_some()
-        && (writable.iter()).any(|path| project.starts_with(path) && *path != project)
-    {
-        kept.insert(0, project.clone());
+    if reads.project_only {
+        let reach = "the project, the writable directories and what Scramjet gives the agent to \
+read; the rest of home and the mounted drives hidden (blockReadsOutsideWorkingDirectories)";
+        rows.push(("Reach:", reach.to_owned()));
     }
-    if !kept.is_empty() {
-        rows.push(("Read-only in them:", listed(&kept)));
+    if !reads.allow.is_empty() && (reads.project_only || !reads.deny.is_empty()) {
+        rows.push(("Re-opened:", listed(&reads.allow)));
     }
     rows
 }

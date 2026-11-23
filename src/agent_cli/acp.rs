@@ -2622,7 +2622,7 @@ impl Acp {
             "mode": mode,
             "network": sandbox.map(|sandbox| sandbox.network),
             "granted": listed,
-            "summary": super::slash::sandbox_summary(agent),
+            "summary": super::slash::sandbox_summary(agent, &self.session.settings.allow_write()),
             "message": message,
             "warnings": warnings,
         });

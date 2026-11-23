@@ -639,7 +639,10 @@ impl Tools<'_> {
                     (std::iter::once(root.to_owned()).chain(writable.into_iter().flatten()))
                         .chain(self.parent.given_to_read()),
                 );
-                let hidden = hide.then(|| sandbox::Hidden::current(named, &reads));
+                let hidden = hide.then(|| match self.sandbox {
+                    Some(_) => sandbox::Hidden::current(named, &reads).grantable(),
+                    None => sandbox::Hidden::current(named, &reads),
+                });
                 let progress = &mut |output: &str| ui.tool_output(output);
                 let output = match (self.sandbox, &hidden) {
                     (Some(sandbox), Some(hidden)) => {

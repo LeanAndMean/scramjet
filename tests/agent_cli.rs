@@ -5554,6 +5554,86 @@ fn acp_finds_the_projects_files_for_at_mentions_through_the_extension() {
 
 #[test]
 #[cfg(unix)]
+fn the_sandbox_shown_lists_what_the_settings_hide_grant_and_re_open() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-reads-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    let (extra, notes) = (scratch.0.join("extra"), scratch.0.join("notes"));
+    for directory in [&project, &extra, &notes.join("open")] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap();
+    let settings = serde_json::json!({
+        "hideCredentials": "never",
+        "blockReadsOutsideWorkingDirectories": true,
+        "sandbox": {"filesystem": {
+            "allowWrite": [extra],
+            "denyRead": [notes],
+            "allowRead": [notes.join("open")],
+        }},
+    });
+    let (mut child, mut stdin, messages) =
+        acp_with(&scratch.0, 1, settings, &["--sandbox", "workspace-write"]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let mut id = 2;
+    let mut ask = |params: serde_json::Value| {
+        id += 1;
+        let mut params = params;
+        params["sessionId"] = session.clone();
+        let method = "_io.github.leanandmean.scramjet/sandbox";
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        );
+        let answer = until(&messages, |message| message["id"] == id).0;
+        answer["result"]["summary"].as_str().unwrap().to_owned()
+    };
+    let summary = ask(serde_json::json!({}));
+    let project = real(&project);
+    for part in [
+        format!(
+            "Writable: {} (the project), {} (allowWrite).",
+            project.display(),
+            real(&extra).display()
+        ),
+        format!("Hidden: {}.", notes.display()),
+        "(blockReadsOutsideWorkingDirectories).".to_owned(),
+        format!("Re-opened: {}.", notes.join("open").display()),
+    ] {
+        assert!(summary.contains(&part), "{part} in {summary}");
+    }
+    assert!(!summary.contains("without a sandbox"), "{summary}");
+    let off = ask(serde_json::json!({"mode": "off"}));
+    assert!(!off.contains("Writable:"), "{off}");
+    assert!(
+        off.contains(&format!("Hidden: {}.", notes.display())),
+        "{off}"
+    );
+    assert!(
+        off.ends_with(
+            "Commands are not kept to the reach without a sandbox, only read, grep and \
+find are; /sandbox workspace-write keeps them to it too."
+        ),
+        "{off}"
+    );
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_shows_and_changes_the_sandbox_through_the_extension_as_slash_sandbox() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-sandbox-{}", std::process::id())),

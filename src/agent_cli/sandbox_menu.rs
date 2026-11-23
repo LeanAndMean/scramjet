@@ -31,6 +31,8 @@ enum Entry {
     Add,
     /// A directory granted in this session or always in this project, and whether always.
     Granted(PathBuf, bool),
+    /// A directory the settings' `sandbox.filesystem.allowWrite` grants in every project.
+    Settings(PathBuf),
 }
 
 impl Interactive {
@@ -52,8 +54,17 @@ impl Interactive {
             let granted = sandbox
                 .as_ref()
                 .map_or(&[][..], |sandbox| &sandbox.writable[..]);
+            let allow_write = self.session.settings.allow_write();
+            let from_settings: Vec<PathBuf> = (allow_write.iter())
+                .filter_map(|path| std::fs::canonicalize(path).ok())
+                .collect();
             for path in granted {
-                entries.push(Entry::Granted(path.clone(), always.contains(path)));
+                entries.push(
+                    match from_settings.contains(path) && !always.contains(path) {
+                        true => Entry::Settings(path.clone()),
+                        false => Entry::Granted(path.clone(), always.contains(path)),
+                    },
+                );
             }
             for path in always.iter().filter(|path| !granted.contains(path)) {
                 entries.push(Entry::Granted(path.clone(), true));
@@ -61,7 +72,7 @@ impl Interactive {
             let mode = sandbox
                 .as_ref()
                 .map_or("off", |sandbox| sandbox.mode.name());
-            let summary = super::slash::sandbox_summary(&self.session.agent);
+            let summary = super::slash::sandbox_summary(&self.session.agent, &allow_write);
             let rows: Vec<String> = (entries.iter())
                 .map(|entry| match entry {
                     Entry::Mode => format!("Mode      {mode}"),
@@ -74,6 +85,7 @@ impl Interactive {
                     Entry::Granted(path, true) => {
                         format!("Writable  {} (always here)", path.display())
                     }
+                    Entry::Settings(path) => format!("Writable  {} (allowWrite)", path.display()),
                 })
                 .collect();
             let notes = (entries.iter())
@@ -91,6 +103,11 @@ impl Interactive {
                     Entry::Granted(_, true) => {
                         "Granted always in this project. Enter makes it read-only again and \
                          forgets it."
+                            .into()
+                    }
+                    Entry::Settings(_) => {
+                        "Granted in every project by the settings' sandbox.filesystem.allowWrite. \
+                         Enter makes it read-only for this session."
                             .into()
                     }
                 })
@@ -125,7 +142,9 @@ impl Interactive {
                         self.add_dir(typed.trim());
                     }
                 }
-                Entry::Granted(path, _) => self.remove_dir(&path.display().to_string()),
+                Entry::Granted(path, _) | Entry::Settings(path) => {
+                    self.remove_dir(&path.display().to_string())
+                }
             }
         }
         if let Some(screen) = &self.screen {

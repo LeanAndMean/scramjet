@@ -647,6 +647,9 @@ pub(super) struct Hidden {
     /// path inside one stays hidden.
     allowed: Vec<PathBuf>,
     allowed_identities: Vec<(u64, u64)>,
+    /// Whether `/add-dir` re-opens a path outside the project-only reach: only with the main
+    /// agent's sandbox on, which grants it.
+    grantable: bool,
 }
 
 impl Hidden {
@@ -687,6 +690,14 @@ impl Hidden {
         }
         hidden.allow(&reads.allow);
         hidden
+    }
+
+    /// These, with the reach's refusal naming `/add-dir`, which a sandbox on can grant.
+    pub(super) fn grantable(self) -> Hidden {
+        Hidden {
+            grantable: true,
+            ..self
+        }
     }
 
     /// Hides what the project-only reach leaves out for the user whose home is `home`, with
@@ -778,9 +789,12 @@ impl Hidden {
             None => format!("{}: hidden, as it holds credentials", path.display()),
             Some(denied) if self.outside.contains(denied) => format!(
                 "{}: outside the project, which the user's settings keep from the agent \
-                 (blockReadsOutsideWorkingDirectories); ask the user to add it with /add-dir or \
-                 sandbox.filesystem.allowRead",
-                path.display()
+                 (blockReadsOutsideWorkingDirectories); ask the user to add it with {}",
+                path.display(),
+                match self.grantable {
+                    true => "/add-dir or sandbox.filesystem.allowRead",
+                    false => "sandbox.filesystem.allowRead",
+                }
             ),
             Some(_) => format!(
                 "{}: hidden by the user's settings (sandbox.filesystem.denyRead)",
@@ -875,6 +889,7 @@ impl Hidden {
             outside: Vec::new(),
             allowed: Vec::new(),
             allowed_identities: Vec::new(),
+            grantable: false,
         }
     }
 
@@ -2327,8 +2342,11 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         assert!(hidden.check(&root.join("a.txt")).is_ok());
         assert!(hidden.check(&home.join(".gitconfig")).is_ok());
         for (path, why) in [
-            ("repos/other/b.txt", "or sandbox.filesystem.allowRead"),
-            ("notes/n.md", "or sandbox.filesystem.allowRead"),
+            (
+                "repos/other/b.txt",
+                "add it with sandbox.filesystem.allowRead",
+            ),
+            ("notes/n.md", "add it with sandbox.filesystem.allowRead"),
             (".cargo/credentials.toml", "hidden, as it holds credentials"),
             (".ssh/id", "hidden, as it holds credentials"),
         ] {
@@ -2336,6 +2354,12 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             let refused = hidden.check(&path).unwrap_err();
             assert!(refused.ends_with(why), "{refused}");
         }
+        let refused = hidden.grantable().check(&home.join("notes/n.md"));
+        let refused = refused.unwrap_err();
+        assert!(
+            refused.ends_with("add it with /add-dir or sandbox.filesystem.allowRead"),
+            "{refused}"
+        );
     }
 
     #[test]

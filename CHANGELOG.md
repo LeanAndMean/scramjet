@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.301.0 — /sandbox shows what is hidden
+
+### Changed
+
+- `/sandbox` lists what `sandbox.filesystem.denyRead` hides, what `allowRead` re-opens and the project-only reach, with the sandbox on or off, and marks the directories `allowWrite` grants. With the sandbox off it says that commands are not kept to the reach, and a read refused outside the project no longer suggests `/add-dir`, which grants nothing then.
+
 ## 2.300.0 — Keep the agent to the project
 
 ### Added

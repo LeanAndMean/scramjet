@@ -1868,6 +1868,11 @@ impl Agent {
         }
     }
 
+    /// The paths the user's settings hide and re-open for the agent's own tools (`set_reads`).
+    pub fn reads(&self) -> &Reads {
+        &self.reads
+    }
+
     /// How subagents' read-only tools are confined (the settings' `sandbox.subagents`): their
     /// commands' network, and the paths hidden from them and re-opened.
     pub fn set_subagents(&mut self, subagents: Subagents) {
