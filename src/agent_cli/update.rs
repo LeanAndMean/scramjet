@@ -121,6 +121,8 @@ pub(super) fn update_self(force: bool) -> Result<(), String> {
             program.display()
         ));
     }
+    #[cfg(unix)]
+    super::writable::program(&program)?;
     let releases = releases();
     outln!(
         "{}",

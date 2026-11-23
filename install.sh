@@ -34,6 +34,23 @@ if [ "$os" = macos ] && [ "$arch" = x86_64 ] && [ "$(sysctl -n hw.optional.arm64
   arch=aarch64
 fi
 
+# A command run with sudo can leave the directory, or the one it would be made in, root's.
+existing=$dir
+while [ ! -e "$existing" ]; do existing=$(dirname "$existing"); done
+if [ ! -w "$existing" ] || [ ! -x "$existing" ]; then
+  # shellcheck disable=SC2012 # one path; stat differs between Linux and macOS
+  owner=$(ls -ld "$existing" | awk '{ print $3 }')
+  if [ "$owner" = "$(id -un)" ]; then
+    fail "$existing is yours but not writable. Run this, then this installer again:
+  chmod u+rwx '$existing'"
+  fi
+  case $existing in
+    "$HOME"/*) fail "cannot write $existing: it is owned by $owner, not you (a command run with sudo most likely made it so). Run this, then this installer again:
+  sudo chown -R \"\$USER\" '$existing'" ;;
+    *) fail "cannot write $existing, owned by $owner: name a directory of your own in SCRAMJET_INSTALL_DIR" ;;
+  esac
+fi
+
 if [ -n "${SCRAMJET_VERSION:-}" ]; then
   version=${SCRAMJET_VERSION#v}
 else

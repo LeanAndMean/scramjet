@@ -73,6 +73,7 @@ mod theme_editor;
 mod tree;
 mod update;
 mod usage;
+mod writable;
 
 use args::{Options, Start, USAGE};
 use scramjet::agent::{
@@ -100,24 +101,30 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         // SAFETY: the process has started no thread yet.
         unsafe { std::env::set_var("SCRAMJET_OFFLINE", "1") };
     }
+    // Checked below before any subcommand that may write, or else once the options are read.
+    let checked = (arguments.first().and_then(|first| first.to_str()))
+        .is_some_and(|first| !first.starts_with('-'));
     if let Some((command, rest)) = arguments.split_first()
         && let Some(command) = command.to_str()
     {
         let rest: Option<Vec<String>> = rest.iter().map(|a| a.to_str().map(String::from)).collect();
         let rest = rest.unwrap_or_default();
-        if command == "acp" {
-            return acp::run(&rest);
-        }
         if let Some(result) = clipboard::run(command, &rest) {
             return result;
+        }
+        if let Some(result) = lint::run(command, &rest) {
+            return result;
+        }
+        if !command.starts_with('-') {
+            writable::check()?;
+        }
+        if command == "acp" {
+            return acp::run(&rest);
         }
         if let Some(result) = catalog::run(command, &rest) {
             return result;
         }
         if let Some(result) = install::run(command, &rest) {
-            return result;
-        }
-        if let Some(result) = lint::run(command, &rest) {
             return result;
         }
         if let Some(result) = import::run(command, &rest) {
@@ -131,6 +138,9 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if options.version {
         outln!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+    if !checked {
+        writable::check()?;
     }
     if let Some(search) = options.list_models.take() {
         let providers = Providers::read(Settings::load().sources(), agent::login::Logins::user());

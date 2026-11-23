@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.295.0 — Files Scramjet cannot write say how to give them back
+
+### Changed
+
+- When a directory Scramjet keeps its files in (`~/.config/scramjet`, `~/.local/state/scramjet`, `~/.local/share/scramjet`, or one above them), or a file or directory in one that another user owns, cannot be written, Scramjet now stops at start naming each one and its owner, with the one command that fixes it (`sudo chown -R "$USER" …`, as a command run with `sudo` usually left it root's), where it used to fail later with `session: Permission denied` or nothing at all.
+- `scramjet update self` and `install.sh` check the program's directory before downloading, and say the same; outside the home directory they say to update it as its owner installed it, or to install into a directory of your own.
+
 ## 2.294.0 — A package's download says why it failed
 
 ### Changed
