@@ -4,11 +4,18 @@ Linux, Seatbelt on macOS. Each check runs a release build in `-p` against a loca
 whose replies call bash; the commands' outputs come back in the next requests and are judged.
 
     python3 scripts/try-sandbox.py [--binary target/release/scramjet] [--scratch DIR] [--keep]
+    python3 scripts/try-sandbox.py --toolchains
 
 Standard library only, for macOS's own python3 (3.9). Nothing reaches a provider, the user's
 settings or credential stores: the home directory is a scratch one (default
 ~/.cache/scramjet-rs-try-sandbox, outside the temporary directories the sandbox leaves writable)
 with fake stores holding a marker. Network checks reach a second local server only.
+
+With --toolchains it instead tries the project-only reach on the user's own home directory and
+tools, in a scratch clone of this repository with `.git` made writable: cargo build and test, node,
+codex, claude, uv, python3, a git commit as the user, and a subagent's read of a skill. Scramjet's
+own settings stay scratch ones; the commands get the user's XDG directories back. It builds the
+clone in debug (a few minutes, about 2 GB, removed after).
 
 Each line says PASS, FAIL, or KNOWN for a gap docs/TASKS.md already records on this platform.
 Exits 1 if any check fails."""
@@ -123,6 +130,8 @@ def main():
     cache = os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache')
     parser.add_argument('--scratch', default=os.path.join(cache, 'scramjet-rs-try-sandbox'))
     parser.add_argument('--keep', action='store_true', help='leave the scratch directory')
+    parser.add_argument('--toolchains', action='store_true',
+                        help="try the project-only reach with the user's own home and tools")
     options = parser.parse_args()
     binary = os.path.abspath(options.binary)
     scratch = os.path.abspath(options.scratch)
@@ -135,10 +144,27 @@ def main():
         os.makedirs(os.path.dirname(os.path.join(home, store)), exist_ok=True)
         with open(os.path.join(home, store), 'w') as file:
             file.write(SECRET + '\n')
+    marks = {'private/secret.txt': SECRET, 'private/open/note.txt': 'OPEN-' + 'NOTE', 'notes.txt': SECRET,
+             'sub-only/secret.txt': SECRET, '.gitconfig': '[user]\n\tname = Try\n# GITCONFIG-' + 'MARK',
+             'tools/bin/try-tool': '#!/bin/sh\necho TOOL-""RAN'}
+    for name, text in marks.items():
+        os.makedirs(os.path.dirname(os.path.join(home, name)), exist_ok=True)
+        with open(os.path.join(home, name), 'w') as file:
+            file.write(text + '\n')
+    os.chmod(os.path.join(home, 'tools/bin/try-tool'), 0o755)
+    elsewhere = os.path.join(scratch, 'elsewhere.txt')
+    with open(elsewhere, 'w') as file:
+        file.write(SECRET + '\n')
+    extra = os.path.join(scratch, 'extra')
+    os.makedirs(extra)
+    # The reach hides these whole; the scratch directory outside the home is in one by default.
+    outside_roots = ['/home', '/root', '/mnt', '/media'] + (['/Users', '/Volumes'] if MAC else [])
+    real_scratch = os.path.realpath(scratch)
+    beside_home = any(real_scratch.startswith(root + '/') for root in outside_roots)
     agent = os.path.join(scratch, 'agent')
     os.makedirs(os.path.join(agent, 'agents'))
     with open(os.path.join(agent, 'agents', 'checker.md'), 'w') as file:
-        file.write('---\nname: checker\ndescription: Runs the checks.\ntools: bash\n---\n\nRun the commands.\n')
+        file.write('---\nname: checker\ndescription: Runs the checks.\ntools: bash, read\n---\n\nRun the commands.\n')
     net = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Reachable)
     threading.Thread(target=net.serve_forever, daemon=True).start()
     url = 'http://127.0.0.1:%d/' % net.server_address[1]
@@ -151,8 +177,15 @@ def main():
     def secret_hidden(output):
         return SECRET not in output
 
+    def shown(mark):
+        return lambda output: mark in output
+
+    reach = {'sandbox': {'mode': 'workspace-write'}, 'blockReadsOutsideWorkingDirectories': True}
+    denied = {'mode': 'workspace-write', 'filesystem': {
+        'denyRead': ['~/private'], 'allowRead': ['~/private/open', '~/.ssh'], 'allowWrite': [extra]}}
     # Each scenario: (title, extra arguments, settings, Git repository?, through a subagent?,
-    # checks); each check (label, command, judged(output) -> bool, known gap on this platform).
+    # checks); each check (label, command, judged(output) -> bool, known gap on this platform), a
+    # command being bash's or a (tool, arguments) call.
     scenarios = [
         ('-p, credential stores hidden (hideCredentials: unattended)', [], {'hideCredentials': 'unattended'}, False, False, [
             ('a store is unreadable', 'cat ~/.ssh/id_fake ~/.netrc ~/.aws/credentials 2>&1', secret_hidden, None),
@@ -203,6 +236,55 @@ def main():
             ('git commit is refused', 'git add -A 2>&1; git commit -qm x 2>&1 && echo COM""MITTED',
              lambda o: 'COMMITTED' not in o, None),
         ]),
+        ('sandbox.filesystem: denyRead, allowRead, allowWrite', [], {'sandbox': denied}, False, False, [
+            ('a denied directory\'s file is unreadable', 'cat ~/private/secret.txt 2>&1', secret_hidden, None),
+            ('allowRead re-opens a path inside it', 'cat ~/private/open/note.txt 2>&1', shown('OPEN-NOTE'), None),
+            ('allowRead does not re-open a credential store', 'cat ~/.ssh/id_fake 2>&1', secret_hidden, None),
+            ('read refuses the denied file', ('read', {'path': os.path.join(home, 'private/secret.txt')}),
+             secret_hidden, None),
+            ('read reads the re-opened one', ('read', {'path': os.path.join(home, 'private/open/note.txt')}),
+             shown('OPEN-NOTE'), None),
+            ('an allowWrite directory is writable', 'echo hi > %s/w && echo EX""TRA-OK' % extra,
+             lambda o: 'EXTRA-OK' in o and os.path.exists(os.path.join(extra, 'w')), None),
+            ('the home directory stays read-only', 'echo hi > ~/x 2>&1 && echo HO""ME-WROTE',
+             lambda o: 'HOME-WROTE' not in o, None),
+        ]),
+        ('denyRead without a sandbox (hideCredentials: unattended)', [],
+         {'hideCredentials': 'unattended', 'sandbox': {'filesystem': {'denyRead': ['~/private']}}}, False, False, [
+            ('a denied directory\'s file is unreadable', 'cat ~/private/secret.txt 2>&1', secret_hidden, None),
+            ('an undenied home file reads', 'cat ~/notes.txt 2>&1', lambda o: SECRET in o, None),
+        ]),
+        ('the project-only reach (blockReadsOutsideWorkingDirectories)', [], reach, False, False, [
+            ('a file in the home directory is unreadable', 'cat ~/notes.txt 2>&1', secret_hidden, None),
+            ('read refuses it too', ('read', {'path': os.path.join(home, 'notes.txt')}), secret_hidden, None),
+            ('the project reads', 'cat mine.txt 2>&1', shown('PROJECT-MARK'), None),
+            ('the project is writable', 'echo hi > f && echo PRO""JECT-OK', shown('PROJECT-OK'), None),
+            ('~/.gitconfig reads', 'cat ~/.gitconfig 2>&1', shown('GITCONFIG-MARK'), None),
+            ('a program on PATH in the home directory runs', 'try-tool 2>&1', shown('TOOL-RAN'), None),
+            ('system directories read', 'test -r /etc/hosts && ls /usr/bin | grep -c . && echo SYS""-OK',
+             shown('SYS-OK'), None),
+        ] + ([('a file beside the home directory (%s) is unreadable' % os.path.dirname(real_scratch),
+               'cat %s 2>&1' % elsewhere, secret_hidden, None)] if beside_home else [])
+          + ([('mounted drives (/mnt) list nothing', 'ls -A /mnt 2>&1 | wc -l',
+               lambda o: o.strip() == '0', None)] if os.path.isdir('/mnt') and os.listdir('/mnt') else [])
+          + ([('mounted volumes (/Volumes) list nothing', 'ls -A /Volumes 2>&1 | wc -l',
+               lambda o: o.strip() == '0', None)] if MAC and os.listdir('/Volumes') else [])),
+        ('a subagent inherits denyRead and the reach', [],
+         {'sandbox': {'filesystem': {'denyRead': ['~/private']}}, 'blockReadsOutsideWorkingDirectories': True},
+         False, True, [
+            ('a denied file is unreadable', 'cat ~/private/secret.txt 2>&1', secret_hidden, None),
+            ('a home file outside the reach is unreadable', 'cat ~/notes.txt 2>&1', secret_hidden, None),
+            ('the project reads', 'cat mine.txt 2>&1', shown('PROJECT-MARK'), None),
+        ]),
+        ('sandbox.subagents replaces denyRead and sets the network', [],
+         {'sandbox': {'filesystem': {'denyRead': ['~/private']},
+                      'subagents': {'network': True, 'filesystem': {'denyRead': ['~/sub-only']}}}}, False, True, [
+            ('its own denyRead hides', 'cat ~/sub-only/secret.txt 2>&1', secret_hidden, None),
+            ('the main agent\'s denyRead does not', 'cat ~/private/secret.txt 2>&1', lambda o: SECRET in o, None),
+            ('the network is on', curl, shown('NET-REACHED'), None),
+            ('the project stays read-only', 'echo hi > g 2>&1 && echo PRO""JECT-WROTE',
+             lambda o: 'PROJECT-WROTE' not in o, None),
+        ]),
         ('--sandbox read-only', ['--sandbox', 'read-only'], {}, False, False, [
             ('the project is not writable', 'echo hi > f 2>&1 && echo PRO""JECT-WROTE',
              lambda o: 'PROJECT-WROTE' not in o, None),
@@ -210,6 +292,8 @@ def main():
         ]),
     ]
 
+    if options.toolchains:
+        scenarios = toolchains(elsewhere, secret_hidden, shown)
     print('scramjet-rs sandbox checks on %s (%s), %s' % (
         sys.platform, 'names fold case' if folded else 'names keep case',
         subprocess.run([binary, '--version'], capture_output=True, text=True, env=dict(
@@ -220,16 +304,26 @@ def main():
         work = os.path.join(scratch, 'run%d' % number)
         project = os.path.join(work, 'proj')
         config = os.path.join(work, 'config', 'scramjet')
-        os.makedirs(project)
         os.makedirs(config)
+        if options.toolchains:
+            subprocess.run(['git', 'clone', '-q', ROOT, project], check=True)
+            settings = json.loads(json.dumps(settings).replace('{project}', project))
+        else:
+            os.makedirs(project)
         shutil.copytree(os.path.join(agent, 'agents'), os.path.join(config, 'agents'))
-        env = dict(os.environ, HOME=home, XDG_CONFIG_HOME=os.path.join(work, 'config'),
-                   XDG_STATE_HOME=os.path.join(work, 'state'), XDG_DATA_HOME=os.path.join(work, 'data'), GIT_CONFIG_NOSYSTEM='1')
+        with open(os.path.join(project, 'mine.txt'), 'w') as file:
+            file.write('PROJECT-' + 'MARK\n')
+        env = dict(os.environ, XDG_CONFIG_HOME=os.path.join(work, 'config'),
+                   XDG_STATE_HOME=os.path.join(work, 'state'), XDG_DATA_HOME=os.path.join(work, 'data'))
+        if not options.toolchains:
+            env.update(HOME=home, PATH=os.path.join(home, 'tools/bin') + os.pathsep + os.environ['PATH'],
+                       GIT_CONFIG_NOSYSTEM='1')
         if git:
             for command in (['git', 'init', '-q'], ['git', 'config', 'user.email', 't@example.com'],
                             ['git', 'config', 'user.name', 't'], ['git', 'commit', '-q', '--allow-empty', '-m', 'start']):
                 subprocess.run(command, cwd=project, env=env, check=True)
-        calls = [('bash', {'command': command}) for _, command, _, _ in checks]
+        calls = [command if isinstance(command, tuple) else ('bash', {'command': command})
+                 for _, command, _, _ in checks]
         if through_subagent:
             streams = [reply([('subagent', {'agent': 'checker', 'task': 'Run the checks.'})], number=0),
                        reply(calls, number=1), reply(text='Ran them.', number=2), reply(text='Done.', number=3)]
@@ -246,7 +340,8 @@ def main():
         with open(os.path.join(config, 'settings.json'), 'w') as file:
             json.dump(settings, file)
         ran = subprocess.run([binary, '--model', 'try/gpt-6-luna', '--no-session'] + args + ['-p', 'Check.'],
-                             cwd=project, env=env, capture_output=True, text=True, timeout=180)
+                             cwd=project, env=env, capture_output=True, text=True,
+                             timeout=3600 if options.toolchains else 180)
         print('\n%s%s' % (title, '' if ran.returncode == 0 else ' (exit %d)' % ran.returncode))
         if ran.returncode != 0 and not any(call in outputs for call in ids):
             print('  FAIL  it did not run:\n' + '\n'.join('        ' + line for line in
@@ -271,6 +366,55 @@ def main():
         shutil.rmtree(scratch, ignore_errors=True)
     print('\n%s' % ('%d check(s) failed' % failed if failed else 'All checks passed or are known gaps.'))
     sys.exit(1 if failed else 0)
+
+
+def toolchains(elsewhere, secret_hidden, shown):
+    """The scenarios of --toolchains, run in a clone ('{project}' in the settings)."""
+    # The commands get the user's own XDG directories back, which Scramjet's scratch ones replace.
+    variables = ['XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME']
+    restore = ' '.join("export %s='%s';" % (name, os.environ[name]) if os.environ.get(name)
+                       else 'unset %s;' % name for name in variables) + ' '
+    # What the reach keeps from those directories, which it reads from Scramjet's environment.
+    config = os.environ.get('XDG_CONFIG_HOME') or '~/.config'
+    data = os.environ.get('XDG_DATA_HOME') or '~/.local/share'
+    reach = {'sandbox': {'mode': 'workspace-write', 'filesystem': {
+                'allowWrite': ['{project}/.git'], 'allowRead': [config + '/git', data + '/uv']}},
+             'blockReadsOutsideWorkingDirectories': True}
+    skill = os.path.join(ROOT, 'sets/scramjet/skills/writing-scramjet-commands/SKILL.md')
+
+    def run(label, command, judged, known=None):
+        return (label, restore + command, judged, known)
+
+    uv = "uv run --no-project python -c \"print('UV'+'-OK')\" 2>&1"
+    cache = os.environ.get('UV_CACHE_DIR') or os.path.join(os.environ.get('XDG_CACHE_HOME') or '~/.cache', 'uv')
+    uv_writes = json.loads(json.dumps(reach))
+    uv_writes['sandbox']['filesystem']['allowWrite'].append(cache)
+
+    return [
+        ('the project-only reach with the user\'s own tools, in a clone', [], reach, False, False, [
+            run('cargo build', 'cargo build --offline --locked 2>&1 | tail -3', shown('Finished')),
+            run('cargo test', 'cargo test --offline --locked --lib settings 2>&1 | tail -3',
+                shown('test result: ok')),
+            run('node', 'node --version 2>&1', lambda o: o.startswith('v')),
+            run('codex', 'codex --version 2>&1', shown('codex-cli')),
+            run('claude', 'claude --version 2>&1', shown('Claude Code')),
+            run('uv run', uv, shown('UV-OK'), 'uv writes its cache, read-only in workspace-write with or without '
+                'the reach (as in Codex): the user adds it to allowWrite, tried next'),
+            run('python3', 'python3 --version 2>&1', shown('Python 3')),
+            run('git commit as the user', 'echo try > try.txt && git add try.txt && '
+                'git commit -qm "Try the reach" 2>&1 && git log -1 --format="AUTHOR %an <%ae>"',
+                lambda o: re.search(r'AUTHOR \S+.* <\S+@\S+>', o) is not None),
+            run('a file elsewhere in the home directory is unreadable', 'cat %s 2>&1' % elsewhere, secret_hidden),
+        ]),
+        ('the reach with uv\'s cache in allowWrite', [], uv_writes, False, False, [
+            run('uv run', uv, shown('UV-OK')),
+        ]),
+        ('a subagent in the reach, in a clone', [], reach, False, True, [
+            ('reads a skill of a loaded set', ('read', {'path': skill}), shown('name: writing-scramjet-commands'), None),
+            ('reads the project', ('read', {'path': 'Cargo.toml'}), shown('[package]'), None),
+            ('does not read elsewhere in the home directory', ('read', {'path': elsewhere}), secret_hidden, None),
+        ]),
+    ]
 
 
 main()
