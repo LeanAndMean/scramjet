@@ -647,6 +647,19 @@ pub(super) struct Parent<'a> {
     pub subagents: &'a sandbox::Subagents,
 }
 
+impl Parent<'_> {
+    /// What Scramjet gave the agent to read, which the project-only reach keeps: the command
+    /// sets', skills' and the user's agents' directories, and this project's sessions.
+    pub(super) fn given_to_read(&self) -> Vec<PathBuf> {
+        let sets = (self.sources.sets.list().iter()).map(|set| set.directory.clone());
+        let skills =
+            (self.skills.list().iter()).filter_map(|skill| skill.path.parent().map(Path::to_owned));
+        let agents = self.sources.user.map(Path::to_owned);
+        let sessions = super::session::directory(self.root).ok();
+        sets.chain(skills).chain(agents).chain(sessions).collect()
+    }
+}
+
 /// A task given to an agent, ready to run.
 struct Job<'a> {
     name: &'a str,
@@ -1249,14 +1262,18 @@ fn run_child(
     let info = &job.info;
     let effort = &job.effort;
     let network = parent.subagents.network;
-    let reads = parent.subagents.reads.opening([parent.root.to_owned()]);
+    let reads = (parent.subagents.reads).opening(
+        [parent.root.to_owned(), job.cwd.clone()]
+            .into_iter()
+            .chain(parent.given_to_read()),
+    );
     let instructions = instructions::child(
         &job.cwd,
         tools,
         &agent.prompt,
         parent.skills,
         parent.agent_directory,
-        &sandbox::Hidden::stores(parent.providers.credential_files(), &reads),
+        &sandbox::Hidden::stores(parent.providers.credential_files(), &reads.without_reach()),
         network,
     );
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];

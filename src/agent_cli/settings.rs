@@ -536,8 +536,12 @@ pub(super) struct Settings {
     deny_read: Vec<String>,
     /// `sandbox.filesystem.allowRead`, as written.
     allow_read: Vec<String>,
+    /// `blockReadsOutsideWorkingDirectories` (also under `permissions`): the project-only reach.
+    project_only: bool,
     /// `sandbox.subagents.network`.
     subagent_network: bool,
+    /// `sandbox.subagents.blockReadsOutsideWorkingDirectories`; `None`: the main agent's.
+    subagent_project_only: Option<bool>,
     /// `sandbox.subagents.filesystem.denyRead`, as written; `None`: the main agent's.
     subagent_deny_read: Option<Vec<String>>,
     /// `sandbox.subagents.filesystem.allowRead`, as written; `None`: the main agent's.
@@ -686,7 +690,9 @@ impl Settings {
             allow_write: Vec::new(),
             deny_read: Vec::new(),
             allow_read: Vec::new(),
+            project_only: false,
             subagent_network: false,
+            subagent_project_only: None,
             subagent_deny_read: None,
             subagent_allow_read: None,
             steering_mode: Delivery::All,
@@ -1084,6 +1090,22 @@ impl Settings {
     fn apply_sandbox(&mut self, path: &str, object: &Map<String, Value>) {
         const MODES: &str = r#""read-only", "workspace-write" or "danger-full-access""#;
         let mut wrong = Vec::new();
+        // Claude Code's key is under `permissions`, which Scramjet has no other use for.
+        let permissions = object.get("permissions").and_then(Value::as_object);
+        let reach = [
+            ("blockReadsOutsideWorkingDirectories", Some(object)),
+            (
+                "permissions.blockReadsOutsideWorkingDirectories",
+                permissions,
+            ),
+        ];
+        for (key, holder) in reach {
+            match holder.and_then(|holder| holder.get(BLOCK_READS)) {
+                None => {}
+                Some(Value::Bool(on)) => self.project_only = *on,
+                Some(_) => wrong.push((key, "true or false")),
+            }
+        }
         match object.get("sandboxNetwork") {
             None => {}
             Some(Value::Bool(network)) => self.sandbox_network = *network,
@@ -1155,6 +1177,11 @@ impl Settings {
             Some(Value::Bool(network)) => self.subagent_network = *network,
             Some(_) => wrong("network", "must be true or false"),
         }
+        match subagents.get(BLOCK_READS) {
+            None => {}
+            Some(Value::Bool(on)) => self.subagent_project_only = Some(*on),
+            Some(_) => wrong(BLOCK_READS, "must be true or false"),
+        }
         if subagents.contains_key("mode") {
             wrong("mode", READ_ONLY);
         }
@@ -1198,6 +1225,7 @@ impl Settings {
         scramjet::agent::Reads {
             deny: resolved(&self.deny_read),
             allow: resolved(&self.allow_read),
+            project_only: self.project_only,
         }
     }
 
@@ -1213,6 +1241,7 @@ impl Settings {
             reads: scramjet::agent::Reads {
                 deny: resolved(&self.subagent_deny_read, &self.deny_read),
                 allow: resolved(&self.subagent_allow_read, &self.allow_read),
+                project_only: self.subagent_project_only.unwrap_or(self.project_only),
             },
         }
     }
@@ -2412,6 +2441,9 @@ fn command_sets(object: &Map<String, Value>) -> Result<Vec<String>, ()> {
 /// What a token count in the settings must be.
 const TOKENS: &str = "a whole number of tokens";
 
+/// Claude Code's name for the project-only reach.
+const BLOCK_READS: &str = "blockReadsOutsideWorkingDirectories";
+
 /// The entries of the list of paths `key`; an error when it is not a list of strings.
 fn paths(object: &Map<String, Value>, key: &str) -> Result<Vec<String>, ()> {
     match object.get(key) {
@@ -2595,7 +2627,8 @@ mod tests {
 
         let object = settings_with(
             &scratch,
-            r#"{"sandboxNetwork": true, "sandbox": {"mode": "read-only", "network": false,
+            r#"{"sandboxNetwork": true, "blockReadsOutsideWorkingDirectories": true,
+                "sandbox": {"mode": "read-only", "network": false,
                 "filesystem": {"allowWrite": ["~/scratch", "own"], "writable_roots": ["/w"],
                     "denyRead": ["~/notes/private", "/abs"], "allowRead": ["~/notes/private/ok"]}}}"#,
         );
@@ -2616,18 +2649,20 @@ mod tests {
             scramjet::agent::Reads {
                 deny: vec![home.join("notes/private"), PathBuf::from("/abs")],
                 allow: vec![home.join("notes/private/ok")],
+                project_only: true,
             }
         );
         let wrong = settings_with(
             &scratch,
-            r#"{"sandbox": {"mode": "rw", "network": 1, "filesystem": {"denyRead": "~"}}}"#,
+            r#"{"sandbox": {"mode": "rw", "network": 1, "filesystem": {"denyRead": "~"}},
+                "permissions": {"blockReadsOutsideWorkingDirectories": "yes"}}"#,
         );
         assert_eq!(wrong.sandbox, None);
         assert!(wrong.reads().deny.is_empty());
         let wrong: Vec<&str> = (wrong.warnings.iter())
             .map(|warning| warning.rsplit(": ").next().unwrap())
             .collect();
-        assert_eq!(wrong.len(), 3, "{wrong:?}");
+        assert_eq!(wrong.len(), 4, "{wrong:?}");
 
         // Subagents take each list from the main agent unless they give their own.
         let main = object.reads();
@@ -2640,11 +2675,14 @@ mod tests {
         );
         let own = settings_with(
             &scratch,
-            r#"{"sandbox": {"filesystem": {"denyRead": ["/main"], "allowRead": ["/main/ok"]},
-                "subagents": {"network": true, "filesystem": {"denyRead": ["/child"]}}}}"#,
+            r#"{"permissions": {"blockReadsOutsideWorkingDirectories": true},
+                "sandbox": {"filesystem": {"denyRead": ["/main"], "allowRead": ["/main/ok"]},
+                "subagents": {"network": true, "blockReadsOutsideWorkingDirectories": false,
+                    "filesystem": {"denyRead": ["/child"]}}}}"#,
         );
         assert!(own.warnings.is_empty(), "{:?}", own.warnings);
         assert_eq!(own.reads().deny, [PathBuf::from("/main")]);
+        assert!(own.reads().project_only);
         assert_eq!(
             own.subagents(),
             scramjet::agent::Subagents {
@@ -2652,6 +2690,7 @@ mod tests {
                 reads: scramjet::agent::Reads {
                     deny: vec![PathBuf::from("/child")],
                     allow: vec![PathBuf::from("/main/ok")],
+                    project_only: false,
                 },
             }
         );

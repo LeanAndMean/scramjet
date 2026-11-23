@@ -620,16 +620,24 @@ impl Tools<'_> {
             _ => {
                 ui.tool_running(std::time::Instant::now());
                 let named = self.parent.providers.credential_files();
-                let mut hide = self.hide_credentials || self.sandbox.is_some();
-                let command = tools::is_shell(call.name) || ["grep", "find"].contains(&call.name);
+                let shell = tools::is_shell(call.name);
+                // Commands are kept within the reach only when confined; the file tools always.
+                let reads = match shell && self.sandbox.is_none() {
+                    true => self.parent.reads.without_reach(),
+                    false => self.parent.reads.clone(),
+                };
+                let mut hide =
+                    self.hide_credentials || self.sandbox.is_some() || reads.project_only;
+                let command = shell || ["grep", "find"].contains(&call.name);
                 if hide && self.sandbox.is_none() && !tools::HIDES_COMMANDS && command {
                     not_hidden(ui);
                     hide = false;
                 }
                 let root = self.parent.root;
                 let writable = self.sandbox.map(|sandbox| sandbox.writable_roots(root));
-                let reads = (self.parent.reads).opening(
-                    std::iter::once(root.to_owned()).chain(writable.into_iter().flatten()),
+                let reads = reads.opening(
+                    (std::iter::once(root.to_owned()).chain(writable.into_iter().flatten()))
+                        .chain(self.parent.given_to_read()),
                 );
                 let hidden = hide.then(|| sandbox::Hidden::current(named, &reads));
                 let progress = &mut |output: &str| ui.tool_output(output);

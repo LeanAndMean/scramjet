@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.300.0 — Keep the agent to the project
+
+### Added
+
+- `"blockReadsOutsideWorkingDirectories": true` in the settings (Claude Code's key, read under `permissions` too) hides the home directory, the other users' homes and mounted drives such as WSL's `/mnt/c` from the agent, but for the project, the directories it may write, what Scramjet gave it to read, the programs on `PATH` with their toolchains, and git's configuration. `read`, `grep` and `find` refuse the rest, saying how to re-open it; commands keep to it in the sandbox, and subagents' always.
+
 ## 2.299.0 — Subagents' own sandbox settings
 
 ### Added

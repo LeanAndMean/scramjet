@@ -506,11 +506,14 @@ const WSLG: &str = "/mnt/wslg";
 const WSLG_DISTRO: &str = "/mnt/wslg/distro";
 
 /// The paths the user's settings hide as the credential stores are
-/// (`sandbox.filesystem.denyRead`), and those they re-open inside them (`allowRead`).
+/// (`sandbox.filesystem.denyRead`), and those they re-open inside them (`allowRead`), and
+/// whether the home directory, the other users' and mounted drives are hidden too but for what
+/// the agent works with (`blockReadsOutsideWorkingDirectories`).
 #[derive(Default, Clone, PartialEq, Debug)]
 pub struct Reads {
     pub deny: Vec<PathBuf>,
     pub allow: Vec<PathBuf>,
+    pub project_only: bool,
 }
 
 impl Reads {
@@ -518,11 +521,94 @@ impl Reads {
     /// in a denied directory, unless `deny` names it itself; what `deny` names in it stays hidden.
     pub(super) fn opening(&self, paths: impl IntoIterator<Item = PathBuf>) -> Reads {
         let mut reads = self.clone();
-        if !reads.deny.is_empty() {
+        if !reads.deny.is_empty() || reads.project_only {
             reads.allow.extend(paths);
         }
         reads
     }
+
+    /// These without the project-only reach: for what Scramjet itself reads (the instructions'
+    /// files) and commands that run unconfined.
+    pub(super) fn without_reach(&self) -> Reads {
+        Reads {
+            project_only: false,
+            ..self.clone()
+        }
+    }
+}
+
+/// What the project-only reach hides: the home directory, the other users' homes and the mounted
+/// drives (WSL's Windows drives among them).
+fn outside_roots(home: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![home.to_owned()];
+    let common = ["/home", "/root", "/mnt", "/media"];
+    let apple = ["/Users", "/Volumes"];
+    let named = common.iter().chain(
+        cfg!(target_os = "macos")
+            .then_some(&apple)
+            .into_iter()
+            .flatten(),
+    );
+    roots.extend(named.map(PathBuf::from));
+    roots
+}
+
+/// What the project-only reach keeps readable in the home directory besides the project and
+/// what Scramjet gave the agent: the directories on `PATH` there with their install prefixes
+/// and where their programs' symlinks lead, the toolchains' stores those programs read, and what
+/// git needs to commit as the user.
+fn kept_in_reach(
+    home: &Path,
+    variable: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_owned());
+    let local = home.join(".local");
+    let mut kept = Vec::new();
+    let keep = |directory: &Path, kept: &mut Vec<PathBuf>| {
+        if !directory.starts_with(&home) || directory == home {
+            return;
+        }
+        kept.push(directory.to_owned());
+        if directory.file_name().is_some_and(|name| name == "bin")
+            && let Some(prefix) = directory.parent()
+            && prefix != home
+            && prefix != local
+        {
+            kept.push(prefix.to_owned());
+        }
+    };
+    let path = variable("PATH").unwrap_or_default();
+    for directory in std::env::split_paths(&path).filter(|path| path.is_absolute()) {
+        let Ok(real) = std::fs::canonicalize(&directory) else {
+            continue;
+        };
+        if !real.starts_with(&home) {
+            continue;
+        }
+        keep(&real, &mut kept);
+        let entries = std::fs::read_dir(&real).into_iter().flatten().flatten();
+        let linked = entries.filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_symlink()));
+        for target in linked.filter_map(|entry| std::fs::canonicalize(entry.path()).ok()) {
+            if let Some(directory) = target.parent().filter(|directory| *directory != real) {
+                keep(directory, &mut kept);
+            }
+        }
+    }
+    let set = |name: &str| {
+        variable(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
+    kept.push(set("RUSTUP_HOME").unwrap_or_else(|| home.join(".rustup")));
+    let data = set("XDG_DATA_HOME").unwrap_or_else(|| home.join(".local/share"));
+    kept.push(data.join("uv"));
+    kept.push(home.join(".gitconfig"));
+    let config = set("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
+    kept.push(config.join("git"));
+    kept.extend(set("GIT_CONFIG_GLOBAL"));
+    kept.sort();
+    kept.dedup();
+    kept
 }
 
 /// How subagents' read-only tools are confined (the settings' `sandbox.subagents`): whether their
@@ -552,8 +638,11 @@ pub(super) struct Hidden {
     /// The `TMUX_TMPDIR` of tmux servers that commands with the stores hidden start.
     #[cfg_attr(windows, allow(dead_code))]
     tmux: Option<PathBuf>,
-    /// Those of `files` and `directories` the user's `denyRead` hides, not holding credentials.
+    /// Those of `files` and `directories` the user's `denyRead` hides, not holding credentials,
+    /// and the project-only reach's.
     denied: Vec<PathBuf>,
+    /// Those of `denied` the project-only reach hides.
+    outside: Vec<PathBuf>,
     /// What `allowRead` re-opens in a denied directory, by real path, never in a store; a hidden
     /// path inside one stays hidden.
     allowed: Vec<PathBuf>,
@@ -591,18 +680,42 @@ impl Hidden {
         let mut hidden =
             std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also));
         hidden.deny(&reads.deny);
+        if reads.project_only
+            && let Some(home) = std::env::home_dir()
+        {
+            hidden.reach(&home, |name| std::env::var_os(name));
+        }
         hidden.allow(&reads.allow);
         hidden
     }
 
+    /// Hides what the project-only reach leaves out for the user whose home is `home`, with
+    /// the environment's `variable`s, but what it keeps.
+    fn reach(&mut self, home: &Path, variable: impl Fn(&str) -> Option<std::ffi::OsString>) {
+        self.deny_outside(&outside_roots(home));
+        self.allow(&kept_in_reach(home, variable));
+    }
+
     /// Hides `paths` too, those that exist, each a file or a directory.
     pub(super) fn deny(&mut self, paths: &[PathBuf]) {
+        self.deny_as(paths, false);
+    }
+
+    /// Hides `paths` as outside the project-only reach.
+    fn deny_outside(&mut self, paths: &[PathBuf]) {
+        self.deny_as(paths, true);
+    }
+
+    fn deny_as(&mut self, paths: &[PathBuf], outside: bool) {
         for real in paths
             .iter()
             .filter_map(|path| std::fs::canonicalize(path).ok())
         {
             if (self.files.iter().chain(&self.directories)).any(|hidden| *hidden == real) {
                 continue;
+            }
+            if outside {
+                self.outside.push(real.clone());
             }
             self.identities.extend(identity(&real));
             match real.is_dir() {
@@ -651,15 +764,25 @@ impl Hidden {
         hidden.is_some_and(|hidden| allowed.is_none_or(|allowed| allowed <= hidden))
     }
 
-    /// Why `path`, found hidden, is: by the user's `denyRead` unless it is in a store.
+    /// Why `path`, found hidden, is: by the user's `denyRead` or outside the project-only reach,
+    /// whichever holds it the closer, unless it is in a store.
     fn refusal(&self, path: &Path) -> String {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         let store = (self.files.iter().chain(&self.directories))
             .filter(|hidden| !self.denied.contains(hidden))
             .any(|store| real.starts_with(store));
-        match store || !self.denied.iter().any(|denied| real.starts_with(denied)) {
-            true => format!("{}: hidden, as it holds credentials", path.display()),
-            false => format!(
+        let innermost = (self.denied.iter())
+            .filter(|denied| real.starts_with(denied))
+            .max_by_key(|denied| denied.components().count());
+        match innermost.filter(|_| !store) {
+            None => format!("{}: hidden, as it holds credentials", path.display()),
+            Some(denied) if self.outside.contains(denied) => format!(
+                "{}: outside the project, which the user's settings keep from the agent \
+                 (blockReadsOutsideWorkingDirectories); ask the user to add it with /add-dir or \
+                 sandbox.filesystem.allowRead",
+                path.display()
+            ),
+            Some(_) => format!(
                 "{}: hidden by the user's settings (sandbox.filesystem.denyRead)",
                 path.display()
             ),
@@ -749,6 +872,7 @@ impl Hidden {
             directories,
             tmux: None,
             denied: Vec::new(),
+            outside: Vec::new(),
             allowed: Vec::new(),
             allowed_identities: Vec::new(),
         }
@@ -1987,6 +2111,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             allow: ["notes/shared", "notes/shared/.ssh", "project", "absent"]
                 .map(|name| home.join(name))
                 .into(),
+            project_only: false,
         };
         let mut hidden = super::Hidden::under(&home, vec![home.join("notes/shared/.ssh")]);
         hidden.deny(&reads.deny);
@@ -2055,6 +2180,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
                 .map(|name| home.join(name))
                 .into(),
             allow: Vec::new(),
+            project_only: false,
         };
         let hidden = |reads: &super::Reads| {
             let mut hidden = super::Hidden::under(&home, Vec::new());
@@ -2101,6 +2227,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let named = super::Reads {
             deny: vec![root.clone()],
             allow: Vec::new(),
+            project_only: false,
         };
         let named = hidden(&named.opening([root.clone()]));
         assert!(named.allowed.is_empty());
@@ -2110,6 +2237,105 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n");
+    }
+
+    #[test]
+    fn the_project_only_reach_hides_the_home_directory_but_what_the_agent_needs() {
+        let home = std::env::temp_dir().join(format!("scramjet-reach-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        for directory in [
+            "repos/project/.git",
+            "repos/other",
+            ".ssh",
+            ".cargo/bin",
+            ".cargo/registry",
+            ".local/bin",
+            ".local/share/tool/versions",
+            ".config/git",
+            ".rustup/toolchains",
+            "notes",
+        ] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for (file, text) in [
+            ("repos/project/a.txt", "plain\n"),
+            ("repos/other/b.txt", "PRIVATE-other\n"),
+            (".ssh/id", "PRIVATE-key\n"),
+            (".cargo/bin/cargo", "#!/bin/sh\necho cargo\n"),
+            (".cargo/registry/index", "index\n"),
+            (".cargo/credentials.toml", "PRIVATE-token\n"),
+            (".local/share/tool/versions/1", "#!/bin/sh\necho tool\n"),
+            (".local/share/tool/other", "PRIVATE-share\n"),
+            (".gitconfig", "[user]\n\tname = Someone\n"),
+            (".config/git/ignore", "ignored\n"),
+            (".rustup/toolchains/t", "toolchain\n"),
+            ("notes/n.md", "PRIVATE-notes\n"),
+        ] {
+            std::fs::write(home.join(file), text).unwrap();
+        }
+        for program in [".cargo/bin/cargo", ".local/share/tool/versions/1"] {
+            use std::os::unix::fs::PermissionsExt;
+            let executable = std::fs::Permissions::from_mode(0o755);
+            std::fs::set_permissions(home.join(program), executable).unwrap();
+        }
+        std::os::unix::fs::symlink(
+            home.join(".local/share/tool/versions/1"),
+            home.join(".local/bin/tool"),
+        )
+        .unwrap();
+        let path = std::env::join_paths([home.join(".cargo/bin"), home.join(".local/bin")]);
+        let path = path.unwrap();
+        let variable = |name: &str| (name == "PATH").then(|| path.clone());
+        let real = |name: &str| std::fs::canonicalize(home.join(name)).unwrap();
+        assert_eq!(
+            super::kept_in_reach(&home, variable),
+            [
+                real(".cargo"),
+                real(".cargo/bin"),
+                real(".config/git"),
+                real(".gitconfig"),
+                real(".local/bin"),
+                real(".local/share/tool/versions"),
+                real(".local/share").join("uv"),
+                real(".rustup"),
+            ]
+        );
+        let root = home.join("repos/project");
+        let mut hidden = super::Hidden::under(&home, vec![home.join(".cargo/credentials.toml")]);
+        hidden.reach(&home, variable);
+        hidden.allow(std::slice::from_ref(&root));
+        let script = "cat a.txt ../../.cargo/registry/index ../../.gitconfig ../../.rustup/toolchains/t; \
+            ../../.cargo/bin/cargo; ../../.local/bin/tool; ls -A ../..; grep -r PRIVATE ../..; \
+            ls /mnt | wc -l; echo done";
+        let sandbox = super::Sandbox {
+            mode: super::SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        let output = super::sandboxed(&root, script, &hidden, &sandbox)
+            .unwrap()
+            .output()
+            .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "plain\nindex\n[user]\n\tname = Someone\ntoolchain\ncargo\ntool\n\
+             .cargo\n.config\n.gitconfig\n.local\n.rustup\nrepos\n0\ndone\n",
+            "{errors}"
+        );
+        assert!(!errors.contains("PRIVATE"), "{errors}");
+        assert!(hidden.check(&root.join("a.txt")).is_ok());
+        assert!(hidden.check(&home.join(".gitconfig")).is_ok());
+        for (path, why) in [
+            ("repos/other/b.txt", "or sandbox.filesystem.allowRead"),
+            ("notes/n.md", "or sandbox.filesystem.allowRead"),
+            (".cargo/credentials.toml", "hidden, as it holds credentials"),
+            (".ssh/id", "hidden, as it holds credentials"),
+        ] {
+            let path = home.join(path);
+            let refused = hidden.check(&path).unwrap_err();
+            assert!(refused.ends_with(why), "{refused}");
+        }
     }
 
     #[test]
