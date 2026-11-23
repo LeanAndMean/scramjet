@@ -513,6 +513,18 @@ pub struct Reads {
     pub allow: Vec<PathBuf>,
 }
 
+impl Reads {
+    /// These with `paths` re-opened too: what the agent works in and may write stays readable
+    /// in a denied directory, unless `deny` names it itself; what `deny` names in it stays hidden.
+    pub(super) fn opening(&self, paths: impl IntoIterator<Item = PathBuf>) -> Reads {
+        let mut reads = self.clone();
+        if !reads.deny.is_empty() {
+            reads.allow.extend(paths);
+        }
+        reads
+    }
+}
+
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
 /// as empty and a hidden directory has no entries, both read-only.
 #[derive(Default, Clone)]
@@ -695,7 +707,8 @@ impl Hidden {
             self.identities.extend(identity(&real));
             self.directories.push(real);
         }
-        self.tmux = own;
+        // Inside what `denyRead` hides, it cannot be made: there commands start no server.
+        self.tmux = own.filter(|own| !self.covered(own, false));
     }
 
     /// The common stores in `home`, and `also`, each a file or a directory.
@@ -1981,6 +1994,87 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             let opened = hidden.opened(&path, std::fs::File::open(&path));
             assert!(opened.unwrap_err().ends_with(why));
         }
+    }
+
+    #[test]
+    fn the_project_and_writable_roots_in_a_denied_directory_stay_readable() {
+        let home = std::env::temp_dir().join(format!("scramjet-opened-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        for directory in ["work/project/.git", "work/project/private", "work/scratch"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for (file, text) in [
+            ("work/other.md", "PRIVATE-other\n"),
+            ("work/project/a.txt", "plain\n"),
+            ("work/project/private/no.md", "PRIVATE-deeper\n"),
+            ("work/scratch/s.txt", "scratch\n"),
+        ] {
+            std::fs::write(home.join(file), text).unwrap();
+        }
+        let root = home.join("work/project");
+        let real = |name: &str| std::fs::canonicalize(home.join(name)).unwrap();
+        let sandbox = super::Sandbox {
+            mode: super::SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: vec![real("work/scratch")],
+        };
+        let denied = super::Reads {
+            deny: ["work", "work/project/private"]
+                .map(|name| home.join(name))
+                .into(),
+            allow: Vec::new(),
+        };
+        let hidden = |reads: &super::Reads| {
+            let mut hidden = super::Hidden::under(&home, Vec::new());
+            hidden.deny(&reads.deny);
+            hidden.allow(&reads.allow);
+            hidden
+        };
+        let writing = hidden(&denied.opening(sandbox.writable_roots(&root)));
+        assert_eq!(
+            writing.allowed,
+            [real("work/project"), real("work/scratch")]
+        );
+        let script = "cat a.txt ../scratch/s.txt; ls -A .. private; grep -r PRIVATE ..; \
+            echo w > ../scratch/w && echo wrote; echo w > w && echo wrote; \
+            echo w > .git/w || echo kept; echo done";
+        let output = super::sandboxed(&root, script, &writing, &sandbox)
+            .unwrap()
+            .output()
+            .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "plain\nscratch\n..:\nproject\nscratch\n\nprivate:\nwrote\nwrote\nkept\ndone\n",
+            "{errors}"
+        );
+        assert!(!errors.contains("PRIVATE"), "{errors}");
+        assert!(writing.check(&root.join("a.txt")).is_ok());
+        assert!(writing.check(&home.join("work/other.md")).is_err());
+        assert!(writing.check(&root.join("private/no.md")).is_err());
+        // Subagents': the project alone re-opened, read-only.
+        let reading = hidden(&denied.opening([root.clone()]));
+        let script = "cat a.txt; ls -A ..; echo w > w || echo refused; echo done";
+        let output = super::command(&root, script, &reading)
+            .unwrap()
+            .output()
+            .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "plain\nproject\nrefused\ndone\n",
+            "{errors}"
+        );
+        // A project the user's denyRead names itself stays hidden.
+        let named = super::Reads {
+            deny: vec![root.clone()],
+            allow: Vec::new(),
+        };
+        assert!(
+            hidden(&named.opening([root.clone()]))
+                .check(&root.join("a.txt"))
+                .is_err()
+        );
     }
 
     #[test]

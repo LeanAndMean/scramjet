@@ -1246,13 +1246,14 @@ fn run_child(
     };
     let info = &job.info;
     let effort = &job.effort;
+    let reads = parent.reads.opening([parent.root.to_owned()]);
     let instructions = instructions::child(
         &job.cwd,
         tools,
         &agent.prompt,
         parent.skills,
         parent.agent_directory,
-        &sandbox::Hidden::stores(parent.providers.credential_files(), parent.reads),
+        &sandbox::Hidden::stores(parent.providers.credential_files(), &reads),
     );
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
@@ -1337,7 +1338,7 @@ fn run_child(
         if calls.is_empty() {
             return run;
         }
-        let hidden = sandbox::Hidden::current(parent.providers.credential_files(), parent.reads);
+        let hidden = sandbox::Hidden::current(parent.providers.credential_files(), &reads);
         for item in calls {
             let output = match Call::parse(&item) {
                 Ok(call) => {

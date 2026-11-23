@@ -1918,6 +1918,28 @@ fn the_settings_sandbox_hides_what_deny_read_names_but_allow_read_and_writes_whe
     assert_eq!(std::fs::read_to_string(always.join("f")).unwrap(), "kept\n");
     let reopened = project.join("private/shared/g");
     assert_eq!(std::fs::read_to_string(reopened).unwrap(), "kept\n");
+    // The project and a writable root in a denied directory stay readable, the rest hidden.
+    std::fs::write(scratch.0.join("other.md"), "PRIVATE-other\n").unwrap();
+    let around = serde_json::json!({"mode": "workspace-write",
+        "filesystem": {"denyRead": [scratch.0], "allowWrite": [always]}});
+    let script = "cat a.txt ../always/f; ls -A ..; cat ../other.md; echo done";
+    let (result, stderr) = run(
+        "bash",
+        serde_json::json!({"command": script}),
+        around.clone(),
+    );
+    assert!(
+        result.contains(r"plain\nkept\nalways\nproject\n") && result.contains("done"),
+        "{result} {stderr}"
+    );
+    assert!(!result.contains("PRIVATE"), "{result}");
+    let (result, stderr) = run("read", serde_json::json!({"path": "a.txt"}), around.clone());
+    assert!(result.contains("plain"), "{result} {stderr}");
+    let (result, stderr) = run("read", serde_json::json!({"path": "../other.md"}), around);
+    assert!(
+        result.contains("sandbox.filesystem.denyRead"),
+        "{result} {stderr}"
+    );
 }
 
 #[test]

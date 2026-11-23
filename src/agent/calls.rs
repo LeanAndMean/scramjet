@@ -623,9 +623,12 @@ impl Tools<'_> {
                     not_hidden(ui);
                     hide = false;
                 }
-                let reads = self.parent.reads;
-                let hidden = hide.then(|| sandbox::Hidden::current(named, reads));
                 let root = self.parent.root;
+                let writable = self.sandbox.map(|sandbox| sandbox.writable_roots(root));
+                let reads = (self.parent.reads).opening(
+                    std::iter::once(root.to_owned()).chain(writable.into_iter().flatten()),
+                );
+                let hidden = hide.then(|| sandbox::Hidden::current(named, &reads));
                 let progress = &mut |output: &str| ui.tool_output(output);
                 let output = match (self.sandbox, &hidden) {
                     (Some(sandbox), Some(hidden)) => {

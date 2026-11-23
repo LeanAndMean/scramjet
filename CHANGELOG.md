@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.298.0 — The project stays readable in a hidden directory
+
+### Changed
+
+- A project, and the directories the sandbox makes writable, inside a `sandbox.filesystem.denyRead` directory stay readable to the agent's commands, `read`, `grep` and `find`, as if `allowRead` named them (a subagent's project too); a `denyRead` path deeper in them stays hidden.
+
+### Fixed
+
+- Sandboxed commands no longer all fail when `denyRead` hides the state directory (`~/.local/state/scramjet`, or `~/.local` around it).
+
 ## 2.297.0 — The sandbox setting re-opens paths in hidden ones
 
 ### Added
