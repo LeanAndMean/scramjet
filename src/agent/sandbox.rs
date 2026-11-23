@@ -600,14 +600,16 @@ impl Hidden {
     }
 
     /// Re-opens those of `paths` that exist in a denied directory, unless they are in a store
-    /// (or are one): `allowRead` cannot uncover what `hideCredentials` hides.
+    /// (or are one): `allowRead` cannot uncover what `hideCredentials` hides. A path denied
+    /// itself stays hidden.
     pub(super) fn allow(&mut self, paths: &[PathBuf]) {
         for real in paths
             .iter()
             .filter_map(|path| std::fs::canonicalize(path).ok())
         {
-            let in_denied = (self.directories.iter())
-                .any(|directory| self.denied.contains(directory) && real.starts_with(directory));
+            let in_denied = (self.directories.iter()).any(|directory| {
+                self.denied.contains(directory) && real.starts_with(directory) && real != *directory
+            });
             let in_store = (self.files.iter().chain(&self.directories))
                 .any(|store| !self.denied.contains(store) && real.starts_with(store));
             if in_denied && !in_store && !self.allowed.contains(&real) {
@@ -2070,11 +2072,14 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             deny: vec![root.clone()],
             allow: Vec::new(),
         };
-        assert!(
-            hidden(&named.opening([root.clone()]))
-                .check(&root.join("a.txt"))
-                .is_err()
-        );
+        let named = hidden(&named.opening([root.clone()]));
+        assert!(named.allowed.is_empty());
+        assert!(named.check(&root.join("a.txt")).is_err());
+        let output = super::sandboxed(&root, "cat a.txt; echo done", &named, &sandbox)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n");
     }
 
     #[test]

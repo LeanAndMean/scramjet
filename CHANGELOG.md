@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.298.1 — A project denyRead names stays hidden from commands
+
+### Fixed
+
+- A project, or a writable directory, that `sandbox.filesystem.denyRead` names itself is hidden from the agent's commands again, not only from `read`, `grep` and `find` (since 2.298.0); an `allowRead` equal to a `denyRead` path no longer re-opens it either.
+
 ## 2.298.0 — The project stays readable in a hidden directory
 
 ### Changed
