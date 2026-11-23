@@ -181,6 +181,7 @@ pub(super) enum Row {
     Credentials,
     Sandbox,
     SandboxNetwork,
+    ProjectReach,
     Autopilot,
     NextSteps,
     Publishing,
@@ -235,6 +236,7 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::Credentials,
             Row::Sandbox,
             Row::SandboxNetwork,
+            Row::ProjectReach,
         ],
     ),
     (
@@ -292,6 +294,7 @@ impl Row {
             Self::Credentials => "Credential stores",
             Self::Sandbox => "Sandbox",
             Self::SandboxNetwork => "Sandbox network",
+            Self::ProjectReach => "Project-only reach",
             Self::Autopilot => "Autopilot",
             Self::NextSteps => "Next steps",
             Self::Publishing => "Publishing",
@@ -444,6 +447,11 @@ impl Row {
             Self::SandboxNetwork => {
                 "Whether commands in a new session's sandbox reach the network. /sandbox network \
                  changes this session's."
+            }
+            Self::ProjectReach => {
+                "On: new sessions' read, grep and find, and commands in the sandbox, see only the \
+                 project, the writable directories, PATH's programs and git's configuration of the \
+                 home directory and mounted drives; allowRead re-opens more. Subagents keep to it."
             }
             Self::Autopilot => {
                 "On: when a command finishes, the next step it recommends runs after a 3-second \
@@ -2100,6 +2108,10 @@ impl Settings {
             Row::Sandbox => self.sandbox.map_or("off", SandboxMode::name).into(),
             Row::SandboxNetwork if self.sandbox_network => "on".into(),
             Row::SandboxNetwork => "off".into(),
+            Row::ProjectReach if !self.project_only => "off".into(),
+            Row::ProjectReach if self.sandbox.is_some() && cfg!(unix) => "on".into(),
+            Row::ProjectReach if cfg!(windows) => "on (read, grep and find only)".into(),
+            Row::ProjectReach => "on (read, grep and find; commands only in the sandbox)".into(),
         }
     }
 
@@ -2252,6 +2264,19 @@ impl Settings {
             Row::SandboxNetwork => {
                 self.sandbox_network = !self.sandbox_network;
                 self.save_sandbox("network", json!(self.sandbox_network))
+            }
+            Row::ProjectReach => {
+                self.project_only = !self.project_only;
+                let on = self.project_only;
+                self.update(|object| {
+                    if let Some(Value::Object(permissions)) = object.get_mut("permissions") {
+                        permissions.remove(BLOCK_READS);
+                        if permissions.is_empty() {
+                            object.remove("permissions");
+                        }
+                    }
+                    object.insert(BLOCK_READS.to_owned(), json!(on));
+                })
             }
         }
     }
@@ -2558,7 +2583,7 @@ mod tests {
         let count = rows.len();
         rows.sort_by_key(|row| format!("{row:?}"));
         rows.dedup();
-        assert_eq!((rows.len(), count), (33, 33));
+        assert_eq!((rows.len(), count), (34, 34));
     }
 
     struct Scratch(PathBuf);
@@ -2730,6 +2755,27 @@ mod tests {
             saved,
             json!({"sandbox": {"filesystem": {"denyRead": ["x"]}, "network": true}})
         );
+    }
+
+    #[test]
+    fn settings_save_the_project_only_reach_at_the_top_over_claude_codes_place() {
+        let scratch = Scratch::new("reach-saved");
+        let path = scratch.0.join("settings.json");
+        let text = r#"{"sandbox": "workspace-write",
+            "permissions": {"blockReadsOutsideWorkingDirectories": true}}"#;
+        let mut settings = settings_with(&scratch, text);
+        if cfg!(unix) {
+            assert_eq!(settings.shown(Row::ProjectReach), "on");
+        }
+        settings.cycle(Row::ProjectReach).unwrap();
+        assert_eq!(settings.shown(Row::ProjectReach), "off");
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            json!({"sandbox": "workspace-write", "blockReadsOutsideWorkingDirectories": false})
+        );
+        settings.cycle(Row::ProjectReach).unwrap();
+        assert!(settings_with(&scratch, &std::fs::read_to_string(&path).unwrap()).project_only);
     }
 
     #[test]
@@ -3607,6 +3653,14 @@ or false; ignored"
             seen(Row::SandboxNetwork, &mut settings),
             ["on", "off", "on", "off"]
         );
+        let on = match cfg!(windows) {
+            true => "on (read, grep and find only)",
+            false => "on (read, grep and find; commands only in the sandbox)",
+        };
+        assert_eq!(
+            seen(Row::ProjectReach, &mut settings),
+            ["off", on, "off", on]
+        );
         assert_eq!(
             seen(Row::Steering, &mut settings),
             [
@@ -3752,6 +3806,7 @@ or false; ignored"
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
                 "sandbox": {"mode": "off", "network": false},
+                "blockReadsOutsideWorkingDirectories": true,
                 "defaultShell": if bash { "bash" } else { "powershell" },
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "never",

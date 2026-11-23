@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.302.0 — The project-only reach in /settings
+
+### Added
+
+- `/settings` → Tools and safety → Project-only reach turns `blockReadsOutsideWorkingDirectories` on or off for new sessions, saying when only `read`, `grep` and `find` keep to it (the sandbox off, or Windows). A value under `permissions` is moved to the top level when it is changed there.
+
 ## 2.301.0 — /sandbox shows what is hidden
 
 ### Changed
