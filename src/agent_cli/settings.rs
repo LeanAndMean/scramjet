@@ -528,8 +528,12 @@ pub(super) struct Settings {
     pub(super) hide_credentials: HideCredentials,
     /// `sandbox`: how the agent's tools are confined; `None`: not at all.
     pub(super) sandbox: Option<SandboxMode>,
-    /// `sandboxNetwork`: whether commands in the sandbox reach the network.
+    /// `sandbox.network` (`sandboxNetwork`): whether commands in the sandbox reach the network.
     pub(super) sandbox_network: bool,
+    /// `sandbox.filesystem.allowWrite` (Codex's `writable_roots`), as written.
+    allow_write: Vec<String>,
+    /// `sandbox.filesystem.denyRead`, as written.
+    deny_read: Vec<String>,
     pub(super) steering_mode: Delivery,
     pub(super) follow_up_mode: Delivery,
     /// The directories of the installed command sets: `commandSets`' (a relative one is
@@ -671,6 +675,8 @@ impl Settings {
             hide_credentials: HideCredentials::Never,
             sandbox: None,
             sandbox_network: true,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
@@ -925,19 +931,6 @@ impl Settings {
             Some(Some("never")) => self.hide_credentials = HideCredentials::Never,
             Some(_) => wrong("hideCredentials", r#""unattended", "always" or "never""#),
         }
-        match object.get("sandbox").map(|value| value.as_str()) {
-            None => {}
-            Some(Some(name)) if let Some(mode) = SandboxMode::parse(name) => self.sandbox = mode,
-            Some(_) => wrong(
-                "sandbox",
-                r#""read-only", "workspace-write" or "danger-full-access""#,
-            ),
-        }
-        match object.get("sandboxNetwork") {
-            None => {}
-            Some(Value::Bool(network)) => self.sandbox_network = *network,
-            Some(_) => wrong("sandboxNetwork", "true or false"),
-        }
         for (key, mode) in [
             ("steeringMode", &mut self.steering_mode),
             ("followUpMode", &mut self.follow_up_mode),
@@ -1071,6 +1064,80 @@ impl Settings {
                 "{path}: modelCatalogs must be a list of URLs; ignored"
             )),
         }
+        self.apply_sandbox(&path, object);
+    }
+
+    /// `sandbox`, an object of Claude Code's shape with Codex's modes, or as before a mode's name
+    /// with `sandboxNetwork` beside it.
+    fn apply_sandbox(&mut self, path: &str, object: &Map<String, Value>) {
+        const MODES: &str = r#""read-only", "workspace-write" or "danger-full-access""#;
+        let mut wrong = Vec::new();
+        match object.get("sandboxNetwork") {
+            None => {}
+            Some(Value::Bool(network)) => self.sandbox_network = *network,
+            Some(_) => wrong.push(("sandboxNetwork", "true or false")),
+        }
+        let sandbox = match object.get("sandbox") {
+            None => None,
+            Some(Value::String(name)) => Some(json!({"mode": name})),
+            Some(Value::Object(sandbox)) => Some(Value::Object(sandbox.clone())),
+            Some(_) => {
+                wrong.push(("sandbox", "an object or a mode's name"));
+                None
+            }
+        };
+        if let Some(sandbox) = &sandbox {
+            match sandbox.get("mode").map(|value| value.as_str()) {
+                None => {}
+                Some(Some(name)) if let Some(mode) = SandboxMode::parse(name) => {
+                    self.sandbox = mode
+                }
+                Some(_) if object["sandbox"].is_string() => wrong.push(("sandbox", MODES)),
+                Some(_) => wrong.push(("sandbox.mode", MODES)),
+            }
+            match sandbox.get("network") {
+                None => {}
+                Some(Value::Bool(network)) => self.sandbox_network = *network,
+                Some(_) => wrong.push(("sandbox.network", "true or false")),
+            }
+            match sandbox.get("filesystem") {
+                None => {}
+                Some(Value::Object(filesystem)) => {
+                    // Codex's name for the directories writable in every project.
+                    for key in ["allowWrite", "writable_roots", "denyRead"] {
+                        let list = match key {
+                            "denyRead" => &mut self.deny_read,
+                            _ => &mut self.allow_write,
+                        };
+                        match paths(filesystem, key) {
+                            Ok(entries) => list.extend(entries),
+                            Err(()) => self.warnings.push(format!(
+                                "{path}: sandbox.filesystem.{key} must be a list of paths; ignored"
+                            )),
+                        }
+                    }
+                }
+                Some(_) => wrong.push(("sandbox.filesystem", "an object")),
+            }
+        }
+        for (key, expected) in wrong {
+            (self.warnings).push(format!("{path}: {key} must be {expected}; ignored"));
+        }
+    }
+
+    /// `sandbox.filesystem.allowWrite`'s directories, with `~` and relative paths resolved as
+    /// the other paths of this file are.
+    pub(super) fn allow_write(&self) -> Vec<PathBuf> {
+        (self.allow_write.iter())
+            .map(|entry| self.resolve(entry))
+            .collect()
+    }
+
+    /// `sandbox.filesystem.denyRead`'s paths, resolved as `allow_write`'s are.
+    pub(super) fn deny_read(&self) -> Vec<PathBuf> {
+        (self.deny_read.iter())
+            .map(|entry| self.resolve(entry))
+            .collect()
     }
 
     /// Scramjet's `retry` keys, each wrong one named and left at its default.
@@ -2073,14 +2140,12 @@ impl Settings {
             }
             Row::Sandbox => {
                 self.sandbox = self.next_sandbox();
-                self.save(
-                    "sandbox",
-                    json!(self.sandbox.map_or("off", SandboxMode::name)),
-                )
+                let mode = json!(self.sandbox.map_or("off", SandboxMode::name));
+                self.save_sandbox("mode", mode)
             }
             Row::SandboxNetwork => {
                 self.sandbox_network = !self.sandbox_network;
-                self.save("sandboxNetwork", json!(self.sandbox_network))
+                self.save_sandbox("network", json!(self.sandbox_network))
             }
         }
     }
@@ -2132,6 +2197,23 @@ impl Settings {
             if let Value::Object(inner) = entry {
                 inner.insert(key.to_owned(), value);
             }
+        })
+    }
+
+    /// Sets `key` in the `sandbox` object, made from the mode's name or `sandboxNetwork` where
+    /// those set it before.
+    fn save_sandbox(&self, key: &str, value: Value) -> io::Result<()> {
+        self.update(|object| {
+            let mut sandbox = match object.remove("sandbox") {
+                Some(Value::Object(sandbox)) => sandbox,
+                Some(Value::String(mode)) => Map::from_iter([("mode".to_owned(), json!(mode))]),
+                _ => Map::new(),
+            };
+            if let Some(network) = object.remove("sandboxNetwork") {
+                sandbox.entry("network").or_insert(network);
+            }
+            sandbox.insert(key.to_owned(), value);
+            object.insert("sandbox".to_owned(), Value::Object(sandbox));
         })
     }
 
@@ -2433,6 +2515,62 @@ mod tests {
         let wrong = settings_with(&scratch, r#"{"sandbox": true, "sandboxNetwork": "no"}"#);
         assert_eq!((wrong.sandbox, wrong.sandbox_network), (None, true));
         assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);
+
+        let object = settings_with(
+            &scratch,
+            r#"{"sandboxNetwork": true, "sandbox": {"mode": "read-only", "network": false,
+                "filesystem": {"allowWrite": ["~/scratch", "own"], "writable_roots": ["/w"],
+                    "denyRead": ["~/notes/private", "/abs"]}}}"#,
+        );
+        assert!(object.warnings.is_empty(), "{:?}", object.warnings);
+        assert_eq!(object.sandbox, Some(SandboxMode::ReadOnly));
+        assert!(!object.sandbox_network);
+        let home = std::env::home_dir().unwrap();
+        assert_eq!(
+            object.allow_write(),
+            [
+                home.join("scratch"),
+                scratch.0.join("own"),
+                PathBuf::from("/w")
+            ]
+        );
+        assert_eq!(
+            object.deny_read(),
+            [home.join("notes/private"), PathBuf::from("/abs")]
+        );
+        let wrong = settings_with(
+            &scratch,
+            r#"{"sandbox": {"mode": "rw", "network": 1, "filesystem": {"denyRead": "~"}}}"#,
+        );
+        assert_eq!(wrong.sandbox, None);
+        assert!(wrong.deny_read().is_empty());
+        let wrong: Vec<&str> = (wrong.warnings.iter())
+            .map(|warning| warning.rsplit(": ").next().unwrap())
+            .collect();
+        assert_eq!(wrong.len(), 3, "{wrong:?}");
+    }
+
+    #[test]
+    fn settings_save_a_sandbox_given_by_name_into_its_object() {
+        let scratch = Scratch::new("sandbox-saved");
+        let path = scratch.0.join("settings.json");
+        let mut settings = settings_with(
+            &scratch,
+            r#"{"sandbox": "read-only", "sandboxNetwork": false}"#,
+        );
+        settings.cycle(Row::Sandbox).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            json!({"sandbox": {"mode": "workspace-write", "network": false}})
+        );
+        std::fs::write(&path, r#"{"sandbox": {"filesystem": {"denyRead": ["x"]}}}"#).unwrap();
+        settings.cycle(Row::SandboxNetwork).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            json!({"sandbox": {"filesystem": {"denyRead": ["x"]}, "network": true}})
+        );
     }
 
     #[test]
@@ -3454,8 +3592,7 @@ or false; ignored"
                 "compaction": {"enabled": false},
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
-                "sandbox": "off",
-                "sandboxNetwork": false,
+                "sandbox": {"mode": "off", "network": false},
                 "defaultShell": if bash { "bash" } else { "powershell" },
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "never",

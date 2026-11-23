@@ -44,6 +44,7 @@ impl Session {
         );
         self.agent.set_retries(settings.retries());
         self.agent.set_compacting(settings.compacting);
+        self.agent.set_deny_read(settings.deny_read());
         self.agent.set_providers(Providers::read(
             settings.sources(),
             scramjet::agent::login::Logins::user(),
@@ -76,6 +77,7 @@ impl Session {
                             writable: Vec::new(),
                         };
                         warnings = sandbox.grant_remembered(&root);
+                        warnings.extend(sandbox.grant_always(&root, &self.settings.allow_write()));
                         sandbox
                     }
                 };

@@ -1827,6 +1827,76 @@ fn shell_path_and_shell_command_prefix_run_the_agents_commands() {
 }
 
 #[test]
+fn the_settings_sandbox_hides_what_deny_read_names_and_writes_where_allow_write_says() {
+    let binary = &binary();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-deny-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(project.join("private")).unwrap();
+    std::fs::write(project.join("private/plan.md"), "PRIVATE-plan\n").unwrap();
+    std::fs::write(project.join("a.txt"), "plain\n").unwrap();
+    let always = scratch.0.join("always");
+    std::fs::create_dir_all(&always).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let run = |name: &str, input: serde_json::Value, sandbox: serde_json::Value| {
+        let (port, bodies) = serve_call(name, input);
+        let models = serde_json::json!({"providers": {"test": {
+            "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+            "models": [{"id": "claude-test"}],
+        }}});
+        std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+        let settings = serde_json::json!({"hideCredentials": "unattended", "sandbox": sandbox});
+        std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+        let output = program(binary)
+            .args(["--retries", "0", "--no-session", "-p", "hi"])
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{stderr}");
+        let _first = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let second = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+        let messages = second["messages"].as_array().unwrap();
+        let result = &messages.last().unwrap()["content"][0];
+        assert_eq!(result["type"], "tool_result", "{second}");
+        (result["content"].to_string(), stderr)
+    };
+    let denied = serde_json::json!({"filesystem": {"denyRead": [project.join("private")]}});
+    let (result, stderr) = run(
+        "read",
+        serde_json::json!({"path": "private/plan.md"}),
+        denied.clone(),
+    );
+    assert!(
+        result.contains("hidden by the user's settings (sandbox.filesystem.denyRead)"),
+        "{result} {stderr}"
+    );
+    let script = "cat a.txt; ls -A private; cat private/plan.md; echo done";
+    let (result, stderr) = run("bash", serde_json::json!({"command": script}), denied);
+    if result.contains("bwrap") {
+        eprintln!("passed over with the stores hidden: {result}");
+        return;
+    }
+    assert!(
+        result.contains("plain") && result.contains("done"),
+        "{result} {stderr}"
+    );
+    assert!(!result.contains("PRIVATE"), "{result}");
+    let write = format!("echo kept > '{}/f' && echo wrote", always.display());
+    let sandbox = serde_json::json!({"mode": "workspace-write",
+        "filesystem": {"allowWrite": [always]}});
+    let (result, stderr) = run("bash", serde_json::json!({"command": write}), sandbox);
+    assert!(result.contains("wrote"), "{result} {stderr}");
+    assert_eq!(std::fs::read_to_string(always.join("f")).unwrap(), "kept\n");
+}
+
+#[test]
 fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
     let binary = &binary();
     let scratch =

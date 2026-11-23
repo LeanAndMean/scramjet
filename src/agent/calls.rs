@@ -125,6 +125,7 @@ impl Agent {
                 None => self.config.tools.clone(),
             },
             hide_credentials: self.hide_credentials,
+            deny_read: self.deny_read.clone(),
             sandbox: self.config.sandbox.clone(),
             mcp: self.mcp.clone(),
         }
@@ -537,6 +538,7 @@ struct Kit {
     /// The coding tools of this run, which children take by default.
     coding_tools: Vec<String>,
     hide_credentials: bool,
+    deny_read: Vec<PathBuf>,
     sandbox: Option<Sandbox>,
     mcp: Option<Arc<mcp::Servers>>,
 }
@@ -562,6 +564,7 @@ impl Kit {
                 approvals: self.approvals.as_deref(),
                 rates: self.rates.as_deref(),
                 tools: &self.coding_tools,
+                deny_read: &self.deny_read,
             },
             hide_credentials: self.hide_credentials,
             sandbox: self.sandbox.as_ref(),
@@ -620,7 +623,8 @@ impl Tools<'_> {
                     not_hidden(ui);
                     hide = false;
                 }
-                let hidden = hide.then(|| sandbox::Hidden::current(named));
+                let denied = self.parent.deny_read;
+                let hidden = hide.then(|| sandbox::Hidden::current(named, denied));
                 let root = self.parent.root;
                 let progress = &mut |output: &str| ui.tool_output(output);
                 let output = match (self.sandbox, &hidden) {

@@ -647,6 +647,8 @@ pub struct Agent {
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
+    /// The paths the user's settings hide as the credential stores are (`set_deny_read`).
+    deny_read: Vec<PathBuf>,
     /// Whether the turn runs with no one to answer a question (`set_unattended`).
     unattended: bool,
     /// Harness tools this run cannot use, not offered (`leave_out_idle_tools`).
@@ -812,6 +814,7 @@ impl Agent {
             runtime_windows: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
+            deny_read: Vec::new(),
             unattended: false,
             left_out: Vec::new(),
             autopilot,
@@ -1019,7 +1022,7 @@ impl Agent {
     fn instruct(&mut self) {
         let config = &self.config;
         let directory = self.agent_directory.as_deref();
-        let hidden = sandbox::Hidden::stores(config.providers.credential_files());
+        let hidden = sandbox::Hidden::stores(config.providers.credential_files(), &self.deny_read);
         let loaded = instructions::load(&config.prompt, &config.root, directory, &hidden);
         let agents = subagent::registered(&self.sets, &mut Vec::new());
         let mcp = !self.enabled_mcp().is_empty();
@@ -1849,6 +1852,15 @@ impl Agent {
     /// always do. A `!` command, which the user runs, never does.
     pub fn set_hide_credentials(&mut self, hide: bool) {
         self.hide_credentials = hide;
+    }
+
+    /// Hides `paths` (the settings' `sandbox.filesystem.denyRead`) wherever the credential stores
+    /// are hidden, from subagents too, and leaves context files there out of the instructions.
+    pub fn set_deny_read(&mut self, paths: Vec<PathBuf>) {
+        if self.deny_read != paths {
+            self.deny_read = paths;
+            self.instruct();
+        }
     }
 
     /// Whether the turns that follow run with no one to answer (`-p`, a step autopilot runs):

@@ -121,7 +121,7 @@ but to NO_PROXY's hosts and this machine.
                          refuses write and edit;
                          workspace-write lets both change the project but its .git,
                          .scramjet and .agents. Commands reach the network unless the
-                         setting sandboxNetwork is false. It needs bubblewrap (bwrap) and
+                         setting sandbox.network is false. It needs bubblewrap (bwrap) and
                          refuses to start without it; on macOS it runs under Seatbelt
                          (sandbox-exec). `!` commands you type and MCP servers stay outside
   --add-dir DIR          let the sandbox's commands, write and edit change DIR too (its

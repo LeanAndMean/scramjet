@@ -1,7 +1,7 @@
 //! The read-only sandbox that subagents' commands run in: bubblewrap with the whole
 //! filesystem mounted read-only, a private `/tmp` discarded after each command, no network, and
 //! the user's credential stores hidden; the main agent's commands in it too under `--sandbox`,
-//! with the project writable in `workspace-write` and the network as `sandboxNetwork` says; and
+//! with the project writable in `workspace-write` and the network as `sandbox.network` says; and
 //! otherwise the main agent's commands with only the credential stores hidden. On macOS the
 //! same through Seatbelt (`seatbelt`). On Windows, subagents' commands run at the low integrity
 //! level (`os::low_integrity`), which keeps them from changing the user's files on local disks
@@ -143,8 +143,8 @@ const PROTECTED: [&str; 3] = [".git", ".scramjet", ".agents"];
 /// sandbox. A directory in `/tmp` may be granted.
 const SANDBOX_OWN: [&str; 4] = ["/dev", "/proc", "/run", "/tmp"];
 
-/// How the main agent's tools are confined (`--sandbox`, settings `sandbox` and
-/// `sandboxNetwork`), with Codex's names.
+/// How the main agent's tools are confined (`--sandbox`, settings `sandbox.mode` and
+/// `sandbox.network`), with Codex's names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SandboxMode {
     /// Every file read-only to bash, and `write` and `edit` refused.
@@ -250,6 +250,21 @@ impl Sandbox {
                     Err(error) if !error.ends_with("already writable") => Some(format!(
                         "{error}: granted always in this project; /sandbox remove {} forgets it",
                         directory.display()
+                    )),
+                    _ => None,
+                },
+            )
+            .collect()
+    }
+
+    /// Grants the directories the user's settings make writable in every project
+    /// (`sandbox.filesystem.allowWrite`); says what could not be.
+    pub fn grant_always(&mut self, root: &Path, directories: &[PathBuf]) -> Vec<String> {
+        (directories.iter())
+            .filter_map(
+                |directory| match self.grant(root, &directory.to_string_lossy()) {
+                    Err(error) if !error.ends_with("already writable") => Some(format!(
+                        "{error}: in sandbox.filesystem.allowWrite; not writable"
                     )),
                     _ => None,
                 },
@@ -501,15 +516,18 @@ pub(super) struct Hidden {
     /// The `TMUX_TMPDIR` of tmux servers that commands with the stores hidden start.
     #[cfg_attr(windows, allow(dead_code))]
     tmux: Option<PathBuf>,
+    /// Those of `files` and `directories` the user's `denyRead` hides, not holding credentials.
+    denied: Vec<PathBuf>,
 }
 
 impl Hidden {
     /// Those of this user's home directory, Scramjet 1's `auth.json` wherever
     /// `SCRAMJET_CODING_AGENT_DIR` puts it, the own one (`login::auth_file`), the files and
-    /// directories `named` (the providers' `credentialFiles`), and this user's tmux servers.
-    pub(super) fn current(named: &[PathBuf]) -> Hidden {
+    /// directories `named` (the providers' `credentialFiles`), those `denied` (the settings'
+    /// `denyRead`), and this user's tmux servers.
+    pub(super) fn current(named: &[PathBuf], denied: &[PathBuf]) -> Hidden {
         #[cfg_attr(windows, allow(unused_mut))]
-        let mut hidden = Hidden::stores(named);
+        let mut hidden = Hidden::stores(named, denied);
         #[cfg(unix)]
         {
             let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
@@ -520,8 +538,8 @@ impl Hidden {
         hidden
     }
 
-    /// `current`'s credential stores, without the tmux servers.
-    pub(super) fn stores(named: &[PathBuf]) -> Hidden {
+    /// `current`'s credential stores and paths denied, without the tmux servers.
+    pub(super) fn stores(named: &[PathBuf], denied: &[PathBuf]) -> Hidden {
         let own = super::login::auth_file();
         if let Some(own) = &own {
             super::login::make(own);
@@ -530,12 +548,50 @@ impl Hidden {
             .chain(relocated(|name| std::env::var_os(name)))
             .chain(named.iter().cloned())
             .collect();
-        std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also))
+        let mut hidden =
+            std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also));
+        hidden.deny(denied);
+        hidden
+    }
+
+    /// Hides `paths` too, those that exist, each a file or a directory.
+    pub(super) fn deny(&mut self, paths: &[PathBuf]) {
+        for real in paths
+            .iter()
+            .filter_map(|path| std::fs::canonicalize(path).ok())
+        {
+            if (self.files.iter().chain(&self.directories)).any(|hidden| *hidden == real) {
+                continue;
+            }
+            self.identities.extend(identity(&real));
+            match real.is_dir() {
+                true => self.directories.push(real.clone()),
+                false => self.files.push(real.clone()),
+            }
+            self.denied.push(real);
+        }
+        self.files.sort();
+        self.directories.sort();
+    }
+
+    /// Why `path`, found hidden, is: by the user's `denyRead` unless it is in a store.
+    fn refusal(&self, path: &Path) -> String {
+        let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        let store = (self.files.iter().chain(&self.directories))
+            .filter(|hidden| !self.denied.contains(hidden))
+            .any(|store| real.starts_with(store));
+        match store || !self.denied.iter().any(|denied| real.starts_with(denied)) {
+            true => format!("{}: hidden, as it holds credentials", path.display()),
+            false => format!(
+                "{}: hidden by the user's settings (sandbox.filesystem.denyRead)",
+                path.display()
+            ),
+        }
     }
 
     /// The stores that exist, files and directories, by their real paths, but those in another.
     pub(super) fn listed(named: &[PathBuf]) -> Vec<PathBuf> {
-        let hidden = Hidden::stores(named);
+        let hidden = Hidden::stores(named, &[]);
         let (files, directories) = hidden.mounted();
         let mut listed: Vec<PathBuf> = files.chain(directories).cloned().collect();
         listed.sort();
@@ -618,6 +674,7 @@ impl Hidden {
             files,
             directories,
             tmux: None,
+            denied: Vec::new(),
         }
     }
 
@@ -634,10 +691,7 @@ impl Hidden {
             }
         };
         match found {
-            true => Err(format!(
-                "{}: hidden, as it holds credentials",
-                path.display()
-            )),
+            true => Err(self.refusal(path)),
             false => Ok(()),
         }
     }
@@ -670,10 +724,7 @@ impl Hidden {
         let failed = |error: std::io::Error| format!("{}: {error}", path.display());
         let file = file.map_err(failed)?;
         match self.holds(&file, path).map_err(failed)? {
-            true => Err(format!(
-                "{}: hidden, as it holds credentials",
-                path.display()
-            )),
+            true => Err(self.refusal(path)),
             false => Ok(file),
         }
     }
@@ -1077,7 +1128,7 @@ pub(super) fn available() -> Result<(), String> {
 /// Whether commands can run in the sandbox here; otherwise why not.
 #[cfg(unix)]
 pub(super) fn available() -> Result<(), String> {
-    let output = command(Path::new("/"), "true", &Hidden::current(&[]))?
+    let output = command(Path::new("/"), "true", &Hidden::current(&[], &[]))?
         .stdin(Stdio::null())
         .output()
         .map_err(|error| format!("cannot start {PROGRAM}: {error}"))?;
@@ -1115,7 +1166,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         let ran = run_sandboxed(
             &root,
             &script,
-            &super::Hidden::current(&[]),
+            &super::Hidden::current(&[], &[]),
             None,
             &cancel,
             &mut |_| {},
@@ -1709,6 +1760,71 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
     }
 
     #[test]
+    fn paths_denied_are_hidden_as_stores_but_said_to_be_the_users_choice() {
+        let home = std::env::temp_dir().join(format!("scramjet-denied-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        for directory in ["notes/.ssh", "project"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for (file, text) in [
+            ("notes/plan.md", "PRIVATE-plan\n"),
+            ("diary.txt", "PRIVATE-diary\n"),
+            ("project/a.txt", "plain\n"),
+        ] {
+            std::fs::write(home.join(file), text).unwrap();
+        }
+        let mut hidden = super::Hidden::under(&home, vec![home.join("notes/.ssh")]);
+        let denied = ["notes", "diary.txt", "absent"].map(|name| home.join(name));
+        hidden.deny(&denied);
+        let script = "cat a.txt; ls -A ../notes; cat ../diary.txt; grep -r PRIVATE ..; echo done";
+        let root = home.join("project");
+        for mut process in [
+            super::command(&root, script, &hidden).unwrap(),
+            super::hiding(&root, script, &hidden).unwrap(),
+        ] {
+            let output = process.output().unwrap();
+            let errors = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "plain\ndone\n",
+                "{errors}"
+            );
+            assert!(!errors.contains("PRIVATE"), "{errors}");
+        }
+        for path in ["notes/plan.md", "diary.txt"] {
+            let refused = hidden.check(&home.join(path)).unwrap_err();
+            assert!(
+                refused.ends_with("(sandbox.filesystem.denyRead)"),
+                "{refused}"
+            );
+        }
+        let store = hidden.check(&home.join("notes/.ssh")).unwrap_err();
+        assert!(
+            store.ends_with("hidden, as it holds credentials"),
+            "{store}"
+        );
+        assert!(hidden.check(&root.join("a.txt")).is_ok());
+    }
+
+    #[test]
+    fn directories_allowed_always_are_granted_and_those_that_cannot_be_said() {
+        let scratch = std::env::temp_dir().join(format!("scramjet-always-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(scratch.clone());
+        let (root, other) = (scratch.join("project"), scratch.join("scratch"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let mut sandbox = super::Sandbox {
+            mode: super::SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        let said = sandbox.grant_always(&root, &[other.clone(), root.clone(), scratch.join("x")]);
+        assert_eq!(sandbox.writable, [std::fs::canonicalize(&other).unwrap()]);
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].ends_with("in sandbox.filesystem.allowWrite; not writable"));
+    }
+
+    #[test]
     fn cargos_hugging_faces_and_copilots_stores_are_hidden_where_their_variables_put_them() {
         let home = std::env::temp_dir().join(format!("scramjet-more-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
@@ -2043,7 +2159,7 @@ TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 30
             let ran = run_sandboxed(
                 std::path::Path::new("/"),
                 &command,
-                &super::Hidden::current(&[]),
+                &super::Hidden::current(&[], &[]),
                 None,
                 &cancel,
                 &mut |_| {},

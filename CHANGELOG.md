@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.296.0 — The sandbox setting takes paths to hide and to write
+
+### Added
+
+- The `sandbox` setting is now an object, as in Claude Code: `{"mode": "workspace-write", "network": false, "filesystem": {"allowWrite": [...], "denyRead": [...]}}`. `allowWrite` (or Codex's `writable_roots`) makes directories writable in the sandbox in every project; `denyRead` hides files and directories from the agent's commands, `read`, `grep`, `find` and its subagents wherever the credential stores are hidden, and a refused read says your settings hide it. A mode's name alone and `sandboxNetwork` still work, and `/settings` moves them into the object when it saves.
+
 ## 2.295.1 — A too-old or missing git says where to get one
 
 ### Fixed
