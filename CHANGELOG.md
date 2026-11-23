@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.295.1 — A too-old or missing git says where to get one
+
+### Fixed
+
+- When a git command fails and git is older than 2.20, or git is not installed, `install`, `update` and the start's package clone now say where to get a current one: Git for Windows' download page on Windows, `xcode-select --install` or `brew install git` on macOS, the system's package manager elsewhere. Before, an old git only said that updating it might help.
+
 ## 2.295.0 — Files Scramjet cannot write say how to give them back
 
 ### Changed

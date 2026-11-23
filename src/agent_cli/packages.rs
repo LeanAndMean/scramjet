@@ -241,9 +241,9 @@ fn git(directory: Option<&Path>) -> Command {
 /// its version: an old Git for Windows's HTTPS helper crashes on newer CPUs without a word.
 fn run(command: &mut Command, what: &str) -> Result<String, String> {
     match command.stdout(Stdio::piped()).output() {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            Err("git is not installed; packages from git need it".into())
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(format!(
+            "git is not installed; packages from git need it: {GET_GIT}"
+        )),
         Err(error) => Err(format!("git: {error}")),
         Ok(output) if !output.status.success() => Err(failed(what, &output.status, version())),
         Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned()),
@@ -265,6 +265,15 @@ fn version() -> Option<String> {
 /// Below this, git is old enough that updating it is the first thing to try.
 const OLD_GIT: (u32, u32) = (2, 20);
 
+/// Where to get a newer git.
+const GET_GIT: &str = if cfg!(windows) {
+    "install the newest Git for Windows from https://git-scm.com/downloads/win"
+} else if cfg!(target_os = "macos") {
+    "run xcode-select --install, or brew install git"
+} else {
+    "install a current git with the system's package manager"
+};
+
 fn failed(what: &str, status: &impl std::fmt::Display, version: Option<String>) -> String {
     let Some(version) = version else {
         return format!("git {what} failed ({status})");
@@ -274,12 +283,10 @@ fn failed(what: &str, status: &impl std::fmt::Display, version: Option<String>) 
         (Some(major), Some(minor)) => (major, minor) < OLD_GIT,
         _ => false,
     };
-    let hint = if old {
-        "; this git is old, and updating it may fix this"
-    } else {
-        ""
-    };
-    format!("git {what} failed ({status}; git {version}{hint})")
+    if old {
+        return format!("git {what} failed ({status}); git {version} is too old: {GET_GIT}");
+    }
+    format!("git {what} failed ({status}; git {version})")
 }
 
 #[cfg(test)]
@@ -299,8 +306,9 @@ mod tests {
         let status = "exit code: 128";
         assert_eq!(
             failed("clone", &status, Some("2.10.0.windows.1".into())),
-            "git clone failed (exit code: 128; git 2.10.0.windows.1; \
-             this git is old, and updating it may fix this)"
+            format!(
+                "git clone failed (exit code: 128); git 2.10.0.windows.1 is too old: {GET_GIT}"
+            )
         );
         assert_eq!(
             failed("clone", &status, Some("2.56.0".into())),
