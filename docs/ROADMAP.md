@@ -98,6 +98,8 @@ Keep transport/runtime and native TUI work moving in parallel where they are ind
 
 ## S5 — Capacity and admission hardening
 
+**Reframed at the steer of 2026-11-23** ([design](DESIGN.md#scale-through-acp-sessions-and-an-external-runner-steer-of-2026-11-23)): the scale work is cheap, isolated, configurable `scramjet acp` sessions driven by an external runner, and a dispatch backend handing children to it. The target of about 8,000 requests in flight in one process, and S3's and S5's admission and adaptive control inside the process, are dropped: overload control is the client's. The text below is kept for its measurement discipline (declared workload, what was measured, no claims beyond it), which still holds for what this repository measures.
+
 **Demonstration:** reproducible sustained high-concurrency workloads with responsive control, bounded resources, accountable failures, and explainable admission adjustments.
 
 - Progress through measured concurrency levels toward approximately 8,000 actual in-flight requests on a declared host/workload. Distinguish synthetic transport capacity, stateful agent capacity, and actual inference-server behavior.
