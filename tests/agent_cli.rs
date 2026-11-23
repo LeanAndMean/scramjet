@@ -2016,6 +2016,68 @@ fn subagents_take_the_main_agents_hidden_paths_and_their_own_network_from_the_se
 }
 
 #[test]
+#[cfg(unix)]
+fn subagents_reach_keeps_the_main_agents_writable_roots() {
+    let binary = &binary();
+    // Not under /tmp, which the sandbox replaces: under /home, which the reach hides.
+    let scratch = Scratch(
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("scramjet-cli-child-reach-{}", std::process::id())),
+    );
+    let (project, home) = (scratch.0.join("project"), scratch.0.join("home"));
+    let (extra, other) = (home.join("extra"), home.join("other"));
+    for directory in [&project, &extra, &other] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::write(extra.join("note.md"), "EXTRA-note\n").unwrap();
+    std::fs::write(other.join("note.md"), "OTHER-note\n").unwrap();
+    let config = scratch.0.join("config");
+    let agents = config.join("scramjet/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    let agent = "---\nname: helper\ndescription: Helps.\ntools: Read, Bash\n---\n\nHelp.\n";
+    std::fs::write(agents.join("helper.md"), agent).unwrap();
+    let script = format!(
+        "cat {} {} 2>&1; echo DONE-$((1+1))",
+        extra.join("note.md").display(),
+        other.join("note.md").display()
+    );
+    let task = serde_json::json!({"agent": "helper", "task": "look"});
+    let mut replies = call_events("subagent", task);
+    replies.splice(
+        1..1,
+        call_events("bash", serde_json::json!({"command": script})),
+    );
+    let (port, bodies) = serve_events(replies);
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({
+        "blockReadsOutsideWorkingDirectories": true,
+        "sandbox": {"mode": "workspace-write", "filesystem": {"allowWrite": [extra]}},
+    });
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session", "-p", "hi"])
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    let mut bodies = (0..4).map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap());
+    let answered = bodies.nth(2).unwrap();
+    assert!(answered.contains("DONE-2"), "{answered} {stderr}");
+    assert!(answered.contains("EXTRA-note"), "{answered}");
+    assert!(!answered.contains("OTHER-note"), "{answered}");
+}
+
+#[test]
 fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
     let binary = &binary();
     let scratch =

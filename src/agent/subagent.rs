@@ -645,6 +645,8 @@ pub(super) struct Parent<'a> {
     pub reads: &'a sandbox::Reads,
     /// How children's tools are confined: their network, and what is hidden and re-opened.
     pub subagents: &'a sandbox::Subagents,
+    /// The agent's writable directories (`Sandbox::writable_roots`), which children's reach keeps.
+    pub writable: Vec<PathBuf>,
 }
 
 impl Parent<'_> {
@@ -1265,6 +1267,7 @@ fn run_child(
     let reads = (parent.subagents.reads).opening(
         [parent.root.to_owned(), job.cwd.clone()]
             .into_iter()
+            .chain(parent.writable.iter().cloned())
             .chain(parent.given_to_read()),
     );
     let instructions = instructions::child(

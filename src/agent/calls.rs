@@ -568,6 +568,8 @@ impl Kit {
                 tools: &self.coding_tools,
                 reads: &self.reads,
                 subagents: &self.subagents,
+                writable: (self.sandbox.as_ref())
+                    .map_or_else(Vec::new, |sandbox| sandbox.writable_roots(&self.root)),
             },
             hide_credentials: self.hide_credentials,
             sandbox: self.sandbox.as_ref(),

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.302.1 — Subagents read the writable directories
+
+### Fixed
+
+- With `blockReadsOutsideWorkingDirectories`, subagents can read the directories the main agent may write (`allowWrite`, `/add-dir`), as the main agent can.
+
 ## 2.302.0 — The project-only reach in /settings
 
 ### Added
