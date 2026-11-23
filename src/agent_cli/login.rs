@@ -156,6 +156,8 @@ impl Interactive {
         let shown = program.name.clone();
         let (telling, heard) = mpsc::channel();
         let [changed, done, cancel] = [(); 3].map(|()| Arc::new(AtomicBool::new(false)));
+        let before =
+            super::programs::BeforeLogin::needed(&self.session.settings, program.directory());
         let finishing = {
             let (logins, changed, done, cancel) = (
                 logins.clone(),
@@ -164,10 +166,15 @@ impl Interactive {
                 cancel.clone(),
             );
             std::thread::spawn(move || {
-                let finished = program.login(&logins, &cancel, |said| {
+                let tell = |said| {
                     let _ = telling.send(said);
                     changed.store(true, Ordering::SeqCst);
-                });
+                };
+                let finished = match before {
+                    Some(before) => before.download(|what| tell(Said::Say(what))),
+                    None => Ok(()),
+                };
+                let finished = finished.and_then(|()| program.login(&logins, &cancel, tell));
                 done.store(true, Ordering::SeqCst);
                 changed.store(true, Ordering::SeqCst);
                 finished

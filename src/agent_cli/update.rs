@@ -12,7 +12,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
     thread::JoinHandle,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -318,22 +318,61 @@ fn run_gh<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         .map(|arg| arg.as_ref().to_string_lossy())
         .collect::<Vec<_>>()
         .join(" ");
-    let output = Command::new(gh)
-        .args(&args)
-        .stdin(Stdio::null())
-        .stderr(Stdio::inherit())
-        .output();
+    let output = Command::new(gh).args(&args).stdin(Stdio::null()).output();
     match output {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Err(format!(
-            "downloads from {repository}'s releases go through GitHub's CLI while it is private: \
-             install `gh` and run `gh auth login` with an account that can read {repository}"
+            "GitHub's CLI, `gh`, is not installed, and downloads from {repository}'s releases go \
+             through it while it is private: install it (https://cli.github.com), then run \
+             `gh auth login` with an account that can read {repository}"
         )),
         Err(error) => Err(format!("gh: {error}")),
-        Ok(output) if !output.status.success() => Err(format!(
-            "gh {what} failed; `gh auth status` shows whether it is logged in to an account that \
-             can read {repository}"
-        )),
+        Ok(output) if !output.status.success() => Err(gh_failed(gh, repository, &what, &output)),
         Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+    }
+}
+
+/// Why `gh` failed on `repository`, with the step that fixes it: not signed in, or signed in to
+/// an account that cannot read it; else what `gh` said.
+fn gh_failed(gh: &Path, repository: &str, what: &str, failed: &Output) -> String {
+    let said = |output: &Output| String::from_utf8_lossy(&output.stderr).into_owned();
+    // gh exits with 4 when it has no login; a token no longer valid answers 401.
+    let signed_out = |output: &Output| {
+        let said = said(output);
+        output.status.code() == Some(4)
+            || said.contains("HTTP 401")
+            || said.contains("401 Unauthorized")
+    };
+    let ask = |args: &[&str]| {
+        Command::new(gh)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .ok()
+    };
+    let user = match signed_out(failed) {
+        true => None,
+        false => ask(&["api", "user", "--jq", ".login"]),
+    };
+    if signed_out(failed) || user.as_ref().is_some_and(signed_out) {
+        return format!(
+            "`gh` is not signed in to GitHub: run `gh auth login`, with an account that can read \
+             {repository}"
+        );
+    }
+    if let Some(user) = user.filter(|user| user.status.success()) {
+        let login = String::from_utf8_lossy(&user.stdout).trim().to_owned();
+        let read = ask(&["api", &format!("repos/{repository}"), "--silent"]);
+        if read.is_some_and(|read| !read.status.success() && said(&read).contains("HTTP 404")) {
+            return format!(
+                "`gh` is signed in as {login}, who cannot read {repository}: run `gh auth login` \
+                 with an account that can, or ask its owners for access"
+            );
+        }
+    }
+    let said = said(failed);
+    match said.lines().map(str::trim).rfind(|line| !line.is_empty()) {
+        Some(line) => format!("gh {what} failed: {line}"),
+        None => format!("gh {what} failed ({})", failed.status),
     }
 }
 
@@ -786,18 +825,53 @@ mod tests {
     }
 
     #[test]
-    fn gh_missing_or_failing_says_what_to_do() {
+    fn gh_missing_says_to_install_it() {
         let missing = download(Path::new("/nonexistent/gh"), "o/r", "v1", "a.tar.gz");
         assert!(
-            missing
-                .unwrap_err()
-                .contains("install `gh` and run `gh auth login`")
+            (missing.unwrap_err())
+                .contains("install it (https://cli.github.com), then run `gh auth login`")
         );
-        let failing = download(Path::new("false"), "o/r", "v1", "a.tar.gz");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn gh_failing_says_why_and_the_step_that_fixes_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new().unwrap();
+        // Each `gh`: what `release view`, `api user` and `api repos/o/r` print and exit with.
+        let gh = |name: &str, release: &str, user: &str, repository: &str| {
+            let path = scratch.0.join(name);
+            let script = format!(
+                "#!/bin/sh\ncase \"$1 $2\" in\n'release view') {release};;\n'api user') {user};;\n\
+                 'api repos/o/r') {repository};;\nesac\nexit 9\n"
+            );
+            fs::write(&path, script).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            download(&path, "o/r", "v1", "a.tar.gz").unwrap_err()
+        };
+        let not_signed_in = "`gh` is not signed in to GitHub: run `gh auth login`, with an \
+                             account that can read o/r";
+        let no_login =
+            "echo 'To get started with GitHub CLI, please run:  gh auth login' >&2; exit 4";
+        assert_eq!(gh("none", no_login, "exit 9", "exit 9"), not_signed_in);
+        let bad = "echo 'gh: Bad credentials (HTTP 401)' >&2; exit 1";
+        let failed = "echo 'non-200 OK status code: 404 Not Found' >&2; exit 1";
+        assert_eq!(gh("expired", failed, bad, "exit 9"), not_signed_in);
+        let me = "echo me; exit 0";
+        let unread = "echo 'gh: Not Found (HTTP 404)' >&2; exit 1";
         assert_eq!(
-            failing.unwrap_err(),
-            "gh release view failed; `gh auth status` shows whether it is logged in to an \
-             account that can read o/r"
+            gh("other", failed, me, unread),
+            "`gh` is signed in as me, who cannot read o/r: run `gh auth login` with an account \
+             that can, or ask its owners for access"
+        );
+        let untagged = "echo 'release not found' >&2; exit 1";
+        assert_eq!(
+            gh("untagged", untagged, me, "exit 0"),
+            "gh release view failed: release not found"
+        );
+        assert_eq!(
+            gh("silent", "exit 1", me, "exit 0"),
+            "gh release view failed (exit status: 1)"
         );
     }
 

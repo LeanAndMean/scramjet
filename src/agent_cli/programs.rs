@@ -36,6 +36,41 @@ pub(super) fn missing(directory: &Path) -> Vec<String> {
         .collect()
 }
 
+/// A package's programs to download before a login through one of them.
+pub(super) struct BeforeLogin {
+    package: String,
+    clone: PathBuf,
+}
+
+impl BeforeLogin {
+    /// For a login through a program that runs in `directory`, when the package bringing it
+    /// lacks a program it takes from its release.
+    pub(super) fn needed(settings: &super::settings::Settings, directory: &Path) -> Option<Self> {
+        let root = settings.clones().ok()?;
+        let package = (settings.packages.iter())
+            .find(|package| directory.starts_with(package.clone_directory(root)))?;
+        let clone = package.clone_directory(root);
+        (!missing(&clone).is_empty()).then(|| Self {
+            package: package.written.clone(),
+            clone,
+        })
+    }
+
+    /// Downloads them, `say` hearing so; why it could not.
+    pub(super) fn download(self, say: impl FnOnce(String)) -> Result<(), String> {
+        let package = &self.package;
+        say(format!("Downloading {package}'s program from its release…"));
+        match fetch(&self.clone).1 {
+            failed if failed.is_empty() => Ok(()),
+            failed => Err(format!(
+                "{package}'s program has not been downloaded from its release, and could not be \
+                 now: {}",
+                failed.join("; ")
+            )),
+        }
+    }
+}
+
 fn fetch_with(gh: &Path, directory: &Path, arch: &str) -> (Vec<String>, Vec<String>) {
     let (mut done, mut failed) = (Vec::new(), Vec::new());
     let wanted: Vec<Wanted> = sets_in(directory)

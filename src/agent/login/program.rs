@@ -173,6 +173,11 @@ impl LoginProgram {
         Ok(credential)
     }
 
+    /// The directory the program runs in, its `models.json`'s.
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
     /// The program, as problems name it.
     fn shown(&self) -> &str {
         &self.command[0]

@@ -1,6 +1,7 @@
 //! Sign-in over ACP (`docs/RPC.md` section 6): `authMethods` are `/login`'s own sign-ins and
 //! the packages' login programs; `authenticate` runs one, each page it opens sent to the client
 //! as a URL-mode elicitation; `logout` removes what they saved. Tokens stay in `auth.json`.
+use super::super::programs::BeforeLogin;
 use super::{INTERNAL_ERROR, INVALID_PARAMS, Job, Out, REQUEST_CANCELLED, Settings, lock};
 use scramjet::agent::login::{self, LoginProgram, Said};
 use scramjet::agent::{Providers, codex, copilot};
@@ -234,6 +235,10 @@ fn sign_in(
         Method::Program(program) => {
             let mut said = None;
             let cancel = pages.cancel.clone();
+            let before = BeforeLogin::needed(&Settings::load(), program.directory());
+            if let Some(before) = before {
+                before.download(drop)?;
+            }
             program.login(logins, &cancel, |heard| match heard {
                 Said::Open(url) => {
                     let message = (said.take())

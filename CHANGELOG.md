@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.294.0 — A package's download says why it failed
+
+### Changed
+
+- When a package's program cannot be downloaded from its release, `install`, `update` and `/login` now say why and the one step that fixes it: `gh` not installed (where to get it), not signed in (`gh auth login`), or signed in to an account that cannot read the package's repository (naming the account); otherwise what `gh` said, where they used to say only to check `gh auth status`.
+- `/login` to a package's provider whose program has not been downloaded yet downloads it first, as the ACP sign-in does, instead of failing on the missing file.
+
 ## 2.293.0 — `scramjet-light` on a light terminal
 
 ### Changed
