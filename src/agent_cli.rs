@@ -483,7 +483,7 @@ fn start(
         session_dir,
     };
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
-    agent.set_deny_read(settings.deny_read());
+    agent.set_reads(settings.reads());
     if let Some(skipped) = interactive::skipped_lines(&agent) {
         let path = agent.session_path().display();
         warnings.push(format!("session {path}: {skipped}"));

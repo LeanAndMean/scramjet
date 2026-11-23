@@ -1827,13 +1827,15 @@ fn shell_path_and_shell_command_prefix_run_the_agents_commands() {
 }
 
 #[test]
-fn the_settings_sandbox_hides_what_deny_read_names_and_writes_where_allow_write_says() {
+fn the_settings_sandbox_hides_what_deny_read_names_but_allow_read_and_writes_where_allow_write_says()
+ {
     let binary = &binary();
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-deny-{}", std::process::id())));
     let project = scratch.0.join("project");
-    std::fs::create_dir_all(project.join("private")).unwrap();
+    std::fs::create_dir_all(project.join("private/shared")).unwrap();
     std::fs::write(project.join("private/plan.md"), "PRIVATE-plan\n").unwrap();
+    std::fs::write(project.join("private/shared/ok.md"), "SHARED-ok\n").unwrap();
     std::fs::write(project.join("a.txt"), "plain\n").unwrap();
     let always = scratch.0.join("always");
     std::fs::create_dir_all(&always).unwrap();
@@ -1867,7 +1869,9 @@ fn the_settings_sandbox_hides_what_deny_read_names_and_writes_where_allow_write_
         assert_eq!(result["type"], "tool_result", "{second}");
         (result["content"].to_string(), stderr)
     };
-    let denied = serde_json::json!({"filesystem": {"denyRead": [project.join("private")]}});
+    let filesystem = serde_json::json!({"denyRead": [project.join("private")],
+        "allowRead": [project.join("private/shared")]});
+    let denied = serde_json::json!({"filesystem": filesystem});
     let (result, stderr) = run(
         "read",
         serde_json::json!({"path": "private/plan.md"}),
@@ -1877,7 +1881,20 @@ fn the_settings_sandbox_hides_what_deny_read_names_and_writes_where_allow_write_
         result.contains("hidden by the user's settings (sandbox.filesystem.denyRead)"),
         "{result} {stderr}"
     );
-    let script = "cat a.txt; ls -A private; cat private/plan.md; echo done";
+    let (result, stderr) = run(
+        "read",
+        serde_json::json!({"path": "private/shared/ok.md"}),
+        denied.clone(),
+    );
+    assert!(result.contains("SHARED-ok"), "{result} {stderr}");
+    let (result, stderr) = run(
+        "grep",
+        serde_json::json!({"pattern": "SHARED|PRIVATE"}),
+        denied.clone(),
+    );
+    assert!(result.contains("SHARED-ok"), "{result} {stderr}");
+    assert!(!result.contains("PRIVATE"), "{result}");
+    let script = "cat a.txt; ls -A private; cat private/plan.md private/shared/ok.md; echo done";
     let (result, stderr) = run("bash", serde_json::json!({"command": script}), denied);
     if result.contains("bwrap") {
         eprintln!("passed over with the stores hidden: {result}");
@@ -1888,12 +1905,19 @@ fn the_settings_sandbox_hides_what_deny_read_names_and_writes_where_allow_write_
         "{result} {stderr}"
     );
     assert!(!result.contains("PRIVATE"), "{result}");
-    let write = format!("echo kept > '{}/f' && echo wrote", always.display());
-    let sandbox = serde_json::json!({"mode": "workspace-write",
-        "filesystem": {"allowWrite": [always]}});
+    assert!(result.contains("SHARED-ok"), "{result}");
+    let write = format!(
+        "echo kept > '{}/f' && echo kept > private/shared/g && echo wrote",
+        always.display()
+    );
+    let mut filesystem = filesystem;
+    filesystem["allowWrite"] = serde_json::json!([always]);
+    let sandbox = serde_json::json!({"mode": "workspace-write", "filesystem": filesystem});
     let (result, stderr) = run("bash", serde_json::json!({"command": write}), sandbox);
     assert!(result.contains("wrote"), "{result} {stderr}");
     assert_eq!(std::fs::read_to_string(always.join("f")).unwrap(), "kept\n");
+    let reopened = project.join("private/shared/g");
+    assert_eq!(std::fs::read_to_string(reopened).unwrap(), "kept\n");
 }
 
 #[test]

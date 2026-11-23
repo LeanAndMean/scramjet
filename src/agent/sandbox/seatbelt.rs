@@ -83,19 +83,51 @@ impl Profile {
 
     /// Hides `files` and `directories` from reads and writes, and the Unix sockets in the
     /// directories (tmux's) from connections, with the directories above each kept from being
-    /// renamed, which would move it out of its path.
-    fn hide(&mut self, files: &[&PathBuf], directories: &[&PathBuf]) {
-        for file in files {
-            let filter = self.path("literal", file);
-            self.rule(&format!("(deny file-read* file-write* {filter})"));
-        }
-        for directory in directories {
-            let filter = self.path("subpath", directory);
-            self.rule(&format!("(deny file-read* file-write* {filter})"));
-            let filter = self.path("subpath", directory);
-            self.rule(&format!(
-                "(deny network-outbound (remote unix-socket {filter}))"
-            ));
+    /// renamed, which would move it out of its path. What `hidden.reopened` names in them is
+    /// readable again, writable if so marked but for `protected`; the shallower rule first, as
+    /// a later one wins.
+    fn hide(&mut self, hidden: &Hiding, protected: &[PathBuf]) {
+        let (files, directories) = (&hidden.files, &hidden.directories);
+        let mut rules: Vec<(&PathBuf, u8)> = (files.iter().map(|path| (*path, 0)))
+            .chain(directories.iter().map(|path| (*path, 1)))
+            .chain(
+                hidden
+                    .reopened
+                    .iter()
+                    .map(|(path, writable)| (*path, 2 + u8::from(*writable))),
+            )
+            .collect();
+        rules.sort_by_key(|(path, _)| path.components().count());
+        for (path, kind) in rules {
+            match kind {
+                0 => {
+                    let filter = self.path("literal", path);
+                    self.rule(&format!("(deny file-read* file-write* {filter})"));
+                }
+                1 => {
+                    let filter = self.path("subpath", path);
+                    self.rule(&format!("(deny file-read* file-write* {filter})"));
+                    let filter = self.path("subpath", path);
+                    self.rule(&format!(
+                        "(deny network-outbound (remote unix-socket {filter}))"
+                    ));
+                }
+                _ => {
+                    let filter = self.path("subpath", path);
+                    self.rule(&format!("(allow file-read* {filter})"));
+                    if kind == 3 {
+                        let mut parts = vec![self.path("subpath", path)];
+                        for kept in protected.iter().filter(|kept| kept.starts_with(path)) {
+                            parts.push(format!("(require-not {})", self.path("literal", kept)));
+                            parts.push(format!("(require-not {})", self.path("subpath", kept)));
+                        }
+                        self.rule(&format!(
+                            "(allow file-write* (require-all {}))",
+                            parts.join(" ")
+                        ));
+                    }
+                }
+            }
         }
         let above: std::collections::BTreeSet<&Path> = (files.iter().chain(directories))
             .flat_map(|store| store.ancestors().skip(1))
@@ -136,7 +168,16 @@ pub(super) struct Closed<'a> {
     pub protected: Vec<PathBuf>,
     pub anchored: Vec<PathBuf>,
     pub network: bool,
-    pub hidden: (Vec<&'a PathBuf>, Vec<&'a PathBuf>),
+    pub hidden: Hiding<'a>,
+}
+
+/// The files and directories a profile hides, and what it re-opens in them (`allowRead`), each
+/// marked writable or not.
+#[derive(Default)]
+pub(super) struct Hiding<'a> {
+    pub files: Vec<&'a PathBuf>,
+    pub directories: Vec<&'a PathBuf>,
+    pub reopened: Vec<(&'a PathBuf, bool)>,
 }
 
 /// `sandbox-exec` with the closed profile `closed`, up to the program to run, in `root`.
@@ -162,7 +203,7 @@ pub(super) fn closed(root: &Path, closed: Closed) -> Command {
     if closed.network {
         profile.text.push_str(NETWORK);
     }
-    profile.hide(&closed.hidden.0, &closed.hidden.1);
+    profile.hide(&closed.hidden, &closed.protected);
     for directory in &closed.anchored {
         profile.anchor(directory);
     }
@@ -171,10 +212,10 @@ pub(super) fn closed(root: &Path, closed: Closed) -> Command {
 }
 
 /// `sandbox-exec` letting everything through but `hidden`, up to the program to run, in `root`.
-pub(super) fn open(root: &Path, hidden: (Vec<&PathBuf>, Vec<&PathBuf>)) -> Command {
+pub(super) fn open(root: &Path, hidden: Hiding) -> Command {
     let mut profile = Profile::default();
     profile.rule("(version 1)\n(allow default)");
-    profile.hide(&hidden.0, &hidden.1);
+    profile.hide(&hidden, &[]);
     profile.command(root)
 }
 
@@ -237,7 +278,11 @@ mod tests {
                 protected: Vec::new(),
                 anchored: Vec::new(),
                 network: false,
-                hidden: (vec![&file], vec![&directory]),
+                hidden: Hiding {
+                    files: vec![&file],
+                    directories: vec![&directory],
+                    reopened: Vec::new(),
+                },
             },
         );
         assert_eq!(process.get_current_dir(), Some(Path::new("/w")));
@@ -265,6 +310,42 @@ mod tests {
     }
 
     #[test]
+    fn a_path_reopened_in_a_hidden_directory_is_allowed_after_it_and_what_it_hides_after_that() {
+        let (notes, shared) = (
+            PathBuf::from("/Users/u/notes"),
+            PathBuf::from("/Users/u/notes/shared"),
+        );
+        let store = shared.join(".netrc");
+        let process = closed(
+            Path::new("/w"),
+            Closed {
+                writable: vec!["/Users/u".into()],
+                protected: vec![shared.join(".git")],
+                anchored: Vec::new(),
+                network: false,
+                hidden: Hiding {
+                    files: vec![&store],
+                    directories: vec![&notes],
+                    reopened: vec![(&shared, true)],
+                },
+            },
+        );
+        let text = spelled(&process);
+        let order = [
+            "(deny file-read* file-write* (subpath \"/Users/u/notes\"))",
+            "(allow file-read* (subpath \"/Users/u/notes/shared\"))",
+            "(allow file-write* (require-all (subpath \"/Users/u/notes/shared\") \
+                (require-not (literal \"/Users/u/notes/shared/.git\")) \
+                (require-not (subpath \"/Users/u/notes/shared/.git\"))))",
+            "(deny file-read* file-write* (literal \"/Users/u/notes/shared/.netrc\"))",
+        ];
+        let places: Vec<usize> = (order.iter())
+            .map(|rule| (text.find(rule)).unwrap_or_else(|| panic!("{rule} in\n{text}")))
+            .collect();
+        assert!(places.is_sorted(), "{order:?} in this order in\n{text}");
+    }
+
+    #[test]
     fn a_workspace_profile_writes_the_project_but_what_it_protects_and_shares_the_network() {
         let root = PathBuf::from("/Users/u/my \"project\"");
         let process = closed(
@@ -274,7 +355,7 @@ mod tests {
                 protected: vec![root.join(".git"), root.join(".agents")],
                 anchored: vec![root.clone()],
                 network: true,
-                hidden: (Vec::new(), Vec::new()),
+                hidden: Hiding::default(),
             },
         );
         let text = spelled(&process);
@@ -372,7 +453,11 @@ mod tests {
     #[test]
     fn an_open_profile_only_hides_the_stores() {
         let tmux = PathBuf::from("/private/tmp/tmux-501");
-        let text = spelled(&open(Path::new("/w"), (Vec::new(), vec![&tmux])));
+        let hidden = Hiding {
+            directories: vec![&tmux],
+            ..Hiding::default()
+        };
+        let text = spelled(&open(Path::new("/w"), hidden));
         assert!(text.starts_with("(version 1)\n(allow default)\n"), "{text}");
         assert!(text.contains("(deny file-read* file-write* (subpath \"/private/tmp/tmux-501\"))"));
         assert!(text.contains(

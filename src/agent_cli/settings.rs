@@ -534,6 +534,8 @@ pub(super) struct Settings {
     allow_write: Vec<String>,
     /// `sandbox.filesystem.denyRead`, as written.
     deny_read: Vec<String>,
+    /// `sandbox.filesystem.allowRead`, as written.
+    allow_read: Vec<String>,
     pub(super) steering_mode: Delivery,
     pub(super) follow_up_mode: Delivery,
     /// The directories of the installed command sets: `commandSets`' (a relative one is
@@ -677,6 +679,7 @@ impl Settings {
             sandbox_network: true,
             allow_write: Vec::new(),
             deny_read: Vec::new(),
+            allow_read: Vec::new(),
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
@@ -1104,9 +1107,10 @@ impl Settings {
                 None => {}
                 Some(Value::Object(filesystem)) => {
                     // Codex's name for the directories writable in every project.
-                    for key in ["allowWrite", "writable_roots", "denyRead"] {
+                    for key in ["allowWrite", "writable_roots", "denyRead", "allowRead"] {
                         let list = match key {
                             "denyRead" => &mut self.deny_read,
+                            "allowRead" => &mut self.allow_read,
                             _ => &mut self.allow_write,
                         };
                         match paths(filesystem, key) {
@@ -1133,11 +1137,13 @@ impl Settings {
             .collect()
     }
 
-    /// `sandbox.filesystem.denyRead`'s paths, resolved as `allow_write`'s are.
-    pub(super) fn deny_read(&self) -> Vec<PathBuf> {
-        (self.deny_read.iter())
-            .map(|entry| self.resolve(entry))
-            .collect()
+    /// `sandbox.filesystem.denyRead`'s paths and `allowRead`'s, resolved as `allow_write`'s are.
+    pub(super) fn reads(&self) -> scramjet::agent::Reads {
+        let resolved = |list: &[String]| list.iter().map(|entry| self.resolve(entry)).collect();
+        scramjet::agent::Reads {
+            deny: resolved(&self.deny_read),
+            allow: resolved(&self.allow_read),
+        }
     }
 
     /// Scramjet's `retry` keys, each wrong one named and left at its default.
@@ -2520,7 +2526,7 @@ mod tests {
             &scratch,
             r#"{"sandboxNetwork": true, "sandbox": {"mode": "read-only", "network": false,
                 "filesystem": {"allowWrite": ["~/scratch", "own"], "writable_roots": ["/w"],
-                    "denyRead": ["~/notes/private", "/abs"]}}}"#,
+                    "denyRead": ["~/notes/private", "/abs"], "allowRead": ["~/notes/private/ok"]}}}"#,
         );
         assert!(object.warnings.is_empty(), "{:?}", object.warnings);
         assert_eq!(object.sandbox, Some(SandboxMode::ReadOnly));
@@ -2535,15 +2541,18 @@ mod tests {
             ]
         );
         assert_eq!(
-            object.deny_read(),
-            [home.join("notes/private"), PathBuf::from("/abs")]
+            object.reads(),
+            scramjet::agent::Reads {
+                deny: vec![home.join("notes/private"), PathBuf::from("/abs")],
+                allow: vec![home.join("notes/private/ok")],
+            }
         );
         let wrong = settings_with(
             &scratch,
             r#"{"sandbox": {"mode": "rw", "network": 1, "filesystem": {"denyRead": "~"}}}"#,
         );
         assert_eq!(wrong.sandbox, None);
-        assert!(wrong.deny_read().is_empty());
+        assert!(wrong.reads().deny.is_empty());
         let wrong: Vec<&str> = (wrong.warnings.iter())
             .map(|warning| warning.rsplit(": ").next().unwrap())
             .collect();

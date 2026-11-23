@@ -505,6 +505,14 @@ const WSLG: &str = "/mnt/wslg";
 #[cfg(unix)]
 const WSLG_DISTRO: &str = "/mnt/wslg/distro";
 
+/// The paths the user's settings hide as the credential stores are
+/// (`sandbox.filesystem.denyRead`), and those they re-open inside them (`allowRead`).
+#[derive(Default, Clone, PartialEq, Debug)]
+pub struct Reads {
+    pub deny: Vec<PathBuf>,
+    pub allow: Vec<PathBuf>,
+}
+
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
 /// as empty and a hidden directory has no entries, both read-only.
 #[derive(Default, Clone)]
@@ -518,16 +526,20 @@ pub(super) struct Hidden {
     tmux: Option<PathBuf>,
     /// Those of `files` and `directories` the user's `denyRead` hides, not holding credentials.
     denied: Vec<PathBuf>,
+    /// What `allowRead` re-opens in a denied directory, by real path, never in a store; a hidden
+    /// path inside one stays hidden.
+    allowed: Vec<PathBuf>,
+    allowed_identities: Vec<(u64, u64)>,
 }
 
 impl Hidden {
     /// Those of this user's home directory, Scramjet 1's `auth.json` wherever
     /// `SCRAMJET_CODING_AGENT_DIR` puts it, the own one (`login::auth_file`), the files and
-    /// directories `named` (the providers' `credentialFiles`), those `denied` (the settings'
-    /// `denyRead`), and this user's tmux servers.
-    pub(super) fn current(named: &[PathBuf], denied: &[PathBuf]) -> Hidden {
+    /// directories `named` (the providers' `credentialFiles`), those `reads` denies but
+    /// re-opens, and this user's tmux servers.
+    pub(super) fn current(named: &[PathBuf], reads: &Reads) -> Hidden {
         #[cfg_attr(windows, allow(unused_mut))]
-        let mut hidden = Hidden::stores(named, denied);
+        let mut hidden = Hidden::stores(named, reads);
         #[cfg(unix)]
         {
             let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
@@ -539,7 +551,7 @@ impl Hidden {
     }
 
     /// `current`'s credential stores and paths denied, without the tmux servers.
-    pub(super) fn stores(named: &[PathBuf], denied: &[PathBuf]) -> Hidden {
+    pub(super) fn stores(named: &[PathBuf], reads: &Reads) -> Hidden {
         let own = super::login::auth_file();
         if let Some(own) = &own {
             super::login::make(own);
@@ -550,7 +562,8 @@ impl Hidden {
             .collect();
         let mut hidden =
             std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also));
-        hidden.deny(denied);
+        hidden.deny(&reads.deny);
+        hidden.allow(&reads.allow);
         hidden
     }
 
@@ -574,6 +587,40 @@ impl Hidden {
         self.directories.sort();
     }
 
+    /// Re-opens those of `paths` that exist in a denied directory, unless they are in a store
+    /// (or are one): `allowRead` cannot uncover what `hideCredentials` hides.
+    pub(super) fn allow(&mut self, paths: &[PathBuf]) {
+        for real in paths
+            .iter()
+            .filter_map(|path| std::fs::canonicalize(path).ok())
+        {
+            let in_denied = (self.directories.iter())
+                .any(|directory| self.denied.contains(directory) && real.starts_with(directory));
+            let in_store = (self.files.iter().chain(&self.directories))
+                .any(|store| !self.denied.contains(store) && real.starts_with(store));
+            if in_denied && !in_store && !self.allowed.contains(&real) {
+                self.allowed_identities.extend(identity(&real));
+                self.allowed.push(real);
+            }
+        }
+        self.allowed.sort();
+    }
+
+    /// Whether `path` is hidden: the innermost hidden or re-opened path holding it is hidden.
+    /// `strict` leaves out a hidden path equal to `path`.
+    fn covered(&self, path: &Path, strict: bool) -> bool {
+        let depth = |found: &PathBuf| found.components().count();
+        let hidden = (self.files.iter().chain(&self.directories))
+            .filter(|hidden| path.starts_with(hidden) && !(strict && *hidden == path))
+            .map(depth)
+            .max();
+        let allowed = (self.allowed.iter())
+            .filter(|allowed| path.starts_with(allowed))
+            .map(depth)
+            .max();
+        hidden.is_some_and(|hidden| allowed.is_none_or(|allowed| allowed <= hidden))
+    }
+
     /// Why `path`, found hidden, is: by the user's `denyRead` unless it is in a store.
     fn refusal(&self, path: &Path) -> String {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
@@ -591,7 +638,7 @@ impl Hidden {
 
     /// The stores that exist, files and directories, by their real paths, but those in another.
     pub(super) fn listed(named: &[PathBuf]) -> Vec<PathBuf> {
-        let hidden = Hidden::stores(named, &[]);
+        let hidden = Hidden::stores(named, &Reads::default());
         let (files, directories) = hidden.mounted();
         let mut listed: Vec<PathBuf> = files.chain(directories).cloned().collect();
         listed.sort();
@@ -606,10 +653,7 @@ impl Hidden {
         impl Iterator<Item = &PathBuf>,
         impl Iterator<Item = &PathBuf>,
     ) {
-        let outside = |path: &&PathBuf| {
-            let mut directories = self.directories.iter();
-            !directories.any(|directory| path != &directory && path.starts_with(directory))
-        };
+        let outside = |path: &&PathBuf| !self.covered(path, true);
         (
             self.files.iter().filter(outside),
             self.directories.iter().filter(outside),
@@ -620,8 +664,7 @@ impl Hidden {
     /// fail or uncover.
     #[cfg(unix)]
     fn overlaps(&self, path: &Path) -> bool {
-        let mut directories = self.directories.iter();
-        directories.any(|directory| path.starts_with(directory))
+        self.covered(path, false)
             || self
                 .files
                 .iter()
@@ -675,6 +718,8 @@ impl Hidden {
             directories,
             tmux: None,
             denied: Vec::new(),
+            allowed: Vec::new(),
+            allowed_identities: Vec::new(),
         }
     }
 
@@ -682,13 +727,15 @@ impl Hidden {
     /// mount of its filesystem.
     pub(super) fn check(&self, path: &Path) -> Result<(), String> {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-        let mut identities = real.ancestors().filter_map(identity);
         let found = match cfg!(unix) {
-            true => identities.any(|found| self.identities.contains(&found)),
+            // The innermost of the hidden and the re-opened decides.
+            true => (real.ancestors().filter_map(identity))
+                .find(|found| {
+                    self.identities.contains(found) || self.allowed_identities.contains(found)
+                })
+                .is_some_and(|found| self.identities.contains(&found)),
             // No identity to compare: by the stores' real paths.
-            false => {
-                (self.files.iter().chain(&self.directories)).any(|store| real.starts_with(store))
-            }
+            false => self.covered(&real, false),
         };
         match found {
             true => Err(self.refusal(path)),
@@ -698,19 +745,21 @@ impl Hidden {
 
     /// Whether a walk that follows no symlinks came to a store: an entry of `metadata` (not
     /// followed) whose real path is `real`. By identity, so another mount or a hard link is
-    /// caught too; on Windows, which has none to compare, by the real path.
+    /// caught too; on Windows, which has none to compare, by the real path. A denied directory
+    /// holding what `allowRead` re-opens is walked, its other entries left out by path.
     pub(super) fn is_store(&self, real: &Path, metadata: &std::fs::Metadata) -> bool {
         #[cfg(unix)]
-        {
+        let found = {
             use std::os::unix::fs::MetadataExt;
-            let _ = real;
             self.identities.contains(&(metadata.dev(), metadata.ino()))
-        }
+                || (!self.allowed.is_empty() && self.covered(real, false))
+        };
         #[cfg(not(unix))]
-        {
+        let found = {
             let _ = metadata;
-            (self.files.iter().chain(&self.directories)).any(|store| real.starts_with(store))
-        }
+            self.covered(real, false)
+        };
+        found && !self.allowed.iter().any(|allowed| allowed.starts_with(real))
     }
 
     /// `file`, opened at `path`, refused as `check` refuses a path, checked on the file opened: a
@@ -748,6 +797,9 @@ impl Hidden {
         if self.identities.contains(&key(&stat)) {
             return Ok(true);
         }
+        if self.allowed_identities.contains(&key(&stat)) {
+            return Ok(false);
+        }
         let mut directory = if FileType::from_raw_mode(stat.st_mode) == FileType::Directory {
             rustix::fs::openat(file, ".", up, Mode::empty())?
         } else {
@@ -766,6 +818,9 @@ impl Hidden {
             let here = key(&rustix::fs::fstat(&directory)?);
             if self.identities.contains(&here) {
                 return Ok(true);
+            }
+            if self.allowed_identities.contains(&here) {
+                return Ok(false);
             }
             let parent = rustix::fs::openat(&directory, "..", up, Mode::empty())?;
             if key(&rustix::fs::fstat(&parent)?) == here {
@@ -846,7 +901,12 @@ pub(super) fn hiding(_: &Path, _: &str, _: &Hidden) -> Result<Command, String> {
 pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Command, String> {
     if cfg!(target_os = "macos") {
         let (files, directories) = hidden.mounted();
-        let mut process = seatbelt::open(root, (files.collect(), directories.collect()));
+        let hiding = seatbelt::Hiding {
+            files: files.collect(),
+            directories: directories.collect(),
+            reopened: hidden.allowed.iter().map(|path| (path, true)).collect(),
+        };
+        let mut process = seatbelt::open(root, hiding);
         hide_variables(&mut process);
         if let Some(own) = &hidden.tmux {
             process.env("TMUX_TMPDIR", own);
@@ -857,7 +917,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
     }
     let mut process = Command::new(PROGRAM);
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
-    hide(&mut process, hidden);
+    hide(&mut process, hidden, &|_| true);
     if let Some(own) = &hidden.tmux {
         process.env("TMUX_TMPDIR", own);
     }
@@ -971,7 +1031,13 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
     if Path::new(WSLG).is_dir() {
         process.args(["--tmpfs", WSLG]);
     }
-    hide(&mut process, hidden);
+    let in_writable = |path: &Path| {
+        (mounts.iter())
+            .filter(|(mount, _)| path.starts_with(mount))
+            .max_by_key(|(mount, _)| mount.components().count())
+            .is_some_and(|(_, writable)| *writable)
+    };
+    hide(&mut process, hidden, &in_writable);
     for kept in &kept {
         process.arg("--ro-bind").arg(kept).arg(kept);
     }
@@ -1033,7 +1099,15 @@ fn closed(
     let (files, directories) = hidden.mounted();
     // Servers that commands with the stores hidden started run what a client asks writable and
     // on the network.
-    closed.hidden = (files.collect(), directories.chain(&hidden.tmux).collect());
+    let writable = |path: &PathBuf| closed.writable.iter().any(|root| path.starts_with(root));
+    let reopened = (hidden.allowed.iter())
+        .map(|path| (path, writable(path)))
+        .collect();
+    closed.hidden = seatbelt::Hiding {
+        files: files.collect(),
+        directories: directories.chain(&hidden.tmux).collect(),
+        reopened,
+    };
     let mut process = seatbelt::closed(root, closed);
     hide_variables(&mut process);
     process
@@ -1054,19 +1128,54 @@ fn hide_variables(process: &mut Command) {
 /// Mounts an empty file over each hidden file and an empty directory over each hidden directory,
 /// both read-only, and leaves out the environment variables that hold credentials and those
 /// that lead tmux to the server the agent runs in.
+///
+/// What `allowRead` re-opens in a hidden directory is bound back into its empty one, writable
+/// where `writable` says, before that is made read-only (bubblewrap makes the mount point), and
+/// what is hidden inside it after: so the shallower first.
 #[cfg(unix)]
-fn hide(process: &mut Command, hidden: &Hidden) {
+fn hide(process: &mut Command, hidden: &Hidden, writable: &dyn Fn(&Path) -> bool) {
+    enum Mount<'a> {
+        File(&'a PathBuf),
+        Directory(&'a PathBuf),
+        Allowed(&'a PathBuf),
+    }
     hide_variables(process);
     let (files, directories) = hidden.mounted();
-    let files: Vec<&PathBuf> = files.collect();
-    if !files.is_empty() {
-        let empty = empty_file();
-        for file in files {
-            process.arg("--ro-bind").arg(&empty).arg(file);
+    let mut mounts: Vec<Mount> = (files.map(Mount::File))
+        .chain(directories.map(Mount::Directory))
+        .chain(hidden.allowed.iter().map(Mount::Allowed))
+        .collect();
+    let path = |mount: &Mount<'_>| match *mount {
+        Mount::File(path) | Mount::Directory(path) | Mount::Allowed(path) => path.clone(),
+    };
+    mounts.sort_by_key(|mount| path(mount).components().count());
+    let empty = (mounts.iter().any(|mount| matches!(mount, Mount::File(_)))).then(empty_file);
+    let mut reopened = Vec::new();
+    for mount in &mounts {
+        match *mount {
+            Mount::File(file) => {
+                process.arg("--ro-bind").args(&empty).arg(file);
+            }
+            Mount::Directory(directory) => {
+                process.arg("--tmpfs").arg(directory);
+                match (hidden.allowed.iter()).any(|allowed| allowed.starts_with(directory)) {
+                    true => reopened.push(directory),
+                    false => {
+                        process.arg("--remount-ro").arg(directory);
+                    }
+                }
+            }
+            Mount::Allowed(allowed) => {
+                process.arg(if writable(allowed) {
+                    "--bind"
+                } else {
+                    "--ro-bind"
+                });
+                process.arg(allowed).arg(allowed);
+            }
         }
     }
-    for directory in directories {
-        process.arg("--tmpfs").arg(directory);
+    for directory in reopened.into_iter().rev() {
         process.arg("--remount-ro").arg(directory);
     }
 }
@@ -1128,10 +1237,14 @@ pub(super) fn available() -> Result<(), String> {
 /// Whether commands can run in the sandbox here; otherwise why not.
 #[cfg(unix)]
 pub(super) fn available() -> Result<(), String> {
-    let output = command(Path::new("/"), "true", &Hidden::current(&[], &[]))?
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("cannot start {PROGRAM}: {error}"))?;
+    let output = command(
+        Path::new("/"),
+        "true",
+        &Hidden::current(&[], &Default::default()),
+    )?
+    .stdin(Stdio::null())
+    .output()
+    .map_err(|error| format!("cannot start {PROGRAM}: {error}"))?;
     match output.status.success() {
         true => Ok(()),
         false => Err(format!(
@@ -1166,7 +1279,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         let ran = run_sandboxed(
             &root,
             &script,
-            &super::Hidden::current(&[], &[]),
+            &super::Hidden::current(&[], &Default::default()),
             None,
             &cancel,
             &mut |_| {},
@@ -1807,6 +1920,70 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
     }
 
     #[test]
+    fn paths_allowed_are_read_again_in_a_denied_directory_but_never_a_store() {
+        let home = std::env::temp_dir().join(format!("scramjet-allowed-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        for directory in ["notes/shared/.ssh", "notes/shared/deeper", "project"] {
+            std::fs::create_dir_all(home.join(directory)).unwrap();
+        }
+        for (file, text) in [
+            ("notes/plan.md", "PRIVATE-plan\n"),
+            ("notes/shared/ok.md", "shared\n"),
+            ("notes/shared/.ssh/key", "PRIVATE-key\n"),
+            ("notes/shared/deeper/no.md", "PRIVATE-deeper\n"),
+            ("project/a.txt", "plain\n"),
+        ] {
+            std::fs::write(home.join(file), text).unwrap();
+        }
+        let reads = super::Reads {
+            deny: ["notes", "notes/shared/deeper"]
+                .map(|name| home.join(name))
+                .into(),
+            allow: ["notes/shared", "notes/shared/.ssh", "project", "absent"]
+                .map(|name| home.join(name))
+                .into(),
+        };
+        let mut hidden = super::Hidden::under(&home, vec![home.join("notes/shared/.ssh")]);
+        hidden.deny(&reads.deny);
+        hidden.allow(&reads.allow);
+        let real = |name: &str| std::fs::canonicalize(home.join(name)).unwrap();
+        assert_eq!(hidden.allowed, [real("notes/shared")]);
+        let script = "cat a.txt ../notes/shared/ok.md; ls -A ../notes ../notes/shared/.ssh \
+            ../notes/shared/deeper; grep -r PRIVATE ..; echo w > ../notes/shared/w && echo wrote; \
+            echo done";
+        let root = home.join("project");
+        for (mut process, wrote) in [
+            (super::command(&root, script, &hidden).unwrap(), ""),
+            (super::hiding(&root, script, &hidden).unwrap(), "wrote\n"),
+        ] {
+            let output = process.output().unwrap();
+            let errors = String::from_utf8_lossy(&output.stderr);
+            let listed = "../notes:\nshared\n\n../notes/shared/.ssh:\n\n../notes/shared/deeper:\n";
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                format!("plain\nshared\n{listed}{wrote}done\n"),
+                "{errors}"
+            );
+            assert!(!errors.contains("PRIVATE"), "{errors}");
+        }
+        let shared = home.join("notes/shared/ok.md");
+        assert!(hidden.check(&shared).is_ok());
+        assert!(hidden.opened(&shared, std::fs::File::open(&shared)).is_ok());
+        assert!(hidden.check(&home.join("notes/shared/w")).is_ok());
+        for (path, why) in [
+            ("notes/plan.md", "(sandbox.filesystem.denyRead)"),
+            ("notes/shared/deeper/no.md", "(sandbox.filesystem.denyRead)"),
+            ("notes/shared/.ssh/key", "hidden, as it holds credentials"),
+        ] {
+            let path = home.join(path);
+            let refused = hidden.check(&path).unwrap_err();
+            assert!(refused.ends_with(why), "{refused}");
+            let opened = hidden.opened(&path, std::fs::File::open(&path));
+            assert!(opened.unwrap_err().ends_with(why));
+        }
+    }
+
+    #[test]
     fn directories_allowed_always_are_granted_and_those_that_cannot_be_said() {
         let scratch = std::env::temp_dir().join(format!("scramjet-always-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(scratch.clone());
@@ -2159,7 +2336,7 @@ TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 30
             let ran = run_sandboxed(
                 std::path::Path::new("/"),
                 &command,
-                &super::Hidden::current(&[], &[]),
+                &super::Hidden::current(&[], &Default::default()),
                 None,
                 &cancel,
                 &mut |_| {},

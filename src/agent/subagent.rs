@@ -641,8 +641,8 @@ pub(super) struct Parent<'a> {
     pub rates: Option<&'a Path>,
     /// The agent's coding tools, whose read-only ones a child whose file lists none has.
     pub tools: &'a [String],
-    /// The paths the user's settings hide, which children's tools keep out of too.
-    pub deny_read: &'a [PathBuf],
+    /// The paths the user's settings hide and re-open, which children's tools follow too.
+    pub reads: &'a sandbox::Reads,
 }
 
 /// A task given to an agent, ready to run.
@@ -1252,7 +1252,7 @@ fn run_child(
         &agent.prompt,
         parent.skills,
         parent.agent_directory,
-        &sandbox::Hidden::stores(parent.providers.credential_files(), parent.deny_read),
+        &sandbox::Hidden::stores(parent.providers.credential_files(), parent.reads),
     );
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
@@ -1337,8 +1337,7 @@ fn run_child(
         if calls.is_empty() {
             return run;
         }
-        let hidden =
-            sandbox::Hidden::current(parent.providers.credential_files(), parent.deny_read);
+        let hidden = sandbox::Hidden::current(parent.providers.credential_files(), parent.reads);
         for item in calls {
             let output = match Call::parse(&item) {
                 Ok(call) => {

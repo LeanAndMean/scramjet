@@ -2492,7 +2492,7 @@ disjoint regions."
         let cancel = AtomicBool::new(false);
         let read = |path: &str| {
             call("read", json!({"path":path}))
-                .run_read_only(&root, &Hidden::current(&[], &[]), &cancel)
+                .run_read_only(&root, &Hidden::current(&[], &Default::default()), &cancel)
                 .unwrap()
         };
         let shot = read("shot.png");
@@ -2866,7 +2866,11 @@ inline image size limit.]",
         std::fs::write(root.join("ignored.rs"), "").unwrap();
         let cancel = AtomicBool::new(false);
         let run = |name: &str, arguments: Value| {
-            call(name, arguments).run_read_only(&root, &Hidden::current(&[], &[]), &cancel)
+            call(name, arguments).run_read_only(
+                &root,
+                &Hidden::current(&[], &Default::default()),
+                &cancel,
+            )
         };
         // Shown with the system's separator, as rg and fd show them.
         let text = |name: &str, arguments: Value| {

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.297.0 — The sandbox setting re-opens paths in hidden ones
+
+### Added
+
+- `sandbox.filesystem.allowRead`, as in Claude Code: files and directories inside a `denyRead` directory that the agent's commands, `read`, `grep`, `find` and its subagents can read again (and write where they could before). It never uncovers a credential store, and a `denyRead` path deeper in it stays hidden.
+
 ## 2.296.0 — The sandbox setting takes paths to hide and to write
 
 ### Added
