@@ -145,6 +145,8 @@ def main():
     curl = 'curl -s -m 5 %s 2>&1' % url
     folded = case_insensitive(scratch)
     tmp = 'try-sandbox-' + secrets.token_hex(3)
+    outside_text = 'sleep 62.%d' % os.getpid()
+    outside = subprocess.Popen(outside_text.split())
 
     def secret_hidden(output):
         return SECRET not in output
@@ -171,9 +173,10 @@ def main():
             ('/tmp is writable', 'echo hi > /tmp/%s && echo T""MP-OK' % tmp, lambda o: 'TMP-OK' in o, None),
             ('a store is unreadable', 'cat ~/.ssh/id_fake ~/.netrc 2>&1', secret_hidden, None),
             ('the network is off', curl, lambda o: 'NET-REACHED' not in o, None),
-            ('pgrep and pkill find its own processes',
-             'sleep 61 & pgrep -lf "^sleep 61$" >/dev/null && pkill -f "^sleep 61$" && wait $!; echo PS-""OK $?',
-             lambda o: 'PS-OK 143' in o, None),
+            ('its own background job stops with kill $!',
+             'sleep 61 & kill $! && wait $!; echo KILL-""OK $?', lambda o: 'KILL-OK 143' in o, None),
+            ('a process outside is unlisted', 'pgrep -lf "%s" 2>&1; echo LIST""ED $?' % outside_text,
+             lambda o: 'LISTED' in o and outside_text not in o, None),
         ]),
         ('--sandbox workspace-write, no Git repository', ['--sandbox', 'workspace-write'], {}, False, False, [
             ('the project is writable', 'echo hi > f && echo PRO""JECT-OK', lambda o: 'PROJECT-OK' in o, None),
@@ -262,6 +265,8 @@ def main():
                 for line in (output if output is not None else '(no output came back)').strip().splitlines()[:6]:
                     print('        | ' + line.replace(SECRET, '<the fake secret>'))
     net.shutdown()
+    outside.kill()
+    outside.wait()
     if not options.keep:
         shutil.rmtree(scratch, ignore_errors=True)
     print('\n%s' % ('%d check(s) failed' % failed if failed else 'All checks passed or are known gaps.'))

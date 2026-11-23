@@ -3436,10 +3436,16 @@ to see full lines]",
             .run(&root, Some(&Hidden::default()), &cancel, &mut |_| {})
             .unwrap();
         assert_eq!(shown(&hidden.text), expected);
-        let listed = format!(
-            "sleep 1{marker} & sleep 0.2; pgrep -lf 'sleep 1{marker}' >/dev/null || echo unlisted; \
-             kill $!\n{command}"
-        );
+        let mut outside = Command::new("sleep")
+            .arg(format!("2{marker}"))
+            .spawn()
+            .unwrap();
+        // Seatbelt lists no process, as Codex's: `pkill` fails there, and `kill $!` is the way.
+        let own = match cfg!(target_os = "macos") {
+            true => command.replace(&format!("pkill -f 'sleep {marker}'"), "kill $!"),
+            false => command.clone(),
+        };
+        let listed = format!("pgrep -f 'sleep 2{marker}' >/dev/null 2>&1 && echo listed\n{own}");
         let sandboxed = run_sandboxed(
             &root,
             &listed,
@@ -3447,9 +3453,10 @@ to see full lines]",
             None,
             &cancel,
             &mut |_| {},
-        )
-        .unwrap();
-        assert_eq!(shown(&sandboxed.tool_output().text), expected);
+        );
+        outside.kill().unwrap();
+        outside.wait().unwrap();
+        assert_eq!(shown(&sandboxed.unwrap().tool_output().text), expected);
     }
 
     #[cfg(target_os = "linux")]

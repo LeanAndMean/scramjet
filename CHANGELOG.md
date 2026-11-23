@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.292.0 — The macOS sandbox hides other processes again
+
+### Changed
+
+- On macOS, a command inside `--sandbox` or a subagent's shell can no longer list other processes or read their command lines, as in Codex: `pgrep` and `pkill` fail there again (they worked since 2.291.3), as `ps` does. The agent and subagents are told to stop their own background jobs with `kill $!` or `kill $(jobs -p)`.
+
 ## 2.291.6 — The macOS sandbox's /tmp told as it is
 
 ### Fixed

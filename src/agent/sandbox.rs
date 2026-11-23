@@ -26,11 +26,11 @@ pub(super) const PROGRAM: &str = "the low-integrity helper";
 pub(super) const PROGRAM: &str = "bwrap";
 
 /// What a sandboxed command cannot run on this system, for the agent's instructions: Seatbelt
-/// refuses setuid programs, `ps` among them.
+/// refuses setuid programs, `ps` among them, and lists no other process to `pgrep` or `pkill`.
 pub(super) const UNRUNNABLE: &str = match cfg!(target_os = "macos") {
     true => {
-        " `ps` cannot run in the sandbox (macOS refuses setuid programs there): `pgrep -lf <pattern>` \
-lists the processes matching it."
+        " `ps`, `pgrep` and `pkill` do not work in the sandbox: stop a command's own background \
+jobs with `kill $!` or `kill $(jobs -p)`."
     }
     false => "",
 };
