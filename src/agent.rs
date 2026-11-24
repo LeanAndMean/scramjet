@@ -1693,6 +1693,11 @@ impl Agent {
         &self.prompts
     }
 
+    /// The context files the instructions hold, outermost first, as start or `reload` read them.
+    pub fn context_files(&self) -> &[PathBuf] {
+        &self.context_files
+    }
+
     pub fn session_path(&self) -> &Path {
         self.session.path()
     }

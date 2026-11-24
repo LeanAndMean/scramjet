@@ -31,6 +31,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod display;
 mod sign_in;
 mod watch;
 
@@ -66,6 +67,8 @@ const EVENTS: &str = "_io.github.leanandmean.scramjet/events";
 const MCP: &str = "_io.github.leanandmean.scramjet/mcp";
 const FILES: &str = "_io.github.leanandmean.scramjet/files";
 const SANDBOX: &str = "_io.github.leanandmean.scramjet/sandbox";
+/// A session's context files changed at `reload`.
+const CONTEXT_FILES: &str = "_io.github.leanandmean.scramjet/context_files";
 const LIVE_SESSIONS: &str = "_io.github.leanandmean.scramjet/live_sessions";
 /// The extension methods the client may call, as `initialize` lists them.
 const EXTENSIONS: [&str; 23] = [
@@ -144,6 +147,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         sessions: HashMap::new(),
         renamed: Arc::default(),
         watches: HashMap::new(),
+        display: None,
     };
     let (sent, inputs) = mpsc::channel();
     on_sigterm(sent.clone()).map_err(|e| format!("acp: SIGTERM: {e}"))?;
@@ -332,6 +336,8 @@ struct Log {
     /// The config options and usage the client was last given.
     options: Value,
     usage: Value,
+    /// The context files the session's instructions hold.
+    context_files: Value,
     /// `--ask`, and the sandbox's mode.
     asks: bool,
     sandbox: &'static str,
@@ -351,6 +357,7 @@ impl Log {
             question: None,
             options: Value::Null,
             usage: Value::Null,
+            context_files: Value::Null,
             asks: false,
             sandbox: FULL_ACCESS,
         }
@@ -458,6 +465,8 @@ struct Connection {
     renamed: Renamed,
     /// The sessions terminals hold that the client follows (`watch`), by id.
     watches: HashMap<String, watch::Watch>,
+    /// Follows the display settings, for a client that knows the extensions.
+    display: Option<display::Watcher>,
 }
 
 type Renamed = Arc<Mutex<HashMap<String, String>>>;
@@ -1147,6 +1156,7 @@ impl Connection {
             "ask": log.asks,
             "sandbox": log.sandbox,
             "usage": log.usage,
+            "contextFiles": log.context_files,
             "seq": log.seq,
         });
         drop((log, turn));
@@ -1210,6 +1220,8 @@ impl Connection {
         if let Some(named) = named.map(str::trim).filter(|named| !named.is_empty()) {
             self.client = named.chars().take(80).collect();
         }
+        let settings = Settings::load();
+        let shown = display::of(&settings);
         let result = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "agentCapabilities": {
@@ -1225,8 +1237,13 @@ impl Connection {
                 "version": env!("CARGO_PKG_VERSION"),
             },
             "authMethods": self.sign_in.advertised(),
-            "_meta": {"io.github.leanandmean.scramjet": {"version": 1, "methods": EXTENSIONS}},
+            "_meta": {"io.github.leanandmean.scramjet":
+                {"version": 1, "methods": EXTENSIONS, "display": shown}},
         });
+        if self.scramjet && self.display.is_none() {
+            let path = settings.path().map(Path::to_path_buf);
+            self.display = Some(display::Watcher::start(self.out.clone(), path, shown));
+        }
         self.out.respond(id, result);
     }
 
@@ -1310,7 +1327,7 @@ impl Connection {
             let shown = front.options();
             front.show(shown);
             // Answered here, so that the commands' update follows it.
-            let result = json!({"sessionId": front.ui.session, "configOptions": front.shown});
+            let result = front.opened();
             out.respond(&answered, result);
             let root = front.session.agent.root().to_path_buf();
             let _ = started.send(Ok((front.ui.session.clone(), root)));
@@ -1363,8 +1380,7 @@ impl Connection {
                         front.show(shown);
                         front.ui.used = None;
                         front.ui.usage_of(&front.session.agent);
-                        let result =
-                            json!({"sessionId": front.ui.session, "configOptions": front.shown});
+                        let result = front.opened();
                         out.respond(&id, result);
                         continue;
                     }
@@ -1698,6 +1714,9 @@ impl Connection {
     fn end(self) {
         for (_, watch) in self.watches {
             watch.stop();
+        }
+        if let Some(display) = self.display {
+            display.stop();
         }
         for handle in self.sessions.values() {
             handle.cancel.store(true, Ordering::Relaxed);
@@ -2285,10 +2304,34 @@ impl Acp {
         lock(&self.ui.log).question = None;
     }
 
+    /// `session/new`'s, `resume`'s or `load`'s result: the session, its options, and in `_meta`
+    /// its file (unless the run saves none) and context files.
+    fn opened(&mut self) -> Value {
+        let agent = &self.session.agent;
+        let files = json!(agent.context_files());
+        lock(&self.ui.log).context_files = files.clone();
+        let mut meta = json!({"contextFiles": files});
+        if agent.unsaved_directory().is_none() {
+            meta["path"] = json!(agent.session_path());
+        }
+        json!({"sessionId": self.ui.session, "configOptions": self.shown,
+            "_meta": {"io.github.leanandmean.scramjet": meta}})
+    }
+
     /// `reload` in this session: the settings and what they name read again, what is wrong in
-    /// them said, and the commands and options listed again.
+    /// them said, and the commands, options and context files listed again.
     fn reload(&mut self) {
         self.session.reload(&self.servers);
+        let files = json!(self.session.agent.context_files());
+        let mut log = lock(&self.ui.log);
+        if log.context_files != files {
+            log.context_files = files.clone();
+            if self.scramjet {
+                let params = json!({"sessionId": self.ui.session, "contextFiles": files});
+                log.notify(&self.ui.out, CONTEXT_FILES, params);
+            }
+        }
+        drop(log);
         let settings = &self.session.settings;
         (self.ui.steering, self.ui.follow_up) = (settings.steering_mode, settings.follow_up_mode);
         let installed = self.session.agent.installed();

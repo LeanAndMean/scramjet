@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.314.0 — Display settings and context files over ACP
+
+### Added
+
+- `scramjet acp` gives the client the user's display settings (`look`, `bottom`, `banner`, `hideThinkingBlock`, `markdown.toolDisplay`) at `initialize`, and tells a client that knows Scramjet's extensions when the settings file changes them, so a client drawing a session as the full screen does draws it as the user's own would.
+- A session's result over ACP lists the context files its instructions hold (`contextFiles`) and, as documented, its session file's path; `state` gives them too, and a client is told when `reload` changes them.
+
 ## 2.313.0 — A reopened session's commands and times over ACP
 
 ### Added

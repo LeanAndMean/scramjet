@@ -4979,6 +4979,85 @@ fn acp_reloads_the_settings_commands_and_models_through_the_extension() {
 
 #[test]
 #[cfg(unix)]
+fn acp_sends_the_display_settings_and_the_session_s_context_files() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-display-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("AGENTS.md"), "Be brief.\n").unwrap();
+    let (port, _bodies) = serve_events(Vec::new());
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"look": "classic", "hideThinkingBlock": true,
+        "markdown": {"toolDisplay": "source"}});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1,
+                "clientCapabilities": {"_meta": {"io.github.leanandmean.scramjet": {}}}}}),
+    );
+    let initialized = next(&messages);
+    let display = &initialized["result"]["_meta"]["io.github.leanandmean.scramjet"]["display"];
+    let expected = serde_json::json!({"look": "classic", "bottom": "bar", "banner": "header",
+        "hideThinkingBlock": true, "markdown": {"toolDisplay": "source"}});
+    assert_eq!(display, &expected);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let opened = next(&messages);
+    let session = opened["result"]["sessionId"].clone();
+    let meta = &opened["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    let agents = project.join("AGENTS.md");
+    assert_eq!(meta["contextFiles"], serde_json::json!([agents]), "{meta}");
+    let path = std::path::Path::new(meta["path"].as_str().unwrap());
+    assert!(path.starts_with(scratch.0.join("state")), "{meta}");
+
+    // Another program changes the settings: the client is told, once for each change it sees.
+    let config = scratch.0.join("config/scramjet/settings.json");
+    let changed = serde_json::json!({"look": "classic", "hideThinkingBlock": true,
+        "markdown": {"toolDisplay": "source"}, "bottom": "pi"});
+    std::fs::write(&config, changed.to_string()).unwrap();
+    let display = "_io.github.leanandmean.scramjet/display";
+    let (told, _) = until(&messages, |message| message["method"] == display);
+    let mut expected = expected;
+    expected["bottom"] = "pi".into();
+    assert_eq!(told["params"]["display"], expected, "{told}");
+
+    std::fs::write(project.join("CLAUDE.md"), "Be kind.\n").unwrap();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3,
+            "method": "_io.github.leanandmean.scramjet/reload"}),
+    );
+    let (reloaded, before) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(reloaded["result"], serde_json::json!({}), "{reloaded}");
+    let files = serde_json::json!([project.join("CLAUDE.md"), agents]);
+    let told = (before.iter())
+        .find(|message| message["method"] == "_io.github.leanandmean.scramjet/context_files")
+        .unwrap_or_else(|| panic!("{before:?}"));
+    assert_eq!(told["params"]["sessionId"], session);
+    assert_eq!(told["params"]["contextFiles"], files);
+    assert!(
+        !(before.iter()).any(|message| message["method"] == display),
+        "{before:?}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4,
+            "method": "_io.github.leanandmean.scramjet/state",
+            "params": {"sessionId": session}}),
+    );
+    let (state, _) = until(&messages, |message| message["id"] == 4);
+    assert_eq!(state["result"]["contextFiles"], files, "{state}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-key-{}", std::process::id())));
