@@ -126,6 +126,7 @@ impl Agent {
                 None => self.config.tools.clone(),
             },
             hide_credentials: self.hide_credentials,
+            offline: self.offline && self.config.sandbox.is_none(),
             reads: self.reads.clone(),
             writable: match &self.config.sandbox {
                 Some(sandbox) => sandbox.writable_roots(&self.config.root),
@@ -554,6 +555,8 @@ struct Kit {
     /// The coding tools of this run, which children take by default.
     coding_tools: Vec<String>,
     hide_credentials: bool,
+    /// Whether commands are kept off the network with no sandbox (`Agent::set_offline`).
+    offline: bool,
     reads: sandbox::Reads,
     /// The writable directories: the sandbox's (`Sandbox::writable_roots`), or those granted
     /// without one, which the reach re-opens.
@@ -591,6 +594,7 @@ impl Kit {
                 sandbox: self.sandbox.as_ref(),
             },
             hide_credentials: self.hide_credentials,
+            offline: self.offline,
             sandbox: self.sandbox.as_ref(),
             mcp: self.mcp.as_deref(),
         }
@@ -601,6 +605,7 @@ impl Kit {
 pub(super) struct Tools<'a> {
     parent: subagent::Parent<'a>,
     hide_credentials: bool,
+    offline: bool,
     sandbox: Option<&'a Sandbox>,
     mcp: Option<&'a mcp::Servers>,
 }
@@ -670,6 +675,13 @@ impl Tools<'_> {
                     // The reach alone leaves the credentials as hideCredentials says.
                     (None, false) => sandbox::Hidden::settings(&reads),
                 });
+                // Off the network, commands run so even with nothing else hidden from them.
+                let offline = shell && self.offline && tools::HIDES_COMMANDS;
+                let hidden = match hidden {
+                    None if offline => Some(sandbox::Hidden::nothing()),
+                    hidden => hidden,
+                };
+                let hidden = hidden.map(|hidden| hidden.offline(offline));
                 let progress = &mut |output: &str| ui.tool_output(output);
                 let output = match (self.sandbox, &hidden) {
                     (Some(sandbox), Some(hidden)) => {
@@ -1096,6 +1108,37 @@ here (sandbox.subagents.mode)\n\nkept.txt says original";
             "{:?}",
             ui.shown
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn without_a_sandbox_commands_kept_offline_reach_no_server_and_the_model_is_told() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let probe = format!(
+            "(exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo connected || echo no network"
+        );
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", json!({ "command": probe })),
+            reply("off"),
+            tool_call("call_2", "bash", json!({ "command": probe })),
+            reply("on"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "offline-without-sandbox");
+        agent.set_offline(true);
+        let cancel = AtomicBool::new(false);
+        let mut ui = Recorder::default();
+        agent.turn("offline", &mut ui, &cancel).unwrap();
+        agent.set_offline(false);
+        agent.turn("online", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(last_output(&bodies[1]), "no network\n");
+        assert_eq!(last_output(&bodies[3]), "connected\n");
+        let told = "The commands you run have no network.";
+        let instructions = |at: usize| bodies[at]["instructions"].as_str().unwrap().to_owned();
+        assert!(instructions(0).contains(told), "{}", instructions(0));
+        assert!(!instructions(2).contains(told), "{}", instructions(2));
     }
 
     #[test]

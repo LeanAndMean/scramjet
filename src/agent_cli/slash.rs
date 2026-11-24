@@ -654,6 +654,9 @@ fn sandbox_info(agent: &Agent, allow_write: &[PathBuf]) -> String {
         None => {
             info += "None: the agent's tools run with your access, the credential stores hidden \
 as the hideCredentials setting says.\n";
+            if agent.offline() {
+                rows.push(("Network:", "off".to_owned()));
+            }
         }
         Some(sandbox) => {
             let network = if sandbox.network { "on" } else { "off" };
@@ -800,6 +803,8 @@ fn session_info(agent: &Agent) -> String {
             false => "no network",
         };
         info += &row("Sandbox:", format!("{}, {network}", sandbox.mode.name()));
+    } else if agent.offline() {
+        info += &row("Sandbox:", "none, no network".to_owned());
     }
     info += "\n";
     info += &heading("Messages");

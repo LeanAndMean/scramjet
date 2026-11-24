@@ -488,6 +488,8 @@ fn start(
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
     agent.set_reads(settings.reads());
     agent.set_subagents(settings.subagents());
+    agent.set_offline(!settings.sandbox_network);
+    warnings.extend(offline_notice(&agent));
     if agent.sandbox().is_none() {
         let said = agent.grant_writable_always(&settings.allow_write());
         // Kept for a later Can read change; with nothing hidden, everything is writable.
@@ -546,6 +548,20 @@ fn start(
         }
     }
     Ok((agent, warnings))
+}
+
+/// While commands are kept off the network with no sandbox: that they are, from a setting the
+/// user may have made for the sandbox alone, and why they cannot run if they cannot.
+pub(super) fn offline_notice(agent: &Agent) -> Option<String> {
+    if agent.sandbox().is_some() || !agent.offline() {
+        return None;
+    }
+    let said = "Commands run off the network: sandbox.network is false; /sandbox network on \
+puts them on it";
+    Some(match Sandbox::check() {
+        Ok(()) => said.to_owned(),
+        Err(error) => format!("{said}. They cannot run: {error}"),
+    })
 }
 
 /// A path the command line gives, as Scramjet resolves `--skill`'s: `~` is the home directory,

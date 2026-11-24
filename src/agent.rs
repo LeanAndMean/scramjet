@@ -679,6 +679,8 @@ pub struct Agent {
     reads: Reads,
     /// The directories made writable without a sandbox (`set_writable`).
     writable: Vec<PathBuf>,
+    /// Whether commands are kept off the network while no sandbox runs (`set_offline`).
+    offline: bool,
     /// How subagents' tools are confined (`set_subagents`).
     subagents: Subagents,
     /// Whether the turn runs with no one to answer a question (`set_unattended`).
@@ -854,6 +856,7 @@ impl Agent {
             hide_credentials: false,
             reads: Reads::default(),
             writable: Vec::new(),
+            offline: false,
             subagents: Subagents::default(),
             unattended: false,
             left_out: Vec::new(),
@@ -1494,7 +1497,11 @@ impl Agent {
         let servers = (self.mcp.as_deref()).map(|servers| servers.section(window));
         let sandbox = (self.config.sandbox.as_ref())
             .filter(|_| self.offers(permissions::NAME))
-            .map(|sandbox| permissions::section(sandbox, &self.config.root));
+            .map(|sandbox| permissions::section(sandbox, &self.config.root))
+            .or_else(|| {
+                let offline = self.offline && self.config.sandbox.is_none();
+                offline.then(|| "\n\n# Sandbox\n\nThe commands you run have no network.".to_owned())
+            });
         let mut parts = self.instructions.clone();
         parts.extend([
             Part::new(Section::Mcp, "MCP servers", servers.unwrap_or_default()),
@@ -1929,6 +1936,18 @@ impl Agent {
     /// The directories made writable without a sandbox (`set_writable`).
     pub fn writable(&self) -> &[PathBuf] {
         &self.writable
+    }
+
+    /// Keeps commands off the network while no sandbox runs (the settings' `sandbox.network`
+    /// false), as a sandbox's own `network` does while it runs; not on Windows, where nothing
+    /// can (`Sandbox::check` says whether bubblewrap or Seatbelt can start).
+    pub fn set_offline(&mut self, offline: bool) {
+        self.offline = offline && cfg!(unix);
+    }
+
+    /// Whether commands are kept off the network while no sandbox runs (`set_offline`).
+    pub fn offline(&self) -> bool {
+        self.offline
     }
 
     /// Makes the directory `path` (relative to the project, or from `~`) writable while no

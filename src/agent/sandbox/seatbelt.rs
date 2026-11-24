@@ -212,9 +212,12 @@ pub(super) fn closed(root: &Path, closed: Closed) -> Command {
 }
 
 /// `sandbox-exec` letting everything through but `hidden`, up to the program to run, in `root`.
-pub(super) fn open(root: &Path, hidden: Hiding) -> Command {
+pub(super) fn open(root: &Path, hidden: Hiding, network: bool) -> Command {
     let mut profile = Profile::default();
     profile.rule("(version 1)\n(allow default)");
+    if !network {
+        profile.rule("(deny network*)");
+    }
     profile.hide(&hidden, &[]);
     profile.command(root)
 }
@@ -457,12 +460,15 @@ mod tests {
             directories: vec![&tmux],
             ..Hiding::default()
         };
-        let text = spelled(&open(Path::new("/w"), hidden));
+        let text = spelled(&open(Path::new("/w"), hidden, true));
         assert!(text.starts_with("(version 1)\n(allow default)\n"), "{text}");
         assert!(text.contains("(deny file-read* file-write* (subpath \"/private/tmp/tmux-501\"))"));
         assert!(text.contains(
             "(deny network-outbound (remote unix-socket (subpath \"/private/tmp/tmux-501\")))"
         ));
         assert!(!text.contains("deny default") && !text.contains("xpc"));
+        assert!(!text.contains("(deny network*)"), "{text}");
+        let offline = spelled(&open(Path::new("/w"), Hiding::default(), false));
+        assert!(offline.starts_with("(version 1)\n(allow default)\n(deny network*)\n"));
     }
 }

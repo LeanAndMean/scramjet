@@ -2753,7 +2753,7 @@ impl Acp {
         listed.extend(others.map(|path| json!({"path": path, "always": true, "granted": false})));
         let result = json!({
             "mode": mode,
-            "network": sandbox.map(|sandbox| sandbox.network),
+            "network": sandbox.map_or(!agent.offline(), |sandbox| sandbox.network),
             "reach": reach_name(agent.reads().reach),
             "granted": listed,
             "summary": super::slash::sandbox_summary(agent, &self.session.settings.allow_write()),

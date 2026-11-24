@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.326.0 — Network off without a sandbox
+
+### Changed
+
+- `/sandbox`'s Network row now works with no sandbox too, on Linux and macOS: off keeps the agent's commands from the internet, the local network and this machine's own servers while they still change any file, and the model is told. `sandbox.network: false` in the settings now does so without a sandbox as well, said at every start; `/sandbox network on` (or the row) puts commands back on it. ACP's `sandbox` answers `network` as a boolean then, not null.
+
 ## 2.325.1 — Also writable without a sandbox, fixed
 
 ### Fixed

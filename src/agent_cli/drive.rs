@@ -69,7 +69,13 @@ impl Session {
                 }
                 self.agent.set_sandbox(None);
                 self.settings.sandbox = None;
-                let said = "No sandbox: the agent's tools run with your access";
+                self.agent.set_offline(!self.settings.sandbox_network);
+                let said = match self.agent.offline() {
+                    true => {
+                        "No sandbox: the agent's tools run with your access, commands off the network"
+                    }
+                    false => "No sandbox: the agent's tools run with your access",
+                };
                 Ok((said.to_owned(), self.remember()))
             }
             SandboxChange::Mode(Some(mode)) => {
@@ -99,9 +105,27 @@ impl Session {
             }
             SandboxChange::Network(network) => {
                 let Some(sandbox) = current else {
-                    return Err("No sandbox: commands reach the network as you can".to_owned());
+                    if cfg!(windows) {
+                        return Err(
+                            "Nothing confines commands on Windows: they reach the network"
+                                .to_owned(),
+                        );
+                    }
+                    if !network {
+                        Sandbox::check().map_err(|error| {
+                            format!("Commands cannot be kept off the network: {error}")
+                        })?;
+                    }
+                    self.agent.set_offline(!network);
+                    self.settings.sandbox_network = network;
+                    let said = match network {
+                        true => "Commands reach the network",
+                        false => "Commands are kept off the network, with no sandbox",
+                    };
+                    return Ok((said.to_owned(), self.remember()));
                 };
                 self.agent.set_sandbox(Some(Sandbox { network, ..sandbox }));
+                self.agent.set_offline(!network);
                 self.settings.sandbox_network = network;
                 let said = match network {
                     true => "Sandbox: commands reach the network",
@@ -320,6 +344,7 @@ impl Session {
             }
         }
         self.agent.set_sandbox(sandbox);
+        self.agent.set_offline(!self.settings.sandbox_network);
         self.apply_reads();
         let said = "This project's sandbox follows every project's default again";
         Ok((said.to_owned(), warnings))

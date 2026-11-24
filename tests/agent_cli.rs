@@ -2353,6 +2353,59 @@ fn commands_keep_to_the_reach_without_a_sandbox_and_write_as_they_are() {
     );
 }
 
+/// `sandbox.network` false keeps commands off the network with no sandbox too, said at start.
+#[test]
+#[cfg(target_os = "linux")]
+fn commands_stay_off_the_network_without_a_sandbox_when_the_settings_say() {
+    let binary = &binary();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-offline-{}", std::process::id())));
+    let (home, config) = (scratch.0.join("home"), scratch.0.join("config"));
+    let project = home.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let probe = listener.local_addr().unwrap().port();
+    let script = format!(
+        "(exec 3<>/dev/tcp/127.0.0.1/{probe}) 2>/dev/null && echo CONNECTED || echo OFFLINE; \
+         echo made > made.txt"
+    );
+    let (port, bodies) = serve_call("bash", serde_json::json!({"command": script}));
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({"sandbox": {"mode": "off", "network": false}});
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session", "-p", "hi"])
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("XDG_STATE_HOME", home.join(".local/state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    assert!(
+        stderr.contains("Commands run off the network: sandbox.network is false"),
+        "{stderr}"
+    );
+    let answered = (0..2)
+        .map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap())
+        .nth(1)
+        .unwrap();
+    assert!(answered.contains("OFFLINE"), "{answered} {stderr}");
+    assert!(answered.contains("The commands you run have no network."));
+    assert_eq!(
+        std::fs::read_to_string(project.join("made.txt")).unwrap(),
+        "made\n"
+    );
+}
+
 /// allowWrite's directories and `--add-dir`'s, which the reach would hide, are re-opened.
 #[test]
 #[cfg(target_os = "linux")]
@@ -6578,19 +6631,25 @@ fn acp_shows_and_changes_the_sandbox_through_the_extension_as_slash_sandbox() {
     );
     let off = ask(method, serde_json::json!({"mode": "off"}))["result"].clone();
     assert_eq!(off["mode"], "danger-full-access", "{off}");
-    assert_eq!(off["network"], serde_json::Value::Null, "{off}");
+    assert_eq!(off["network"], false, "{off}");
+    assert_eq!(
+        off["message"],
+        "No sandbox: the agent's tools run with your access, commands off the network"
+    );
     let state = ask(
         "_io.github.leanandmean.scramjet/state",
         serde_json::json!({}),
     );
     assert_eq!(state["result"]["sandbox"], "danger-full-access", "{state}");
-    let no_network = ask(method, serde_json::json!({"network": false}));
-    assert!(
-        no_network["error"]["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("No sandbox"),
-        "{no_network}"
+    // Without a sandbox, the network is still the user's to turn off.
+    let on = ask(method, serde_json::json!({"network": true}))["result"].clone();
+    assert_eq!(on["network"], true, "{on}");
+    assert_eq!(on["message"], "Commands reach the network", "{on}");
+    let no_network = ask(method, serde_json::json!({"network": false}))["result"].clone();
+    assert_eq!(no_network["network"], false, "{no_network}");
+    assert_eq!(
+        no_network["message"],
+        "Commands are kept off the network, with no sandbox"
     );
     // Without a sandbox, the reach kept to the project and the system hides what is taken out.
     let added = ask(method, serde_json::json!({"add": extra}))["result"].clone();

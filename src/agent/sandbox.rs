@@ -819,9 +819,27 @@ pub(super) struct Hidden {
     /// leaves them without a sandbox, and only what the settings hide is.
     #[cfg_attr(windows, allow(dead_code))]
     stores_shown: bool,
+    /// Whether commands run without a sandbox are kept off the network (`offline`).
+    #[cfg_attr(windows, allow(dead_code))]
+    offline: bool,
 }
 
 impl Hidden {
+    /// Nothing but this user's tmux servers, whose commands would run on the network: for the
+    /// commands kept off it alone.
+    pub(super) fn nothing() -> Hidden {
+        Hidden {
+            stores_shown: true,
+            ..Default::default()
+        }
+        .apart_from_tmux()
+    }
+
+    /// These, with commands run without a sandbox kept off the network if `offline`.
+    pub(super) fn offline(self, offline: bool) -> Hidden {
+        Hidden { offline, ..self }
+    }
+
     /// Those of this user's home directory, Scramjet 1's `auth.json` wherever
     /// `SCRAMJET_CODING_AGENT_DIR` puts it, the own one (`login::auth_file`), the files and
     /// directories `named` (the providers' `credentialFiles`), those `reads` denies but
@@ -1099,6 +1117,7 @@ impl Hidden {
             allowed_identities: Vec::new(),
             grantable: false,
             stores_shown: false,
+            offline: false,
         }
     }
 
@@ -1307,7 +1326,9 @@ pub(super) fn sandboxed(
 /// `bash -c command` in `root` with everything as it is, writable and on the network, except the
 /// credential stores, hidden as in the sandbox (`scripts/without-credentials.sh`). Unlike the
 /// sandbox, it shares the process ids, so that a command's `setsid nohup … &` outlives
-/// it, as outside.
+/// it, as outside. Kept `offline`, it is off the network, and on Linux the sockets in `/run`
+/// are hidden as in the sandbox (D-Bus, Docker's, WSL's way to Windows' programs), through
+/// which this machine's servers would reach it for it; on macOS every socket is closed.
 #[cfg(windows)]
 pub(super) fn hiding(_: &Path, _: &str, _: &Hidden) -> Result<Command, String> {
     Err(NOT_HIDDEN.to_owned())
@@ -1322,7 +1343,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
             directories: directories.collect(),
             reopened: hidden.allowed.iter().map(|path| (path, true)).collect(),
         };
-        let mut process = seatbelt::open(root, hiding);
+        let mut process = seatbelt::open(root, hiding, !hidden.offline);
         hide_variables(&mut process, hidden);
         if let Some(own) = &hidden.tmux {
             process.env("TMUX_TMPDIR", own);
@@ -1333,6 +1354,13 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
     }
     let mut process = Command::new(launcher());
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
+    if hidden.offline {
+        process.args(["--unshare-net", "--tmpfs", "/run"]);
+        let real_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+        if real_root.starts_with("/run") {
+            process.arg("--bind").arg(&real_root).arg(&real_root);
+        }
+    }
     hide(&mut process, hidden, &|_| true);
     // After what is hidden, as re-opening a directory above it would uncover it; not where it
     // is hidden, whose empty directory has no room for it.
@@ -3049,6 +3077,42 @@ echo made > made.txt; echo private > /tmp/scramjet-hiding-{marker}; \
             }
         });
         assert!(left, "the background command did not outlive the command");
+    }
+
+    #[test]
+    fn hiding_offline_keeps_commands_off_the_network_and_this_machines_sockets() {
+        let root = std::env::temp_dir().join(format!("scramjet-offline-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // `/run` is Linux's; macOS closes every socket instead.
+        let script = format!(
+            "(exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo connected || echo no network; \
+echo made > made.txt && echo wrote; echo $(ls -A /run 2>/dev/null | wc -l)"
+        );
+        let run = |offline: bool| {
+            let hidden = super::Hidden::nothing().offline(offline);
+            let output = super::hiding(&root, &script, &hidden)
+                .unwrap()
+                .output()
+                .unwrap();
+            let errors = String::from_utf8_lossy(&output.stderr).into_owned();
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            (text.lines().map(str::to_owned).collect::<Vec<_>>(), errors)
+        };
+        let (online, errors) = run(false);
+        assert_eq!(online[..2], ["connected", "wrote"], "{errors}");
+        let (offline, errors) = run(true);
+        assert_eq!(offline[..2], ["no network", "wrote"], "{errors}");
+        if cfg!(target_os = "linux")
+            && std::path::Path::new("/run")
+                .read_dir()
+                .is_ok_and(|mut d| d.next().is_some())
+        {
+            assert_ne!(online[2], "0", "{errors}");
+            assert_eq!(offline[2], "0", "{errors}");
+        }
+        assert!(root.join("made.txt").exists());
     }
 
     /// Ends the tmux servers of these `TMUX_TMPDIR`s, also when a test fails.

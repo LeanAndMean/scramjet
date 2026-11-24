@@ -307,7 +307,7 @@ impl Interactive {
                 let sandbox = self.session.agent.sandbox();
                 super::sandbox_menu::summary(
                     sandbox.map(|sandbox| sandbox.mode),
-                    sandbox.is_none_or(|sandbox| sandbox.network),
+                    sandbox.map_or(!self.session.agent.offline(), |sandbox| sandbox.network),
                     self.session.settings.reach(),
                 )
             }

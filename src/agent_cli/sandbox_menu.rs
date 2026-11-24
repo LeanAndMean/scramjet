@@ -69,7 +69,7 @@ pub(super) fn summary(mode: Option<SandboxMode>, network: bool, reach: Reach) ->
         Some(SandboxMode::WorkspaceWrite) => "can change the project",
         None => "can change anything",
     };
-    let network = match network || mode.is_none() {
+    let network = match network || (mode.is_none() && cfg!(windows)) {
         true => "network on",
         false => "network off",
     };
@@ -240,10 +240,10 @@ impl Interactive {
                     None if cfg!(windows) => {
                         self.say("Nothing confines commands on Windows: they reach the network")
                     }
-                    None => self.say(
-                        "No sandbox: commands reach the network as you can; choose what the \
-                         agent can change first",
-                    ),
+                    None => {
+                        let offline = self.session.agent.offline();
+                        self.change_sandbox(SandboxChange::Network(offline))
+                    }
                 },
                 Entry::Path(PathList::Writable, path) if !subagents => {
                     self.remove_dir(&path.display().to_string())
@@ -328,7 +328,12 @@ impl Interactive {
         }
         let (read, note) = here(&read, note, now.reach != default.reach);
         rows.push(row("Can read", read, note, Entry::Read));
-        let (network, note) = match sandbox.map(|sandbox| sandbox.network) {
+        let network = match sandbox.map(|sandbox| sandbox.network) {
+            _ if cfg!(windows) && sandbox.is_none() => None,
+            Some(network) => Some(network),
+            None => Some(!agent.offline()),
+        };
+        let (network, note) = match network {
             Some(true) => (
                 "on",
                 "Commands reach the internet, the local network and this machine's servers.",
@@ -337,16 +342,12 @@ impl Interactive {
                 "off",
                 "Commands reach neither the internet, the local network nor this machine's servers.",
             ),
-            None if cfg!(windows) => (
+            None => (
                 "on (nothing confines it on Windows)",
                 "Commands reach the network as you can.",
             ),
-            None => (
-                "on (no sandbox)",
-                "Without a sandbox commands reach the network as you can.",
-            ),
         };
-        let set = sandbox.is_some() && now.network != default.network;
+        let set = cfg!(unix) && now.network != default.network;
         let (network, note) = here(network, note.to_owned(), set);
         rows.push(row("Network", network, note, Entry::Network));
         // Without a sandbox everything is writable but what the reach hides.
