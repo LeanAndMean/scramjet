@@ -1315,6 +1315,7 @@ impl Connection {
             let root = front.session.agent.root().to_path_buf();
             let _ = started.send(Ok((front.ui.session.clone(), root)));
             front.commands();
+            front.ui.usage_of(&front.session.agent);
             for job in given {
                 let (id, Prompt { text, images }) = match job {
                     Job::Prompt(id, prompt) => (id, prompt),
@@ -1360,6 +1361,8 @@ impl Connection {
                         }
                         let shown = front.options();
                         front.show(shown);
+                        front.ui.used = None;
+                        front.ui.usage_of(&front.session.agent);
                         let result =
                             json!({"sessionId": front.ui.session, "configOptions": front.shown});
                         out.respond(&id, result);
@@ -1892,6 +1895,8 @@ fn config_options(agent: &Agent, models: &[ModelOption], booleans: bool) -> Valu
     let values: Vec<Value> = (values.into_iter())
         .map(|level| json!({"value": level, "name": level_name(level)}))
         .collect();
+    // `default` alone is offered both for a model that does not reason and for one that
+    // reasons with no levels, which `reasons` tells apart.
     options.push(json!({
         "id": "thought_level",
         "name": "Thinking",
@@ -1899,6 +1904,7 @@ fn config_options(agent: &Agent, models: &[ModelOption], booleans: bool) -> Valu
         "type": "select",
         "currentValue": effort,
         "options": values,
+        "_meta": {"io.github.leanandmean.scramjet": {"reasons": agent.reasons()}},
     }));
     let mut option = json!({
         "id": "autopilot",
@@ -3062,10 +3068,10 @@ impl Front for Acp {
         self.ui.agent_message(&format!("\n\nNext: {text}"));
     }
     fn say(&mut self, text: &str) {
-        self.ui.notice(text);
+        self.ui.say("info", text);
     }
     fn note(&mut self, text: &str) {
-        self.ui.notice(text);
+        self.ui.say("info", text);
     }
     fn notices(&mut self, notices: &[String]) {
         for notice in notices {
@@ -3073,7 +3079,7 @@ impl Front for Acp {
         }
     }
     fn recorded(&mut self, record: &str) {
-        self.ui.notice(record);
+        self.ui.next_step(record);
     }
     /// A client that knows Scramjet follows the new session's id; others keep the thread's,
     /// and are told in it.
@@ -3758,7 +3764,9 @@ impl AgentUi for Updates {
                 }
                 self.chunk("agent_thought_chunk", text)
             }
-            StreamProgress::Call(_) => {}
+            StreamProgress::Call(name) => {
+                self.status("preparing", &format!("Preparing {name}"), None)
+            }
         }
     }
     fn retrying(&mut self, error: &str, attempt: u32, retries: u32, delay: Duration) {
@@ -3996,9 +4004,18 @@ impl AgentUi for Updates {
             None => "Context compacted.".to_owned(),
         };
         let summary = json!([{"type": "text", "text": compaction.summary}]);
-        let tokens =
-            json!({"io.github.leanandmean.scramjet": {"tokensBefore": compaction.tokens_before}});
-        let fields = json!({"summary": summary, "_meta": tokens});
+        let mut meta = json!({"tokensBefore": compaction.tokens_before,
+            "keptItems": compaction.kept_items});
+        if let Some(automatic) = automatic {
+            let why = match automatic {
+                scramjet::agent::AutoCompaction::Threshold => "threshold",
+                scramjet::agent::AutoCompaction::Overflow => "overflow",
+            };
+            meta["automatic"] = json!(why);
+            meta["reason"] = json!(automatic.reason());
+        }
+        let meta = json!({"io.github.leanandmean.scramjet": meta});
+        let fields = json!({"summary": summary, "_meta": meta});
         self.compaction_update("completed", fields, Some(&said));
     }
     fn compaction_failed(&mut self, error: &AgentError) {
@@ -4072,8 +4089,9 @@ impl AgentUi for Updates {
         lock(&self.log).question = Some(message.to_owned());
         self.agent_message(message);
     }
+    /// The full screen shows a core notice in the warning color, a next step's record muted.
     fn notice(&mut self, text: &str) {
-        self.say("info", text);
+        self.say("warning", text);
     }
     fn next_step(&mut self, record: &str) {
         self.say("info", record);

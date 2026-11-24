@@ -2634,6 +2634,15 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
         "{commands}"
     );
     assert!(commands["params"]["_meta"].is_null(), "{commands}");
+    // The window shows from the start, before any reply.
+    let usage = next(&messages);
+    let update = &usage["params"]["update"];
+    assert_eq!(update["sessionUpdate"], "usage_update", "{usage}");
+    assert_eq!(
+        (&update["used"], &update["size"]),
+        (&0.into(), &1000.into()),
+        "{usage}"
+    );
     let prompt = |id: u64, text: &str| {
         serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
             "params": {"sessionId": session, "prompt": [{"type": "text", "text": text}]}})
@@ -2940,6 +2949,7 @@ fn acp_numbers_what_it_sends_and_gives_the_state_and_events_to_a_client_that_com
     };
     let commands = next(&messages);
     assert_eq!(seq(&commands), Some(1), "{commands}");
+    assert_eq!(seq(&next(&messages)), Some(2));
     let call = |id: u64, method: &str, params: serde_json::Value| {
         let mut params = params;
         params["sessionId"] = session.clone();
@@ -2949,7 +2959,7 @@ fn acp_numbers_what_it_sends_and_gives_the_state_and_events_to_a_client_that_com
     send(&mut stdin, call(3, "state", serde_json::json!({})));
     let idle = next(&messages)["result"].clone();
     assert_eq!(idle["running"], false, "{idle}");
-    assert_eq!(idle["seq"], 1, "{idle}");
+    assert_eq!(idle["seq"], 2, "{idle}");
     assert_eq!(idle["ask"], true, "{idle}");
     assert_eq!(idle["sandbox"], "danger-full-access", "{idle}");
     assert_eq!(idle["configOptions"][0]["id"], "model", "{idle}");
@@ -2963,7 +2973,7 @@ fn acp_numbers_what_it_sends_and_gives_the_state_and_events_to_a_client_that_com
     // Every update and request is numbered on from the last, in the order written.
     let sent: Vec<serde_json::Value> = before.into_iter().chain([request.clone()]).collect();
     let numbers: Vec<Option<u64>> = sent.iter().map(seq).collect();
-    let expected: Vec<Option<u64>> = (2..2 + sent.len() as u64).map(Some).collect();
+    let expected: Vec<Option<u64>> = (3..3 + sent.len() as u64).map(Some).collect();
     assert_eq!(numbers, expected, "{sent:?}");
     // Coming back during the turn: what is open, and what was sent since a number.
     send(&mut stdin, call(5, "state", serde_json::json!({})));
@@ -2974,14 +2984,14 @@ fn acp_numbers_what_it_sends_and_gives_the_state_and_events_to_a_client_that_com
     assert!(running["question"].is_null(), "{running}");
     send(
         &mut stdin,
-        call(6, "events", serde_json::json!({"since": 1})),
+        call(6, "events", serde_json::json!({"since": 2})),
     );
     let events = next(&messages)["result"].clone();
     assert_eq!(events["complete"], true, "{events}");
     assert_eq!(events["events"], serde_json::json!(sent), "{events}");
     send(
         &mut stdin,
-        call(7, "events", serde_json::json!({"since": 3})),
+        call(7, "events", serde_json::json!({"since": 4})),
     );
     let later = next(&messages)["result"].clone();
     assert_eq!(later["events"], serde_json::json!(sent[2..]), "{later}");
@@ -3292,7 +3302,12 @@ content-length: 2\r\nconnection: close\r\n\r\n{}";
         .collect();
     // Waiting, retrying after the 503, waiting again for the call, then for the reply after it
     // is not sent: the question ends the turn.
-    assert_eq!(states, ["waiting", "retrying", "waiting"], "{statuses:?}");
+    // The call is written after the second wait.
+    assert_eq!(
+        states,
+        ["waiting", "retrying", "waiting", "preparing"],
+        "{statuses:?}"
+    );
     assert_eq!(statuses[0]["sessionId"], session);
     assert_eq!(statuses[0]["text"], "Waiting for reply");
     let retrying = statuses[1];
@@ -3304,6 +3319,10 @@ content-length: 2\r\nconnection: close\r\n\r\n{}";
         "{retrying}"
     );
     assert!(retrying["delayMs"].as_u64().unwrap() > 0, "{retrying}");
+    assert_eq!(
+        statuses[3]["text"], "Preparing get_scramjet_user_input",
+        "{statuses:?}"
+    );
     // The question goes just before the turn's response.
     let last = seen.last().unwrap();
     assert_eq!(last["method"], ours("question"), "{last}");
@@ -3950,6 +3969,7 @@ fn acp_prompts_carry_images() {
             "params": {"cwd": project, "mcpServers": []}}),
     );
     let session = next(&messages)["result"]["sessionId"].clone();
+    next(&messages);
     next(&messages);
     let mut png = Vec::new();
     image::RgbImage::new(2, 2)
@@ -4676,6 +4696,13 @@ fn acp_shows_compactions_and_what_commands_sent() {
                 );
                 let summary = compactions[1]["summary"][0]["text"].as_str().unwrap();
                 assert!(summary.contains("The summary."), "{summary}");
+                let meta = &compactions[1]["_meta"]["io.github.leanandmean.scramjet"];
+                assert!(meta["keptItems"].as_u64().is_some(), "{meta}");
+                assert_eq!(meta["automatic"], "threshold", "{meta}");
+                assert!(
+                    meta["reason"].as_str().unwrap().starts_with("Automatic"),
+                    "{meta}"
+                );
             }
             false => {
                 assert!(compactions.is_empty(), "{second:?}");
@@ -4936,6 +4963,7 @@ fn acp_reloads_the_settings_commands_and_models_through_the_extension() {
             .find(|update| update["sessionUpdate"] == kind)
             .unwrap_or_else(|| panic!("no {kind} in {updates:?}"))
     };
+    assert_eq!(of("notice")["severity"], "warning", "{updates:?}");
     let warning = of("notice")["title"].as_str().unwrap();
     assert!(
         warning.contains("commandSets must be a list of directories"),
@@ -6946,6 +6974,10 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
     );
     let level = option(&options, "thought_level");
     assert_eq!(level["currentValue"], "low", "{options}");
+    assert_eq!(
+        level["_meta"]["io.github.leanandmean.scramjet"]["reasons"],
+        true
+    );
     let levels: Vec<_> = (level["options"].as_array().unwrap().iter())
         .map(|value| value["value"].as_str().unwrap())
         .collect();
@@ -7040,6 +7072,10 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
     );
     let level = option(options, "thought_level");
     assert_eq!(level["currentValue"], "default", "{update}");
+    assert_eq!(
+        level["_meta"]["io.github.leanandmean.scramjet"]["reasons"],
+        false
+    );
     assert_eq!(
         level["options"],
         serde_json::json!([{"value": "default", "name": "Model's default"}])
@@ -7713,7 +7749,10 @@ fn acp_lists_resumes_closes_and_deletes_saved_sessions() {
     let (answer, before) = request(&mut stdin, "session/resume", resume(&started[2], &project));
     assert_eq!(answer["result"]["sessionId"], started[2], "{answer}");
     assert!(answer["result"]["configOptions"].is_array(), "{answer}");
-    assert!(before.is_empty(), "{before:?}");
+    let kinds: Vec<_> = (before.iter())
+        .map(|message| message["params"]["update"]["sessionUpdate"].as_str())
+        .collect();
+    assert_eq!(kinds, [Some("usage_update")], "{before:?}");
     let (answer, before) = request(&mut stdin, "session/load", resume(&started[2], &project));
     assert_eq!(answer["result"]["sessionId"], started[2], "{answer}");
     let shown: Vec<_> = (before.iter())
@@ -7948,7 +7987,12 @@ fn acp_loads_a_saved_session_replaying_its_branch() {
     // conversation.
     let (answer, again) = request(&mut stdin, "session/load", load(&project));
     assert_eq!(answer["result"]["sessionId"], session, "{answer}");
-    let again: Vec<_> = (again.iter())
+    let usage = again.last().unwrap();
+    assert_eq!(
+        usage["params"]["update"]["sessionUpdate"], "usage_update",
+        "{usage}"
+    );
+    let again: Vec<_> = (again[..again.len() - 1].iter())
         .map(|message| entry(&message["params"]["update"]))
         .collect();
     assert_eq!(again, updates.iter().map(entry).collect::<Vec<_>>());

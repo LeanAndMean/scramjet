@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.312.0 — ACP clients see what the full screen shows
+
+### Added
+
+- `scramjet acp` sends more of what the full screen shows: the window's usage as a session opens, before any reply; a `preparing` status (`Preparing NAME`) while the model writes a tool call; a compaction's kept items and, when automatic, why it ran; and on `thought_level` whether the model reasons at all.
+
+### Changed
+
+- Over ACP, the core's notices (an MCP server not available, a setting refused) are `warning`s, as the full screen shows them in the warning color; next-step records stay `info`.
+
 ## 2.311.0 — --bare and --ephemeral
 
 ### Added
