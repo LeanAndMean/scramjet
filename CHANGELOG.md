@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.319.0 — Your own agents listed, and worktrees a sandbox cannot remove
+
+### Changed
+
+- The agent's instructions list your own agents (`~/.config/scramjet/agents`) with the command sets', so it uses one you name; before, it saw only the sets' and said the agent did not exist.
+
+### Fixed
+
+- A kept subagent worktree's note says when the main agent's sandbox keeps the worktree or the repository's `.git` read-only, so its removal command would fail there, and to ask for them (`request_permissions`) or leave the removal to you.
+
 ## 2.318.1 — Subagent worktrees kept when they should be
 
 ### Fixed

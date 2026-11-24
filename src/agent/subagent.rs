@@ -858,6 +858,12 @@ struct Run {
     kept: Option<String>,
 }
 
+/// What the parent is told of the job's worktree, if kept.
+fn kept(job: &Job, parent: &Parent) -> Option<String> {
+    let main = parent.sandbox.map(|sandbox| (sandbox, parent.root));
+    job.worktree.as_ref()?.finish(main)
+}
+
 impl Run {
     fn new(name: &str) -> Self {
         Self {
@@ -1233,7 +1239,7 @@ fn run_jobs(
                         }
                         (None, None) => Run::failed(job.name, None, unknown(job.name)),
                     };
-                    run.kept = job.worktree.as_ref().and_then(worktree::Worktree::finish);
+                    run.kept = kept(job, parent);
                     let _ = sender.send((index, Event::Done(run)));
                 }
             });
@@ -1259,7 +1265,7 @@ fn run_jobs(
         .zip(jobs)
         .map(|(run, job)| {
             run.unwrap_or_else(|| Run {
-                kept: job.worktree.as_ref().and_then(worktree::Worktree::finish),
+                kept: kept(job, parent),
                 ..Run::failed(
                     job.name,
                     Some("aborted"),

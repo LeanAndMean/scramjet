@@ -2528,6 +2528,10 @@ fn installed_says_where_each_comes_from_and_what_is_wrong() {
     agent.autonomy = None;
     project_sets(&mut agent);
     agent.instruct();
+    // The catalog lists what a call reaches by default: the user's agents and the sets'.
+    let instructions = agent.instructions();
+    assert!(instructions.contains("- demo:helper: Does demo:helper.\n- mine: Does mine."));
+    assert!(!instructions.contains("- ours:"), "{instructions}");
     let found = agent.installed();
     assert_eq!(found.sets, agent.sets.list());
     let agents: Vec<(&str, &AgentSource)> = (found.agents.iter())

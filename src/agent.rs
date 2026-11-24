@@ -1062,7 +1062,11 @@ impl Agent {
         let reads = self.reads.without_reach().opening([config.root.clone()]);
         let hidden = sandbox::Hidden::stores(config.providers.credential_files(), &reads);
         let loaded = instructions::load(&config.prompt, &config.root, directory, &hidden);
-        let agents = subagent::registered(&self.sets, &mut Vec::new());
+        let sources = subagent::Sources {
+            user: self.agents_directory.as_deref(),
+            sets: &self.sets,
+        };
+        let agents = subagent::discover(&sources, &config.root, subagent::Scope::User).agents;
         let mcp = !self.enabled_mcp().is_empty();
         self.instructions = instructions::agent(
             &config.root,
