@@ -90,6 +90,7 @@ pub(super) enum Binding {
     ModelsReorderUp,
     ModelsReorderDown,
     NextStepFresh,
+    SandboxSave,
     TreeFoldOrUp,
     TreeUnfoldOrDown,
     TreeEditLabel,
@@ -126,11 +127,12 @@ enum Section {
     Resume,
     ScopedModels,
     NextSteps,
+    Sandbox,
     Tree,
     ThemeEditor,
 }
 
-const SECTIONS: [(Section, &str); 10] = [
+const SECTIONS: [(Section, &str); 11] = [
     (Section::Navigation, "Navigation"),
     (Section::Selecting, "Selecting"),
     (Section::Editing, "Editing"),
@@ -139,6 +141,7 @@ const SECTIONS: [(Section, &str); 10] = [
     (Section::Resume, "In /resume"),
     (Section::ScopedModels, "In /scoped-models"),
     (Section::NextSteps, "In next steps"),
+    (Section::Sandbox, "In /sandbox"),
     (Section::Tree, "In /tree"),
     (Section::ThemeEditor, "In the theme editor"),
 ];
@@ -174,7 +177,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 96] = [
+const DEFINITIONS: [Definition; 97] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -248,6 +251,7 @@ const DEFINITIONS: [Definition; 96] = [
     define(B::ModelsReorderUp, "app.models.reorderUp", &["alt+up"], S::ScopedModels, "Move the model up"),
     define(B::ModelsReorderDown, "app.models.reorderDown", &["alt+down"], S::ScopedModels, "Move the model down"),
     define(B::NextStepFresh, "app.nextStep.toggleFreshSession", &["tab"], S::NextSteps, "Run the step in a fresh session, or in this one"),
+    define(B::SandboxSave, "app.sandbox.saveDefault", &["ctrl+s"], S::Sandbox, "Save the sandbox as every project's default"),
     define(B::TreeFoldOrUp, "app.tree.foldOrUp", &["ctrl+left", "alt+left", "alt+b"], S::Tree, "Fold the branch, or up to the one before"),
     define(B::TreeUnfoldOrDown, "app.tree.unfoldOrDown", &["ctrl+right", "alt+right", "alt+f"], S::Tree, "Unfold the branch, or down to the next"),
     define(B::TreeEditLabel, "app.tree.editLabel", &["shift+l"], S::Tree, "Label the entry"),

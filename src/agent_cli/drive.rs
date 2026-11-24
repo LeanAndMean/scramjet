@@ -1,10 +1,11 @@
 //! The session every front end drives: the agent, the user's settings and the models Ctrl+P
 //! cycles through, and what happens between turns (a completed command's next step), apart
 //! from how each front end shows it (`Front`).
-use super::settings::{Delivery, Settings};
+use super::sandbox_menu;
+use super::settings::{Delivery, PathList, Settings};
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Remembered,
-    Reopened, Sandbox, SandboxMode, SessionInfo, Source, Step, Suggested, shortened,
+    Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Reach,
+    Remembered, Reopened, Sandbox, SandboxMode, SessionInfo, Source, Step, Suggested, shortened,
 };
 use std::path::Path;
 use std::time::Duration;
@@ -117,10 +118,14 @@ impl Session {
                     Some(Err(error)) => return Err(error),
                     None => false,
                 };
+                let default = (self.settings).remove_listed(false, PathList::Writable, &path);
                 if revoked.is_some() {
                     self.agent.set_sandbox(sandbox);
                 }
                 let said = match (revoked.is_some(), forgotten) {
+                    (false, false) if default => {
+                        format!("{} is no longer in the default", path.display())
+                    }
                     (true, true) => format!(
                         "{} is no longer granted in this project; read-only again",
                         path.display()
@@ -133,7 +138,80 @@ impl Session {
                 };
                 Ok((said, Vec::new()))
             }
+            SandboxChange::Reach(reach) => {
+                self.settings.set_reach(reach);
+                self.apply_reads();
+                let said = format!("Can read: {}", sandbox_menu::reach_name(reach));
+                Ok((said, Vec::new()))
+            }
+            SandboxChange::Listed {
+                subagents,
+                list,
+                path,
+                add,
+            } => {
+                let real = Sandbox::resolve(&root, &path);
+                let changed = match add {
+                    true => self.settings.add_listed(subagents, list, &real),
+                    false => self.settings.remove_listed(subagents, list, &real),
+                };
+                let whose = if subagents {
+                    "subagents'"
+                } else {
+                    "the agent's"
+                };
+                let shown = shortened(&real.to_string_lossy());
+                let said = match (list, add, changed) {
+                    (_, true, false) => return Err(format!("{shown} is listed already")),
+                    (_, false, false) => return Err(format!("{path} is not listed")),
+                    (PathList::Hidden, true, _) => format!("{shown} is hidden from {whose} tools"),
+                    (PathList::Hidden, false, _) => format!("{shown} is no longer hidden"),
+                    (PathList::Readable, true, _) => format!("{shown} is readable again"),
+                    (PathList::Readable, false, _) => {
+                        format!("{shown} is no longer readable again")
+                    }
+                    (PathList::Writable, true, _) => format!("{shown} is writable to subagents"),
+                    (PathList::Writable, false, _) => {
+                        format!("{shown} is no longer writable to subagents")
+                    }
+                };
+                self.apply_reads();
+                Ok((said, Vec::new()))
+            }
+            SandboxChange::Subagents(mode, network, reach) => {
+                self.settings.set_subagent_policy(mode, network, reach);
+                self.apply_reads();
+                Ok(("Subagents' sandbox changed".to_owned(), Vec::new()))
+            }
+            SandboxChange::OwnList(list, own) => {
+                self.settings.own_list(list, own);
+                self.apply_reads();
+                let said = match own {
+                    true => "Subagents have a list of their own",
+                    false => "Subagents take the main agent's list",
+                };
+                Ok((said.to_owned(), Vec::new()))
+            }
+            SandboxChange::Save => {
+                let network = current
+                    .as_ref()
+                    .map_or(self.settings.sandbox_network, |s| s.network);
+                let mode = current.map(|sandbox| sandbox.mode);
+                match self.settings.save_sandbox_defaults(mode, network) {
+                    Ok(()) => Ok((
+                        "Saved as the default for every project".to_owned(),
+                        Vec::new(),
+                    )),
+                    Err(error) => Err(format!("Settings not saved: {error}")),
+                }
+            }
         }
+    }
+
+    /// The paths hidden and re-opened, and subagents' sandbox, as the settings have them now.
+    fn apply_reads(&mut self) {
+        self.agent.set_reads(self.settings.reads());
+        self.agent.set_subagents(self.settings.subagents());
     }
 }
 
@@ -147,6 +225,22 @@ pub(super) enum SandboxChange {
     Add(String),
     /// A directory's grant taken back, and forgotten if it was granted always in the project.
     Remove(String),
+    /// What the main agent's tools can read.
+    Reach(Reach),
+    /// A path added to `list` or taken out of it: the main agent's hidden or readable again,
+    /// or `subagents`' (their writable ones too).
+    Listed {
+        subagents: bool,
+        list: PathList,
+        path: String,
+        add: bool,
+    },
+    /// Subagents' mode, network and reach (`None`: the main agent's).
+    Subagents(SandboxMode, bool, Option<Reach>),
+    /// Subagents' hidden or readable list made their own, or the main agent's again.
+    OwnList(PathList, bool),
+    /// The sandbox as it is now, saved as every project's default.
+    Save,
 }
 
 /// Puts `servers` in place of the settings' MCP servers of the same names, enabled.

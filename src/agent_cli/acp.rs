@@ -11,7 +11,7 @@ use super::settings::Settings;
 use super::slash::Builtin;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose,
+    Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose, Reach,
     Remembered, Reopened, Reply, SandboxMode, SessionChoice, Shell, StreamProgress, TYPE_SOMETHING,
     Times, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
@@ -509,6 +509,27 @@ fn keyed_providers(
 const AUTH_REQUIRED: i64 = -32000;
 
 /// `AUTH_REQUIRED`'s message, saying why.
+/// The `sandbox` extension's names of a reach.
+const REACH_NAMES: [(Reach, &str); 3] = [
+    (Reach::Everything, "everything"),
+    (Reach::Project, "project"),
+    (Reach::Minimal, "minimal"),
+];
+
+fn reach(name: &str) -> Option<Reach> {
+    REACH_NAMES
+        .iter()
+        .find(|(_, known)| *known == name)
+        .map(|(reach, _)| *reach)
+}
+
+fn reach_name(reach: Reach) -> &'static str {
+    REACH_NAMES
+        .iter()
+        .find(|(known, _)| *known == reach)
+        .map_or("everything", |(_, name)| name)
+}
+
 fn auth_required(why: &str) -> String {
     format!("authentication required: {why}")
 }
@@ -858,7 +879,7 @@ impl Connection {
     /// `/sandbox`: the session's sandbox, after the change `params` gives (`mode`, `network`,
     /// `add` or `remove`, at most one), made at the turn's next pause as the full screen makes it.
     fn sandbox(&self, id: &Value, params: &Value) {
-        let given: Vec<&str> = (["mode", "network", "add", "remove"].into_iter())
+        let given: Vec<&str> = (["mode", "network", "add", "remove", "reach"].into_iter())
             .filter(|key| !params[key].is_null())
             .collect();
         let change = match given[..] {
@@ -878,6 +899,13 @@ impl Connection {
                         .error(id, INVALID_PARAMS, "network is true or false");
                 }
             },
+            ["reach"] => match params["reach"].as_str().and_then(reach) {
+                Some(reach) => Some(SandboxChange::Reach(reach)),
+                None => {
+                    let message = "reach is everything, project or minimal";
+                    return self.out.error(id, INVALID_PARAMS, message);
+                }
+            },
             [key @ ("add" | "remove")] => {
                 let directory = params[key].as_str().map(str::trim).unwrap_or_default();
                 if directory.is_empty() {
@@ -890,7 +918,7 @@ impl Connection {
                 })
             }
             _ => {
-                let message = "at most one of mode, network, add and remove";
+                let message = "at most one of mode, network, add, remove and reach";
                 return self.out.error(id, INVALID_PARAMS, message);
             }
         };
@@ -2725,6 +2753,7 @@ impl Acp {
         let result = json!({
             "mode": mode,
             "network": sandbox.map(|sandbox| sandbox.network),
+            "reach": reach_name(agent.reads().reach),
             "granted": listed,
             "summary": super::slash::sandbox_summary(agent, &self.session.settings.allow_write()),
             "message": message,

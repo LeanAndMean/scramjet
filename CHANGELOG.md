@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.321.0 — One sandbox screen
+
+### Changed
+
+- `/sandbox` is one screen for the whole sandbox, in plain rows: Can change (nothing, this project, anything), Can read, Network, the lists Also writable, Hidden and Also readable (Add… and Enter to take one out), and Subagents with the same rows. Every change applies at once, what the agent can read too; Ctrl+S saves it as every project's default. `/permissions` opens it as well.
+- `/settings` has one Sandbox row, summing it up and opening that screen, in place of its Sandbox, Sandbox network and Project-only reach rows.
+
 ## 2.320.0 — A chain's subagents share their worktree
 
 ### Changed

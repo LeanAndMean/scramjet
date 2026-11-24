@@ -310,7 +310,7 @@ impl Interactive {
         self.change_sandbox(SandboxChange::Remove(directory.to_owned()));
     }
 
-    fn change_sandbox(&mut self, change: SandboxChange) {
+    pub(super) fn change_sandbox(&mut self, change: SandboxChange) {
         match self.session.change_sandbox(change) {
             Ok((said, warnings)) => {
                 for warning in warnings {

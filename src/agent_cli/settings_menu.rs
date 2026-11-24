@@ -12,7 +12,7 @@ use super::theme_editor::ThemeEditor;
 use super::{background, editor, installed, palette, select, style};
 use scramjet::agent::{
     Approval, Approvals, CODING_TOOLS, Choice, Edge, HARNESS_TOOLS, Installed, NextStep, NextSteps,
-    Problem, Publication, Sandbox, Scope, Setting, config_directory, shortened, write_replacing,
+    Problem, Publication, Scope, Setting, config_directory, shortened, write_replacing,
 };
 use std::{
     path::{Path, PathBuf},
@@ -264,12 +264,7 @@ impl Interactive {
                         self.say(&format!("Error: {error}"));
                     }
                 }
-                Row::Sandbox
-                    if self.session.settings.next_sandbox().is_some()
-                        && let Err(error) = Sandbox::check() =>
-                {
-                    self.say(&format!("Error: {error}"));
-                }
+                Row::Sandbox => self.sandbox_screen(false),
                 row => {
                     if let Err(error) = self.session.settings.cycle(row) {
                         self.say(&format!("Error: settings not saved: {error}"));
@@ -308,6 +303,14 @@ impl Interactive {
             Row::ThinkingLevel => (self.session.agent.effort().map(scramjet_level))
                 .unwrap_or("model default")
                 .to_owned(),
+            Row::Sandbox => {
+                let sandbox = self.session.agent.sandbox();
+                super::sandbox_menu::summary(
+                    sandbox.map(|sandbox| sandbox.mode),
+                    sandbox.is_none_or(|sandbox| sandbox.network),
+                    self.session.settings.reach(),
+                )
+            }
             Row::Autopilot if self.session.agent.autopilot() => "on".into(),
             Row::Autopilot => "off".into(),
             Row::NextSteps => steps_summary(&self.session.agent.next_steps()),

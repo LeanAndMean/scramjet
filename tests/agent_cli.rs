@@ -6385,6 +6385,15 @@ fn acp_shows_and_changes_the_sandbox_through_the_extension_as_slash_sandbox() {
     let network = ask(method, serde_json::json!({"network": false}))["result"].clone();
     assert_eq!(network["network"], false, "{network}");
     assert_eq!(network["message"], "Sandbox: no network");
+    assert_eq!(network["reach"], "everything", "{network}");
+    let reach = ask(method, serde_json::json!({"reach": "minimal"}))["result"].clone();
+    assert_eq!(reach["reach"], "minimal", "{reach}");
+    assert_eq!(
+        reach["message"],
+        "Can read: this project and the system only"
+    );
+    let wrong = ask(method, serde_json::json!({"reach": true}));
+    assert_eq!(wrong["error"]["code"], -32602, "{wrong}");
     let read_only = ask(method, serde_json::json!({"mode": "read-only"}))["result"].clone();
     assert_eq!(read_only["mode"], "read-only", "{read_only}");
     assert_eq!(read_only["network"], false, "{read_only}");

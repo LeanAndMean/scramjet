@@ -179,12 +179,19 @@ pub(super) enum Row {
     DefaultShell,
     Credentials,
     Sandbox,
-    SandboxNetwork,
-    ProjectReach,
     Autopilot,
     NextSteps,
     Publishing,
     Installed,
+}
+
+/// A list of paths `/sandbox` edits: `sandbox.filesystem`'s `allowWrite`, `denyRead` and
+/// `allowRead`, the main agent's or subagents'.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PathList {
+    Writable,
+    Hidden,
+    Readable,
 }
 
 /// `/settings`' headings, each over its rows, in the order shown.
@@ -234,8 +241,6 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::DefaultShell,
             Row::Credentials,
             Row::Sandbox,
-            Row::SandboxNetwork,
-            Row::ProjectReach,
         ],
     ),
     (
@@ -251,10 +256,7 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
 
 /// The groups `/settings` lists here: `GROUPS` without the rows for another system.
 pub(super) fn groups() -> Vec<(&'static str, Vec<Row>)> {
-    let here = |row: &&Row| {
-        (**row != Row::DefaultShell || cfg!(windows))
-            && (!matches!(row, Row::Sandbox | Row::SandboxNetwork) || cfg!(unix))
-    };
+    let here = |row: &&Row| **row != Row::DefaultShell || cfg!(windows);
     (GROUPS.iter())
         .map(|(heading, rows)| (*heading, rows.iter().filter(here).copied().collect()))
         .filter(|(_, rows): &(_, Vec<Row>)| !rows.is_empty())
@@ -292,8 +294,6 @@ impl Row {
             Self::DefaultShell => "Shell of ! commands",
             Self::Credentials => "Credential stores",
             Self::Sandbox => "Sandbox",
-            Self::SandboxNetwork => "Sandbox network",
-            Self::ProjectReach => "Project-only reach",
             Self::Autopilot => "Autopilot",
             Self::NextSteps => "Next steps",
             Self::Publishing => "Publishing",
@@ -440,19 +440,8 @@ impl Row {
                  started (a next step run at once, -p), always or never. Subagents never see them."
             }
             Self::Sandbox => {
-                "How new sessions confine the agent's tools: read-only, workspace-write (the \
-                 project writable) or off; --sandbox overrides it. /sandbox changes this session's."
-            }
-            Self::SandboxNetwork => {
-                "Whether commands in a new session's sandbox reach the network. /sandbox network \
-                 changes this session's."
-            }
-            Self::ProjectReach => {
-                "On: new sessions' read, grep and find, and commands in the sandbox, see only the \
-                 project, the writable directories, PATH's programs and git's configuration of the \
-                 home directory and mounted drives; minimal: only the system's directories \
-                 (/usr, /etc, /opt, /bin, /lib) besides the project and the writable directories. \
-                 allowRead re-opens more. Subagents keep to it."
+                "What the agent and its subagents can change and read, and whether their commands \
+                 reach the network. Enter opens /sandbox."
             }
             Self::Autopilot => {
                 "On: when a command finishes, the next step it recommends runs after a 3-second \
@@ -2162,23 +2151,11 @@ impl Settings {
                 HideCredentials::Never => "never hidden",
             }
             .into(),
-            Row::Sandbox => self.sandbox.map_or("off", SandboxMode::name).into(),
-            Row::SandboxNetwork if self.sandbox_network => "on".into(),
-            Row::SandboxNetwork => "off".into(),
-            Row::ProjectReach => {
-                let name = match self.reach {
-                    Reach::Everything => return "off".into(),
-                    Reach::Project => "on",
-                    Reach::Minimal => "minimal",
-                };
-                match (self.sandbox, cfg!(windows)) {
-                    (Some(_), false) => name.into(),
-                    (_, true) => format!("{name} (read, grep and find only)"),
-                    (None, false) => {
-                        format!("{name} (read, grep and find; commands only in the sandbox)")
-                    }
-                }
-            }
+            Row::Sandbox => super::sandbox_menu::summary(
+                self.sandbox.filter(|_| cfg!(unix)),
+                self.sandbox_network,
+                self.reach,
+            ),
         }
     }
 
@@ -2200,6 +2177,7 @@ impl Settings {
             | Row::Autopilot
             | Row::NextSteps
             | Row::Publishing
+            | Row::Sandbox
             | Row::Installed => Ok(()),
             Row::StartupModel => {
                 let (startup, name) = match self.startup_model {
@@ -2323,45 +2301,202 @@ impl Settings {
                 self.hide_credentials = hide;
                 self.save("hideCredentials", json!(name))
             }
-            Row::Sandbox => {
-                self.sandbox = self.next_sandbox();
-                let mode = json!(self.sandbox.map_or("off", SandboxMode::name));
-                self.save_sandbox("mode", mode)
+        }
+    }
+
+    /// The reach `blockReadsOutsideWorkingDirectories` gives, or `/sandbox` set since.
+    pub(super) fn reach(&self) -> Reach {
+        self.reach
+    }
+
+    /// Sets the main agent's reach for the session, unsaved (`save_sandbox_defaults`).
+    pub(super) fn set_reach(&mut self, reach: Reach) {
+        self.reach = reach;
+    }
+
+    /// Subagents' mode, network and reach (`None`: the main agent's), as `/sandbox` shows them.
+    pub(super) fn subagent_policy(&self) -> (SandboxMode, bool, Option<Reach>) {
+        (
+            self.subagent_mode,
+            self.subagent_network,
+            self.subagent_reach,
+        )
+    }
+
+    /// Sets subagents' mode, network and reach for the session, unsaved.
+    pub(super) fn set_subagent_policy(
+        &mut self,
+        mode: SandboxMode,
+        network: bool,
+        reach: Option<Reach>,
+    ) {
+        (
+            self.subagent_mode,
+            self.subagent_network,
+            self.subagent_reach,
+        ) = (mode, network, reach);
+    }
+
+    /// The paths of `list`, the main agent's or `subagents`', resolved; `None`: subagents take
+    /// the main agent's.
+    pub(super) fn listed(&self, subagents: bool, list: PathList) -> Option<Vec<PathBuf>> {
+        let entries = self.entries(subagents, list)?;
+        Some(entries.iter().map(|entry| self.resolve(entry)).collect())
+    }
+
+    fn entries(&self, subagents: bool, list: PathList) -> Option<&Vec<String>> {
+        match (subagents, list) {
+            (false, PathList::Writable) => Some(&self.allow_write),
+            (false, PathList::Hidden) => Some(&self.deny_read),
+            (false, PathList::Readable) => Some(&self.allow_read),
+            (true, PathList::Writable) => Some(&self.subagent_allow_write),
+            (true, PathList::Hidden) => self.subagent_deny_read.as_ref(),
+            (true, PathList::Readable) => self.subagent_allow_read.as_ref(),
+        }
+    }
+
+    /// The list for `edit`; a subagents' list that took the main agent's starts as a copy of it.
+    fn entries_mut(&mut self, subagents: bool, list: PathList) -> &mut Vec<String> {
+        match (subagents, list) {
+            (false, PathList::Writable) => &mut self.allow_write,
+            (false, PathList::Hidden) => &mut self.deny_read,
+            (false, PathList::Readable) => &mut self.allow_read,
+            (true, PathList::Writable) => &mut self.subagent_allow_write,
+            (true, PathList::Hidden) => {
+                (self.subagent_deny_read).get_or_insert_with(|| self.deny_read.clone())
             }
-            Row::SandboxNetwork => {
-                self.sandbox_network = !self.sandbox_network;
-                self.save_sandbox("network", json!(self.sandbox_network))
-            }
-            Row::ProjectReach => {
-                self.reach = match self.reach {
-                    Reach::Everything => Reach::Project,
-                    Reach::Project => Reach::Minimal,
-                    Reach::Minimal => Reach::Everything,
-                };
-                let saved = match self.reach {
-                    Reach::Minimal => json!(MINIMAL),
-                    reach => json!(reach.kept()),
-                };
-                self.update(|object| {
-                    if let Some(Value::Object(permissions)) = object.get_mut("permissions") {
-                        permissions.remove(BLOCK_READS);
-                        if permissions.is_empty() {
-                            object.remove("permissions");
-                        }
-                    }
-                    object.insert(BLOCK_READS.to_owned(), saved);
-                })
+            (true, PathList::Readable) => {
+                (self.subagent_allow_read).get_or_insert_with(|| self.allow_read.clone())
             }
         }
     }
 
-    /// The sandbox mode after the saved one, as Enter in `/settings` moves to it.
-    pub(super) fn next_sandbox(&self) -> Option<SandboxMode> {
-        match self.sandbox {
-            None => Some(SandboxMode::ReadOnly),
-            Some(SandboxMode::ReadOnly) => Some(SandboxMode::WorkspaceWrite),
-            Some(SandboxMode::WorkspaceWrite) => None,
+    /// Adds `path`, absolute, to `list` for the session, unsaved, written with `~` for the home
+    /// directory; false if it is there already.
+    pub(super) fn add_listed(&mut self, subagents: bool, list: PathList, path: &Path) -> bool {
+        let listed = (self.listed(subagents, list)).or_else(|| self.listed(false, list));
+        if listed.unwrap_or_default().iter().any(|known| known == path) {
+            return false;
         }
+        let entry = shortened(&path.to_string_lossy());
+        self.entries_mut(subagents, list).push(entry);
+        true
+    }
+
+    /// Takes `path` out of `list` for the session, unsaved, matched by its path as written or
+    /// its real one; false if it was not there.
+    pub(super) fn remove_listed(&mut self, subagents: bool, list: PathList, path: &Path) -> bool {
+        let is = |resolved: PathBuf| {
+            resolved == path || std::fs::canonicalize(&resolved).is_ok_and(|real| real == path)
+        };
+        let entries = (self.entries(subagents, list)).or_else(|| self.entries(false, list));
+        let resolved: Vec<bool> = (entries.into_iter().flatten())
+            .map(|entry| is(self.resolve(entry)))
+            .collect();
+        if !resolved.contains(&true) {
+            return false;
+        }
+        let mut matched = resolved.into_iter();
+        (self.entries_mut(subagents, list)).retain(|_| !matched.next().unwrap_or(false));
+        true
+    }
+
+    /// Makes subagents' `list` (hidden or readable) their own, a copy of the main agent's, or
+    /// the main agent's again.
+    pub(super) fn own_list(&mut self, list: PathList, own: bool) {
+        if own {
+            self.entries_mut(true, list);
+            return;
+        }
+        match list {
+            PathList::Hidden => self.subagent_deny_read = None,
+            PathList::Readable => self.subagent_allow_read = None,
+            PathList::Writable => {}
+        }
+    }
+
+    /// Saves the sandbox as the session has it, `mode` and `network` the main agent's, and the
+    /// reach, lists and subagents' as set since the file was read, as every project's default.
+    pub(super) fn save_sandbox_defaults(
+        &mut self,
+        mode: Option<SandboxMode>,
+        network: bool,
+    ) -> io::Result<()> {
+        (self.sandbox, self.sandbox_network) = (mode, network);
+        let list = |entries: &[String]| json!(entries);
+        let reach = |reach: Reach| match reach {
+            Reach::Minimal => json!(MINIMAL),
+            reach => json!(reach.kept()),
+        };
+        let put = |object: &mut Map<String, Value>, key: &str, value: Option<Value>| {
+            match value {
+                Some(value) => object.insert(key.to_owned(), value),
+                None => object.remove(key),
+            };
+        };
+        let filesystem = |object: &mut Map<String, Value>, lists: [(&str, Option<Value>); 3]| {
+            let mut filesystem = match object.remove("filesystem") {
+                Some(Value::Object(filesystem)) => filesystem,
+                _ => Map::new(),
+            };
+            filesystem.remove("writable_roots");
+            for (key, value) in lists {
+                put(&mut filesystem, key, value);
+            }
+            if !filesystem.is_empty() {
+                object.insert("filesystem".to_owned(), Value::Object(filesystem));
+            }
+        };
+        let nonempty = |entries: &[String]| (!entries.is_empty()).then(|| list(entries));
+        self.update(|object| {
+            object.remove("sandboxNetwork");
+            if let Some(Value::Object(permissions)) = object.get_mut("permissions") {
+                permissions.remove(BLOCK_READS);
+                if permissions.is_empty() {
+                    object.remove("permissions");
+                }
+            }
+            object.insert(BLOCK_READS.to_owned(), reach(self.reach));
+            let mut sandbox = match object.remove("sandbox") {
+                Some(Value::Object(sandbox)) => sandbox,
+                _ => Map::new(),
+            };
+            let name = mode.map_or("off", SandboxMode::name);
+            sandbox.insert("mode".to_owned(), json!(name));
+            sandbox.insert("network".to_owned(), json!(network));
+            let lists = [
+                ("allowWrite", nonempty(&self.allow_write)),
+                ("denyRead", nonempty(&self.deny_read)),
+                ("allowRead", nonempty(&self.allow_read)),
+            ];
+            filesystem(&mut sandbox, lists);
+            let mut subagents = match sandbox.remove("subagents") {
+                Some(Value::Object(subagents)) => subagents,
+                _ => Map::new(),
+            };
+            let writes = self.subagent_mode == SandboxMode::WorkspaceWrite;
+            put(
+                &mut subagents,
+                "mode",
+                writes.then(|| json!("workspace-write")),
+            );
+            put(
+                &mut subagents,
+                "network",
+                self.subagent_network.then_some(json!(true)),
+            );
+            put(&mut subagents, BLOCK_READS, self.subagent_reach.map(reach));
+            let lists = [
+                ("allowWrite", nonempty(&self.subagent_allow_write)),
+                ("denyRead", self.subagent_deny_read.as_deref().map(list)),
+                ("allowRead", self.subagent_allow_read.as_deref().map(list)),
+            ];
+            filesystem(&mut subagents, lists);
+            if !subagents.is_empty() {
+                sandbox.insert("subagents".to_owned(), Value::Object(subagents));
+            }
+            object.insert("sandbox".to_owned(), Value::Object(sandbox));
+        })
     }
 
     /// The agent's tools, `on` among them, chosen in `/settings`; saved as Codex's `[tools]`
@@ -2402,23 +2537,6 @@ impl Settings {
             if let Value::Object(inner) = entry {
                 inner.insert(key.to_owned(), value);
             }
-        })
-    }
-
-    /// Sets `key` in the `sandbox` object, made from the mode's name or `sandboxNetwork` where
-    /// those set it before.
-    fn save_sandbox(&self, key: &str, value: Value) -> io::Result<()> {
-        self.update(|object| {
-            let mut sandbox = match object.remove("sandbox") {
-                Some(Value::Object(sandbox)) => sandbox,
-                Some(Value::String(mode)) => Map::from_iter([("mode".to_owned(), json!(mode))]),
-                _ => Map::new(),
-            };
-            if let Some(network) = object.remove("sandboxNetwork") {
-                sandbox.entry("network").or_insert(network);
-            }
-            sandbox.insert(key.to_owned(), value);
-            object.insert("sandbox".to_owned(), Value::Object(sandbox));
         })
     }
 
@@ -2675,7 +2793,7 @@ mod tests {
         let count = rows.len();
         rows.sort_by_key(|row| format!("{row:?}"));
         rows.dedup();
-        assert_eq!((rows.len(), count), (34, 34));
+        assert_eq!((rows.len(), count), (32, 32));
     }
 
     struct Scratch(PathBuf);
@@ -2862,58 +2980,96 @@ mod tests {
     }
 
     #[test]
-    fn settings_save_a_sandbox_given_by_name_into_its_object() {
+    fn the_sandbox_saved_as_the_default_keeps_the_files_other_keys_and_old_shapes_go() {
         let scratch = Scratch::new("sandbox-saved");
         let path = scratch.0.join("settings.json");
-        let mut settings = settings_with(
-            &scratch,
-            r#"{"sandbox": "read-only", "sandboxNetwork": false}"#,
-        );
-        settings.cycle(Row::Sandbox).unwrap();
-        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let text = r#"{"sandbox": "read-only", "sandboxNetwork": false,
+            "permissions": {"blockReadsOutsideWorkingDirectories": true}}"#;
+        let mut settings = settings_with(&scratch, text);
+        assert_eq!(settings.reach(), Reach::Project);
+        settings.set_reach(Reach::Minimal);
+        let saved = |settings: &mut Settings, mode, network| {
+            settings.save_sandbox_defaults(mode, network).unwrap();
+            serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap()
+        };
         assert_eq!(
-            saved,
-            json!({"sandbox": {"mode": "workspace-write", "network": false}})
+            saved(&mut settings, Some(SandboxMode::WorkspaceWrite), false),
+            json!({"sandbox": {"mode": "workspace-write", "network": false},
+                BLOCK_READS: "minimal"})
         );
-        std::fs::write(&path, r#"{"sandbox": {"filesystem": {"denyRead": ["x"]}}}"#).unwrap();
-        settings.cycle(Row::SandboxNetwork).unwrap();
-        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let read = settings_with(&scratch, &std::fs::read_to_string(&path).unwrap());
+        assert_eq!(read.reach, Reach::Minimal);
+        assert_eq!(read.sandbox, Some(SandboxMode::WorkspaceWrite));
+        assert!(!read.sandbox_network);
+        // The launcher and Codex's writable_roots are kept, the latter as allowWrite.
+        let text = r#"{"theme": "x", "sandbox": {"launcher": "bwrap-wrapper",
+            "filesystem": {"writable_roots": ["~/cache"], "denyRead": ["notes"]}}}"#;
+        std::fs::write(&path, text).unwrap();
+        let mut settings = settings_with(&scratch, text);
         assert_eq!(
-            saved,
-            json!({"sandbox": {"filesystem": {"denyRead": ["x"]}, "network": true}})
+            saved(&mut settings, None, true),
+            json!({"theme": "x", BLOCK_READS: false, "sandbox": {
+                "launcher": "bwrap-wrapper", "mode": "off", "network": true,
+                "filesystem": {"allowWrite": ["~/cache"], "denyRead": ["notes"]}}})
         );
     }
 
     #[test]
-    fn settings_save_the_project_only_reach_at_the_top_over_claude_codes_place() {
-        let scratch = Scratch::new("reach-saved");
+    fn sandbox_lists_change_for_the_session_and_subagents_take_a_copy_once_they_differ() {
+        let scratch = Scratch::new("sandbox-lists");
         let path = scratch.0.join("settings.json");
-        let text = r#"{"sandbox": "workspace-write",
-            "permissions": {"blockReadsOutsideWorkingDirectories": true}}"#;
-        let mut settings = settings_with(&scratch, text);
-        if cfg!(unix) {
-            assert_eq!(settings.shown(Row::ProjectReach), "on");
-        }
-        settings.cycle(Row::ProjectReach).unwrap();
-        if cfg!(unix) {
-            assert_eq!(settings.shown(Row::ProjectReach), "minimal");
-        }
-        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let mut settings = settings_with(
+            &scratch,
+            r#"{"sandbox": {"filesystem": {"denyRead": ["notes"]}}}"#,
+        );
+        let notes = scratch.0.join("notes");
+        let secret = scratch.0.join("secret");
         assert_eq!(
-            saved,
-            json!({"sandbox": "workspace-write", "blockReadsOutsideWorkingDirectories": "minimal"})
+            settings.listed(false, PathList::Hidden),
+            Some(vec![notes.clone()])
+        );
+        assert_eq!(settings.listed(true, PathList::Hidden), None);
+        assert!(settings.add_listed(false, PathList::Hidden, &secret));
+        assert!(!settings.add_listed(false, PathList::Hidden, &secret));
+        assert_eq!(settings.reads().deny, [notes.clone(), secret.clone()]);
+        // Unsaved until saved.
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("secret"));
+        assert_eq!(
+            settings.subagents().reads.deny,
+            [notes.clone(), secret.clone()]
+        );
+        // A list of subagents' own starts as the main agent's, then goes its way.
+        assert!(settings.remove_listed(true, PathList::Hidden, &notes));
+        assert_eq!(
+            settings.subagents().reads.deny,
+            std::slice::from_ref(&secret)
+        );
+        assert_eq!(settings.reads().deny, [notes.clone(), secret.clone()]);
+        assert!(!settings.remove_listed(true, PathList::Hidden, &notes));
+        settings.set_subagent_policy(SandboxMode::WorkspaceWrite, true, Some(Reach::Project));
+        assert!(settings.add_listed(true, PathList::Writable, &scratch.0));
+        settings.save_sandbox_defaults(None, true).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let shown = |path: &Path| shortened(&path.to_string_lossy());
+        assert_eq!(
+            saved["sandbox"]["filesystem"]["denyRead"],
+            json!(["notes", shown(&secret)])
         );
         assert_eq!(
-            settings_with(&scratch, &saved.to_string()).reach,
-            Reach::Minimal
+            saved["sandbox"]["subagents"],
+            json!({"mode": "workspace-write", "network": true, BLOCK_READS: true,
+                "filesystem": {"allowWrite": [shown(&scratch.0)], "denyRead": [shown(&secret)]}})
         );
-        settings.cycle(Row::ProjectReach).unwrap();
-        assert_eq!(settings.shown(Row::ProjectReach), "off");
+        // Back to the main agent's list, which is then saved as none of their own.
+        settings.own_list(PathList::Hidden, false);
+        assert_eq!(settings.subagents().reads.deny, [notes, secret]);
+        settings.save_sandbox_defaults(None, true).unwrap();
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved[BLOCK_READS], json!(false));
-        settings.cycle(Row::ProjectReach).unwrap();
-        let saved = settings_with(&scratch, &std::fs::read_to_string(&path).unwrap());
-        assert_eq!(saved.reach, Reach::Project);
+        assert!(
+            saved["sandbox"]["subagents"]["filesystem"]
+                .get("denyRead")
+                .is_none()
+        );
     }
 
     #[test]
@@ -3813,27 +3969,6 @@ or false; ignored"
             ]
         );
         assert_eq!(
-            seen(Row::Sandbox, &mut settings),
-            ["off", "read-only", "workspace-write", "off"]
-        );
-        assert_eq!(
-            seen(Row::SandboxNetwork, &mut settings),
-            ["on", "off", "on", "off"]
-        );
-        let shown = |name: &str| match cfg!(windows) {
-            true => format!("{name} (read, grep and find only)"),
-            false => format!("{name} (read, grep and find; commands only in the sandbox)"),
-        };
-        assert_eq!(
-            seen(Row::ProjectReach, &mut settings),
-            [
-                "off".to_owned(),
-                shown("on"),
-                shown("minimal"),
-                "off".to_owned()
-            ]
-        );
-        assert_eq!(
             seen(Row::Steering, &mut settings),
             [
                 "all at once",
@@ -3977,8 +4112,6 @@ or false; ignored"
                 "compaction": {"enabled": false},
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
-                "sandbox": {"mode": "off", "network": false},
-                "blockReadsOutsideWorkingDirectories": false,
                 "defaultShell": if bash { "bash" } else { "powershell" },
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "never",

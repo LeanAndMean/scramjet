@@ -74,7 +74,7 @@ const SLASH_COMMANDS: [(&str, &str); 28] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 15] = [
+const ALIASES: [(&str, &str); 16] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
@@ -88,6 +88,7 @@ const ALIASES: [(&str, &str); 15] = [
     ("help", "hotkeys"),
     ("keymap", "hotkeys"),
     ("changelog", "release-notes"),
+    ("permissions", "sandbox"),
     // The built-in set's `scramjet:bug`, listed as `bug` (`Command::listed_name`).
     ("feedback", "bug"),
     ("report-issue", "bug"),

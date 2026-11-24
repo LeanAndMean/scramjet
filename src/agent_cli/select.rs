@@ -303,6 +303,8 @@ pub(super) struct Picker {
     acts: bool,
     /// Whether `/scoped-models`' keys do (`scoping`).
     scoping: bool,
+    /// Keys that end the list with an action on the selected row (`keyed`).
+    keys: Vec<(Binding, Act)>,
     /// Whether Tab ends the list (`tabbing`).
     tabs: bool,
     /// Whether Enter returns where the list was (`placing`).
@@ -406,6 +408,7 @@ impl Picker {
             held: false,
             acts: false,
             scoping: false,
+            keys: Vec::new(),
             tabs: false,
             places: false,
             folds: Vec::new(),
@@ -449,6 +452,7 @@ impl Picker {
             held: false,
             acts: false,
             scoping: false,
+            keys: Vec::new(),
             tabs: false,
             places: false,
             folds: Vec::new(),
@@ -532,6 +536,12 @@ impl Picker {
     /// in Scramjet's list (`Act`); without a row they do nothing.
     pub(super) fn scoping(mut self) -> Self {
         self.scoping = true;
+        self
+    }
+
+    /// Makes each of `keys`' bindings end the list with its action on the selected row.
+    pub(super) fn keyed(mut self, keys: Vec<(Binding, Act)>) -> Self {
+        self.keys = keys;
         self
     }
 
@@ -756,6 +766,7 @@ impl Picker {
             held: false,
             acts: false,
             scoping: false,
+            keys: Vec::new(),
             tabs: false,
             places: false,
             folds: Vec::new(),
@@ -824,6 +835,9 @@ impl Picker {
         if self.scoping
             && let Some(&(_, act)) = scoped.iter().find(|&&(binding, _)| key.is(binding))
         {
+            return row.map(|row| self.act(act, row));
+        }
+        if let Some(&(_, act)) = self.keys.iter().find(|&&(binding, _)| key.is(binding)) {
             return row.map(|row| self.act(act, row));
         }
         let toggles = [
