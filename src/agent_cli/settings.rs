@@ -11,8 +11,7 @@ use super::tree::Filter;
 use super::{background, theme};
 use scramjet::agent::{
     CODING_TOOLS, Compacting, DEFAULT_TOOLS, HARNESS_TOOLS, McpServer, McpTransport, Origin, Reach,
-    Retries, SandboxMode, Set, UserShell, offline, sets_in, shortened, state_directory,
-    write_replacing,
+    Retries, SandboxMode, Set, UserShell, offline, sets_in, shortened, write_replacing,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -628,7 +627,8 @@ impl Settings {
         let path =
             scramjet::agent::login::config_directory().map(|config| config.join("settings.json"));
         let mut settings = Self::read_with(path, packages::clones(), cloning);
-        settings.recall = (state_directory().ok()).map(|state| state.join("last-used-models.json"));
+        let records = scramjet::agent::records_directory().ok();
+        settings.recall = records.map(|state| state.join("last-used-models.json"));
         settings
     }
 
@@ -2402,8 +2402,9 @@ impl Settings {
         })
     }
 
+    /// Saves `change`; with `--ephemeral`, nothing: what changed lasts for the run.
     fn update(&self, change: impl FnOnce(&mut Map<String, Value>)) -> io::Result<()> {
-        let Some(path) = &self.path else {
+        let Some(path) = self.path.as_ref().filter(|_| !scramjet::agent::ephemeral()) else {
             return Ok(());
         };
         // Another session's change between the read and the rename would be lost without it.

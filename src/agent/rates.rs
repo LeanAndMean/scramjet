@@ -37,7 +37,7 @@ pub(super) fn path() -> Option<PathBuf> {
     if cfg!(test) {
         return None;
     }
-    let state = super::session::state_directory().ok()?;
+    let state = super::session::records_directory().ok()?;
     Some(state.join("output-rates.json"))
 }
 

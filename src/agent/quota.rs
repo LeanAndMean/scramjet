@@ -274,7 +274,7 @@ pub(super) fn path() -> Option<PathBuf> {
     if cfg!(test) {
         return None;
     }
-    Some(super::session::state_directory().ok()?.join("quota.json"))
+    Some(super::session::records_directory().ok()?.join("quota.json"))
 }
 
 /// Keeps the quota a response from `provider` reported, if any, as that provider's.

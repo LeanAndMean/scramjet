@@ -80,8 +80,8 @@ pub use request::{CacheRetention, set_cache_retention};
 pub use sandbox::{Reach, Reads, Remembered, Sandbox, SandboxMode, Subagents, set_launcher};
 pub use session::{
     Branch, Found, Label, ModelChange, Reading, Removal, Session, SessionInfo,
-    directory as session_directory, projects_directory, read_branch, read_conversation,
-    state_directory,
+    directory as session_directory, ephemeral, keep_records_apart, projects_directory, read_branch,
+    read_conversation, records_directory, state_directory,
 };
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};
@@ -186,6 +186,21 @@ fn sent(item: &Value) -> bool {
         // A prompt, `!` command, summary or status check: a user message without a type.
         None => item.get("type").is_none() && item["role"] == "user",
     }
+}
+
+static BARE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// For `--bare`: nothing is looked for in the user's own directories, but the settings, models
+/// and credentials: no context files, `SYSTEM.md` or `APPEND_SYSTEM.md` of the configuration
+/// directory or the home directory, no skills of the configuration directory or
+/// `~/.agents/skills`, no loose agents of the user's. What the settings list still loads.
+pub fn set_bare() {
+    BARE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether this run is `--bare`.
+pub(crate) fn bare() -> bool {
+    BARE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Ends what must not go on, or be cut short, when the process exits on a signal: kills the
@@ -685,7 +700,7 @@ pub struct Agent {
 pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inventory {
     let sets = Sets::for_project(installed, root);
     let commands = Commands::discover(&sets);
-    let user = subagent::user_directory();
+    let user = subagent::user_directory().filter(|_| !bare());
     let sources = subagent::Sources {
         user: user.as_deref(),
         sets: &sets,
@@ -1033,8 +1048,8 @@ impl Agent {
             &config.skill_options,
             &config.root,
         );
-        self.agents_directory = subagent::user_directory();
-        self.agent_directory = login::config_directory();
+        self.agents_directory = subagent::user_directory().filter(|_| !bare());
+        self.agent_directory = login::config_directory().filter(|_| !bare());
         self.instruct();
     }
 

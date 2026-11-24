@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.311.0 — --bare and --ephemeral
+
+### Added
+
+- `--bare`, as Claude Code's: nothing is read from your own directories but the settings, `models.json` and `auth.json` (no context files or `SYSTEM.md` of `~/.config/scramjet` or the home directory, no skills of `~/.config/scramjet/skills` or `~/.agents/skills`, no agents of `~/.config/scramjet/agents`). What the settings list and the project's own still load. For runs given their own instructions, such as an ACP client's sessions.
+- `--ephemeral`, as Codex's: as `--no-session`, and the settings' changes, the models last chosen, the output rates, the quotas and the agents approved last for the run only, kept in a private temporary directory removed at exit. Logins and the providers' model lists are still saved.
+
 ## 2.310.0 — Each tool call's run time, and sessions the ACP client names
 
 ### Added

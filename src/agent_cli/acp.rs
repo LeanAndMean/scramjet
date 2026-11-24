@@ -107,6 +107,7 @@ pub(super) fn run(arguments: &[String]) -> Result<(), String> {
         return Ok(());
     };
     refuse_unfit(&options)?;
+    options.isolate()?;
     let settings = Settings::load_cloning();
     scramjet::agent::set_shell(
         settings.shell_path.clone(),
@@ -216,8 +217,8 @@ pub(super) const USAGE: &str = "Usage: scramjet acp [options]
 
 Runs Scramjet as an Agent Client Protocol (v1) agent: the client starts it and speaks JSON-RPC on
 its stdin and stdout, one message per line. The options are those of the full screen (--model,
---thinking, --sandbox, --tools, --no-session, ...; see scramjet --help); each session the client
-opens starts with them in the folder it names.";
+--thinking, --sandbox, --tools, --no-session, --bare, --ephemeral, ...; see scramjet --help);
+each session the client opens starts with them in the folder it names.";
 
 /// What the full screen's options ask that no ACP session can do yet.
 fn refuse_unfit(options: &Options) -> Result<(), String> {

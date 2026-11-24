@@ -55,8 +55,9 @@ enum Place {
 /// Where Pi looks, first wins: the project's `.scramjet/skills` and the `.agents/skills` of the
 /// project and the directories above it up to its Git root, the settings' `listed` paths, the
 /// `skills` directories of the command sets (as a Claude Code plugin's), then the user's
-/// `skills` in Scramjet's agent directory and `~/.agents/skills`; then, as Scramjet's, the
-/// paths `--skill` gives, which are all with `--no-skills`.
+/// `skills` in Scramjet's agent directory and `~/.agents/skills` (with `--bare`, neither, and
+/// never as a project's); then, as Scramjet's, the paths `--skill` gives, which are all with
+/// `--no-skills`.
 fn places(
     listed: &[PathBuf],
     sets: &[PathBuf],
@@ -96,6 +97,7 @@ fn places(
             Place::Directory { top_files: true },
         ));
     }
+    let user_agents = user_agents.filter(|_| !super::bare());
     places.extend(user_agents.map(|skills| (skills, Place::Directory { top_files: false })));
     places.extend(given);
     places
@@ -105,7 +107,7 @@ impl Skills {
     /// The skills of a session in `root`, with the settings' `listed` files and directories,
     /// the command `sets`' own and the command line's `options`.
     pub fn discover(listed: &[PathBuf], sets: &[Set], options: &SkillOptions, root: &Path) -> Self {
-        let agent_directory = super::login::config_directory();
+        let agent_directory = super::login::config_directory().filter(|_| !super::bare());
         let home = std::env::home_dir();
         let sets: Vec<PathBuf> = sets.iter().map(|set| set.directory.clone()).collect();
         Self::load(&places(

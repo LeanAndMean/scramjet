@@ -3598,6 +3598,114 @@ fn acp_sessions_leave_out_the_directives_when_the_client_or_the_settings_say() {
 
 #[test]
 #[cfg(unix)]
+fn acp_bare_and_ephemeral_sessions_read_none_of_the_users_directories_and_leave_nothing() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-bare-{}", std::process::id())));
+    let (home, config, state) = (
+        scratch.0.join("home"),
+        scratch.0.join("config"),
+        scratch.0.join("state"),
+    );
+    let (project, temporary) = (home.join("project"), scratch.0.join("tmp"));
+    for directory in [&project, &config.join("scramjet"), &temporary] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::create_dir_all(state.join("scramjet")).unwrap();
+    let skill = home.join(".agents/skills/home-skill/SKILL.md");
+    std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    std::fs::write(&skill, "---\nname: home-skill\ndescription: d\n---\nb\n").unwrap();
+    std::fs::write(home.join("AGENTS.md"), "Home context.").unwrap();
+    std::fs::write(config.join("scramjet/AGENTS.md"), "Config context.").unwrap();
+    std::fs::write(project.join("AGENTS.md"), "Project context.").unwrap();
+    let reply = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done"}}"#.to_owned(),
+        r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ]
+    .to_vec();
+    let (port, bodies) = serve_events(vec![reply]);
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test", "contextWindow": 1000},
+            {"id": "claude-other", "contextWindow": 1000}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = r#"{"hideCredentials": "never"}"#;
+    std::fs::write(config.join("scramjet/settings.json"), settings).unwrap();
+    let rates = state.join("scramjet/output-rates.json");
+    std::fs::write(&rates, "{}").unwrap();
+    let mut child = program(&binary())
+        .args(["acp", "--retries", "0", "--bare", "--ephemeral"])
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &config)
+        .env("XDG_STATE_HOME", &state)
+        .env("TMPDIR", &temporary)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = BufReader::new(child.stdout.take().unwrap());
+    let (sent, messages) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stdout.lines().map_while(Result::ok) {
+            let _ = sent.send(serde_json::from_str::<serde_json::Value>(&line).unwrap());
+        }
+    });
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1}}),
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let (opened, _) = until(&messages, |message| message["id"] == 2);
+    let session = opened["result"]["sessionId"].clone();
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (answer, _) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 4, "method": "session/set_config_option",
+            "params": {"sessionId": session, "configId": "model",
+                "value": "test/claude-other"}}),
+    );
+    let (changed, _) = until(&messages, |message| message["id"] == 4);
+    assert!(changed["result"].is_object(), "{changed}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let body: serde_json::Value =
+        serde_json::from_str(&bodies.recv_timeout(Duration::from_secs(20)).unwrap()).unwrap();
+    let system = body["system"].to_string();
+    assert!(system.contains("Project context."), "{system}");
+    for left_out in ["home-skill", "Home context.", "Config context."] {
+        assert!(!system.contains(left_out), "{left_out}: {system}");
+    }
+    let saved = std::fs::read_to_string(config.join("scramjet/settings.json")).unwrap();
+    assert_eq!(saved, settings);
+    assert_eq!(std::fs::read_to_string(&rates).unwrap(), "{}");
+    let kept: Vec<_> = std::fs::read_dir(state.join("scramjet"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let left = std::fs::read_dir(&temporary).unwrap().count();
+    assert_eq!(left, 0, "the temporary directory holds what the run kept");
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_sessions_take_the_id_the_client_names_as_their_files_name() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-named-{}", std::process::id())),

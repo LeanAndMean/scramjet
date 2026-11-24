@@ -7,7 +7,7 @@ pub(super) const USAGE: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
 [--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
-[--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
+[--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
 [-s MODE] [--offline] [-p] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
@@ -77,6 +77,16 @@ but to NO_PROXY's hosts and this machine.
   --no-session           save no session, as Scramjet 1's: those of this run (/clear, /fork,
                          /branch and /import too) are kept in a private temporary directory
                          removed at exit, and /resume lists only them
+  --bare                 look for nothing in your own directories but the settings, models.json
+                         and auth.json, as Claude Code's --bare: no AGENTS.md, CLAUDE.md,
+                         SYSTEM.md or APPEND_SYSTEM.md of ~/.config/scramjet or of the home
+                         directory, no skills of ~/.config/scramjet/skills or ~/.agents/skills,
+                         no agents of ~/.config/scramjet/agents; what the settings list (command
+                         sets, skills, MCP servers) and the project's own still load
+  --ephemeral            leave nothing behind, as Codex's --ephemeral: no session saved, as
+                         with --no-session; the settings' changes, the models last chosen, the
+                         output rates, the quotas and the agents approved last for the run only.
+                         Logins and the lists of the providers' models are still saved
   --session-dir DIR      save and find sessions in DIR, in place of the project's directory
                          under ~/.local/state/scramjet/sessions, as Scramjet 1's (default:
                          the settings' sessionDir); -c, -r, /resume and --session ID look
@@ -325,6 +335,10 @@ pub(super) struct Options {
     pub(super) skills: Vec<String>,
     /// `--no-skills`.
     pub(super) no_skills: bool,
+    /// `--bare`.
+    pub(super) bare: bool,
+    /// `--ephemeral`.
+    pub(super) ephemeral: bool,
     /// `--theme`: as typed, resolved once the session starts.
     pub(super) themes: Vec<String>,
     /// `--no-themes`.
@@ -357,6 +371,18 @@ pub(super) struct Options {
 }
 
 impl Options {
+    /// Sets the run apart as `--bare` and `--ephemeral` ask, before anything is read or kept.
+    pub(super) fn isolate(&self) -> Result<(), String> {
+        if self.bare {
+            scramjet::agent::set_bare();
+        }
+        if self.ephemeral {
+            let failed = |error| format!("--ephemeral: no private temporary directory: {error}");
+            scramjet::agent::keep_records_apart().map_err(failed)?;
+        }
+        Ok(())
+    }
+
     /// The options `arguments` give; `None` when they ask for `--help`.
     pub(super) fn parse(arguments: impl Iterator<Item = OsString>) -> Result<Option<Self>, String> {
         let mut options = Self {
@@ -371,6 +397,8 @@ impl Options {
             prompt: SystemPrompt::default(),
             skills: Vec::new(),
             no_skills: false,
+            bare: false,
+            ephemeral: false,
             themes: Vec::new(),
             no_themes: false,
             only_tools: None,
@@ -497,6 +525,8 @@ without spaces"
                 }
                 Some("--fork") => fork = Some(value()?),
                 Some("--no-session") => no_session = true,
+                Some("--bare") => options.bare = true,
+                Some("--ephemeral") => options.ephemeral = true,
                 Some("--session-dir") => options.session_dir = Some(value()?),
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
@@ -550,14 +580,18 @@ workspace-write and danger-full-access"
             .or_else(|| no_builtin_tools.then(|| HARNESS_TOOLS.map(String::from).to_vec()));
         // As Scramjet's, `--fork` cannot be given with the others, `--no-session` included; nor
         // can `--no-session`, where Scramjet's quietly wins over them.
-        let alone = match (fork, no_session) {
+        let unsaved = match options.ephemeral {
+            true => "--ephemeral",
+            false => "--no-session",
+        };
+        let alone = match (fork, no_session || options.ephemeral) {
             (Some(_), true) => {
                 return Err(format!(
-                    "--fork cannot be combined with --no-session\n\n{USAGE}"
+                    "--fork cannot be combined with {unsaved}\n\n{USAGE}"
                 ));
             }
             (Some(fork), false) => Some(("--fork", Start::Fork(fork))),
-            (None, true) => Some(("--no-session", Start::Unsaved)),
+            (None, true) => Some((unsaved, Start::Unsaved)),
             (None, false) => None,
         };
         if let Some((option, start)) = alone {
@@ -639,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn no_session_starts_one_not_saved_and_goes_with_no_other_session_option() {
+    fn no_session_and_ephemeral_start_one_not_saved_and_go_with_no_other_session_option() {
         let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
         let options = parse(&["--no-session", "-p", "hi"]).unwrap().unwrap();
         assert!(matches!(options.start, Start::Unsaved));
@@ -652,6 +686,12 @@ mod tests {
         assert!(error.starts_with("--no-session cannot be combined with --resume\n"));
         let error = refused(&["-c", "--fork", "abc"]);
         assert!(error.starts_with("--fork cannot be combined with --continue\n"));
+        let options = parse(&["--ephemeral", "--bare"]).unwrap().unwrap();
+        assert!(matches!(options.start, Start::Unsaved) && options.ephemeral && options.bare);
+        let error = refused(&["--ephemeral", "-c"]);
+        assert!(error.starts_with("--ephemeral cannot be combined with --continue\n"));
+        let error = refused(&["--fork", "abc", "--ephemeral"]);
+        assert!(error.starts_with("--fork cannot be combined with --ephemeral\n"));
     }
 
     #[test]

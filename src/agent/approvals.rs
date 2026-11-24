@@ -12,7 +12,7 @@ use std::{
 
 /// Where approvals are kept.
 pub(super) fn path() -> Option<PathBuf> {
-    let state = super::session::state_directory().ok()?;
+    let state = super::session::records_directory().ok()?;
     Some(state.join("approved-agents.json"))
 }
 

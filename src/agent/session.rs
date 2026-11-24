@@ -847,6 +847,48 @@ impl Drop for Unsaved {
     }
 }
 
+/// With `--ephemeral`, the private directory holding this run's copies of the records, removed
+/// at exit.
+static RECORDS: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The records a run reads and keeps adding to: copied for `--ephemeral`.
+const RECORDS_COPIED: [&str; 4] = [
+    "output-rates.json",
+    "quota.json",
+    "approved-agents.json",
+    "last-used-models.json",
+];
+
+/// For `--ephemeral`: the run keeps its records (output rates, quotas, agents approved, models
+/// last chosen) in copies in a private temporary directory, removed at exit, and leaves the state
+/// directory's as they were. The caches of what providers list stay shared.
+pub fn keep_records_apart() -> io::Result<()> {
+    let unsaved = Unsaved::create()?;
+    let directory = unsaved.path().to_owned();
+    // Removed at exit, as `UNSAVED` still lists it.
+    std::mem::forget(unsaved);
+    if let Ok(state) = state_directory() {
+        for name in RECORDS_COPIED {
+            let _ = std::fs::copy(state.join(name), directory.join(name));
+        }
+    }
+    let _ = RECORDS.set(directory);
+    Ok(())
+}
+
+/// Whether this run is `--ephemeral`.
+pub fn ephemeral() -> bool {
+    RECORDS.get().is_some()
+}
+
+/// Where the run's records are kept: the state directory, else with `--ephemeral` their copies.
+pub fn records_directory() -> io::Result<PathBuf> {
+    match RECORDS.get() {
+        Some(directory) => Ok(directory.clone()),
+        None => state_directory(),
+    }
+}
+
 /// `$XDG_STATE_HOME/scramjet`, by default `~/.local/state/scramjet`.
 pub fn state_directory() -> io::Result<PathBuf> {
     let state = crate::os::base_directory("XDG_STATE_HOME", ".local/state")

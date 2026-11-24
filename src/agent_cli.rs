@@ -139,6 +139,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         outln!("{}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    options.isolate()?;
     if !checked {
         writable::check()?;
     }

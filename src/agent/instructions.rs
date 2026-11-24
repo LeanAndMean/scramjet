@@ -576,8 +576,8 @@ pub(super) fn load(
 /// The context files, as Scramjet's: those of the `agent_directory`, then those of `root` and
 /// the directories above it, outermost first, with their contents. A directory's `CLAUDE.md` comes
 /// before its `AGENTS.md`, which is left out when it says the same; its `CLAUDE.local.md` comes
-/// last. One in a `hidden` store is
-/// left out, said in `problems`.
+/// last; with `--bare`, none of the home directory's. One in a `hidden` store is left out, said
+/// in `problems`.
 pub(super) fn context_files(
     root: &Path,
     agent_directory: Option<&Path>,
@@ -588,7 +588,11 @@ pub(super) fn context_files(
         .map(|directory| directory_context(directory, hidden, problems)))
     .unwrap_or_default();
     let mut above = Vec::new();
+    let home = std::env::home_dir().filter(|_| super::bare());
     for directory in root.ancestors() {
+        if home.as_deref() == Some(directory) {
+            continue;
+        }
         let found = directory_context(directory, hidden, problems).into_iter();
         let found: Vec<_> = found
             .filter(|(path, _)| !files.iter().any(|(seen, _)| seen == path))
