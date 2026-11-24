@@ -738,7 +738,20 @@ impl Subagents {
             let why = "subagents run read-only here (sandbox.subagents.mode)";
             return (Err(why.to_owned()), Vec::new());
         }
-        let allowed = |path: &Path| main.is_none_or(|main| main.check_write(root, path).is_ok());
+        let kept: Vec<PathBuf> = main.map_or_else(Vec::new, |main| {
+            (main.protected_paths(root).into_iter())
+                .chain(main.read_only_project(root))
+                .collect()
+        });
+        // A directory holding what the main agent keeps read-only, as its project's `.git` below
+        // a child working above the project, is the child's only where it keeps that so too.
+        let allowed = |path: &Path| {
+            main.is_none_or(|main| main.check_write(root, path).is_ok())
+                && (kept.iter()).all(|kept| {
+                    !kept.starts_with(path)
+                        || (protected(path).iter()).any(|own| kept.starts_with(own))
+                })
+        };
         let mut capped = false;
         let mut sandbox = Sandbox {
             mode: SandboxMode::ReadOnly,
@@ -759,7 +772,7 @@ impl Subagents {
                     capped = true;
                     said.push(format!(
                         "{}: in sandbox.subagents.filesystem.allowWrite; not writable, as the \
-main agent's sandbox leaves it read-only",
+main agent's sandbox leaves it, or some of it, read-only",
                         real.display()
                     ));
                 }
@@ -775,7 +788,7 @@ main agent's sandbox leaves it read-only",
         }
         let why = match capped {
             true => format!(
-                "the main agent's sandbox leaves {} read-only",
+                "the main agent's sandbox leaves {}, or some of it, read-only",
                 cwd.display()
             ),
             false => "none of sandbox.subagents.filesystem.allowWrite can be written".to_owned(),
@@ -950,12 +963,22 @@ impl Hidden {
 
     /// Re-opens those of `paths` that exist in a denied directory, unless they are in a store
     /// (or are one): `allowRead` cannot uncover what `hideCredentials` hides. A path denied
-    /// itself stays hidden.
+    /// itself stays hidden, but for a directory the reach alone hides, which is shown whole.
     pub(super) fn allow(&mut self, paths: &[PathBuf]) {
         for real in paths
             .iter()
             .filter_map(|path| std::fs::canonicalize(path).ok())
         {
+            if self.outside.contains(&real) {
+                self.directories.retain(|directory| *directory != real);
+                self.files.retain(|file| *file != real);
+                self.denied.retain(|denied| *denied != real);
+                if let Some(found) = identity(&real) {
+                    self.identities.retain(|identity| *identity != found);
+                }
+                self.outside.retain(|outside| *outside != real);
+                continue;
+            }
             let in_denied = (self.directories.iter()).any(|directory| {
                 self.denied.contains(directory) && real.starts_with(directory) && real != *directory
             });
@@ -1786,7 +1809,7 @@ mod tests {
                 .starts_with("the main agent's sandbox leaves")
         );
         assert!(
-            said[0].ends_with("as the main agent's sandbox leaves it read-only"),
+            said[0].ends_with("as the main agent's sandbox leaves it, or some of it, read-only"),
             "{said:?}"
         );
         let both = Subagents {
@@ -1814,6 +1837,29 @@ mod tests {
         assert_eq!(writer.writable_roots(&project), [real(&project)]);
         let (none, _) = Subagents::default().writer(&project, &project, None, true);
         assert!(none.unwrap_err().ends_with("(sandbox.subagents.mode)"));
+        // Above the project, in a directory the main agent may write: the project's `.git`,
+        // which the main agent keeps read-only, is not the child's to write.
+        std::fs::create_dir(project.join(".git")).unwrap();
+        let granted = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: vec![real(&base)],
+        };
+        assert!(granted.check_write(&project, &base).is_ok());
+        let workspace = Subagents {
+            mode: SandboxMode::WorkspaceWrite,
+            ..Default::default()
+        };
+        let (above, _) = workspace.writer(&project, &base, Some(&granted), false);
+        assert!(above.unwrap_err().contains("or some of it, read-only"));
+        let (sibling, _) = workspace.writer(&project, &scratch, Some(&granted), false);
+        assert_eq!(sibling.unwrap().mode, SandboxMode::WorkspaceWrite);
+        let read_only_project = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            ..granted
+        };
+        let (above, _) = workspace.writer(&project, &base, Some(&read_only_project), false);
+        assert!(above.is_err());
     }
 
     #[test]
@@ -2643,6 +2689,36 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             false => expected.into(),
         };
         assert_eq!(outside, expected);
+    }
+
+    /// A project, or an `allowRead` entry, that is itself a directory the reach hides (`~`,
+    /// a top-level `/workspace`) is shown whole; `denyRead` naming it still hides it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_directory_the_reach_hides_is_shown_when_it_is_the_project() {
+        let root = std::env::temp_dir().join(format!("scramjet-at-reach-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/f.txt"), "shown\n").unwrap();
+        let mut hidden = super::Hidden::default();
+        hidden.deny_outside(std::slice::from_ref(&root));
+        assert!(hidden.check(&root.join("sub/f.txt")).is_err());
+        hidden.allow(std::slice::from_ref(&root));
+        assert!(hidden.check(&root.join("sub/f.txt")).is_ok());
+        let output = super::hiding(&root, "cat sub/f.txt", &hidden)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "shown\n");
+        let mut denied = super::Hidden::default();
+        denied.deny(std::slice::from_ref(&root));
+        denied.deny_outside(std::slice::from_ref(&root));
+        denied.allow(std::slice::from_ref(&root));
+        let refused = denied.check(&root.join("sub/f.txt")).unwrap_err();
+        assert!(
+            refused.ends_with("(sandbox.filesystem.denyRead)"),
+            "{refused}"
+        );
     }
 
     /// In the real `/`: the project, in a hidden home, is re-opened read-only, and the system's

@@ -4,6 +4,15 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.326.1 — Review of the sandbox's reaches and subagents' writes, fixed
+
+### Fixed
+
+- With `blockReadsOutsideWorkingDirectories`, a project that is itself a directory the reach hides (Scramjet started in the home directory, or a top-level `/workspace` with `"minimal"`) is no longer empty to the agent, and `allowRead` or `/add-dir` naming such a directory (`/scratch`) now opens it.
+- A subagent that may write, working in a directory above the project (`cwd: ".."` with that directory writable), can no longer write the project's `.git`, `.scramjet` or `.agents`, nor a project the main agent keeps read-only: it gets read-only tools and is told why.
+- A subagent chain's later `isolation: worktree` step whose `cwd` is in another repository now fails with why, rather than working in the first repository's worktree.
+- On macOS, commands no longer fail to start in another directory when Scramjet was started by a relative path (`./scramjet`).
+
 ## 2.326.0 — Network off without a sandbox
 
 ### Changed

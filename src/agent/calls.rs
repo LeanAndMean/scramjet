@@ -1419,7 +1419,7 @@ worktree\n---\n\nWrite.\n",
         assert_eq!(names, ["read", "bash"]);
         let result = last_output(&bodies[9]);
         let why = format!(
-            "- write, edit: left out, as the main agent's sandbox leaves {} read-only",
+            "- write, edit: left out, as the main agent's sandbox leaves {}, or some of it, read-only",
             root.display()
         );
         assert!(result.contains(&why), "{result}");

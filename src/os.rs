@@ -512,10 +512,11 @@ pub fn session_helper() {
             eprintln!("scramjet: cannot start {}: {error}", program.display());
             std::process::exit(127);
         }
-        // The running file, even once an update has replaced or removed it.
+        // The running file, even once an update has replaced or removed it; absolute, as
+        // commands start in other directories and macOS's may be as typed.
         let own = match Path::new("/proc/self/exe").exists() {
             true => Some(PathBuf::from("/proc/self/exe")),
-            false => std::env::current_exe().ok(),
+            false => (std::env::current_exe().ok()).and_then(|own| std::path::absolute(own).ok()),
         };
         if let Some(own) = own {
             let _ = HELPER.set(own);

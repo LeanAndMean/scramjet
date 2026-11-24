@@ -93,13 +93,18 @@ impl Worktree {
         }
     }
 
-    /// Where `cwd` of the repository is in the worktree.
+    /// Where `cwd` of the repository is in the worktree; a chain's later step may name another.
     pub(super) fn inside(&self, cwd: &Path) -> Result<PathBuf, String> {
         let cwd = crate::os::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
-        let inside = match cwd.strip_prefix(&self.top) {
-            Ok(relative) => self.path.join(relative),
-            Err(_) => self.path.clone(),
+        let Ok(relative) = cwd.strip_prefix(&self.top) else {
+            return Err(format!(
+                "isolation \"worktree\": {} is outside {}, the repository of the chain's \
+                 worktree",
+                cwd.display(),
+                self.top.display()
+            ));
         };
+        let inside = self.path.join(relative);
         // What HEAD lacks (an untracked directory) is made; what a symlink in HEAD leads out of
         // the worktree is refused, as the child may write there whatever the main sandbox.
         (std::fs::create_dir_all(&inside).and_then(|()| crate::os::canonicalize(&inside)))
@@ -275,6 +280,16 @@ mod tests {
             error.ends_with("is not a directory in the worktree"),
             "{error}"
         );
+        // A chain's later step in another repository is not run in this one's worktree.
+        let other = base.join("other");
+        repository(&other);
+        let (shared, _) = Worktree::add(&project, &project, &state).unwrap();
+        let error = shared.inside(&other.join("src")).unwrap_err();
+        assert!(
+            error.ends_with("the repository of the chain's worktree"),
+            "{error}"
+        );
+        assert_eq!(shared.finish(None), None);
 
         // Files in a submodule's directory, which git status does not see, keep the worktree.
         let module = base.join("module");
