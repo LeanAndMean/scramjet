@@ -181,6 +181,9 @@ fn install_package(source: Source) -> Result<(), String> {
             other.written
         ));
     }
+    if packages::clear_interrupted(&directory, &root)? {
+        outln!("Removed {}, left by a clone cut short", shown(&directory));
+    }
     let fresh = !directory.exists();
     if !fresh && !packages::is_clone(&directory) {
         return Err(format!(
@@ -396,7 +399,11 @@ fn update(reference: Option<&str>) -> Result<(), String> {
     for source in &chosen {
         let directory = source.clone_directory(&root);
         let written = &source.written;
-        let result = match (directory.exists(), &source.reference) {
+        let cleared = packages::clear_interrupted(&directory, &root);
+        if let Ok(true) = cleared {
+            outln!("Removed {}, left by a clone cut short", shown(&directory));
+        }
+        let result = cleared.and_then(|_| match (directory.exists(), &source.reference) {
             (false, _) => packages::clone(source, &directory, &root)
                 .map(|()| (format!("Cloned {written} into {}", shown(&directory)), true)),
             (true, Some(reference)) => Ok((
@@ -409,7 +416,7 @@ fn update(reference: Option<&str>) -> Result<(), String> {
                     false => (format!("Updated {written}: {before}..{after}"), true),
                 })
             }
-        };
+        });
         let result = result.and_then(|(line, updated)| {
             let (downloaded, failed) = super::programs::fetch(&directory);
             let updated = updated || !downloaded.is_empty();

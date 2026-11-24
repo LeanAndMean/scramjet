@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.303.3 — A cancelled package clone is not taken as installed
+
+### Fixed
+
+- `scramjet install git:…` clones beside the package's place and moves the clone there once checked out, so a clone cancelled or cut short is not taken for the package at the next run ("holds no command set"). A clone holding only `.git`, as earlier versions left one, is removed and cloned again by `install`, `update` and the start that clones a listed package.
+- Git's progress shows while a package is cloned, so a clone waiting on the network or a sign-in no longer looks stuck.
+
 ## 2.303.2 — A clearer refusal for /proc
 
 ### Fixed

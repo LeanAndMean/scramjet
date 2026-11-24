@@ -849,7 +849,14 @@ mod tests {
             );
             fs::write(&path, script).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            download(&path, "o/r", "v1", "a.tar.gz").unwrap_err()
+            // Another test's fork can hold the script open for writing for a moment.
+            loop {
+                let error = download(&path, "o/r", "v1", "a.tar.gz").unwrap_err();
+                if !error.contains("os error 26") {
+                    break error;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
         };
         let not_signed_in = "`gh` is not signed in to GitHub: run `gh auth login`, with an \
                              account that can read o/r";

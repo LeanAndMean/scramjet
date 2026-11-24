@@ -130,27 +130,56 @@ pub(super) fn clones() -> Option<PathBuf> {
     Some(data.join("scramjet").join("git"))
 }
 
-/// Clones `source` into `directory`, which must not exist, at its ref. Nothing of it is left
-/// when that fails.
+/// Clones `source` into `directory`, which must not exist, at its ref. The clone is made beside
+/// it and renamed into place once checked out, so a clone cut short is never taken as complete;
+/// nothing of it is left when that fails. Git shows its progress.
 pub(super) fn clone(source: &Source, directory: &Path, root: &Path) -> Result<(), String> {
     if directory.exists() {
         return Err(format!("{} exists already", directory.display()));
     }
     let parent = directory.parent().unwrap_or(directory);
     fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+    let mut name = std::ffi::OsString::from(".");
+    name.push(directory.file_name().unwrap_or_default());
+    name.push(".partial");
+    let partial = parent.join(name);
+    if partial.exists() {
+        fs::remove_dir_all(&partial).map_err(|error| format!("{}: {error}", partial.display()))?;
+    }
     let mut command = git(None);
-    command.args(["clone", "--quiet", "--", &source.repository]);
-    let cloned = run(command.arg(directory), "clone").and_then(|_| match &source.reference {
-        Some(reference) => checkout(directory, reference),
-        None => Ok(()),
-    });
+    command.args(["clone", "--", &source.repository]);
+    let cloned = run(command.arg(&partial), "clone")
+        .and_then(|_| match &source.reference {
+            Some(reference) => checkout(&partial, reference),
+            None => Ok(()),
+        })
+        .and_then(|()| {
+            fs::rename(&partial, directory)
+                .map_err(|error| format!("{}: {error}", directory.display()))
+        });
     if cloned.is_err() {
-        if directory.exists() {
-            let _ = delete(directory, root);
-        }
+        let _ = fs::remove_dir_all(&partial);
         prune(parent, root);
     }
     cloned
+}
+
+/// Deletes the clone in `directory` when it holds nothing but `.git`, as a clone cut short
+/// before its checkout leaves it (versions before 2.303.3 cloned in place); whether it did.
+pub(super) fn clear_interrupted(directory: &Path, root: &Path) -> Result<bool, String> {
+    if !is_clone(directory) {
+        return Ok(false);
+    }
+    let Ok(entries) = fs::read_dir(directory) else {
+        return Ok(false);
+    };
+    let only_git = entries
+        .filter_map(Result::ok)
+        .all(|entry| entry.file_name() == ".git");
+    if only_git {
+        delete(directory, root)?;
+    }
+    Ok(only_git)
 }
 
 /// Checks out `reference` in the clone in `directory`.

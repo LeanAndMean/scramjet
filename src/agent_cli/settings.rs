@@ -1470,6 +1470,9 @@ impl Settings {
             let directory = source.clone_directory(root);
             let mut failed = None;
             let mut fetched = false;
+            if self.cloning && packages::clear_interrupted(&directory, root).unwrap_or(false) {
+                eprintln!("Removed {}, left by a clone cut short", shown(&directory));
+            }
             if self.cloning && !directory.exists() {
                 eprintln!("Cloning {} into {}…", source.written, shown(&directory));
                 failed = packages::clone(source, &directory, root).err();

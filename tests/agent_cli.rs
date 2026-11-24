@@ -1317,13 +1317,21 @@ fn packages_from_git_are_cloned_listed_updated_and_removed() {
         serde_json::from_str::<serde_json::Value>(&text).unwrap()["packages"].clone()
     };
 
+    // A clone cut short (only its `.git`, as an older version's cancelled clone left it) and a
+    // `.partial` one beside it are removed, and the clone made again; git's progress shows.
+    std::fs::create_dir_all(&clone).unwrap();
+    git(&clone, &["init", "--quiet"]);
+    let partial = clone.with_file_name(".upstream.partial");
+    std::fs::create_dir_all(partial.join(".git")).unwrap();
     let kit = native("packages/kit/mach12");
     let (ok, out, err) = run(&["install", &source]);
     assert!(ok, "{out}{err}");
+    assert!(err.contains("Cloning into"), "{err}");
+    assert!(!partial.exists());
     assert_eq!(
         out,
         format!(
-            "Cloning {source} into {shown_clone}\nInstalled {source} from {shown_clone}:\n  \
+            "Removed {shown_clone}, left by a clone cut short\nCloning {source} into {shown_clone}\nInstalled {source} from {shown_clone}:\n  \
 mach12 ({kit}): 1 command, 0 agents\n  providers (providers): 0 commands, \
 0 agents, and providers (models.json)\nIt runs at each start:\n  bin/models --all \
 (providersCommand in {models}, run in its directory)\n",
