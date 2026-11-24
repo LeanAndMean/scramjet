@@ -1756,8 +1756,9 @@ fn the_agents_commands_run_in_sessions_of_their_own() {
     let config = scratch.0.join("config");
     std::fs::create_dir_all(config.join("scramjet")).unwrap();
     let (port, bodies) = serve_bash_call(
-        "echo \"sid=$(ps -o sid= -p $$ | tr -d ' ') pgid=$(ps -o pgid= -p $$ | tr -d ' ') \
-pid=$$ parent=$(ps -o comm= -p $PPID)\"",
+        "echo \"sid=$(python3 -c 'import os, sys; print(os.getsid(int(sys.argv[1])))' $$) \
+pgid=$(ps -o pgid= -p $$ | tr -d ' ') \
+pid=$$ parent=$(basename \"$(ps -o comm= -p $PPID)\")\"",
     );
     let models = serde_json::json!({"providers": {"test": {
         "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
@@ -2065,8 +2066,13 @@ fn the_settings_sandbox_hides_what_deny_read_names_but_allow_read_and_writes_whe
         serde_json::json!({"command": script}),
         around.clone(),
     );
+    // Seatbelt refuses to list a hidden directory at all.
+    let listed = match cfg!(target_os = "macos") {
+        true => "",
+        false => r"always\nproject\n",
+    };
     assert!(
-        result.contains(r"plain\nkept\nalways\nproject\n") && result.contains("done"),
+        result.contains(&format!(r"plain\nkept\n{listed}")) && result.contains("done"),
         "{result} {stderr}"
     );
     assert!(!result.contains("PRIVATE"), "{result}");
@@ -5245,7 +5251,7 @@ fn acp_sends_the_display_settings_and_the_session_s_context_files() {
     let opened = next(&messages);
     let session = opened["result"]["sessionId"].clone();
     let meta = &opened["result"]["_meta"]["io.github.leanandmean.scramjet"];
-    let agents = project.join("AGENTS.md");
+    let agents = std::fs::canonicalize(&project).unwrap().join("AGENTS.md");
     assert_eq!(meta["contextFiles"], serde_json::json!([agents]), "{meta}");
     let path = std::path::Path::new(meta["path"].as_str().unwrap());
     assert!(path.starts_with(scratch.0.join("state")), "{meta}");

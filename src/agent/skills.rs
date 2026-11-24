@@ -71,13 +71,16 @@ fn places(
         return given.collect();
     }
     let user_agents = home.map(|home| crate::os::join(home, ".agents/skills"));
+    // The project's path is the real one, which a home reached through a symlink is not.
+    let real_home = home.and_then(|home| crate::os::canonicalize(home).ok());
+    let real_agents = real_home.map(|home| crate::os::join(&home, ".agents/skills"));
     let mut places = vec![(
         crate::os::join(root, ".scramjet/skills"),
         Place::Directory { top_files: true },
     )];
     for directory in root.ancestors() {
         let skills = crate::os::join(directory, ".agents/skills");
-        if user_agents.as_ref() != Some(&skills) {
+        if user_agents.as_ref() != Some(&skills) && real_agents.as_ref() != Some(&skills) {
             places.push((skills, Place::Directory { top_files: false }));
         }
         if directory.join(".git").exists() {
@@ -519,6 +522,23 @@ mod tests {
         let user = home.join(".agents/skills");
         assert_eq!(found.iter().filter(|(path, _)| path == &user).count(), 1);
         assert_eq!(found.last().unwrap().0, user);
+        // Nor when the home directory is reached through a symlink, as macOS's `/var`.
+        #[cfg(unix)]
+        {
+            let linked = scratch.0.join("linked-home");
+            std::os::unix::fs::symlink(&home, &linked).unwrap();
+            let found = places(
+                &[],
+                &[],
+                &SkillOptions::default(),
+                &home,
+                None,
+                Some(&linked),
+            );
+            let paths: Vec<_> = found.iter().map(|(path, _)| path.clone()).collect();
+            assert!(!paths.contains(&home.join(".agents/skills")), "{paths:?}");
+            assert_eq!(found.last().unwrap().0, linked.join(".agents/skills"));
+        }
     }
 
     #[cfg(unix)]

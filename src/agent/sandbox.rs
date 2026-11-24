@@ -1793,10 +1793,11 @@ mod tests {
         assert_eq!(writer.mode, SandboxMode::ReadOnly);
         assert_eq!(writer.writable_roots(&project), [real(&scratch)]);
         assert_eq!(said.len(), 2, "{said:?}");
-        assert!(
-            said[0].starts_with("/proc: the sandbox keeps /proc its own"),
-            "{said:?}"
-        );
+        let proc = match cfg!(target_os = "linux") {
+            true => "/proc: the sandbox keeps /proc its own",
+            false => "/proc: No such file or directory",
+        };
+        assert!(said[0].starts_with(proc), "{said:?}");
         let main = Sandbox {
             mode: SandboxMode::WorkspaceWrite,
             network: false,
@@ -2561,7 +2562,11 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         ] {
             let output = process.output().unwrap();
             let errors = String::from_utf8_lossy(&output.stderr);
-            let listed = "../notes:\nshared\n\n../notes/shared/.ssh:\n\n../notes/shared/deeper:\n";
+            // Seatbelt refuses to list a hidden directory at all.
+            let listed = match cfg!(target_os = "macos") {
+                true => "",
+                false => "../notes:\nshared\n\n../notes/shared/.ssh:\n\n../notes/shared/deeper:\n",
+            };
             assert_eq!(
                 String::from_utf8_lossy(&output.stdout),
                 format!("plain\nshared\n{listed}{wrote}done\n"),
@@ -2636,7 +2641,11 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let errors = String::from_utf8_lossy(&output.stderr);
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "plain\nscratch\n..:\nproject\nscratch\n\nprivate:\nwrote\nwrote\nkept\ndone\n",
+            match cfg!(target_os = "macos") {
+                true => "plain\nscratch\nwrote\nwrote\nkept\ndone\n",
+                false =>
+                    "plain\nscratch\n..:\nproject\nscratch\n\nprivate:\nwrote\nwrote\nkept\ndone\n",
+            },
             "{errors}"
         );
         assert!(!errors.contains("PRIVATE"), "{errors}");

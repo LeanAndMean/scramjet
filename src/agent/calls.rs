@@ -1272,6 +1272,7 @@ worktree\n---\n\nWrite.\n",
         );
         let real = std::fs::canonicalize(&root).unwrap();
         let worktrees = subagent::worktree::directory(&state, &real);
+        let worktrees = std::fs::canonicalize(&worktrees).unwrap();
         let task = bodies[1]["input"][0]["content"].as_str().unwrap();
         let kept: Vec<_> = (std::fs::read_dir(&worktrees).unwrap())
             .map(|entry| entry.unwrap().path())

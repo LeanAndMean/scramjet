@@ -490,6 +490,8 @@ mod tests {
         std::fs::create_dir_all(&two).unwrap();
         let path = scratch.0.join("settings.json");
         let write = |text: &str| std::fs::write(&path, text).unwrap();
+        // As a rooted path is kept, on the settings file's drive on Windows.
+        let kept = |rooted: &str| scramjet::os::join(&scratch.0, rooted).display().to_string();
         write(
             r#"{"sandbox": {"mode": "workspace-write",
                 "filesystem": {"denyRead": ["/hidden/a"], "allowWrite": ["/w"]}}}"#,
@@ -500,20 +502,22 @@ mod tests {
         assert!(!settings.set_here());
         settings.sandbox_network = false;
         settings.reach = Reach::Minimal;
-        assert!(settings.add_listed(false, PathList::Hidden, Path::new("/hidden/b")));
-        assert!(settings.remove_listed(false, PathList::Hidden, Path::new("/hidden/a")));
+        let added = PathBuf::from(kept("/hidden/b"));
+        assert!(settings.add_listed(false, PathList::Hidden, &added));
+        let resolved = settings.resolve("/hidden/a");
+        assert!(settings.remove_listed(false, PathList::Hidden, &resolved));
         settings.set_subagent_policy(SandboxMode::WorkspaceWrite, true, Some(Reach::Project));
         settings.own_list(PathList::Readable, true);
         settings.remember_project().unwrap();
         assert!(settings.set_here());
-        assert!(settings.added_here(false, PathList::Hidden, Path::new("/hidden/b")));
+        assert!(settings.added_here(false, PathList::Hidden, &added));
         let removed = settings.removed_here(false, PathList::Hidden);
-        assert_eq!(removed, [PathBuf::from("/hidden/a")]);
+        assert_eq!(removed, [resolved]);
         let real = std::fs::canonicalize(&one).unwrap().display().to_string();
         assert_eq!(
             store(&scratch),
             json!({real.clone(): {"network": false, BLOCK_READS: "minimal",
-                "denyRead": {"add": ["/hidden/b"], "remove": ["/hidden/a"]},
+                "denyRead": {"add": [kept("/hidden/b")], "remove": [kept("/hidden/a")]},
                 "subagents": {"mode": "workspace-write", "network": true, BLOCK_READS: true,
                     "allowRead": {"add": [], "remove": []}}}})
         );
@@ -533,7 +537,7 @@ mod tests {
         again.reload();
         assert_eq!(again.sandbox, Some(SandboxMode::ReadOnly));
         assert!(!again.sandbox_network);
-        assert_eq!(again.deny_read, ["/hidden/c", "/hidden/b"]);
+        assert_eq!(again.deny_read, ["/hidden/c".to_owned(), kept("/hidden/b")]);
         assert!(again.allow_write.is_empty());
         assert_eq!(again.subagent_allow_read, Some(Vec::new()));
         // Saved as the default, the project follows it and keeps nothing of its own.

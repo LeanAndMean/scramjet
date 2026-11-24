@@ -241,8 +241,11 @@ mod tests {
 
     #[test]
     fn an_unchanged_worktree_goes_and_a_changed_one_stays_with_its_branch() {
-        let base = std::env::temp_dir().join(format!("scramjet-worktree-{}", std::process::id()));
-        let _scratch = crate::agent::tests::ScratchDir::new(base.clone());
+        let scratch =
+            std::env::temp_dir().join(format!("scramjet-worktree-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(scratch.clone());
+        // macOS's temporary directory is under the `/var` symlink.
+        let base = std::fs::canonicalize(&scratch).unwrap();
         let (project, state) = (base.join("project"), base.join("state"));
         repository(&project);
         let (unchanged, cwd) = Worktree::add(&project, &project.join("src"), &state).unwrap();

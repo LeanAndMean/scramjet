@@ -977,7 +977,14 @@ async fn run(
     {
         Ok(service) => Ok(service),
         Err(error) => {
-            // Its standard error says more once the process ended.
+            // Whether it ended, which a busy machine tells some time after its output closed,
+            // then its standard error, which says more once the process ended.
+            for _ in 0..50 {
+                if ended.load(Ordering::Relaxed) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
             let why = match ended.load(Ordering::Relaxed) {
                 true => "it ended before it answered".to_owned(),

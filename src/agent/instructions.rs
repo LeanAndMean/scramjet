@@ -621,8 +621,9 @@ pub(super) fn context_files(
     .unwrap_or_default();
     let mut above = Vec::new();
     let home = std::env::home_dir().filter(|_| super::bare());
+    let real_home = (home.as_deref()).and_then(|home| crate::os::canonicalize(home).ok());
     for directory in root.ancestors() {
-        if home.as_deref() == Some(directory) {
+        if home.as_deref() == Some(directory) || real_home.as_deref() == Some(directory) {
             continue;
         }
         let found = directory_context(directory, hidden, problems).into_iter();

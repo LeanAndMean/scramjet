@@ -2877,6 +2877,8 @@ mod tests {
         assert_eq!((wrong.sandbox, wrong.sandbox_network), (None, true));
         assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);
 
+        // A rooted path is taken from the settings file's directory, on its drive on Windows.
+        let absolute = |path: &str| scramjet::os::join(&scratch.0, path);
         let object = settings_with(
             &scratch,
             r#"{"sandboxNetwork": true, "blockReadsOutsideWorkingDirectories": true,
@@ -2890,19 +2892,12 @@ mod tests {
         let home = std::env::home_dir().unwrap();
         assert_eq!(
             object.allow_write(),
-            [
-                home.join("scratch"),
-                scratch.0.join("own"),
-                std::path::absolute("/w").unwrap()
-            ]
+            [home.join("scratch"), scratch.0.join("own"), absolute("/w")]
         );
         assert_eq!(
             object.reads(),
             scramjet::agent::Reads {
-                deny: vec![
-                    home.join("notes/private"),
-                    std::path::absolute("/abs").unwrap()
-                ],
+                deny: vec![home.join("notes/private"), absolute("/abs")],
                 allow: vec![home.join("notes/private/ok")],
                 reach: Reach::Project,
             }
@@ -2929,7 +2924,6 @@ mod tests {
                 ..Default::default()
             }
         );
-        let absolute = |path: &str| std::path::absolute(path).unwrap();
         let own = settings_with(
             &scratch,
             r#"{"permissions": {"blockReadsOutsideWorkingDirectories": true},

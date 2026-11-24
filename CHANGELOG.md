@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.326.3 — The home directory through a symlink, and MCP servers that end at start
+
+### Fixed
+
+- When the home directory is reached through a symlink (`HOME` naming a link, as macOS's `/var` is one), a project under it no longer takes the home directory's `~/.agents/skills` as its own, and `--bare` now leaves out its `AGENTS.md` and `CLAUDE.md` there too.
+- An MCP server that ends as it starts is now said to have ended, with what it wrote, also on a busy machine, rather than "did not answer as an MCP server".
+
 ## 2.326.2 — What a subagent's removed worktree held
 
 ### Fixed
