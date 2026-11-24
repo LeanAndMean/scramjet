@@ -1297,7 +1297,10 @@ impl Settings {
         }
         match retry.get("enabled") {
             None | Some(Value::Bool(true)) => {}
-            Some(Value::Bool(false)) => self.retry.attempts = 0,
+            Some(Value::Bool(false)) => {
+                self.retry.attempts = 0;
+                self.retry.shared = false;
+            }
             Some(_) => wrong.push(("enabled".to_owned(), "true or false".to_owned())),
         }
         for (key, expected) in wrong {
@@ -2813,6 +2816,7 @@ mod tests {
             attempts: 5,
             delay: Duration::from_millis(500),
             max_wait: None,
+            shared: true,
         };
         assert_eq!(settings.retries(), expected);
         settings.retries_given = Some(1);
@@ -2829,8 +2833,8 @@ mod tests {
         );
         let older = older.retries();
         assert_eq!(
-            (older.attempts, older.max_wait),
-            (0, Some(Duration::from_secs(9)))
+            (older.attempts, older.max_wait, older.shared),
+            (0, Some(Duration::from_secs(9)), false)
         );
         let wrong = settings_with(
             &scratch,

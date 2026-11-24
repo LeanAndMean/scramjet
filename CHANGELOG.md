@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.307.0 — No shared wait with retries turned off
+
+### Changed
+
+- With `retry.enabled: false`, a provider's Retry-After is no longer kept for other requests to the model, in this process or the user's others, nor waited out before a request: a 429 fails the turn at once, so a runner that retries by itself does not stall other sessions.
+
 ## 2.306.0 — Key commands run once, not for every request
 
 ### Changed

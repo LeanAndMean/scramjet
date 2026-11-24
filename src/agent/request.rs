@@ -486,7 +486,10 @@ pub(super) fn send(
     loop {
         let mut kept = false;
         // A wait longer than the settings allow is the provider's to refuse again.
-        while let Some(left) = super::cooldown::take(route, model, max_wait) {
+        while let Some(left) = (retries.shared)
+            .then(|| super::cooldown::take(route, model, max_wait))
+            .flatten()
+        {
             on(Sending::Cooling(left));
             if sleep(executor, left, cancel) {
                 return Err(AgentError::Cancelled);
@@ -599,7 +602,7 @@ pub(super) fn send(
             !failure.transient || failure.overflow || attempt >= retries.attempts || too_long;
         if let Some(wait) = failure
             .wait
-            .filter(|wait| failure.transient && *wait < Duration::MAX)
+            .filter(|wait| retries.shared && failure.transient && *wait < Duration::MAX)
         {
             super::cooldown::hold(route, model, wait, !gives_up && delay == wait);
         }
@@ -976,6 +979,7 @@ response is incomplete; retry the request."});
             attempts: 0,
             delay: Duration::ZERO,
             max_wait: None,
+            shared: true,
         });
         let message = match agent.turn("hi", &mut Recorder::default(), &AtomicBool::new(false)) {
             Err(AgentError::Provider(message)) => message,
@@ -1055,6 +1059,7 @@ response is incomplete; retry the request."});
                 attempts: 1,
                 delay: Duration::ZERO,
                 max_wait: None,
+                shared: true,
             };
             let cancel = AtomicBool::new(false);
             let sent = send(
@@ -1105,6 +1110,7 @@ response is incomplete; retry the request."});
             attempts: 1,
             delay: Duration::ZERO,
             max_wait: Some(Duration::from_secs(1)),
+            shared: true,
         });
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
@@ -1141,6 +1147,7 @@ response is incomplete; retry the request."});
             attempts: 1,
             delay: Duration::from_millis(100),
             max_wait: None,
+            shared: true,
         });
         let mut ui = Recorder::default();
         agent.turn("hi", &mut ui, &AtomicBool::new(false)).unwrap();
@@ -1162,6 +1169,7 @@ response is incomplete; retry the request."});
             attempts: 0,
             delay: Duration::ZERO,
             max_wait: Some(Duration::from_secs(2)),
+            shared: true,
         });
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
@@ -1186,6 +1194,37 @@ response is incomplete; retry the request."});
     }
 
     #[test]
+    fn retries_turned_off_neither_keep_nor_wait_out_a_providers_retry_after() {
+        let busy =
+            b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 5\r\ncontent-length: 4\r\n\r\nbusy";
+        let done = || stream(&fixture::text_events("done", fixture::known_usage()));
+        let (endpoint, server) = serve(vec![busy.to_vec(), done(), done()]);
+        let unshared = Retries {
+            attempts: 0,
+            delay: Duration::ZERO,
+            max_wait: None,
+            shared: false,
+        };
+        let (mut unshared_agent, _scratch) = agent(endpoint, "unshared");
+        unshared_agent.set_retries(unshared);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        assert!(unshared_agent.turn("hi", &mut ui, &cancel).is_err());
+        let refused = Instant::now();
+        unshared_agent.turn("hi", &mut ui, &cancel).unwrap();
+        // Nor does a request that would share the wait find one kept.
+        let (mut sharing, _other) = agent(endpoint, "unshared-other");
+        sharing.set_retries(Retries {
+            shared: true,
+            ..unshared
+        });
+        sharing.turn("hi", &mut ui, &cancel).unwrap();
+        assert!(refused.elapsed() < Duration::from_secs(4));
+        assert!(ui.cooling.is_empty());
+        assert_eq!(server.join().unwrap().len(), 3);
+    }
+
+    #[test]
     fn requests_held_by_a_shared_wait_reach_the_provider_one_after_another() {
         let busy =
             b"HTTP/1.1 429 Too Many Requests\r\nretry-after: 1\r\ncontent-length: 4\r\n\r\nbusy";
@@ -1203,6 +1242,7 @@ response is incomplete; retry the request."});
             attempts: 0,
             delay: Duration::ZERO,
             max_wait: None,
+            shared: true,
         };
         let (mut refused, _scratch) = agent(endpoint, "spaced-refused");
         refused.set_retries(no_retries);

@@ -211,6 +211,9 @@ pub struct Retries {
     /// A longer wait, backoff or the provider's Retry-After, fails the request instead
     /// (`provider.maxRetryDelayMs`); `None` for no limit (0 there).
     pub max_wait: Option<Duration>,
+    /// Whether a provider's Retry-After is kept for the other requests to the model, in this
+    /// process and the user's others, and waited out before each; not when `enabled` is false.
+    pub shared: bool,
 }
 
 impl Default for Retries {
@@ -219,6 +222,7 @@ impl Default for Retries {
             attempts: 10,
             delay: Duration::from_secs(2),
             max_wait: Some(Duration::from_secs(60)),
+            shared: true,
         }
     }
 }

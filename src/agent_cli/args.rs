@@ -276,7 +276,8 @@ default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cy
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
 list and the agent save; and startupModel: per-directory (new sessions start with the model
 chosen last in their project, kept in $XDG_STATE_HOME/scramjet/last-used-models.json) or
-global; retry: enabled, maxRetries (10), baseDelayMs (2000, doubled at each retry up to
+global; retry: enabled (true; false: no retry, and a provider's Retry-After is neither kept
+for other requests nor waited out), maxRetries (10), baseDelayMs (2000, doubled at each retry up to
 provider.maxRetryDelayMs, give or take a tenth) and provider.maxRetryDelayMs (60000: a longer
 wait the provider asks for fails the request; 0 for no limit); compaction: enabled (true),
 reserveTokens (16384: compaction runs once the context passes the window less this) and
