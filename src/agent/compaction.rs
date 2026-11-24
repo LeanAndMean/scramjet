@@ -222,6 +222,44 @@ pub(super) fn summary_message(summary: &str) -> Value {
     json!({"role":"user", "content":format!("{SUMMARY_PREFIX}{summary}{SUMMARY_SUFFIX}")})
 }
 
+/// Stored with a compaction's summary message in the conversation: what its session entry
+/// saved, and the items it kept (`Saved`). Never sent.
+pub(super) const COMPACTED: &str = "_scramjet_compaction";
+
+/// The summary message of the compaction entry `entry`, which kept `kept` items.
+pub(super) fn compacted_message(entry: &Value, kept: usize) -> Value {
+    let mut message = summary_message(entry["summary"].as_str().unwrap_or_default());
+    let mut saved = json!({"kept_items": kept});
+    for key in ["tokens_before", "automatic"] {
+        if let Some(value) = entry.get(key) {
+            saved[key] = value.clone();
+        }
+    }
+    message[COMPACTED] = saved;
+    message
+}
+
+/// What a compaction in a resumed conversation saved; each part is unknown in a session saved
+/// before it was.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedCompaction {
+    pub tokens_before: Option<u64>,
+    pub kept_items: Option<usize>,
+    /// Why it ran without `/compact`; also `None` in sessions saved before it was kept.
+    pub automatic: Option<AutoCompaction>,
+}
+
+impl SavedCompaction {
+    pub(super) fn of(item: &Value) -> Self {
+        let saved = &item[COMPACTED];
+        Self {
+            tokens_before: saved["tokens_before"].as_u64(),
+            kept_items: (saved["kept_items"].as_u64()).and_then(|kept| usize::try_from(kept).ok()),
+            automatic: saved["automatic"].as_str().and_then(AutoCompaction::named),
+        }
+    }
+}
+
 /// Whether a user message is a compaction or branch summary, which Scramjet does not count as a
 /// user message.
 pub(super) fn is_summary(item: &Value) -> bool {
@@ -653,6 +691,20 @@ pub enum AutoCompaction {
 }
 
 impl AutoCompaction {
+    /// Its name, as saved and sent to ACP clients.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Threshold => "threshold",
+            Self::Overflow => "overflow",
+        }
+    }
+
+    fn named(name: &str) -> Option<Self> {
+        [Self::Threshold, Self::Overflow]
+            .into_iter()
+            .find(|automatic| automatic.name() == name)
+    }
+
     /// A short line saying why compaction ran, for the user.
     pub fn reason(self) -> &'static str {
         match self {
@@ -709,16 +761,18 @@ impl Agent {
         let tokens_before = self
             .context_size()
             .unwrap_or_else(|| estimate(&self.conversation));
-        self.session.append(
-            &json!({"type":"compaction", "summary":summary, "first_kept":cut,
-                "read_files":files.read, "modified_files":files.modified,
-                "tokens_before":tokens_before}),
-        )?;
+        let mut entry = json!({"type":"compaction", "summary":summary, "first_kept":cut,
+            "read_files":files.read, "modified_files":files.modified,
+            "tokens_before":tokens_before});
+        if let Some(automatic) = automatic {
+            entry["automatic"] = json!(automatic.name());
+        }
+        self.session.append(&entry)?;
         if let Some(line) = self.session.leaf() {
             ui.saved(Saved::Compaction, line);
         }
         let kept = self.conversation.split_off(cut);
-        self.conversation = vec![summary_message(&summary)];
+        self.conversation = vec![compacted_message(&entry, kept.len())];
         self.conversation.extend(kept);
         // A delegated command's earlier result may be summarized away, so it may run again.
         self.delegated.clear();

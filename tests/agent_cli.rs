@@ -4703,6 +4703,23 @@ fn acp_shows_compactions_and_what_commands_sent() {
                     meta["reason"].as_str().unwrap().starts_with("Automatic"),
                     "{meta}"
                 );
+                send(
+                    &mut stdin,
+                    serde_json::json!({"jsonrpc": "2.0", "id": 5, "method": "session/load",
+                        "params": {"sessionId": session, "cwd": project, "mcpServers": []}}),
+                );
+                let (answer, replayed) = until(&messages, |message| message.get("id").is_some());
+                assert!(answer.get("result").is_some(), "{answer}");
+                let replayed: Vec<_> = (replayed.iter())
+                    .map(|message| &message["params"]["update"])
+                    .filter(|update| update["sessionUpdate"] == "compaction_update")
+                    .collect();
+                assert_eq!(replayed.len(), 1, "{replayed:?}");
+                assert_eq!(replayed[0]["summary"], compactions[1]["summary"]);
+                let again = &replayed[0]["_meta"]["io.github.leanandmean.scramjet"];
+                for key in ["tokensBefore", "keptItems", "automatic", "reason"] {
+                    assert_eq!(again[key], meta[key], "{key}: {again}");
+                }
             }
             false => {
                 assert!(compactions.is_empty(), "{second:?}");

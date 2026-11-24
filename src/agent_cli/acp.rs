@@ -4087,11 +4087,7 @@ impl AgentUi for Updates {
         let mut meta = json!({"tokensBefore": compaction.tokens_before,
             "keptItems": compaction.kept_items});
         if let Some(automatic) = automatic {
-            let why = match automatic {
-                scramjet::agent::AutoCompaction::Threshold => "threshold",
-                scramjet::agent::AutoCompaction::Overflow => "overflow",
-            };
-            meta["automatic"] = json!(why);
+            meta["automatic"] = json!(automatic.name());
             meta["reason"] = json!(automatic.reason());
         }
         let meta = json!({"io.github.leanandmean.scramjet": meta});
@@ -4125,10 +4121,32 @@ impl AgentUi for Updates {
         }
     }
     fn compaction_summary(&mut self, summary: &str) {
-        if self.replaying {
-            let fields = json!({"summary": [{"type": "text", "text": summary}]});
-            self.compaction_update("completed", fields, Some("Context compacted."));
+        self.replayed_compaction(summary, &scramjet::agent::SavedCompaction::default());
+    }
+    fn replayed_compaction(&mut self, summary: &str, saved: &scramjet::agent::SavedCompaction) {
+        if !self.replaying {
+            return;
         }
+        let mut meta = json!({});
+        if let Some(tokens) = saved.tokens_before {
+            meta["tokensBefore"] = json!(tokens);
+        }
+        if let Some(kept) = saved.kept_items {
+            meta["keptItems"] = json!(kept);
+        }
+        let said = match saved.automatic {
+            Some(automatic) => {
+                meta["automatic"] = json!(automatic.name());
+                meta["reason"] = json!(automatic.reason());
+                format!("Context compacted. {}", automatic.reason())
+            }
+            None => "Context compacted.".to_owned(),
+        };
+        let mut fields = json!({"summary": [{"type": "text", "text": summary}]});
+        if meta.as_object().is_some_and(|meta| !meta.is_empty()) {
+            fields["_meta"] = json!({"io.github.leanandmean.scramjet": meta});
+        }
+        self.compaction_update("completed", fields, Some(&said));
     }
     fn branch_summary(&mut self, summary: &str) {
         if self.replaying {

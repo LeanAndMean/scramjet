@@ -515,11 +515,12 @@ impl Entries {
                     .and_then(|cut| usize::try_from(cut).ok())
                     .filter(|&cut| cut <= items.len())
                     .ok_or_else(|| invalid(path, "invalid compaction cut point"))?;
-                let summary = value["summary"]
-                    .as_str()
-                    .ok_or_else(|| invalid(path, "missing compaction summary"))?;
+                if !value["summary"].is_string() {
+                    return Err(invalid(path, "missing compaction summary"));
+                }
                 items.drain(..cut);
-                items.insert(0, super::compaction::summary_message(summary));
+                let message = super::compaction::compacted_message(value, items.len());
+                items.insert(0, message);
                 context.files = FileLists::of(value);
                 context.context_tokens = None;
             } else if value["type"] == "branch_summary" {
@@ -607,8 +608,17 @@ impl Entries {
             };
             stored.entry(key).or_default().push_back(entry.line);
         }
+        let key = |item: &Value| match item.get(super::compaction::COMPACTED) {
+            Some(_) => {
+                let mut item = item.clone();
+                item.as_object_mut()
+                    .map(|item| item.remove(super::compaction::COMPACTED));
+                item.to_string()
+            }
+            None => item.to_string(),
+        };
         (items.iter())
-            .map(|item| stored.get_mut(&item.to_string())?.pop_front())
+            .map(|item| stored.get_mut(&key(item))?.pop_front())
             .collect()
     }
 

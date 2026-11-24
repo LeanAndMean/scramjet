@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.315.0 — A reopened session's compactions over ACP
+
+### Added
+
+- `scramjet acp`'s `session/load` and `watch` give a replayed compaction what a live one has: the tokens before it, the items it kept and, for an automatic one, why it ran. Sessions now save why a compaction ran; older ones replay without the reason.
+
 ## 2.314.0 — Display settings and context files over ACP
 
 ### Added

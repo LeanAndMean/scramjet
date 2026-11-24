@@ -3,7 +3,8 @@
 use super::tools::{self, Call};
 use super::{
     Agent, AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, Reply, SUBAGENTS,
-    StreamProgress, TIMING, TYPED, Tokens, compaction, message_text, publish, question, status,
+    SavedCompaction, StreamProgress, TIMING, TYPED, Tokens, compaction, message_text, publish,
+    question, status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -132,6 +133,10 @@ pub trait AgentUi {
     fn command_sent(&mut self, _typed: &str, _sent: &str) {}
     /// The summary of a compaction in a resumed conversation.
     fn compaction_summary(&mut self, summary: &str);
+    /// A compaction in a resumed conversation: its summary and what its session saved.
+    fn replayed_compaction(&mut self, summary: &str, _saved: &SavedCompaction) {
+        self.compaction_summary(summary);
+    }
     /// The summary of a branch the conversation came back from, in a resumed conversation.
     fn branch_summary(&mut self, summary: &str);
     /// Asks whether a tool call may run; returns `Deny` without an answer once `cancel` is set.
@@ -632,7 +637,7 @@ pub fn show_entries(
                     .as_str()
                     .and_then(|typed| typed.strip_prefix('!'));
                 if let Some(summary) = compaction::previous_summary(std::slice::from_ref(item)) {
-                    ui.compaction_summary(summary);
+                    ui.replayed_compaction(summary, &SavedCompaction::of(item));
                 } else if let Some(summary) = compaction::branch_summary(item) {
                     ui.branch_summary(summary);
                 } else if let Some(command) = command {

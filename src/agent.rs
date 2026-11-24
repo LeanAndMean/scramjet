@@ -61,7 +61,7 @@ pub use autonomy::{
 pub use catalog::{Catalog, Offered, check_url as check_catalog_url};
 pub use client::{StreamProgress, download};
 pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, sets_in};
-pub use compaction::{AutoCompaction, Compaction};
+pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use image::{decode_base64, mime as image_type, set_images};
 pub use instructions::{Part, Section};
