@@ -2849,12 +2849,15 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         }
     }
 
-    /// Linux's: BSD's `wc` pads its count, and how Seatbelt lists a hidden directory is untried.
-    #[cfg(target_os = "linux")]
+    /// On macOS Seatbelt refuses to list a hidden directory at all, where Linux's shows what
+    /// is kept in it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn the_project_only_reach_hides_the_home_directory_but_what_the_agent_needs() {
-        let home = std::env::temp_dir().join(format!("scramjet-reach-{}", std::process::id()));
-        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let scratch = std::env::temp_dir().join(format!("scramjet-reach-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(scratch.clone());
+        // macOS's temporary directory is under the `/var` symlink.
+        let home = std::fs::canonicalize(&scratch).unwrap();
         for directory in [
             "repos/project/.git",
             "repos/other",
@@ -2918,11 +2921,15 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         hidden.allow(std::slice::from_ref(&root));
         let script = "cat a.txt ../../.cargo/registry/index ../../.gitconfig ../../.rustup/toolchains/t; \
             ../../.cargo/bin/cargo; ../../.local/bin/tool; ls -A ../..; grep -r PRIVATE ../..; \
-            ls /mnt | wc -l; echo done";
+            for top in /mnt /Volumes; do ls -A $top 2>/dev/null | wc -l | tr -d ' '; done; echo done";
         let sandbox = super::Sandbox {
             mode: super::SandboxMode::WorkspaceWrite,
             network: false,
             writable: Vec::new(),
+        };
+        let listed = match cfg!(target_os = "macos") {
+            true => "",
+            false => ".cargo\n.config\n.gitconfig\n.local\n.rustup\nrepos\n",
         };
         let sandboxed = super::sandboxed(&root, script, &hidden, &sandbox).unwrap();
         let unconfined = super::hiding(&root, script, &hidden).unwrap();
@@ -2931,8 +2938,9 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             let errors = String::from_utf8_lossy(&output.stderr);
             assert_eq!(
                 String::from_utf8_lossy(&output.stdout),
-                "plain\nindex\n[user]\n\tname = Someone\ntoolchain\ncargo\ntool\n\
-                 .cargo\n.config\n.gitconfig\n.local\n.rustup\nrepos\n0\ndone\n",
+                format!(
+                    "plain\nindex\n[user]\n\tname = Someone\ntoolchain\ncargo\ntool\n{listed}0\n0\ndone\n"
+                ),
                 "{errors}"
             );
             assert!(!errors.contains("PRIVATE"), "{errors}");
