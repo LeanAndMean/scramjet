@@ -533,6 +533,9 @@ pub(super) struct Settings {
     pub(super) tools: Vec<String>,
     /// The harness's own tools `tools` turns off.
     pub(super) harness_off: Vec<String>,
+    /// `directives`: whether the instructions hold the `# Scramjet` orientation and Scramjet's
+    /// directives, as `--no-directives` leaves them out.
+    pub(super) directives: bool,
     pub(super) hide_credentials: HideCredentials,
     /// `sandbox`: how the agent's tools are confined; `None`: not at all.
     pub(super) sandbox: Option<SandboxMode>,
@@ -692,6 +695,7 @@ impl Settings {
             recall: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
             harness_off: Vec::new(),
+            directives: true,
             hide_credentials: HideCredentials::Never,
             sandbox: None,
             sandbox_network: true,
@@ -1118,6 +1122,11 @@ impl Settings {
             None => {}
             Some(Value::Bool(network)) => self.sandbox_network = *network,
             Some(_) => wrong.push(("sandboxNetwork", "true or false")),
+        }
+        match object.get("directives") {
+            None => {}
+            Some(Value::Bool(directives)) => self.directives = *directives,
+            Some(_) => wrong.push(("directives", "true or false")),
         }
         let sandbox = match object.get("sandbox") {
             None => None,

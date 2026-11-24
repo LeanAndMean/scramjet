@@ -170,11 +170,14 @@ Guidelines:
         "Skills",
         skills_section(has("read"), skills),
     ));
-    parts.push(Part::new(
-        Section::Directives,
-        "Scramjet's directives",
-        format!("\n{}\n{DIRECTIVES}\n", orientation()),
-    ));
+    if !loaded.no_directives {
+        let directives = directives(commands, agents, has(question::NAME));
+        parts.push(Part::new(
+            Section::Directives,
+            "Scramjet's directives",
+            format!("\n{}\n{directives}\n", orientation()),
+        ));
+    }
     let catalogs = [
         (Section::Agents, "Subagents", subagent::catalog(agents)),
         (Section::Commands, "Commands", commands.catalog()),
@@ -198,6 +201,46 @@ Guidelines:
 /// The text of `parts`, in order.
 pub(super) fn joined(parts: &[Part]) -> String {
     parts.iter().map(|part| part.text.as_str()).collect()
+}
+
+/// Scramjet's directives, each section and guideline only where it applies: command framing
+/// with commands loaded, release timing with a pre-merge command to hand it to, the structural
+/// mapper's guideline with that agent offered, and asking through a tool with the tool offered.
+fn directives(commands: &Commands, agents: &[subagent::Definition], asks: bool) -> String {
+    let command =
+        |suffix: &str| (commands.list().iter()).any(|command| command.name.ends_with(suffix));
+    let applies = |heading: &str| match heading {
+        "# Command framing" => !commands.list().is_empty(),
+        "# Release preparation timing" => command(":pr-pre-merge"),
+        _ => true,
+    };
+    let mapper = agents
+        .iter()
+        .any(|agent| agent.name == "mach12:structural-mapper");
+    let starts = std::iter::once(0).chain(DIRECTIVES.match_indices("\n# ").map(|(at, _)| at + 1));
+    let starts: Vec<usize> = starts.chain([DIRECTIVES.len()]).collect();
+    let mut text = String::new();
+    for section in starts.windows(2).map(|at| &DIRECTIVES[at[0]..at[1]]) {
+        if applies(section.lines().next().unwrap_or_default()) {
+            text += section;
+        }
+    }
+    if !mapper {
+        let at = text.find(" - Before producing a non-trivial file-level implementation plan");
+        if let Some(at) = at {
+            let end = text[at..].find('\n').map_or(text.len(), |end| at + end + 1);
+            text.replace_range(at..end, "");
+        }
+    }
+    if !asks {
+        text = text.replace(
+            " When you ask through a tool, say it in the question itself.",
+            "",
+        );
+    }
+    text.truncate(text.trim_end().len());
+    text.push('\n');
+    text
 }
 
 /// The `# Scramjet` section, as Scramjet 1's.
@@ -437,6 +480,8 @@ pub(super) struct Loaded {
     /// After it: the `--append-system-prompt` texts, else `APPEND_SYSTEM.md`.
     pub appended: Vec<String>,
     pub context: Vec<(PathBuf, String)>,
+    /// `--no-directives`: without the `# Scramjet` orientation and Scramjet's directives.
+    pub no_directives: bool,
     /// The files `opening` and `appended` were read from, each with whether it is the opening.
     pub files: Vec<(PathBuf, bool)>,
     /// The files among them that could not be read.
@@ -482,7 +527,10 @@ pub(super) fn load(
     agent_directory: Option<&Path>,
     hidden: &Hidden,
 ) -> Loaded {
-    let mut loaded = Loaded::default();
+    let mut loaded = Loaded {
+        no_directives: prompt.no_directives,
+        ..Loaded::default()
+    };
     if !prompt.no_context_files {
         loaded.context = context_files(root, agent_directory, hidden, &mut loaded.problems);
     }
@@ -789,14 +837,16 @@ model: \"Reviewed by x\"\n- Multiple credited models: describe each model's cont
     #[test]
     fn the_directives_follow_the_context_and_skills_and_the_catalogs_follow_them() {
         let root = Path::new("/nonexistent/scramjet-rs-directives");
+        let commands = Commands::parsed(&[("set:pr-pre-merge", "Merge.")]);
         let text = agent(
             root,
             &[],
-            &Commands::default(),
+            &commands,
             &[],
             &Skills::default(),
             &Loaded::default(),
         );
+        let text = &text[..text.find("\n\n# Available commands").unwrap()];
         let at = |heading: &str| text.find(&format!("\n# {heading}\n")).unwrap();
         assert!(at("Scramjet") < at("Prior-session fallback"));
         assert!(at("Command framing") < at("Executing actions with care"));
@@ -818,6 +868,65 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
 (every option, key and built-in command)\n",
             std::env::current_exe().unwrap().display()
         )));
+    }
+
+    #[test]
+    fn each_directive_is_given_only_where_it_applies_and_none_without_directives() {
+        let root = Path::new("/nonexistent/scramjet-rs-directives");
+        let mapper = subagent::Definition {
+            name: "mach12:structural-mapper".into(),
+            description: "Maps.".into(),
+            tools: None,
+            disallowed: Vec::new(),
+            model: None,
+            prompt: String::new(),
+            source: "installed",
+            path: PathBuf::from("/sets/mach12/agents/structural-mapper.md"),
+            digest: String::new(),
+            diagnostics: Vec::new(),
+        };
+        let given = |tools: &[&str], commands: &Commands, agents: &[subagent::Definition]| {
+            agent(
+                root,
+                tools,
+                commands,
+                agents,
+                &Skills::default(),
+                &Loaded::default(),
+            )
+        };
+        let (framing, release) = ("\n# Command framing\n", "\n# Release preparation timing\n");
+        let planning = "dispatch `mach12:structural-mapper`";
+        let asking = "When you ask through a tool, say it in the question itself.";
+        let bare = given(&[], &Commands::default(), &[]);
+        for absent in [framing, release, planning, asking] {
+            assert!(!bare.contains(absent), "{absent}");
+        }
+        assert!(bare.contains("\n# Tool results and external content\n"));
+        assert!(bare.contains("IMPORTANT: You must NEVER generate or guess URLs"));
+        assert!(bare.contains(" - Prefer editing existing files to creating new ones.\n"));
+        assert!(bare.contains("not a gate to clear."), "{bare}");
+        let commands = Commands::parsed(&[("set:go", "Go.")]);
+        let text = given(
+            &[question::NAME, subagent::NAME],
+            &commands,
+            std::slice::from_ref(&mapper),
+        );
+        for present in [framing, planning, asking] {
+            assert!(text.contains(present), "{present}");
+        }
+        assert!(!text.contains(release));
+        // The mapper offered without the subagent tool is not offered.
+        assert!(!given(&[], &commands, &[mapper]).contains(planning));
+
+        let loaded = Loaded {
+            no_directives: true,
+            ..Loaded::default()
+        };
+        let parts = super::agent(root, &["read"], &commands, &[], &Skills::default(), &loaded);
+        let sections: Vec<_> = parts.iter().map(|part| part.section).collect();
+        assert_eq!(sections, [Section::Opening, Section::Commands]);
+        assert!(!joined(&parts).contains("# Scramjet\n"));
     }
 
     #[test]
@@ -857,6 +966,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             system: Some("Be terse.".into()),
             append: vec![given.display().to_string(), "Inline.".into()],
             no_context_files: false,
+            ..SystemPrompt::default()
         };
         let loaded = load(&prompt, &root, Some(&home), &Hidden::default());
         assert_eq!(loaded.opening.as_deref(), Some("Be terse."));
@@ -902,6 +1012,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             system: Some("You review code.".into()),
             append: vec!["First.".into(), "Second.\n".into()],
             no_context_files: false,
+            ..SystemPrompt::default()
         };
         let loaded = load(&prompt, &scratch, None, &Hidden::default());
         let tools = super::super::tools::offered(

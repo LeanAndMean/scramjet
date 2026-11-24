@@ -3454,6 +3454,75 @@ fn acp_turns_stopped_at_the_output_limit_or_by_a_refusal_say_so() {
     assert!(child.wait().unwrap().success());
 }
 
+#[test]
+#[cfg(unix)]
+fn acp_sessions_leave_out_the_directives_when_the_client_or_the_settings_say() {
+    let scratch = Scratch(std::env::temp_dir().join(format!(
+        "scramjet-cli-acp-directives-{}",
+        std::process::id()
+    )));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done"}}"#.to_owned(),
+        r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ]
+    .to_vec();
+    let (port, bodies) = serve_events(vec![reply]);
+    // Whether each session's request held the directives, for sessions opened with `metas`.
+    let directed = |settings: serde_json::Value, metas: &[serde_json::Value]| {
+        let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings, &[]);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1}}),
+        );
+        next(&messages);
+        let mut held = Vec::new();
+        for (n, meta) in metas.iter().enumerate() {
+            let id = 2 * n + 2;
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/new",
+                    "params": {"cwd": project, "mcpServers": [], "_meta": meta}}),
+            );
+            let (opened, _) = until(&messages, |message| message["id"] == id);
+            let session = opened["result"]["sessionId"].clone();
+            send(
+                &mut stdin,
+                serde_json::json!({"jsonrpc": "2.0", "id": id + 1, "method": "session/prompt",
+                    "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+            );
+            let (answer, _) = until(&messages, |message| message["id"] == id + 1);
+            assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+            let body: serde_json::Value =
+                serde_json::from_str(&bodies.recv_timeout(Duration::from_secs(20)).unwrap())
+                    .unwrap();
+            let system = body["system"].to_string();
+            assert!(system.contains("Available tools:"), "{system}");
+            assert!(system.contains("# Available commands"), "{system}");
+            held.push(system.contains("# Scramjet\\n") && system.contains("# Doing tasks"));
+        }
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+        held
+    };
+    let ours = |fields| serde_json::json!({"io.github.leanandmean.scramjet": fields});
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let metas = [
+        serde_json::json!({}),
+        ours(serde_json::json!({"directives": false})),
+        ours(serde_json::json!({"directives": true})),
+    ];
+    assert_eq!(directed(settings, &metas), [true, false, true]);
+    let settings = serde_json::json!({"hideCredentials": "never", "directives": false});
+    assert_eq!(directed(settings, &metas[2..]), [false]);
+}
+
 /// The `tool_call` update and the completed one of a prompt turn in `project` whose reply
 /// calls `name` with `input`, for a client offering `capabilities`.
 #[cfg(unix)]

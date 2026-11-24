@@ -1277,8 +1277,9 @@ impl Connection {
             log: log.clone(),
         };
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
+        let directives = params["_meta"]["io.github.leanandmean.scramjet"]["directives"] != false;
         let thread = std::thread::spawn(move || {
-            let session = match start_session(&arguments, &cwd, &servers, file) {
+            let session = match start_session(&arguments, &cwd, &servers, file, directives) {
                 Ok(session) => session,
                 Err(error) => {
                     let _ = started.send(Err((INTERNAL_ERROR, error)));
@@ -2075,15 +2076,18 @@ fn mcp_servers(servers: &Value) -> Result<Vec<McpServer>, String> {
 
 /// Starts a session in `cwd` with the options `arguments` give, as the full screen starts one,
 /// or continues the saved session `file`, with the client's MCP `servers` beside the settings' (in place of those of the same name,
-/// and started though the settings disable that name).
+/// and started though the settings disable that name), without Scramjet's directives unless
+/// `directives` (`session/new`'s `_meta` `directives: false`).
 fn start_session(
     arguments: &[String],
     cwd: &Path,
     servers: &[McpServer],
     file: Option<PathBuf>,
+    directives: bool,
 ) -> Result<Session, String> {
-    let options = Options::parse(arguments.iter().map(OsString::from))?
+    let mut options = Options::parse(arguments.iter().map(OsString::from))?
         .ok_or("--help is not a session's option")?;
+    options.prompt.no_directives |= !directives;
     let choice = match (file, &options.start) {
         (Some(file), _) => SessionChoice::Open(file),
         (None, Launch::Unsaved) => SessionChoice::Unsaved,

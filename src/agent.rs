@@ -301,6 +301,9 @@ pub struct SystemPrompt {
     pub append: Vec<String>,
     /// `--no-context-files`: without the `AGENTS.md` and `CLAUDE.md` files.
     pub no_context_files: bool,
+    /// `--no-directives` (or the `directives` setting off): without the `# Scramjet`
+    /// orientation and Scramjet's directives.
+    pub no_directives: bool,
 }
 
 /// The reasoning effort levels a model takes, and the current one, as Shift+Tab cycles

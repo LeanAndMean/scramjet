@@ -78,7 +78,7 @@ mod writable;
 use args::{Options, Start, USAGE};
 use scramjet::agent::{
     self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
-    Next, Providers, Sandbox, Session, SessionChoice, SkillOptions,
+    Next, Providers, Sandbox, Session, SessionChoice, SkillOptions, SystemPrompt,
 };
 use settings::Settings;
 use std::{
@@ -476,7 +476,10 @@ fn start(
         command_sets: settings.command_sets.clone(),
         skills: settings.skills.clone(),
         skill_options,
-        prompt: options.prompt,
+        prompt: SystemPrompt {
+            no_directives: options.prompt.no_directives || !settings.directives,
+            ..options.prompt
+        },
         mcp_servers: settings.mcp_servers.clone(),
         mcp_disabled: settings.disabled_mcp_servers.clone(),
         sandbox,

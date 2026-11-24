@@ -7,10 +7,9 @@ pub(super) const USAGE: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
 [--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
-[--system-prompt TEXT]
-[--append-system-prompt TEXT]... [--no-context-files] [--skill PATH]... [--no-skills]
-[--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask] [-s MODE] [--offline] [-p]
-[@FILE...] [MESSAGE...]
+[--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
+[--skill PATH]... [--no-skills] [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
+[-s MODE] [--offline] [-p] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
        scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
@@ -92,6 +91,9 @@ but to NO_PROXY's hosts and this machine.
   -nc, --no-context-files
                          leave out the AGENTS.md, CLAUDE.md and CLAUDE.local.md files of
                          ~/.config/scramjet, the project and the directories above it
+  --no-directives        leave out the # Scramjet orientation and Scramjet's directives that
+                         follow the context files and skills (also the directives setting
+                         off), for sessions given a task and instructions of their own
   --skill PATH           a skill file, or a directory of skills, looked in after the others
                          (repeatable); a relative PATH is from the current directory
   -ns, --no-skills       no skills but those --skill names: none from the skill directories
@@ -498,6 +500,7 @@ without spaces"
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
+                Some("--no-directives") => options.prompt.no_directives = true,
                 Some("--skill") => options.skills.push(value()?),
                 Some("-ns" | "--no-skills") => options.no_skills = true,
                 Some("--theme") => options.themes.push(value()?),

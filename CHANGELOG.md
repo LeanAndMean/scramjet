@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.305.0 — Directives only where they apply, or none
+
+### Added
+
+- `--no-directives` (or the `directives` setting `false`, or ACP's `session/new` with `_meta["io.github.leanandmean.scramjet"]: {"directives": false}` for one session) leaves the `# Scramjet` orientation and Scramjet's directives out of the instructions, about 5,000 tokens a request, for sessions given a task and instructions of their own (`LeanAndMean/scramjet#5`).
+
+### Changed
+
+- Scramjet's directives give each part only where it applies: command framing with commands loaded, release timing with a pre-merge command, the structural mapper's guideline with that agent offered, and asking through a tool with the question tool offered, so weaker models no longer imitate commands and agents the session does not have.
+
 ## 2.304.2 — Commands started without copying the agent
 
 ### Fixed
