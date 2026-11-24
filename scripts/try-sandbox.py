@@ -269,6 +269,26 @@ def main():
                lambda o: o.strip() == '0', None)] if os.path.isdir('/mnt') and os.listdir('/mnt') else [])
           + ([('mounted volumes (/Volumes) list nothing', 'ls -A /Volumes 2>&1 | wc -l',
                lambda o: o.strip() == '0', None)] if MAC and os.listdir('/Volumes') else [])),
+        ('the minimal reach (blockReadsOutsideWorkingDirectories: "minimal")', [],
+         {'sandbox': {'mode': 'workspace-write', 'filesystem': {'allowRead': ['~/private/open']}},
+          'blockReadsOutsideWorkingDirectories': 'minimal'}, False, False, [
+            ('a file in the home directory is unreadable', 'cat ~/notes.txt 2>&1', secret_hidden, None),
+            ('read refuses it too', ('read', {'path': os.path.join(home, 'notes.txt')}), secret_hidden, None),
+            ('the project reads', 'cat mine.txt 2>&1', shown('PROJECT-MARK'), None),
+            ('the project is writable', 'echo hi > f && echo PRO""JECT-OK', shown('PROJECT-OK'), None),
+            ('allowRead re-opens a home path', 'cat ~/private/open/note.txt 2>&1', shown('OPEN-NOTE'), None),
+            ('~/.gitconfig is hidden', 'cat ~/.gitconfig 2>&1', lambda o: 'GITCONFIG-MARK' not in o, None),
+            ('a program on PATH in the home directory is hidden', 'try-tool 2>&1',
+             lambda o: 'TOOL-RAN' not in o, None),
+            ('system directories read', 'test -r /etc/hosts && ls /usr/bin | grep -c . && echo SYS""-OK',
+             shown('SYS-OK'), None),
+            ('read reads a system file', ('read', {'path': '/etc/hosts'}), lambda o: 'localhost' in o, None),
+        ] + ([('the rest of / (/var) lists nothing', 'ls -A /var 2>&1 | wc -l',
+               lambda o: o.strip() == '0', None),
+              ('read refuses there too', ('read', {'path': '/var/log'}),
+               shown('blockReadsOutsideWorkingDirectories'), None)] if not MAC else [])
+          + ([('a file beside the home directory (%s) is unreadable' % os.path.dirname(real_scratch),
+               'cat %s 2>&1' % elsewhere, secret_hidden, None)] if beside_home else [])),
         ('a subagent inherits denyRead and the reach', [],
          {'sandbox': {'filesystem': {'denyRead': ['~/private']}}, 'blockReadsOutsideWorkingDirectories': True},
          False, True, [

@@ -521,14 +521,34 @@ const WSLG: &str = "/mnt/wslg";
 const WSLG_DISTRO: &str = "/mnt/wslg/distro";
 
 /// The paths the user's settings hide as the credential stores are
-/// (`sandbox.filesystem.denyRead`), and those they re-open inside them (`allowRead`), and
-/// whether the home directory, the other users' and mounted drives are hidden too but for what
-/// the agent works with (`blockReadsOutsideWorkingDirectories`).
+/// (`sandbox.filesystem.denyRead`), and those they re-open inside them (`allowRead`), and how
+/// far the agent's reads reach besides (`blockReadsOutsideWorkingDirectories`).
 #[derive(Default, Clone, PartialEq, Debug)]
 pub struct Reads {
     pub deny: Vec<PathBuf>,
     pub allow: Vec<PathBuf>,
-    pub project_only: bool,
+    pub reach: Reach,
+}
+
+/// What is hidden besides what `denyRead` names, but for what the agent works with and what
+/// `allowRead` re-opens.
+#[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Reach {
+    /// Nothing more.
+    #[default]
+    Everything,
+    /// The home directory, the other users' homes and the mounted drives; PATH's programs and
+    /// git's configuration in the home directory kept (`true`).
+    Project,
+    /// All but the system's own directories (`"minimal"`, Codex's `:minimal`); on Windows as
+    /// `Project`.
+    Minimal,
+}
+
+impl Reach {
+    pub fn kept(self) -> bool {
+        self != Reach::Everything
+    }
 }
 
 impl Reads {
@@ -536,17 +556,17 @@ impl Reads {
     /// in a denied directory, unless `deny` names it itself; what `deny` names in it stays hidden.
     pub(super) fn opening(&self, paths: impl IntoIterator<Item = PathBuf>) -> Reads {
         let mut reads = self.clone();
-        if !reads.deny.is_empty() || reads.project_only {
+        if !reads.deny.is_empty() || reads.reach.kept() {
             reads.allow.extend(paths);
         }
         reads
     }
 
-    /// These without the project-only reach: for what Scramjet itself reads (the instructions'
+    /// These without the reach: for what Scramjet itself reads (the instructions'
     /// files) and commands that run unconfined.
     pub(super) fn without_reach(&self) -> Reads {
         Reads {
-            project_only: false,
+            reach: Reach::Everything,
             ..self.clone()
         }
     }
@@ -571,6 +591,42 @@ fn outside_roots(home: &Path) -> Vec<PathBuf> {
     );
     roots.extend(named.map(PathBuf::from));
     roots
+}
+
+/// The system's own directories, which the minimal reach keeps: programs and their libraries,
+/// configuration, and the kernel's and temporary directories the sandbox mounts afresh.
+const SYSTEM: &[&str] = match cfg!(target_os = "macos") {
+    true => &[
+        "usr",
+        "bin",
+        "sbin",
+        "opt",
+        "etc",
+        "tmp",
+        "var",
+        "private",
+        "dev",
+        "System",
+        "Library",
+        "Applications",
+    ],
+    false => &[
+        "usr", "etc", "opt", "bin", "sbin", "lib", "lib32", "lib64", "libx32", "dev", "proc",
+        "sys", "tmp", "run",
+    ],
+};
+
+/// What the minimal reach hides: each entry at the top of `top` but `SYSTEM`'s. Symlinks are
+/// left, as `/bin` to `usr/bin`: what they lead to is judged where it is.
+fn outside_system(top: &Path) -> Vec<PathBuf> {
+    let entries = std::fs::read_dir(top).into_iter().flatten().flatten();
+    let mut outside: Vec<PathBuf> = entries
+        .filter(|entry| entry.file_type().is_ok_and(|kind| !kind.is_symlink()))
+        .filter(|entry| !SYSTEM.iter().any(|name| entry.file_name() == *name))
+        .map(|entry| entry.path())
+        .collect();
+    outside.sort();
+    outside
 }
 
 /// What the project-only reach keeps readable in the home directory besides the project and
@@ -663,15 +719,15 @@ pub(super) struct Hidden {
     #[cfg_attr(windows, allow(dead_code))]
     tmux: Option<PathBuf>,
     /// Those of `files` and `directories` the user's `denyRead` hides, not holding credentials,
-    /// and the project-only reach's.
+    /// and the reach's.
     denied: Vec<PathBuf>,
-    /// Those of `denied` the project-only reach hides.
+    /// Those of `denied` the reach hides.
     outside: Vec<PathBuf>,
     /// What `allowRead` re-opens in a denied directory, by real path, never in a store; a hidden
     /// path inside one stays hidden.
     allowed: Vec<PathBuf>,
     allowed_identities: Vec<(u64, u64)>,
-    /// Whether `/add-dir` re-opens a path outside the project-only reach: only with the main
+    /// Whether `/add-dir` re-opens a path outside the reach: only with the main
     /// agent's sandbox on, which grants it.
     grantable: bool,
 }
@@ -707,10 +763,14 @@ impl Hidden {
         let mut hidden =
             std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also));
         hidden.deny(&reads.deny);
-        if reads.project_only
-            && let Some(home) = std::env::home_dir()
-        {
-            hidden.reach(&home, |name| std::env::var_os(name));
+        match (reads.reach, std::env::home_dir()) {
+            (Reach::Minimal, _) if cfg!(unix) => {
+                hidden.deny_outside(&outside_system(Path::new("/")))
+            }
+            (Reach::Project | Reach::Minimal, Some(home)) => {
+                hidden.reach(&home, |name| std::env::var_os(name))
+            }
+            _ => {}
         }
         hidden.allow(&reads.allow);
         hidden
@@ -736,7 +796,7 @@ impl Hidden {
         self.deny_as(paths, false);
     }
 
-    /// Hides `paths` as outside the project-only reach.
+    /// Hides `paths` as outside the reach.
     fn deny_outside(&mut self, paths: &[PathBuf]) {
         self.deny_as(paths, true);
     }
@@ -799,7 +859,7 @@ impl Hidden {
         hidden.is_some_and(|hidden| allowed.is_none_or(|allowed| allowed <= hidden))
     }
 
-    /// Why `path`, found hidden, is: by the user's `denyRead` or outside the project-only reach,
+    /// Why `path`, found hidden, is: by the user's `denyRead` or outside the reach,
     /// whichever holds it the closer, unless it is in a store.
     fn refusal(&self, path: &Path) -> String {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
@@ -2188,7 +2248,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             allow: ["notes/shared", "notes/shared/.ssh", "project", "absent"]
                 .map(|name| home.join(name))
                 .into(),
-            project_only: false,
+            reach: super::Reach::Everything,
         };
         let mut hidden = super::Hidden::under(&home, vec![home.join("notes/shared/.ssh")]);
         hidden.deny(&reads.deny);
@@ -2257,7 +2317,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
                 .map(|name| home.join(name))
                 .into(),
             allow: Vec::new(),
-            project_only: false,
+            reach: super::Reach::Everything,
         };
         let hidden = |reads: &super::Reads| {
             let mut hidden = super::Hidden::under(&home, Vec::new());
@@ -2304,7 +2364,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         let named = super::Reads {
             deny: vec![root.clone()],
             allow: Vec::new(),
-            project_only: false,
+            reach: super::Reach::Everything,
         };
         let named = hidden(&named.opening([root.clone()]));
         assert!(named.allowed.is_empty());
@@ -2314,6 +2374,70 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "done\n");
+    }
+
+    #[test]
+    fn the_minimal_reach_hides_all_at_the_top_but_the_systems_directories() {
+        let top = std::env::temp_dir().join(format!("scramjet-top-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(top.clone());
+        for directory in ["usr/bin", "etc", "home", "var", "scratch"] {
+            std::fs::create_dir_all(top.join(directory)).unwrap();
+        }
+        std::fs::write(top.join("init"), "").unwrap();
+        std::os::unix::fs::symlink("usr/bin", top.join("bin")).unwrap();
+        std::os::unix::fs::symlink("scratch", top.join("data")).unwrap();
+        let outside = super::outside_system(&top);
+        let expected = ["home", "init", "scratch", "var"].map(|name| top.join(name));
+        let expected = match cfg!(target_os = "macos") {
+            true => vec![top.join("home"), top.join("init"), top.join("scratch")],
+            false => expected.into(),
+        };
+        assert_eq!(outside, expected);
+    }
+
+    /// In the real `/`: the project, in a hidden home, is re-opened read-only, and the system's
+    /// directories stay.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_minimal_reach_keeps_commands_to_the_system_and_the_project() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let reads = super::Reads {
+            reach: super::Reach::Minimal,
+            ..Default::default()
+        };
+        let mut hidden = super::Hidden::stores(&[], &reads.opening([root.clone()]));
+        hidden.tmux = None;
+        let home = std::env::home_dir().unwrap();
+        let script = format!(
+            "head -c 9 Cargo.toml; echo; ls /usr/bin/env /etc/passwd; ls -A {} | wc -l; ls -A /var | wc -l; \
+             echo x > Cargo.toml.new || echo refused; echo done",
+            home.display()
+        );
+        let sandbox = super::Sandbox {
+            mode: super::SandboxMode::ReadOnly,
+            network: false,
+            writable: Vec::new(),
+        };
+        let output = super::sandboxed(&root, &script, &hidden, &sandbox)
+            .unwrap()
+            .output()
+            .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        let shown = String::from_utf8_lossy(&output.stdout);
+        // The home directory shows only the way down to the project.
+        let to_project = root.strip_prefix(&home).map_or(0, |_| 1);
+        assert_eq!(
+            shown,
+            format!("[package]\n/etc/passwd\n/usr/bin/env\n{to_project}\n0\nrefused\ndone\n"),
+            "{errors}"
+        );
+        assert!(hidden.check(&root.join("Cargo.toml")).is_ok());
+        assert!(hidden.check(std::path::Path::new("/etc/passwd")).is_ok());
+        let refused = hidden.check(std::path::Path::new("/var/log")).unwrap_err();
+        assert!(
+            refused.contains("blockReadsOutsideWorkingDirectories"),
+            "{refused}"
+        );
     }
 
     #[test]

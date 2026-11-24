@@ -8,7 +8,7 @@ use super::interactive::{Interactive, completions};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
-use scramjet::agent::{Agent, AgentError, McpState, Remembered, SandboxMode};
+use scramjet::agent::{Agent, AgentError, McpState, Reach, Remembered, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -693,12 +693,12 @@ fn unconfined_note(agent: &Agent) -> Option<String> {
         return None;
     }
     match cfg!(windows) {
-        true if reads.project_only || !reads.deny.is_empty() => Some(
+        true if reads.reach.kept() || !reads.deny.is_empty() => Some(
             "Commands are not kept to what is hidden: Windows cannot hide files from them; only \
 read, grep and find are."
                 .to_owned(),
         ),
-        false if reads.project_only => Some(
+        false if reads.reach.kept() => Some(
             "Commands are not kept to the reach without a sandbox, only read, grep and find are; \
 /sandbox workspace-write keeps them to it too."
                 .to_owned(),
@@ -759,12 +759,25 @@ fn sandbox_paths(agent: &Agent, allow_write: &[PathBuf]) -> Vec<(&'static str, S
     if !reads.deny.is_empty() {
         rows.push(("Hidden:", listed(&reads.deny)));
     }
-    if reads.project_only {
-        let reach = "the project, the writable directories and what Scramjet gives the agent to \
-read; the rest of home and the mounted drives hidden (blockReadsOutsideWorkingDirectories)";
+    let reach = match reads.reach {
+        _ if cfg!(windows) && reads.reach.kept() => Some(
+            "the project, the writable directories and what Scramjet gives the agent to read; \
+the rest of home and the other profiles hidden (blockReadsOutsideWorkingDirectories)",
+        ),
+        Reach::Everything => None,
+        Reach::Project => Some(
+            "the project, the writable directories and what Scramjet gives the agent to read; \
+the rest of home and the mounted drives hidden (blockReadsOutsideWorkingDirectories)",
+        ),
+        Reach::Minimal => Some(
+            "the system's directories, the project, the writable directories and what Scramjet \
+gives the agent to read; the rest hidden (blockReadsOutsideWorkingDirectories: \"minimal\")",
+        ),
+    };
+    if let Some(reach) = reach {
         rows.push(("Reach:", reach.to_owned()));
     }
-    if !reads.allow.is_empty() && (reads.project_only || !reads.deny.is_empty()) {
+    if !reads.allow.is_empty() && (reads.reach.kept() || !reads.deny.is_empty()) {
         rows.push(("Re-opened:", listed(&reads.allow)));
     }
     rows

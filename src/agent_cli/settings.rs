@@ -10,7 +10,7 @@ use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet::agent::{
-    CODING_TOOLS, Compacting, DEFAULT_TOOLS, HARNESS_TOOLS, McpServer, McpTransport, Origin,
+    CODING_TOOLS, Compacting, DEFAULT_TOOLS, HARNESS_TOOLS, McpServer, McpTransport, Origin, Reach,
     Retries, SandboxMode, Set, UserShell, offline, sets_in, shortened, state_directory,
     write_replacing,
 };
@@ -451,7 +451,9 @@ impl Row {
             Self::ProjectReach => {
                 "On: new sessions' read, grep and find, and commands in the sandbox, see only the \
                  project, the writable directories, PATH's programs and git's configuration of the \
-                 home directory and mounted drives; allowRead re-opens more. Subagents keep to it."
+                 home directory and mounted drives; minimal: only the system's directories \
+                 (/usr, /etc, /opt, /bin, /lib) besides the project and the writable directories. \
+                 allowRead re-opens more. Subagents keep to it."
             }
             Self::Autopilot => {
                 "On: when a command finishes, the next step it recommends runs after a 3-second \
@@ -547,14 +549,14 @@ pub(super) struct Settings {
     deny_read: Vec<String>,
     /// `sandbox.filesystem.allowRead`, as written.
     allow_read: Vec<String>,
-    /// `blockReadsOutsideWorkingDirectories` (also under `permissions`): the project-only reach.
-    project_only: bool,
+    /// `blockReadsOutsideWorkingDirectories` (also under `permissions`).
+    reach: Reach,
     /// `sandbox.launcher`: the program started in bubblewrap's place; `None`: `bwrap`.
     pub(super) sandbox_launcher: Option<PathBuf>,
     /// `sandbox.subagents.network`.
     subagent_network: bool,
     /// `sandbox.subagents.blockReadsOutsideWorkingDirectories`; `None`: the main agent's.
-    subagent_project_only: Option<bool>,
+    subagent_reach: Option<Reach>,
     /// `sandbox.subagents.filesystem.denyRead`, as written; `None`: the main agent's.
     subagent_deny_read: Option<Vec<String>>,
     /// `sandbox.subagents.filesystem.allowRead`, as written; `None`: the main agent's.
@@ -704,10 +706,10 @@ impl Settings {
             allow_write: Vec::new(),
             deny_read: Vec::new(),
             allow_read: Vec::new(),
-            project_only: false,
+            reach: Reach::Everything,
             sandbox_launcher: None,
             subagent_network: false,
-            subagent_project_only: None,
+            subagent_reach: None,
             subagent_deny_read: None,
             subagent_allow_read: None,
             steering_mode: Delivery::All,
@@ -1107,18 +1109,20 @@ impl Settings {
         let mut wrong = Vec::new();
         // Claude Code's key is under `permissions`, which Scramjet has no other use for.
         let permissions = object.get("permissions").and_then(Value::as_object);
-        let reach = [
+        let places = [
             ("blockReadsOutsideWorkingDirectories", Some(object)),
             (
                 "permissions.blockReadsOutsideWorkingDirectories",
                 permissions,
             ),
         ];
-        for (key, holder) in reach {
+        for (key, holder) in places {
             match holder.and_then(|holder| holder.get(BLOCK_READS)) {
                 None => {}
-                Some(Value::Bool(on)) => self.project_only = *on,
-                Some(_) => wrong.push((key, "true or false")),
+                Some(value) => match reach(value) {
+                    Some(reach) => self.reach = reach,
+                    None => wrong.push((key, REACHES)),
+                },
             }
         }
         match object.get("sandboxNetwork") {
@@ -1212,8 +1216,10 @@ impl Settings {
         }
         match subagents.get(BLOCK_READS) {
             None => {}
-            Some(Value::Bool(on)) => self.subagent_project_only = Some(*on),
-            Some(_) => wrong(BLOCK_READS, "must be true or false"),
+            Some(value) => match reach(value) {
+                Some(reach) => self.subagent_reach = Some(reach),
+                None => wrong(BLOCK_READS, &format!("must be {REACHES}")),
+            },
         }
         if subagents.contains_key("mode") {
             wrong("mode", READ_ONLY);
@@ -1258,7 +1264,7 @@ impl Settings {
         scramjet::agent::Reads {
             deny: resolved(&self.deny_read),
             allow: resolved(&self.allow_read),
-            project_only: self.project_only,
+            reach: self.reach,
         }
     }
 
@@ -1274,7 +1280,7 @@ impl Settings {
             reads: scramjet::agent::Reads {
                 deny: resolved(&self.subagent_deny_read, &self.deny_read),
                 allow: resolved(&self.subagent_allow_read, &self.allow_read),
-                project_only: self.subagent_project_only.unwrap_or(self.project_only),
+                reach: self.subagent_reach.unwrap_or(self.reach),
             },
         }
     }
@@ -2139,10 +2145,20 @@ impl Settings {
             Row::Sandbox => self.sandbox.map_or("off", SandboxMode::name).into(),
             Row::SandboxNetwork if self.sandbox_network => "on".into(),
             Row::SandboxNetwork => "off".into(),
-            Row::ProjectReach if !self.project_only => "off".into(),
-            Row::ProjectReach if self.sandbox.is_some() && cfg!(unix) => "on".into(),
-            Row::ProjectReach if cfg!(windows) => "on (read, grep and find only)".into(),
-            Row::ProjectReach => "on (read, grep and find; commands only in the sandbox)".into(),
+            Row::ProjectReach => {
+                let name = match self.reach {
+                    Reach::Everything => return "off".into(),
+                    Reach::Project => "on",
+                    Reach::Minimal => "minimal",
+                };
+                match (self.sandbox, cfg!(windows)) {
+                    (Some(_), false) => name.into(),
+                    (_, true) => format!("{name} (read, grep and find only)"),
+                    (None, false) => {
+                        format!("{name} (read, grep and find; commands only in the sandbox)")
+                    }
+                }
+            }
         }
     }
 
@@ -2297,8 +2313,15 @@ impl Settings {
                 self.save_sandbox("network", json!(self.sandbox_network))
             }
             Row::ProjectReach => {
-                self.project_only = !self.project_only;
-                let on = self.project_only;
+                self.reach = match self.reach {
+                    Reach::Everything => Reach::Project,
+                    Reach::Project => Reach::Minimal,
+                    Reach::Minimal => Reach::Everything,
+                };
+                let saved = match self.reach {
+                    Reach::Minimal => json!(MINIMAL),
+                    reach => json!(reach.kept()),
+                };
                 self.update(|object| {
                     if let Some(Value::Object(permissions)) = object.get_mut("permissions") {
                         permissions.remove(BLOCK_READS);
@@ -2306,7 +2329,7 @@ impl Settings {
                             object.remove("permissions");
                         }
                     }
-                    object.insert(BLOCK_READS.to_owned(), json!(on));
+                    object.insert(BLOCK_READS.to_owned(), saved);
                 })
             }
         }
@@ -2503,6 +2526,19 @@ const TOKENS: &str = "a whole number of tokens";
 
 /// Claude Code's name for the project-only reach.
 const BLOCK_READS: &str = "blockReadsOutsideWorkingDirectories";
+const MINIMAL: &str = "minimal";
+const REACHES: &str = "true, false or \"minimal\"";
+
+/// A `blockReadsOutsideWorkingDirectories` value: `true` the project-only reach, `"minimal"`
+/// the system's directories only besides what the agent works with.
+fn reach(value: &Value) -> Option<Reach> {
+    match value {
+        Value::Bool(true) => Some(Reach::Project),
+        Value::Bool(false) => Some(Reach::Everything),
+        Value::String(name) if name == MINIMAL => Some(Reach::Minimal),
+        _ => None,
+    }
+}
 
 /// The entries of the list of paths `key`; an error when it is not a list of strings.
 fn paths(object: &Map<String, Value>, key: &str) -> Result<Vec<String>, ()> {
@@ -2725,7 +2761,7 @@ mod tests {
                     std::path::absolute("/abs").unwrap()
                 ],
                 allow: vec![home.join("notes/private/ok")],
-                project_only: true,
+                reach: Reach::Project,
             }
         );
         let wrong = settings_with(
@@ -2759,7 +2795,7 @@ mod tests {
         );
         assert!(own.warnings.is_empty(), "{:?}", own.warnings);
         assert_eq!(own.reads().deny, [absolute("/main")]);
-        assert!(own.reads().project_only);
+        assert_eq!(own.reads().reach, Reach::Project);
         assert_eq!(
             own.subagents(),
             scramjet::agent::Subagents {
@@ -2767,7 +2803,7 @@ mod tests {
                 reads: scramjet::agent::Reads {
                     deny: vec![absolute("/child")],
                     allow: vec![absolute("/main/ok")],
-                    project_only: false,
+                    reach: Reach::Everything,
                 },
             }
         );
@@ -2820,14 +2856,25 @@ mod tests {
             assert_eq!(settings.shown(Row::ProjectReach), "on");
         }
         settings.cycle(Row::ProjectReach).unwrap();
-        assert_eq!(settings.shown(Row::ProjectReach), "off");
+        if cfg!(unix) {
+            assert_eq!(settings.shown(Row::ProjectReach), "minimal");
+        }
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             saved,
-            json!({"sandbox": "workspace-write", "blockReadsOutsideWorkingDirectories": false})
+            json!({"sandbox": "workspace-write", "blockReadsOutsideWorkingDirectories": "minimal"})
+        );
+        assert_eq!(
+            settings_with(&scratch, &saved.to_string()).reach,
+            Reach::Minimal
         );
         settings.cycle(Row::ProjectReach).unwrap();
-        assert!(settings_with(&scratch, &std::fs::read_to_string(&path).unwrap()).project_only);
+        assert_eq!(settings.shown(Row::ProjectReach), "off");
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved[BLOCK_READS], json!(false));
+        settings.cycle(Row::ProjectReach).unwrap();
+        let saved = settings_with(&scratch, &std::fs::read_to_string(&path).unwrap());
+        assert_eq!(saved.reach, Reach::Project);
     }
 
     #[test]
@@ -3734,13 +3781,18 @@ or false; ignored"
             seen(Row::SandboxNetwork, &mut settings),
             ["on", "off", "on", "off"]
         );
-        let on = match cfg!(windows) {
-            true => "on (read, grep and find only)",
-            false => "on (read, grep and find; commands only in the sandbox)",
+        let shown = |name: &str| match cfg!(windows) {
+            true => format!("{name} (read, grep and find only)"),
+            false => format!("{name} (read, grep and find; commands only in the sandbox)"),
         };
         assert_eq!(
             seen(Row::ProjectReach, &mut settings),
-            ["off", on, "off", on]
+            [
+                "off".to_owned(),
+                shown("on"),
+                shown("minimal"),
+                "off".to_owned()
+            ]
         );
         assert_eq!(
             seen(Row::Steering, &mut settings),
@@ -3887,7 +3939,7 @@ or false; ignored"
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},
                 "sandbox": {"mode": "off", "network": false},
-                "blockReadsOutsideWorkingDirectories": true,
+                "blockReadsOutsideWorkingDirectories": false,
                 "defaultShell": if bash { "bash" } else { "powershell" },
                 "doubleEscapeAction": "tree",
                 "hideCredentials": "never",

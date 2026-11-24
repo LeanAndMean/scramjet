@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.309.0 — A minimal reach: the system's directories only
+
+### Added
+
+- `"blockReadsOutsideWorkingDirectories": "minimal"` keeps the agent's commands in the sandbox, and its `read`, `grep` and `find`, to the system's own directories (`/usr`, `/etc`, `/opt`, `/bin`, `/lib`…) besides the project, the writable directories and what Scramjet gives it; everything else at the top of `/` is hidden, as is the rest of the home directory, `PATH`'s programs there included. `allowRead` re-opens what a task needs. `/settings`' Project-only reach row moves through off, on and minimal; `sandbox.subagents` takes it too.
+
 ## 2.308.0 — A launcher in bubblewrap's place
 
 ### Added

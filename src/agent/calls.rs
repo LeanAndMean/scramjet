@@ -629,9 +629,9 @@ impl Tools<'_> {
                     false => self.parent.reads.clone(),
                 };
                 let mut hide =
-                    self.hide_credentials || self.sandbox.is_some() || reads.project_only;
+                    self.hide_credentials || self.sandbox.is_some() || reads.reach.kept();
                 if shell && self.sandbox.is_none() && !tools::HIDES_COMMANDS {
-                    if self.parent.reads.project_only {
+                    if self.parent.reads.reach.kept() {
                         not_kept(ui);
                     }
                     if hide {
