@@ -105,6 +105,8 @@ enum Entry {
     Same(PathList),
     /// Makes subagents' list the main agent's again.
     Back(PathList),
+    /// A path of the default the project took out of the list.
+    Restore(PathList, PathBuf),
     Subagents,
 }
 
@@ -140,6 +142,17 @@ fn label(list: PathList) -> &'static str {
 
 fn shown(path: &Path) -> String {
     shortened(&path.to_string_lossy())
+}
+
+/// `value`, and `note`, saying when this project sets the row.
+fn here(value: &str, note: String, set: bool) -> (String, String) {
+    match set {
+        true => (
+            format!("{value} (set here)"),
+            format!("{note} Set for this project."),
+        ),
+        false => (value.to_owned(), note),
+    }
 }
 
 impl Interactive {
@@ -186,17 +199,28 @@ impl Interactive {
                 None,
                 |index, width| clip(&texts[index], width),
             );
-            let save = [(Binding::SandboxSave, "save for every project")];
-            let hint = select::hint("change", &save, if subagents { "back" } else { "close" });
+            let mut keys = vec![(Binding::SandboxSave, "save for every project")];
+            if self.project_sets() {
+                keys.push((Binding::SandboxReset, "reset this project"));
+            }
+            let hint = select::hint("change", &keys, if subagents { "back" } else { "close" });
             let notes = rows.iter().map(|row| row.note.clone()).collect();
             let picker = (picker.noting(hint, notes))
-                .keyed(vec![(Binding::SandboxSave, Act::Save)])
+                .keyed(vec![
+                    (Binding::SandboxSave, Act::Save),
+                    (Binding::SandboxReset, Act::Reset),
+                ])
                 .held();
             let index = match screen.pick_or_act(picker) {
                 Picked::Row(Some(index)) => index,
                 Picked::Act(Act::Save, index, _) => {
                     at = index;
                     self.change_sandbox(SandboxChange::Save);
+                    continue;
+                }
+                Picked::Act(Act::Reset, index, _) => {
+                    at = index;
+                    self.reset_sandbox();
                     continue;
                 }
                 _ => return,
@@ -243,7 +267,9 @@ impl Interactive {
                     };
                     let typed = typed.trim().to_owned();
                     match (list, subagents) {
-                        (PathList::Writable, false) => self.add_dir(&typed),
+                        (PathList::Writable, false) => {
+                            self.change_sandbox(SandboxChange::AddHere(typed))
+                        }
                         (list, _) => self.change_sandbox(SandboxChange::Listed {
                             subagents,
                             list: *list,
@@ -254,6 +280,15 @@ impl Interactive {
                 }
                 Entry::Same(list) => self.change_sandbox(SandboxChange::OwnList(*list, true)),
                 Entry::Back(list) => self.change_sandbox(SandboxChange::OwnList(*list, false)),
+                Entry::Restore(PathList::Writable, path) if !subagents => {
+                    self.change_sandbox(SandboxChange::AddHere(path.display().to_string()))
+                }
+                Entry::Restore(list, path) => self.change_sandbox(SandboxChange::Listed {
+                    subagents,
+                    list: *list,
+                    path: path.display().to_string(),
+                    add: true,
+                }),
                 Entry::Subagents => {
                     self.sandbox_screen(true);
                     at = index;
@@ -268,6 +303,8 @@ impl Interactive {
         let sandbox = agent.sandbox();
         let mode = sandbox.map(|sandbox| sandbox.mode);
         let reach = settings.reach();
+        let now = settings.rows();
+        let default = settings.sandbox_default().unwrap_or(&now);
         let mut rows = Vec::new();
         let change = match cfg!(windows) {
             true => "anything (Windows has no sandbox)",
@@ -280,6 +317,7 @@ impl Interactive {
                  read-only. Enter chooses."
             }
         };
+        let (change, note) = here(change, note.to_owned(), now.mode != default.mode);
         rows.push(row("Can change", change, note, Entry::Change));
         let mut read = reach_name(reach).to_owned();
         let mut note = format!("{} Enter chooses.", reach_note(reach));
@@ -294,6 +332,7 @@ impl Interactive {
                     .to_owned(),
             };
         }
+        let (read, note) = here(&read, note, now.reach != default.reach);
         rows.push(row("Can read", read, note, Entry::Read));
         let (network, note) = match sandbox.map(|sandbox| sandbox.network) {
             Some(true) => (
@@ -313,22 +352,29 @@ impl Interactive {
                 "Without a sandbox commands reach the network as you can.",
             ),
         };
+        let set = sandbox.is_some() && now.network != default.network;
+        let (network, note) = here(network, note.to_owned(), set);
         rows.push(row("Network", network, note, Entry::Network));
         if let Some(sandbox) = sandbox {
             let root = agent.root();
             let always =
                 (Remembered::user().and_then(|kept| kept.of(root).ok())).unwrap_or_default();
-            let from_settings: Vec<PathBuf> = (settings.allow_write().iter())
-                .filter_map(|path| std::fs::canonicalize(path).ok())
-                .collect();
+            let real = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
+                (paths.iter())
+                    .filter_map(|path| std::fs::canonicalize(path).ok())
+                    .collect()
+            };
+            let from_settings = real(settings.allow_write());
+            let from_default = (settings.default_listed(false, PathList::Writable))
+                .map_or_else(|| from_settings.clone(), real);
+            let grant = |path: &PathBuf| match from_settings.contains(path) {
+                _ if always.contains(path) => Grant::Project,
+                true if from_default.contains(path) => Grant::Default,
+                true => Grant::Project,
+                false => Grant::Session,
+            };
             let mut granted: Vec<(PathBuf, Grant)> = (sandbox.writable.iter())
-                .map(
-                    |path| match (always.contains(path), from_settings.contains(path)) {
-                        (true, _) => (path.clone(), Grant::Project),
-                        (false, true) => (path.clone(), Grant::Default),
-                        (false, false) => (path.clone(), Grant::Session),
-                    },
-                )
+                .map(|path| (path.clone(), grant(path)))
                 .collect();
             let others = always
                 .iter()
@@ -338,19 +384,20 @@ impl Interactive {
                 let (mark, note) = match grant {
                     Grant::Session => ("", "For this session. Enter makes it read-only again."),
                     Grant::Project => (
-                        " (this project)",
-                        "Always in this project. Enter makes it read-only and forgets it.",
+                        " (set here)",
+                        "Writable in this project. Enter makes it read-only and forgets it.",
                     ),
                     Grant::Default => (
                         " (every project)",
-                        "In every project. Enter makes it read-only here; saved, everywhere.",
+                        "In every project's default. Enter makes it read-only in this one.",
                     ),
                 };
                 let value = format!("{}{mark}", shown(&path));
                 let entry = Entry::Path(PathList::Writable, path);
                 rows.push(row(label(PathList::Writable), value, note, entry));
             }
-            let note = "Another directory the agent may change, for this session (as /add-dir).";
+            self.removed_rows(&mut rows, false, PathList::Writable);
+            let note = "Another directory the agent may change in this project.";
             rows.push(row(
                 label(PathList::Writable),
                 "Add…",
@@ -369,12 +416,63 @@ impl Interactive {
         let network = if network { "network on" } else { "network off" };
         let value = format!("{change} · {} · {network}", reads(reach));
         let note = "What subagents can change and read, and their network. Enter opens them.";
+        let theirs = |rows: &super::settings::Rows| {
+            (
+                rows.subagent_mode,
+                rows.subagent_network,
+                rows.subagent_reach,
+            )
+        };
+        let set = theirs(&now) != theirs(default)
+            || settings.sandbox_default().is_some()
+                && [PathList::Writable, PathList::Hidden, PathList::Readable]
+                    .into_iter()
+                    .any(|list| settings.listed(true, list) != settings.default_listed(true, list));
+        let (value, note) = here(&value, note.to_owned(), set);
         rows.push(row("Subagents", value, note, Entry::Subagents));
         rows
     }
 
+    /// Whether the project sets any of the sandbox's rows, or grants a directory always.
+    fn project_sets(&self) -> bool {
+        let root = self.session.agent.root();
+        let always = Remembered::user().and_then(|kept| kept.of(root).ok());
+        self.session.settings.set_here() || always.is_some_and(|always| !always.is_empty())
+    }
+
+    /// Ctrl+R: once confirmed, the project's sandbox every project's default again.
+    fn reset_sandbox(&mut self) {
+        if !self.project_sets() {
+            return self.say("This project sets nothing of its own: it follows the defaults");
+        }
+        let names = ["Reset this project to the defaults", "Keep it"];
+        let notes = vec![
+            "Forgets what was set here and the directories granted always here.".to_owned(),
+            "Changes nothing.".to_owned(),
+        ];
+        if self.choose("Reset this project", &names, notes, None) == Some(0) {
+            self.change_sandbox(SandboxChange::Reset);
+        }
+    }
+
+    /// The rows of the default's paths the project took out of `list`, each to put back.
+    fn removed_rows(&self, rows: &mut Vec<Row>, subagents: bool, list: PathList) {
+        let note = match list {
+            PathList::Writable => "In every project's default, read-only here. Enter puts it back.",
+            PathList::Hidden => "Hidden by default, shown in this project. Enter hides it again.",
+            PathList::Readable => "In every project's default, taken out here. Enter puts it back.",
+        };
+        for path in self.session.settings.removed_here(subagents, list) {
+            let value = format!("{} (taken out here)", shown(&path));
+            rows.push(row(label(list), value, note, Entry::Restore(list, path)));
+        }
+    }
+
     fn subagent_rows(&self) -> Vec<Row> {
-        let (mode, network, reach) = self.session.settings.subagent_policy();
+        let settings = &self.session.settings;
+        let (mode, network, reach) = settings.subagent_policy();
+        let now = settings.rows();
+        let default = settings.sandbox_default().unwrap_or(&now);
         let mut rows = Vec::new();
         let change = match (mode, cfg!(windows)) {
             (_, true) => "nothing (on Windows they only read)",
@@ -383,6 +481,8 @@ impl Interactive {
         };
         let note = "Where they work: those whose agent files list write or edit change their \
                     working directory or worktree. Enter switches.";
+        let set = now.subagent_mode != default.subagent_mode;
+        let (change, note) = here(change, note.to_owned(), set);
         rows.push(row("Can change", change, note, Entry::Change));
         let (read, note) = match reach {
             None => (
@@ -391,6 +491,8 @@ impl Interactive {
             ),
             Some(reach) => (reach_name(reach), reach_note(reach)),
         };
+        let set = now.subagent_reach != default.subagent_reach;
+        let (read, note) = here(read, note.to_owned(), set);
         rows.push(row("Can read", read, note, Entry::Read));
         let (value, note) = match network {
             true => (
@@ -402,6 +504,8 @@ impl Interactive {
                 "Their commands reach neither the internet, the local network nor this machine's servers.",
             ),
         };
+        let set = now.subagent_network != default.subagent_network;
+        let (value, note) = here(value, note.to_owned(), set);
         rows.push(row("Network", value, note, Entry::Network));
         for list in [PathList::Writable, PathList::Hidden, PathList::Readable] {
             self.list_rows(&mut rows, true, list);
@@ -413,14 +517,12 @@ impl Interactive {
     /// the main agent" or a row to make it so again.
     fn list_rows(&self, rows: &mut Vec<Row>, subagents: bool, list: PathList) {
         let label = label(list);
-        let Some(paths) = self.session.settings.listed(subagents, list) else {
+        let settings = &self.session.settings;
+        let default_own = settings.default_listed(subagents, list).is_some();
+        let Some(paths) = settings.listed(subagents, list) else {
             let note = "Subagents take the main agent's list. Enter gives them one of their own.";
-            rows.push(row(
-                label,
-                "same as the main agent",
-                note,
-                Entry::Same(list),
-            ));
+            let (value, note) = here("same as the main agent", note.to_owned(), default_own);
+            rows.push(row(label, value, note, Entry::Same(list)));
             return;
         };
         let (each, add) = match (list, subagents) {
@@ -439,13 +541,24 @@ impl Interactive {
                  credential store.",
             ),
         };
+        let own_here = subagents && settings.sandbox_default().is_some() && !default_own;
         for path in paths {
-            let entry = Entry::Path(list, path.clone());
-            rows.push(row(label, shown(&path), each, entry));
+            let set = !own_here && settings.added_here(subagents, list, &path);
+            let (value, note) = here(&shown(&path), each.to_owned(), set);
+            rows.push(row(label, value, note, Entry::Path(list, path)));
+        }
+        if !own_here {
+            self.removed_rows(rows, subagents, list);
         }
         rows.push(row(label, "Add…", add, Entry::Add(list)));
         if subagents && list != PathList::Writable {
-            let note = "Enter makes subagents take the main agent's list again.";
+            let note = match own_here {
+                true => {
+                    "Subagents' own list is set for this project. Enter makes them take the \
+                         main agent's list again."
+                }
+                false => "Enter makes subagents take the main agent's list again.",
+            };
             rows.push(row(
                 label,
                 "Same as the main agent…",

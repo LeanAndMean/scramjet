@@ -91,6 +91,7 @@ pub(super) enum Binding {
     ModelsReorderDown,
     NextStepFresh,
     SandboxSave,
+    SandboxReset,
     TreeFoldOrUp,
     TreeUnfoldOrDown,
     TreeEditLabel,
@@ -177,7 +178,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 97] = [
+const DEFINITIONS: [Definition; 98] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -252,6 +253,7 @@ const DEFINITIONS: [Definition; 97] = [
     define(B::ModelsReorderDown, "app.models.reorderDown", &["alt+down"], S::ScopedModels, "Move the model down"),
     define(B::NextStepFresh, "app.nextStep.toggleFreshSession", &["tab"], S::NextSteps, "Run the step in a fresh session, or in this one"),
     define(B::SandboxSave, "app.sandbox.saveDefault", &["ctrl+s"], S::Sandbox, "Save the sandbox as every project's default"),
+    define(B::SandboxReset, "app.sandbox.resetProject", &["ctrl+r"], S::Sandbox, "Reset this project's sandbox to the defaults"),
     define(B::TreeFoldOrUp, "app.tree.foldOrUp", &["ctrl+left", "alt+left", "alt+b"], S::Tree, "Fold the branch, or up to the one before"),
     define(B::TreeUnfoldOrDown, "app.tree.unfoldOrDown", &["ctrl+right", "alt+right", "alt+f"], S::Tree, "Unfold the branch, or down to the next"),
     define(B::TreeEditLabel, "app.tree.editLabel", &["shift+l"], S::Tree, "Label the entry"),
@@ -848,7 +850,10 @@ mod tests {
             (
                 B::SelectDown,
                 ctrl('r'),
-                &["Rename the session (In /resume)"],
+                &[
+                    "Rename the session (In /resume)",
+                    "Reset this project's sandbox to the defaults (In /sandbox)",
+                ],
             ),
             (B::SessionRename, ctrl('l'), &[]),
             (

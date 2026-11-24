@@ -7,7 +7,7 @@ use scramjet::agent::{
     Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Reach,
     Remembered, Reopened, Sandbox, SandboxMode, SessionInfo, Source, Step, Suggested, shortened,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// How long `/autopilot on` waits before it chooses the recommended next step, as Scramjet.
@@ -65,8 +65,9 @@ impl Session {
         match change {
             SandboxChange::Mode(None) => {
                 self.agent.set_sandbox(None);
+                self.settings.sandbox = None;
                 let said = "No sandbox: the agent's tools run with your access";
-                Ok((said.to_owned(), Vec::new()))
+                Ok((said.to_owned(), self.remember()))
             }
             SandboxChange::Mode(Some(mode)) => {
                 let mut warnings = Vec::new();
@@ -85,6 +86,8 @@ impl Session {
                     }
                 };
                 self.agent.set_sandbox(Some(sandbox));
+                self.settings.sandbox = Some(mode);
+                warnings.extend(self.remember());
                 Ok((format!("Sandbox: {}", mode.name()), warnings))
             }
             SandboxChange::Network(network) => {
@@ -92,11 +95,12 @@ impl Session {
                     return Err("No sandbox: commands reach the network as you can".to_owned());
                 };
                 self.agent.set_sandbox(Some(Sandbox { network, ..sandbox }));
+                self.settings.sandbox_network = network;
                 let said = match network {
                     true => "Sandbox: commands reach the network",
                     false => "Sandbox: no network",
                 };
-                Ok((said.to_owned(), Vec::new()))
+                Ok((said.to_owned(), self.remember()))
             }
             SandboxChange::Add(directory) => {
                 let Some(mut sandbox) = current else {
@@ -108,6 +112,17 @@ impl Session {
                 let said = format!("{} is writable for this session", path.display());
                 Ok((said, Vec::new()))
             }
+            SandboxChange::AddHere(directory) => {
+                let Some(mut sandbox) = current else {
+                    let said = "No sandbox: the agent can change every file you can already";
+                    return Err(said.to_owned());
+                };
+                let path = sandbox.grant(&root, &directory)?;
+                self.agent.set_sandbox(Some(sandbox));
+                (self.settings).add_listed(false, PathList::Writable, &path);
+                let said = format!("{} is writable in this project", path.display());
+                Ok((said, self.remember()))
+            }
             SandboxChange::Remove(directory) => {
                 let mut sandbox = current;
                 let revoked =
@@ -118,31 +133,28 @@ impl Session {
                     Some(Err(error)) => return Err(error),
                     None => false,
                 };
-                let default = (self.settings).remove_listed(false, PathList::Writable, &path);
+                let listed = (self.settings).remove_listed(false, PathList::Writable, &path);
                 if revoked.is_some() {
                     self.agent.set_sandbox(sandbox);
                 }
-                let said = match (revoked.is_some(), forgotten) {
-                    (false, false) if default => {
-                        format!("{} is no longer in the default", path.display())
-                    }
+                let said = match (revoked.is_some(), forgotten || listed) {
                     (true, true) => format!(
-                        "{} is no longer granted in this project; read-only again",
+                        "{} is no longer writable in this project; read-only again",
                         path.display()
                     ),
                     (false, true) => {
-                        format!("{} is no longer granted in this project", path.display())
+                        format!("{} is no longer writable in this project", path.display())
                     }
                     (true, false) => format!("{} is read-only again", path.display()),
                     (false, false) => return Err(format!("{directory} was not granted")),
                 };
-                Ok((said, Vec::new()))
+                Ok((said, self.remember()))
             }
             SandboxChange::Reach(reach) => {
                 self.settings.set_reach(reach);
                 self.apply_reads();
                 let said = format!("Can read: {}", sandbox_menu::reach_name(reach));
-                Ok((said, Vec::new()))
+                Ok((said, self.remember()))
             }
             SandboxChange::Listed {
                 subagents,
@@ -176,12 +188,12 @@ impl Session {
                     }
                 };
                 self.apply_reads();
-                Ok((said, Vec::new()))
+                Ok((said, self.remember()))
             }
             SandboxChange::Subagents(mode, network, reach) => {
                 self.settings.set_subagent_policy(mode, network, reach);
                 self.apply_reads();
-                Ok(("Subagents' sandbox changed".to_owned(), Vec::new()))
+                Ok(("Subagents' sandbox changed".to_owned(), self.remember()))
             }
             SandboxChange::OwnList(list, own) => {
                 self.settings.own_list(list, own);
@@ -190,22 +202,85 @@ impl Session {
                     true => "Subagents have a list of their own",
                     false => "Subagents take the main agent's list",
                 };
-                Ok((said.to_owned(), Vec::new()))
+                Ok((said.to_owned(), self.remember()))
             }
             SandboxChange::Save => {
                 let network = current
                     .as_ref()
                     .map_or(self.settings.sandbox_network, |s| s.network);
                 let mode = current.map(|sandbox| sandbox.mode);
-                match self.settings.save_sandbox_defaults(mode, network) {
-                    Ok(()) => Ok((
-                        "Saved as the default for every project".to_owned(),
-                        Vec::new(),
-                    )),
-                    Err(error) => Err(format!("Settings not saved: {error}")),
+                if let Err(error) = self.settings.save_sandbox_defaults(mode, network) {
+                    return Err(format!("Settings not saved: {error}"));
                 }
+                let warnings = (self.settings.follow_default().err().into_iter())
+                    .map(|error| format!("this project's own rows not forgotten: {error}"))
+                    .collect();
+                let said = "Saved as the default for every project";
+                Ok((said.to_owned(), warnings))
+            }
+            SandboxChange::Reset => self.reset_project(&root, current),
+        }
+    }
+
+    /// Keeps the sandbox's rows as they differ in this project now; the warning if not.
+    fn remember(&self) -> Vec<String> {
+        (self.settings.remember_project().err().into_iter())
+            .map(|error| format!("not remembered for this project: {error}"))
+            .collect()
+    }
+
+    /// The project's sandbox as every project's default has it, its own rows and its grants
+    /// forgotten; what was granted for the session only stays.
+    fn reset_project(
+        &mut self,
+        root: &Path,
+        current: Option<Sandbox>,
+    ) -> Result<(String, Vec<String>), String> {
+        let kept = Remembered::user();
+        let always = match &kept {
+            Some(kept) => kept.of(root)?,
+            None => Vec::new(),
+        };
+        let listed = self.settings.allow_write();
+        let real = |path: &PathBuf| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let listed: Vec<PathBuf> = listed.iter().map(real).collect();
+        self.settings.reset_project()?;
+        if let Some(kept) = &kept {
+            for path in &always {
+                kept.remove(root, path)?;
             }
         }
+        let mut warnings = Vec::new();
+        let session: Vec<PathBuf> = (current.iter().flat_map(|sandbox| &sandbox.writable))
+            .filter(|path| !always.contains(path) && !listed.contains(path))
+            .cloned()
+            .collect();
+        let sandbox = match self.settings.sandbox.filter(|_| cfg!(unix)) {
+            Some(_)
+                if current.is_none()
+                    && let Err(error) = Sandbox::check() =>
+            {
+                warnings.push(error);
+                None
+            }
+            Some(mode) => {
+                let mut sandbox = Sandbox {
+                    mode,
+                    network: self.settings.sandbox_network,
+                    writable: Vec::new(),
+                };
+                warnings.extend(sandbox.grant_always(root, &self.settings.allow_write()));
+                for path in session {
+                    _ = sandbox.grant(root, &path.to_string_lossy());
+                }
+                Some(sandbox)
+            }
+            None => None,
+        };
+        self.agent.set_sandbox(sandbox);
+        self.apply_reads();
+        let said = "This project's sandbox follows every project's default again";
+        Ok((said.to_owned(), warnings))
     }
 
     /// The paths hidden and re-opened, and subagents' sandbox, as the settings have them now.
@@ -221,8 +296,10 @@ pub(super) enum SandboxChange {
     /// A mode, `None` for no sandbox.
     Mode(Option<SandboxMode>),
     Network(bool),
-    /// A directory made writable too.
+    /// A directory made writable too, for the session (`/add-dir`).
     Add(String),
+    /// A directory made writable in this project.
+    AddHere(String),
     /// A directory's grant taken back, and forgotten if it was granted always in the project.
     Remove(String),
     /// What the main agent's tools can read.
@@ -239,8 +316,10 @@ pub(super) enum SandboxChange {
     Subagents(SandboxMode, bool, Option<Reach>),
     /// Subagents' hidden or readable list made their own, or the main agent's again.
     OwnList(PathList, bool),
-    /// The sandbox as it is now, saved as every project's default.
+    /// The sandbox as it is now, saved as every project's default, which the project follows.
     Save,
+    /// The project's own rows and grants forgotten.
+    Reset,
 }
 
 /// Puts `servers` in place of the settings' MCP servers of the same names, enabled.

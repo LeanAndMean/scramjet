@@ -784,7 +784,7 @@ impl Interactive {
                 }
                 Act::Earlier => chosen.shift(&id, -1),
                 Act::Later => chosen.shift(&id, 1),
-                Act::Save | Act::Rename | Act::Delete | Act::Fold => false,
+                Act::Save | Act::Reset | Act::Rename | Act::Delete | Act::Fold => false,
             };
             if changed {
                 self.session.scope = chosen.scope();

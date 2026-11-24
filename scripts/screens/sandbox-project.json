@@ -1,0 +1,51 @@
+{
+  "size": "100x40",
+  "settings": {
+    "sandbox": {"filesystem": {"denyRead": ["~/notes"]}}
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "steps": [
+    {"sleep": 1},
+    {"type": "/sandbox\r"},
+    {"until": "Subagents"},
+    {"type": "\r"},
+    {"until": "Can change  \u2191\u2193"},
+    {"type": "\u001b[A\r"},
+    {"until": "Sandbox: workspace-write"},
+    {"type": "\u001b[B\u001b[B\r"},
+    {"until": "Sandbox: no network"},
+    {"type": "\u001b[B\u001b[B\r"},
+    {"until": "no longer hidden"},
+    {"sleep": 0.3},
+    {"shot": "marked"},
+    {"type": "\u001b"},
+    {"sleep": 0.3},
+    {"type": "/reload\r"},
+    {"until": "Reloaded settings"},
+    {"type": "/sandbox\r"},
+    {"until": "Subagents"},
+    {"sleep": 0.3},
+    {"shot": "reloaded"},
+    {"type": "\u001b"},
+    {"sleep": 0.3},
+    {"type": "!cat \"$XDG_CONFIG_HOME/scramjet/sandbox-projects.json\"\r"},
+    {"until": "denyRead"},
+    {"sleep": 0.3},
+    {"shot": "file"},
+    {"type": "/sandbox\r"},
+    {"until": "Subagents"},
+    {"type": "\u0012"},
+    {"until": "Keep it"},
+    {"sleep": 0.3},
+    {"shot": "confirm"},
+    {"type": "\r"},
+    {"until": "default again"},
+    {"sleep": 0.3},
+    {"shot": "reset"},
+    {"type": "\u001b"},
+    {"sleep": 0.3},
+    {"type": "\u0004"}
+  ]
+}

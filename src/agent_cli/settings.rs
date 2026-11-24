@@ -14,6 +14,9 @@ use scramjet::agent::{
     Retries, SandboxMode, Set, UserShell, offline, sets_in, shortened, write_replacing,
 };
 use serde_json::{Map, Value, json};
+
+mod project;
+pub(super) use project::Rows;
 use std::{
     fs::File,
     io,
@@ -595,6 +598,8 @@ pub(super) struct Settings {
     pub(super) disabled_mcp_servers: Vec<String>,
     /// `modelCatalogs`: the URLs of the model catalogs providers come from (`agent::Catalog`).
     pub(super) model_catalogs: Vec<String>,
+    /// The project the sandbox's rows are for, and their default (`project`).
+    project: Option<project::Project>,
     /// What is wrong in the file; those keys keep their defaults.
     pub(super) warnings: Vec<String>,
 }
@@ -653,11 +658,12 @@ impl Settings {
         match read_object(path) {
             Ok(object) => {
                 let (recall, clones) = (self.recall.take(), self.clones.take());
-                let retries_given = self.retries_given;
+                let (retries_given, project) = (self.retries_given, self.project.take());
                 *self = Self::defaults(self.path.take());
                 (self.recall, self.clones) = (recall, clones);
-                self.retries_given = retries_given;
+                (self.retries_given, self.project) = (retries_given, project);
                 self.apply(&object);
+                self.apply_project();
             }
             Err(error) => self.warnings = vec![format!("{error}; kept as they were")],
         }
@@ -727,6 +733,7 @@ impl Settings {
             mcp_servers: Vec::new(),
             disabled_mcp_servers: Vec::new(),
             model_catalogs: Vec::new(),
+            project: None,
             warnings: Vec::new(),
         }
     }
@@ -2424,10 +2431,7 @@ impl Settings {
     ) -> io::Result<()> {
         (self.sandbox, self.sandbox_network) = (mode, network);
         let list = |entries: &[String]| json!(entries);
-        let reach = |reach: Reach| match reach {
-            Reach::Minimal => json!(MINIMAL),
-            reach => json!(reach.kept()),
-        };
+        let reach = project::reach_value;
         let put = |object: &mut Map<String, Value>, key: &str, value: Option<Value>| {
             match value {
                 Some(value) => object.insert(key.to_owned(), value),

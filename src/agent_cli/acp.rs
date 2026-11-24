@@ -2199,6 +2199,7 @@ fn start_session(
     };
     let root = super::project_root(Some(cwd.to_owned()))?;
     let mut settings = Settings::load();
+    settings.in_project(&root);
     settings.retries_given = options.retries;
     drive::with_servers(&mut settings, servers);
     let session_dir = (options.session_dir.as_deref())

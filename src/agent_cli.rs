@@ -185,6 +185,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
+    settings.in_project(&root);
     settings.retries_given = options.retries;
     scramjet::agent::set_shell(
         settings.shell_path.clone(),

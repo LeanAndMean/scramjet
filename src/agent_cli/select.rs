@@ -107,6 +107,8 @@ pub(super) enum Act {
     Earlier,
     Later,
     Save,
+    /// `/sandbox`'s Ctrl+R.
+    Reset,
     /// Right or Enter on a closed chain's row (`Picker::folding`), Left or Enter on an open one,
     /// Left on one of its steps: the chain's row.
     Fold,

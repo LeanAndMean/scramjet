@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.322.0 — The sandbox remembered per project
+
+### Changed
+
+- What you change in `/sandbox` is remembered for the project: the next session there, a resumed one too, starts with it, and `/reload` keeps it. Only the rows changed there are kept, marked "(set here)" (a default's path taken out shows as "taken out here", to put back); the others follow the default, so a default changed later reaches them. Kept beside your settings in `sandbox-projects.json`, never in the repository.
+- Ctrl+R in `/sandbox` resets the project to the defaults, once confirmed; Ctrl+S saves the sandbox as every project's default, and the project then follows it. Also writable's Add… makes a directory writable in this project, where `/add-dir` stays for the session.
+
 ## 2.321.0 — One sandbox screen
 
 ### Changed
