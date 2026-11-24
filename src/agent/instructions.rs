@@ -915,6 +915,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             tools: None,
             disallowed: Vec::new(),
             model: None,
+            worktree: false,
             prompt: String::new(),
             source: "installed",
             path: PathBuf::from("/sets/mach12/agents/structural-mapper.md"),

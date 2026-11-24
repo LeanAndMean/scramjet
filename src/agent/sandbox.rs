@@ -486,6 +486,17 @@ fn protected(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
+/// The Git directories outside `root` that its `.git` file names, as a linked worktree's: kept
+/// readable, for Git to work there, wherever they are (under `/tmp`, the sandbox's own).
+#[cfg(unix)]
+fn linked_git(root: &Path) -> Vec<PathBuf> {
+    let gitdir = pointed_to(&root.join(".git"));
+    let common = gitdir.as_deref().and_then(common_dir);
+    (gitdir.into_iter().chain(common))
+        .filter(|real| !real.starts_with(root))
+        .collect()
+}
+
 /// The common Git directory, with the config and hooks, that a worktree's Git directory names.
 fn common_dir(gitdir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
@@ -709,12 +720,14 @@ impl Subagents {
     /// The sandbox of a child that may write, working in `cwd` of the project `root`: `cwd`
     /// writable in `workspace-write`, and `writable`'s directories, each only where the sandbox
     /// of the main agent, `main`, lets it write too. Else why it writes nowhere. Also what of
-    /// `writable` could not be granted.
+    /// `writable` could not be granted. A worktree made for the child, `own`, is writable whatever
+    /// the main agent's sandbox: it holds none of the user's files.
     pub(super) fn writer(
         &self,
         root: &Path,
         cwd: &Path,
         main: Option<&Sandbox>,
+        own: bool,
     ) -> (Result<Sandbox, String>, Vec<String>) {
         if self.mode == SandboxMode::ReadOnly && self.writable.is_empty() {
             let why = "subagents run read-only here (sandbox.subagents.mode)";
@@ -728,7 +741,7 @@ impl Subagents {
             writable: Vec::new(),
         };
         if self.mode == SandboxMode::WorkspaceWrite {
-            match allowed(&std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned())) {
+            match own || allowed(&std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned())) {
                 true => sandbox.mode = SandboxMode::WorkspaceWrite,
                 false => capped = true,
             }
@@ -1370,6 +1383,7 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
         (granted.iter().filter(|directory| **directory != real_root)).map(|d| (d.clone(), true)),
     );
     let mut kept = kept;
+    kept.extend(linked_git(&real_root));
     kept.retain(|path| !hidden.overlaps(path));
     // What stays read-only in a writable directory, the project too, is pinned there from the
     // innermost writable mount holding it; a pin in a read-only one would make it writable.
@@ -1647,7 +1661,7 @@ mod tests {
             writable: vec![scratch.clone(), "/proc".into(), base.join("gone")],
             ..Default::default()
         };
-        let (writer, said) = subagents.writer(&project, &project, None);
+        let (writer, said) = subagents.writer(&project, &project, None, false);
         let writer = writer.unwrap();
         assert_eq!(writer.mode, SandboxMode::ReadOnly);
         assert_eq!(writer.writable_roots(&project), [real(&scratch)]);
@@ -1661,7 +1675,7 @@ mod tests {
             network: false,
             writable: Vec::new(),
         };
-        let (writer, said) = subagents.writer(&project, &project, Some(&main));
+        let (writer, said) = subagents.writer(&project, &project, Some(&main), false);
         assert!(
             writer
                 .unwrap_err()
@@ -1675,9 +1689,26 @@ mod tests {
             mode: SandboxMode::WorkspaceWrite,
             ..subagents
         };
-        let writer = both.writer(&project, &project, Some(&main)).0.unwrap();
+        let writer = both
+            .writer(&project, &project, Some(&main), false)
+            .0
+            .unwrap();
+        let read_only = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            ..main
+        };
+        assert!(
+            both.writer(&project, &project, Some(&read_only), false)
+                .0
+                .is_err()
+        );
+        let own = both
+            .writer(&project, &project, Some(&read_only), true)
+            .0
+            .unwrap();
+        assert_eq!(own.writable_roots(&project), [real(&project)]);
         assert_eq!(writer.writable_roots(&project), [real(&project)]);
-        let (none, _) = Subagents::default().writer(&project, &project, None);
+        let (none, _) = Subagents::default().writer(&project, &project, None, true);
         assert!(none.unwrap_err().ends_with("(sandbox.subagents.mode)"));
     }
 

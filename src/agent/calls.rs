@@ -120,6 +120,7 @@ impl Agent {
             agent_directory: self.agent_directory.clone(),
             approvals: self.approvals.clone(),
             rates: self.rates.clone(),
+            worktrees: self.worktrees.clone(),
             coding_tools: match self.command_line_tools() {
                 Some(tools) => tools.into_iter().map(str::to_owned).collect(),
                 None => self.config.tools.clone(),
@@ -542,6 +543,7 @@ struct Kit {
     agent_directory: Option<PathBuf>,
     approvals: Option<PathBuf>,
     rates: Option<PathBuf>,
+    worktrees: Option<PathBuf>,
     /// The coding tools of this run, which children take by default.
     coding_tools: Vec<String>,
     hide_credentials: bool,
@@ -571,6 +573,7 @@ impl Kit {
                 agent_directory: self.agent_directory.as_deref(),
                 approvals: self.approvals.as_deref(),
                 rates: self.rates.as_deref(),
+                worktrees: self.worktrees.as_deref(),
                 tools: &self.coding_tools,
                 reads: &self.reads,
                 subagents: &self.subagents,
@@ -1082,6 +1085,125 @@ here (sandbox.subagents.mode)\n\nkept.txt says original";
             "{:?}",
             ui.shown
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_subagent_in_a_worktree_writes_there_and_an_unchanged_one_is_removed() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                subagent::NAME,
+                json!({"agent":"writer","task":"Change it"}),
+            ),
+            tool_call(
+                "call_2",
+                "write",
+                json!({"path":"src/new.txt","content":"new"}),
+            ),
+            tool_call(
+                "call_3",
+                "bash",
+                json!({"command":"pwd; echo more >> a.txt; git status --short"}),
+            ),
+            reply("changed"),
+            reply("done"),
+            tool_call(
+                "call_4",
+                subagent::NAME,
+                json!({"agent":"reader","task":"Look","isolation":"worktree"}),
+            ),
+            reply("looked"),
+            reply("done"),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "subagent-worktree");
+        let root = agent.root().to_owned();
+        std::fs::write(root.join("a.txt"), "a\n").unwrap();
+        let git = |arguments: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(arguments)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "{status:?}");
+            String::from_utf8(status.stdout).unwrap()
+        };
+        git(&["init", "-q"]);
+        git(&["add", "a.txt"]);
+        git(&["commit", "-qm", "a"]);
+        let agents = scratch.0.join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("writer.md"),
+            "---\nname: writer\ndescription: Writes\ntools: read, bash, write\nisolation: \
+worktree\n---\n\nWrite.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            agents.join("reader.md"),
+            "---\nname: reader\ndescription: Reads\ntools: read\n---\n\nRead.\n",
+        )
+        .unwrap();
+        agent.agents_directory = Some(agents);
+        let state = scratch.0.join("state");
+        agent.worktrees = Some(state.clone());
+        agent.set_subagents(sandbox::Subagents {
+            mode: SandboxMode::WorkspaceWrite,
+            ..Default::default()
+        });
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("write", &mut Recorder::default(), &cancel)
+            .unwrap();
+        agent
+            .turn("look", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 8);
+        let real = std::fs::canonicalize(&root).unwrap();
+        let worktrees = subagent::worktree::directory(&state, &real);
+        let kept: Vec<_> = (std::fs::read_dir(&worktrees).unwrap())
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        let kept = &kept[0];
+        let task = bodies[1]["input"][0]["content"].as_str().unwrap();
+        assert!(task.contains(&format!("at {},", kept.display())), "{task}");
+        // Git works there, its repository under /tmp, which the sandbox replaces.
+        let bash = last_output(&bodies[3]);
+        assert!(bash.starts_with(&format!("{}\n", kept.display())), "{bash}");
+        assert!(bash.contains(" M a.txt\n?? src/"), "{bash}");
+        assert_eq!(
+            std::fs::read_to_string(kept.join("src/new.txt")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            std::fs::read_to_string(kept.join("a.txt")).unwrap(),
+            "a\nmore\n"
+        );
+        assert_eq!(std::fs::read_to_string(root.join("a.txt")).unwrap(), "a\n");
+        assert!(!root.join("src").exists());
+        let result = last_output(&bodies[4]);
+        assert!(result.starts_with("changed\n\nWorktree kept with uncommitted changes: "));
+        let branch = format!("worktree-{}", kept.file_name().unwrap().to_string_lossy());
+        assert!(
+            result.contains(&format!("branch {branch} from ")),
+            "{result}"
+        );
+        // The reader changed nothing: its worktree and branch are gone.
+        assert_eq!(last_output(&bodies[7]), "looked");
+        assert_eq!(std::fs::read_dir(&worktrees).unwrap().count(), 1);
+        let branches = git(&["branch", "--format=%(refname:short)"]);
+        assert_eq!(
+            branches
+                .lines()
+                .filter(|b| b.starts_with("worktree-"))
+                .count(),
+            1
+        );
+        assert!(branches.contains(&branch), "{branches}");
     }
 
     #[test]

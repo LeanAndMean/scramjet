@@ -634,6 +634,8 @@ pub struct Agent {
     approvals: Option<PathBuf>,
     /// Where replies' output rates are kept (`rates::path`).
     rates: Option<PathBuf>,
+    /// The state directory under which children's worktrees are made (`subagent::worktrees`).
+    worktrees: Option<PathBuf>,
     sets: Sets,
     /// Scramjet's agent directory, whose context files, `SYSTEM.md` and `APPEND_SYSTEM.md` the
     /// instructions take.
@@ -824,6 +826,7 @@ impl Agent {
             agents_directory: None,
             approvals: approvals::path(),
             rates: rates::path(),
+            worktrees: subagent::worktrees(),
             sets: Sets::default(),
             agent_directory: None,
             context_files: Vec::new(),

@@ -97,6 +97,7 @@ mod tests {
             tools: None,
             disallowed: Vec::new(),
             model: None,
+            worktree: false,
             prompt: String::new(),
             source: "project",
             path: PathBuf::from("/repo/.scramjet/agents/p.md"),

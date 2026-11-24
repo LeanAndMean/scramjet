@@ -779,7 +779,7 @@ pub fn directory(root: &Path) -> io::Result<PathBuf> {
     Ok(projects_directory()?.join(slug(&root.to_string_lossy())))
 }
 
-fn slug(root: &str) -> String {
+pub(crate) fn slug(root: &str) -> String {
     let replaced = |c: char| std::path::is_separator(c) || (cfg!(windows) && c == ':');
     root.trim_matches(replaced).replace(replaced, "-")
 }

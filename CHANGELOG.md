@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.318.0 — A worktree for each subagent
+
+### Added
+
+- `isolation: worktree` in an agent's file, or `"isolation": "worktree"` in a `subagent` task, as in Claude Code, runs the subagent in a git worktree of its own, on a new branch from `HEAD`, under the state directory's `worktrees/`; with `sandbox.subagents.mode: "workspace-write"` it writes there, even where the main agent's sandbox is read-only. A worktree left unchanged is removed with its branch; otherwise the result names its path and branch.
+
+### Fixed
+
+- Git works in the sandbox in a linked worktree whose repository is under `/tmp`: the repository's `.git` stays readable there.
+
 ## 2.317.0 — Resume an ACP session in another folder
 
 ### Changed

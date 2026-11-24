@@ -29,6 +29,7 @@ use std::{
 use yaml_rust2::Yaml;
 
 mod slots;
+pub(super) mod worktree;
 
 pub const NAME: &str = "subagent";
 
@@ -55,12 +56,17 @@ const READ_ONLY: [&str; 7] = ["read", "grep", "find", "ls", "bash", "powershell"
 pub(super) fn definition() -> Value {
     let effort = json!({"type":"string","enum":LEVELS,
         "description":"Thinking effort level for the agent subprocess. Capped at the main session's level."});
+    let isolation = json!({"type":"string","enum":[worktree::ISOLATION],
+        "description":"\"worktree\" runs the agent in a git worktree of its own, on a new branch \
+from HEAD (uncommitted changes are not in it): removed afterwards if the agent changed nothing, \
+else its path and branch are in the result."});
     let item = |task: &str| {
         json!({"type":"object","properties":{
             "agent":{"type":"string","description":"Name of the agent to invoke"},
             "task":{"type":"string","description":task},
             "cwd":{"type":"string","description":"Working directory for the agent process"},
-            "effort":effort},
+            "effort":effort,
+            "isolation":isolation},
           "required":["agent","task"]})
     };
     json!({"type":"function","name":NAME,"strict":false,
@@ -82,7 +88,17 @@ applies.",
 \"both\" to include project-local loose agents. Registered command-set agents remain available \
 under every scope."},
             "cwd":{"type":"string","description":"Working directory for the agent process (single mode)"},
-            "effort":effort}}})
+            "effort":effort,
+            "isolation":isolation}}})
+}
+
+/// Where children's worktrees are made: the state directory; nowhere in unit tests, which must
+/// leave the user's alone.
+pub(super) fn worktrees() -> Option<PathBuf> {
+    match cfg!(test) {
+        true => None,
+        false => super::session::state_directory().ok(),
+    }
 }
 
 /// The name here of a tool an agent file names as Claude Code does, so that one file serves both.
@@ -111,6 +127,8 @@ pub(super) struct Definition {
     /// default ones.
     pub disallowed: Vec<String>,
     pub model: Option<String>,
+    /// Its `isolation: worktree`, as Claude Code's: a git worktree of its own for each task.
+    pub worktree: bool,
     /// The file's body, added to the child's instructions.
     pub prompt: String,
     /// `user` or `project` for a loose agent; a command set's origin (`installed`, `project` or `built in`).
@@ -412,6 +430,16 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
     };
     let tools = list("tools");
     let disallowed = list("disallowedTools").unwrap_or_default();
+    let worktree = match &frontmatter["isolation"] {
+        Yaml::String(isolation) if isolation.trim() == worktree::ISOLATION => true,
+        Yaml::BadValue => false,
+        _ => {
+            diagnostics.push(format!(
+                "{shown}: ignoring isolation frontmatter other than \"worktree\""
+            ));
+            false
+        }
+    };
     let model = match &frontmatter["model"] {
         Yaml::String(model) => Some(model.trim().to_owned()).filter(|model| !model.is_empty()),
         Yaml::BadValue => None,
@@ -426,6 +454,7 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
         tools,
         disallowed,
         model,
+        worktree,
         prompt: body,
         source,
         path: path.to_owned(),
@@ -441,6 +470,7 @@ struct Task {
     task: String,
     cwd: Option<String>,
     effort: Option<String>,
+    worktree: bool,
 }
 
 enum Mode {
@@ -497,16 +527,30 @@ impl Checked {
         Some(effort)
     }
 
+    fn isolation(&mut self, value: &Value, path: &str) -> bool {
+        let isolation = self.string(value, path, false);
+        if isolation
+            .as_deref()
+            .is_some_and(|given| given != worktree::ISOLATION)
+        {
+            let error = format!("  - {path}: must be equal to one of the allowed values");
+            self.errors.push(error);
+        }
+        isolation.is_some()
+    }
+
     fn task(&mut self, item: &Value, path: &str) -> Option<Task> {
         let agent = self.string(&item["agent"], &format!("{path}/agent"), true);
         let task = self.string(&item["task"], &format!("{path}/task"), true);
         let cwd = self.string(&item["cwd"], &format!("{path}/cwd"), false);
         let effort = self.effort(&item["effort"], &format!("{path}/effort"));
+        let worktree = self.isolation(&item["isolation"], &format!("{path}/isolation"));
         Some(Task {
             agent: agent?,
             task: task?,
             cwd,
             effort,
+            worktree,
         })
     }
 
@@ -535,6 +579,7 @@ fn arguments(arguments: &Value) -> Result<Arguments, Vec<String>> {
     let task = checked.string(&arguments["task"], "task", false);
     let cwd = checked.string(&arguments["cwd"], "cwd", false);
     let effort = checked.effort(&arguments["effort"], "effort");
+    let worktree = checked.isolation(&arguments["isolation"], "isolation");
     let scope = match checked
         .string(&arguments["agentScope"], "agentScope", false)
         .as_deref()
@@ -558,6 +603,7 @@ fn arguments(arguments: &Value) -> Result<Arguments, Vec<String>> {
             task,
             cwd,
             effort,
+            worktree,
         }),
         _ => None,
     };
@@ -647,6 +693,8 @@ pub(super) struct Parent<'a> {
     pub approvals: Option<&'a Path>,
     /// Where replies' output rates are kept (`rates::path`).
     pub rates: Option<&'a Path>,
+    /// The state directory under which children's worktrees are made; none, none made.
+    pub worktrees: Option<&'a Path>,
     /// The agent's coding tools, whose read-only ones a child whose file lists none has.
     pub tools: &'a [String],
     /// The paths the user's settings hide and re-open for the agent's own tools.
@@ -668,7 +716,13 @@ impl Parent<'_> {
             (self.skills.list().iter()).filter_map(|skill| skill.path.parent().map(Path::to_owned));
         let agents = self.sources.user.map(Path::to_owned);
         let sessions = super::session::directory(self.root).ok();
-        sets.chain(skills).chain(agents).chain(sessions).collect()
+        let worktrees = (self.worktrees).map(|state| worktree::directory(state, self.root));
+        (sets
+            .chain(skills)
+            .chain(agents)
+            .chain(sessions)
+            .chain(worktrees))
+        .collect()
     }
 }
 
@@ -688,6 +742,10 @@ struct Job<'a> {
     /// Where its `write`, `edit` and commands may change files, when it has `write` or `edit`.
     writer: Option<sandbox::Sandbox>,
     warnings: Vec<String>,
+    /// The worktree it runs in, with `isolation: worktree`.
+    worktree: Option<worktree::Worktree>,
+    /// Why it cannot run, such as a worktree not made.
+    failure: Option<String>,
 }
 
 impl<'a> Job<'a> {
@@ -699,10 +757,21 @@ impl<'a> Job<'a> {
         sandbox: &Result<(), String>,
     ) -> Self {
         let agent = agents.iter().find(|agent| agent.name == task.agent);
-        let cwd = match &task.cwd {
+        let mut cwd = match &task.cwd {
             Some(cwd) => tools::resolve(parent.root, cwd),
             None => parent.root.to_owned(),
         };
+        let (mut worktree, mut failure) = (None, None);
+        if agent.is_some_and(|agent| agent.worktree) || task.worktree && agent.is_some() {
+            let made = match parent.worktrees {
+                Some(state) => worktree::Worktree::add(&cwd, state),
+                None => Err("isolation \"worktree\": no state directory".to_owned()),
+            };
+            match made {
+                Ok((made, inside)) => (worktree, cwd) = (Some(made), inside),
+                Err(error) => failure = Some(error),
+            }
+        }
         let (tools, writer, warnings) = match agent {
             Some(agent) => {
                 let (writes, said) = match (agent.writes(), sandbox) {
@@ -712,7 +781,12 @@ impl<'a> Job<'a> {
                         Err(format!("the sandbox is unavailable ({error})")),
                         Vec::new(),
                     ),
-                    (true, Ok(())) => parent.subagents.writer(parent.root, &cwd, parent.sandbox),
+                    (true, Ok(())) => (parent.subagents).writer(
+                        parent.root,
+                        &cwd,
+                        parent.sandbox,
+                        worktree.is_some(),
+                    ),
                 };
                 let (tools, mut warnings) = child_tools(agent, parent.tools, sandbox, &writes);
                 warnings.extend(said);
@@ -736,6 +810,8 @@ impl<'a> Job<'a> {
             tools,
             writer,
             warnings,
+            worktree,
+            failure,
         }
     }
 
@@ -777,6 +853,8 @@ struct Run {
     responses: Vec<Value>,
     /// What was said about the agent's file and the tools it did not get.
     warnings: Vec<String>,
+    /// What the parent is told of a worktree kept.
+    kept: Option<String>,
 }
 
 impl Run {
@@ -789,6 +867,7 @@ impl Run {
             turns: 0,
             responses: Vec::new(),
             warnings: Vec::new(),
+            kept: None,
         }
     }
 
@@ -826,6 +905,10 @@ impl Run {
             Some((_, message)) => message.clone(),
             None if self.output.is_empty() => "(no output)".into(),
             None => self.output.clone(),
+        };
+        let text = match &self.kept {
+            Some(kept) => format!("{text}\n\n{kept}"),
+            None => text,
         };
         with_warnings(text, std::slice::from_ref(self))
     }
@@ -1044,6 +1127,9 @@ is added or changed.",
                     } else {
                         last
                     };
+                    let kept = runs.iter().filter_map(|run| run.kept.as_deref());
+                    let last = std::iter::once(last.as_str()).chain(kept);
+                    let last = last.collect::<Vec<_>>().join("\n\n");
                     (with_warnings(last, &runs), false, runs)
                 }
             }
@@ -1128,8 +1214,9 @@ fn run_jobs(
                         break;
                     }
                     let job = &jobs[index];
-                    let run = match job.agent {
-                        Some(agent) => {
+                    let mut run = match (&job.failure, job.agent) {
+                        (Some(failure), _) => Run::failed(job.name, Some("error"), failure.clone()),
+                        (None, Some(agent)) => {
                             let Some(_slot) = CHILDREN.take(cancel) else {
                                 break;
                             };
@@ -1137,8 +1224,9 @@ fn run_jobs(
                                 let _ = sender.send((index, event));
                             })
                         }
-                        None => Run::failed(job.name, None, unknown(job.name)),
+                        (None, None) => Run::failed(job.name, None, unknown(job.name)),
                     };
+                    run.kept = job.worktree.as_ref().and_then(worktree::Worktree::finish);
                     let _ = sender.send((index, Event::Done(run)));
                 }
             });
@@ -1163,8 +1251,9 @@ fn run_jobs(
         .into_iter()
         .zip(jobs)
         .map(|(run, job)| {
-            run.unwrap_or_else(|| {
-                Run::failed(
+            run.unwrap_or_else(|| Run {
+                kept: job.worktree.as_ref().and_then(worktree::Worktree::finish),
+                ..Run::failed(
                     job.name,
                     Some("aborted"),
                     "Subagent was aborted before launch".into(),
@@ -1322,7 +1411,18 @@ fn run_child(
         network,
         writer,
     );
-    let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
+    let mut task = format!("Task: {}", job.task);
+    if let Some(worktree) = &job.worktree {
+        task += &format!(
+            "\n\nYou work in a git worktree of {} of your own, at {}, on the branch {}: what is \
+under {0} is at the same place under {1}. Git's own files stay read-only: leave your changes \
+uncommitted.",
+            worktree.top.display(),
+            worktree.path.display(),
+            worktree.branch
+        );
+    }
+    let mut input = vec![json!({"role":"user","content":task})];
     for _ in 0..MAX_STEPS {
         if cancel.load(Ordering::Relaxed) {
             run.error = Some((Some("aborted"), "Subagent was aborted".into()));
@@ -1709,6 +1809,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
                 .map(str::to_owned)
                 .collect(),
             model: None,
+            worktree: false,
             prompt: String::new(),
             source: "user",
             path: PathBuf::from("/x.md"),

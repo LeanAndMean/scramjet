@@ -1,0 +1,75 @@
+{
+  "size": "100x48",
+  "settings": {
+    "sandbox": {
+      "subagents": {
+        "mode": "workspace-write"
+      }
+    }
+  },
+  "config": {
+    "agents/fixer.md": "---\nname: fixer\ndescription: Makes small fixes\ntools: read, bash, write, edit\nisolation: worktree\n---\n\nMake the change asked, then say what you changed.\n"
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Add a notes file",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "fixer",
+          "task": "Write NOTES.md"
+        }
+      }
+    ],
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "NOTES.md",
+          "content": "Notes\n"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo more >> NOTES.md; echo x >> README.md; git status --short; git add -A 2>&1 | tail -1"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Wrote NOTES.md and touched README.md in my worktree."
+      }
+    ],
+    [
+      {
+        "text": "The fixer's worktree has NOTES.md."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "worktree has NOTES"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "expanded"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}
