@@ -788,6 +788,12 @@ impl Hidden {
     /// whichever holds it the closer, unless it is in a store.
     fn refusal(&self, path: &Path) -> String {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+        if in_processes(&real) {
+            return format!(
+                "{}: a process's own files, hidden as they hold credentials (its environment)",
+                path.display()
+            );
+        }
         let store = (self.files.iter().chain(&self.directories))
             .filter(|hidden| !self.denied.contains(hidden))
             .any(|store| real.starts_with(store));
@@ -906,16 +912,17 @@ impl Hidden {
     /// mount of its filesystem.
     pub(super) fn check(&self, path: &Path) -> Result<(), String> {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
-        let found = match cfg!(unix) {
-            // The innermost of the hidden and the re-opened decides.
-            true => (real.ancestors().filter_map(identity))
-                .find(|found| {
-                    self.identities.contains(found) || self.allowed_identities.contains(found)
-                })
-                .is_some_and(|found| self.identities.contains(&found)),
-            // No identity to compare: by the stores' real paths.
-            false => self.covered(&real, false),
-        };
+        let found = in_processes(&real)
+            || match cfg!(unix) {
+                // The innermost of the hidden and the re-opened decides.
+                true => (real.ancestors().filter_map(identity))
+                    .find(|found| {
+                        self.identities.contains(found) || self.allowed_identities.contains(found)
+                    })
+                    .is_some_and(|found| self.identities.contains(&found)),
+                // No identity to compare: by the stores' real paths.
+                false => self.covered(&real, false),
+            };
         match found {
             true => Err(self.refusal(path)),
             false => Ok(()),
@@ -927,6 +934,9 @@ impl Hidden {
     /// caught too; on Windows, which has none to compare, by the real path. A denied directory
     /// holding what `allowRead` re-opens is walked, its other entries left out by path.
     pub(super) fn is_store(&self, real: &Path, metadata: &std::fs::Metadata) -> bool {
+        if in_processes(real) {
+            return true;
+        }
         #[cfg(unix)]
         let found = {
             use std::os::unix::fs::MetadataExt;
@@ -972,6 +982,9 @@ impl Hidden {
         // As std's `MetadataExt::dev`: macOS's `st_dev` is an `i32`.
         #[allow(clippy::unnecessary_cast)]
         let key = |stat: &rustix::fs::Stat| (stat.st_dev as u64, stat.st_ino as u64);
+        if opened_path(file).is_ok_and(|real| in_processes(&real)) {
+            return Ok(true);
+        }
         let stat = rustix::fs::fstat(file)?;
         if self.identities.contains(&key(&stat)) {
             return Ok(true);
@@ -1008,6 +1021,25 @@ impl Hidden {
             directory = parent;
         }
     }
+}
+
+/// Whether `real` is in a process's directory of `/proc` (`self` and `thread-self` lead to one),
+/// whose `environ` holds what the process was started with, a provider's key among it. The
+/// sandbox's commands see their own processes only; the file tools run in the agent's.
+fn in_processes(real: &Path) -> bool {
+    if !cfg!(any(target_os = "linux", target_os = "android")) {
+        return false;
+    }
+    let mut parts = real.components().skip(1).map(|part| part.as_os_str());
+    parts.next().is_some_and(|top| top == "proc")
+        && parts
+            .next()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name == "self"
+                    || name == "thread-self"
+                    || (!name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()))
+            })
 }
 
 /// Where an open file is now, as the system knows it, not by its path, which a rename can change.

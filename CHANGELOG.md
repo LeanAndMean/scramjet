@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.303.1 — Processes' files hidden from the file tools
+
+### Fixed
+
+- With the credential stores hidden (`--sandbox`, `hideCredentials`, the project-only reach), `read`, `grep`, `find` and `ls` refuse the processes' directories in `/proc` (`/proc/self`, `/proc/thread-self`, `/proc/<pid>`): they run in Scramjet's own process, whose environment holds a provider's key, and could read it from `/proc/self/environ`. The rest of `/proc` still reads.
+
 ## 2.303.0 — The project-only reach on Windows
 
 ### Fixed

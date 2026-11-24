@@ -2484,6 +2484,40 @@ disjoint regions."
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn file_tools_with_stores_hidden_refuse_the_processes_files() {
+        let root = std::env::temp_dir();
+        let hidden = Hidden::current(&[], &Default::default());
+        let cancel = AtomicBool::new(false);
+        let run = |name: &str, arguments: Value| {
+            call(name, arguments).run_read_only(&root, &hidden, false, &cancel)
+        };
+        let own = format!("/proc/{}", std::process::id());
+        let parent = format!("/proc/{}/environ", std::os::unix::process::parent_id());
+        for path in [
+            "/proc/self/environ",
+            "/proc/thread-self/environ",
+            &format!("{own}/environ"),
+            &parent,
+            "/proc/self/root/proc/self/environ",
+        ] {
+            let refused = run("read", json!({"path": path})).unwrap_err();
+            assert!(refused.contains("a process's own files"), "{refused}");
+        }
+        for name in ["ls", "find", "grep"] {
+            let arguments = json!({"path": "/proc/self", "pattern": "*"});
+            assert!(run(name, arguments).is_err(), "{name}");
+        }
+        let walked = |path: &str| {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            hidden.is_store(Path::new(path), &metadata)
+        };
+        assert!(walked("/proc/1") && walked("/proc/self") && !walked("/proc/sys"));
+        let cpu = run("read", json!({"path": "/proc/cpuinfo"})).unwrap();
+        assert!(cpu.text.contains("processor"));
+    }
+
     #[test]
     fn read_sends_an_image_with_its_text_and_says_why_one_is_left_out() {
         let root =
