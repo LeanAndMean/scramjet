@@ -133,16 +133,26 @@ impl Worktree {
             })
     }
 
-    /// Removes the worktree and its branch if the child changed nothing; else what the parent
-    /// is told of it, with what of the removal the `main` agent's sandbox in its project keeps
-    /// read-only.
+    /// Removes the worktree and its branch if the child changed nothing but files git ignores,
+    /// as Claude Code does, then naming those; else what the parent is told of it, with what of
+    /// the removal the `main` agent's sandbox in its project keeps read-only.
     pub(super) fn finish(&self, main: Option<(&Sandbox, &Path)>) -> Option<String> {
         let path = self.path.display();
-        let changed = git(
+        let status = git(
             &self.path,
-            &["status", "--porcelain", "--untracked-files=all"],
-        )
-        .map(|status| !status.is_empty() || self.submodule_written());
+            &[
+                "status",
+                "--porcelain",
+                "--ignored=matching",
+                "--untracked-files=all",
+            ],
+        );
+        let lines = || status.iter().flat_map(|status| status.lines());
+        let ignored: Vec<&str> = lines()
+            .filter_map(|line| line.strip_prefix("!! "))
+            .collect();
+        let changed = (status.as_ref())
+            .map(|_| lines().any(|line| !line.starts_with("!! ")) || self.submodule_written());
         let head = git(&self.path, &["rev-parse", "HEAD"]);
         let commits = match &head {
             Ok(head) if *head != self.base => git(
@@ -156,9 +166,22 @@ impl Worktree {
             let shown = self.path.to_string_lossy();
             let removed = git(&self.top, &["worktree", "remove", "--force", &shown])
                 .and_then(|_| git(&self.top, &["branch", "-D", &self.branch]));
-            return removed
-                .err()
-                .map(|error| format!("Its worktree {path} is unchanged but was left: {error}"));
+            return match removed {
+                Err(error) => Some(format!(
+                    "Its worktree {path} is unchanged but was left: {error}"
+                )),
+                Ok(_) if ignored.is_empty() => None,
+                Ok(_) => {
+                    let mut shown = ignored[..ignored.len().min(5)].join(", ");
+                    if ignored.len() > 5 {
+                        shown.push_str(&format!(" and {} more", ignored.len() - 5));
+                    }
+                    Some(format!(
+                        "Its worktree {path} changed nothing git tracks, so it was removed with \
+                         the files git ignores in it: {shown}"
+                    ))
+                }
+            };
         }
         let what = match (changed, commits) {
             (Ok(true), Some(commits)) => format!("{commits} commits and uncommitted changes"),
@@ -230,6 +253,21 @@ mod tests {
         assert!(!unchanged.path.exists());
         let branches = git(&project, &["branch", "--list", &unchanged.branch]).unwrap();
         assert!(branches.is_empty(), "{branches}");
+
+        // Files git ignores alone leave it unchanged, and the note names what went with it.
+        std::fs::write(project.join(".gitignore"), "out/\n.env\n").unwrap();
+        git(&project, &["add", ".gitignore"]).unwrap();
+        commit(&project);
+        let (ignoring, cwd) = Worktree::add(&project, &project, &state).unwrap();
+        std::fs::create_dir_all(cwd.join("out/notes")).unwrap();
+        std::fs::write(cwd.join("out/notes/a.md"), "a\n").unwrap();
+        std::fs::write(cwd.join(".env"), "A=1\n").unwrap();
+        let note = ignoring.finish(None).unwrap();
+        assert!(
+            note.ends_with("was removed with the files git ignores in it: .env, out/"),
+            "{note}"
+        );
+        assert!(!ignoring.path.exists());
 
         let (changed, cwd) = Worktree::add(&project, &project, &state).unwrap();
         std::fs::write(cwd.join("new.txt"), "new\n").unwrap();

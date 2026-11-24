@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.326.2 — What a subagent's removed worktree held
+
+### Fixed
+
+- A subagent's worktree that changed nothing git tracks is still removed, as in Claude Code, but when files git ignores were in it (an ignored `out/`, a `.env`, build output) the main agent is now told which went with it, rather than finding them gone.
+
 ## 2.326.1 — Review of the sandbox's reaches and subagents' writes, fixed
 
 ### Fixed

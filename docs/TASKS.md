@@ -7,7 +7,6 @@ Last steer: ffa60f6
 ## Current focus
 
 From the review of 0d1546d, ffa60f6, 3162ff5, 3ace6d3, 110fc47, ca6ed8a and 67fe420 (2.326.1 fixed four findings):
-- A child's worktree holding only gitignored files (notes under an ignored `out/`, a `.env`) is removed as unchanged, with them (`Worktree::finish`, `src/agent/subagent/worktree.rs`: `git status` without `--ignored`); since ffa60f6 a whole chain's at once. Counting ignored files would keep every worktree a build wrote `target/` in: decide, as a `Choice:`, between keeping it when ignored files outside the usual build directories appear, saying in the result which ignored files go with it, or leaving it.
 - Under 67fe420's offline commands on macOS, Seatbelt's open profile with `(deny network*)` still allows `mach-lookup`, so `open <url>` or `launchctl submit` may reach the network outside the profile (untried, item 35); Linux hides `/run`'s D-Bus and systemd.
 
 From the review of be0a8ce (2.324.1 fixed its findings, 2.325.0 the writable directories without a sandbox):

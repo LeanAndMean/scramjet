@@ -1,0 +1,68 @@
+{
+  "size": "100x48",
+  "settings": {
+    "sandbox": {
+      "subagents": {
+        "mode": "workspace-write"
+      }
+    }
+  },
+  "config": {
+    "agents/fixer.md": "---\nname: fixer\ndescription: Makes small fixes\ntools: read, bash, write, edit\nisolation: worktree\n---\n\nMake the change asked, then say what you changed.\n"
+  },
+  "files": {
+    "README.md": "Project\n",
+    ".gitignore": "out/\n"
+  },
+  "prompt": "Draft notes",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "fixer",
+          "task": "Draft notes in out/notes.md"
+        }
+      }
+    ],
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "out/notes.md",
+          "content": "Notes\n"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Wrote out/notes.md in my worktree."
+      }
+    ],
+    [
+      {
+        "text": "The fixer's notes were in an ignored directory, so they went with its worktree."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "went with its worktree"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "expanded"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}
