@@ -1110,10 +1110,10 @@ def remapped_keys(read, until, send, output):
     on_screen('Keyboard shortcuts  \u2191\u2193 move \u00b7 F6 change \u00b7 Esc close')
     send(b'queue follow')
     rows = on_screen('app.message.followUp, by default Alt+Enter')
-    assert any(re.fullmatch('\u203a Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
+    assert any(re.fullmatch('\u203a +Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
     send(b'\x7f' * 12 + b'thinking block')
     rows = on_screen('app.thinking.toggle, by default Ctrl+T')
-    assert any(re.fullmatch('\u203a F2 +Toggle thinking block visibility', row) for row in rows), rows
+    assert any(re.fullmatch('\u203a +F2 +Toggle thinking block visibility', row) for row in rows), rows
     send(b'\x1b')
     on_screen('Keyboard shortcuts', gone=True)
     # The hints name the keys in use.
@@ -1134,7 +1134,7 @@ def remapped_keys(read, until, send, output):
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move \u00b7 F6 change')
     send(b'\x1b[A')
-    on_screen('\u203a Installed')
+    on_screen('\u203a   Installed')
     send(b'\x1b[17~')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 F6 edit \u00b7 Esc back')
     title = next(at for at, row in enumerate(rows) if row.startswith('Installed  '))
@@ -1341,7 +1341,7 @@ def changed_keys(read, until, send, output):
     on_screen('Press the new key  Esc cancels')
     send(b'\x11')
     rows = on_screen('Keyboard shortcuts  Saved in ')
-    assert any(re.fullmatch('\u203a Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
+    assert any(re.fullmatch('\u203a +Ctrl\\+Q +Queue follow-up message \\(or send\\)', row) for row in rows), rows
     # The list shows again as it was left: its query, the rows it matches, the row changed.
     assert any(row.startswith('> queue follow') for row in rows), rows
     assert not any('Move cursor up' in row for row in rows), rows
@@ -1364,7 +1364,7 @@ def changed_keys(read, until, send, output):
     on_screen('Press another key  Esc cancels')
     send(b'\x1bOS')
     rows = on_screen('Keyboard shortcuts  Saved in ')
-    assert any(re.fullmatch('\u203a Ctrl\\+Q / F4 +Queue follow-up message \\(or send\\)', row)
+    assert any(re.fullmatch('\u203a +Ctrl\\+Q / F4 +Queue follow-up message \\(or send\\)', row)
                for row in rows), rows
     assert json.load(open(keys_file)) == {'app.message.followUp': ['ctrl+q', 'f4']}
     send(b'\r')
@@ -1395,8 +1395,8 @@ def logins(read, until, send, output):
     send(b'/login\r')
     rows = on_screen('Log in to  ')
     at = rows.index('  Subscriptions')
-    assert rows[at:at + 5] == ['  Subscriptions', '\u203a   ChatGPT Plus/Pro (Codex Subscription)',
-                               '    GitHub Copilot', '  API keys', '    test'], rows
+    assert rows[at:at + 6] == ['  Subscriptions', '\u203a   ChatGPT Plus/Pro (Codex Subscription)',
+                               '    GitHub Copilot', '', '  API keys', '    test'], rows
     # A provider of models.json takes an API key, saved hidden and sent with its requests.
     send(b'\x1b[B\x1b[B')
     on_screen('Its requests carry no key. One saved here is kept in auth.json, as logins are')
@@ -1486,7 +1486,7 @@ def logins(read, until, send, output):
     # Under a heading for each provider, the current model's first.
     rows = on_screen('    grok-4.6')
     at = rows.index('  GitHub Copilot')
-    assert rows[at - 2:at + 3] == ['  test', '\u203a   gpt-6-luna \u2713', '  GitHub Copilot',
+    assert rows[at - 3:at + 3] == ['  test', '\u203a   gpt-6-luna \u2713', '', '  GitHub Copilot',
                                    '    gpt-6-luna', '    grok-4.6'], rows
     send(b'\x1b[B\r')
     on_screen('Model set to (github-copilot) gpt-6-luna')
@@ -1495,7 +1495,7 @@ def logins(read, until, send, output):
     send(b'/model\r')
     rows = on_screen('    grok-4.6')
     at = rows.index('  GitHub Copilot')
-    assert rows[at:at + 5] == ['  GitHub Copilot', '\u203a   gpt-6-luna \u2713', '    grok-4.6', '  test',
+    assert rows[at:at + 6] == ['  GitHub Copilot', '\u203a   gpt-6-luna \u2713', '    grok-4.6', '', '  test',
                                '    gpt-6-luna'], rows
     send(b'\x1b')
     on_screen('grok-4.6', gone=True)
@@ -1722,7 +1722,7 @@ def local_models(read, until, send, output):
     send(b'/login\r')
     rows = on_screen('Log in to  ')
     dialog = rows[[i for i, row in enumerate(rows) if row.startswith('Log in to  ')][-1]:]
-    assert dialog[4:7] == ['  API keys', '    test', '  Local models'], dialog
+    assert dialog[5:9] == ['  API keys', '    test', '', '  Local models'], dialog
     send(b'\x1b')
     on_screen('Log in to  ', gone=True)
     send(b'/model\r')
@@ -2673,7 +2673,7 @@ def model_list_in_a_scope(read, until, send, output):
     send(b'\x1b[B\t')
     rows = on_screen('All models  \u2191\u2193 move \u00b7 Enter select \u00b7 Tab models for Ctrl+P')
     text = '\n'.join(rows)
-    grouped = '  openai\n    gpt-6-luna \u2713\n    gpt-6-terra\n  anthropic\n\u203a   claude-haiku-5-5\n'
+    grouped = '  openai\n    gpt-6-luna \u2713\n    gpt-6-terra\n\n  anthropic\n\u203a   claude-haiku-5-5\n'
     assert grouped in text, text
     # The query stays across Tab, matching nothing in the scope.
     send(b'terra\t')
@@ -2708,8 +2708,8 @@ def model_list_in_a_scope(read, until, send, output):
 
 
 def setting(label, value):
-    """A row of `/settings`, its label as wide as the widest."""
-    return label.ljust(len('Follow-up messages')) + '  ' + value
+    """A row of `/settings`, indented under its heading, its label as wide as the widest."""
+    return '  ' + label.ljust(len('Follow-up messages')) + '  ' + value
 
 
 def defaults_shown(read, until, send, output):
@@ -2770,7 +2770,7 @@ def settings_menu(read, until, send, output):
     rows = on_screen('\u203a [ ] switch_scramjet_model')
     assert rows[-1] == '  Changes the session\'s model', rows
     send(b'\x1b')
-    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find, ls; s…'))
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find, ls;…'))
     send(b'\x1b')
     ending(read, output, EMPTY)
     # Typed during a turn, it opens at once while the call runs; the turn's next request has what
@@ -2785,7 +2785,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B' * 24 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
-    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find; switc…'))
+    on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find; swi…'))
     send(b'\x1b')
     on_screen('Replied.')
     send(b'\x04')
@@ -3589,12 +3589,12 @@ def installed_view(read, until, send, output):
     assert rows[at + 1].startswith('\u203a   settings: '), rows
     assert rows[at + 2].startswith('    agents: %s: failed to read agent file (No such' % stale_agent), rows
     assert rows[at + 3].startswith('    skills: skill path does not exist: '), rows
-    assert rows[at + 4] == '  Command sets', rows
+    assert rows[at + 4:at + 6] == ['', '  Command sets'], rows
     # The program's own set, here its checkout's, comes last.
     builtin = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'sets', 'scramjet')
     home = os.path.expanduser('~')
     builtin = '~' + builtin[len(home):] if builtin.startswith(home + os.sep) else builtin
-    assert rows[at + 5:at + 8] == ['    demo      project   ' + os.path.join(project, '.scramjet', 'demo'),
+    assert rows[at + 6:at + 9] == ['    demo      project   ' + os.path.join(project, '.scramjet', 'demo'),
                                    '    tools     project   ' + os.path.join(project, '.scramjet', 'tools'),
                                    '    scramjet  built in  ' + builtin], rows
     # The note under the list says the whole problem, which the row cuts, and that Enter opens the
@@ -4031,8 +4031,9 @@ def next_step_settings(read, until, send, output):
     send(b'\r')
     rows = on_screen('Next steps  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc back')
     at = rows.index('  After /flow:step')
-    assert rows[at - 1:at + 4] == [
+    assert rows[at - 2:at + 4] == [
         '\u203a Apply 1 suggested setting',
+        '',
         '  After /flow:step',
         '    \u2192 /flow:step            ask me \u00b7 as any other command \u00b7 suggested: continue automatically',
         '    \u2192 /flow:done            continue automatically \u00b7 this project',

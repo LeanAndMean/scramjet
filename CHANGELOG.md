@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.323.0 — Headings that read as headings
+
+### Changed
+
+- In `/settings`, `/login`, `/model`'s list of all models, `/hotkeys`, Installed, Next steps and Publishing, headings are bold in the theme's heading color with a blank line above, and the rows under them are indented.
+
+### Fixed
+
+- A list scrolled through its headings no longer shows a heading without any of its rows: one scrolled away shows above its rows, and one with no room for a row under it waits until there is.
+
 ## 2.322.0 — The sandbox remembered per project
 
 ### Changed

@@ -198,7 +198,7 @@ styles! {
     SELECTED: [BOLD];
     SELECTOR_MARK: [] Accent;
     /// A heading among a selector's rows, over the rows it groups.
-    SELECTOR_HEADING: [] Muted;
+    SELECTOR_HEADING: [BOLD] MdHeading;
     /// The tree lines before the rows of forked sessions in `/resume` and of `/tree`'s entries.
     SELECTOR_TREE: [] Dim;
     /// In `/tree`'s rows, as Scramjet's tree colors them: the mark on the current entry's path,

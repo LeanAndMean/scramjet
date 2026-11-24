@@ -327,7 +327,7 @@ impl Interactive {
             let rows = rows.into_iter();
             [heading.to_owned()]
                 .into_iter()
-                .chain(rows.map(|row| format!("{:width$}  {}", row.label(), value(row))))
+                .chain(rows.map(|row| format!("  {:width$}  {}", row.label(), value(row))))
         }))
         .collect()
     }

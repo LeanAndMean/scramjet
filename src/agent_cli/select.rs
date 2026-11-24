@@ -1351,15 +1351,10 @@ fn lines(
     // The keys take rows from the list while it keeps the selected row and those beside it.
     let spare = height.saturating_sub(3 + search_rows + wanted.min(3));
     let header = header_lines(title, hint, width, 1 + spare.min(HINT_LINES - 1));
-    let visible = list
-        .visible
-        .min(shown)
-        .min(height.saturating_sub(2 + header.len() + search_rows).max(1));
-    // As in Scramjet, the selected row stays in the middle where it can.
-    let top = list
-        .selected
-        .saturating_sub(visible / 2)
-        .min(shown - visible);
+    let room = (list.visible)
+        .min(height.saturating_sub(2 + header.len() + search_rows))
+        .max(1);
+    let (window, all) = window(list, room);
     let mut lines = vec![];
     for (at, part) in header.iter().enumerate() {
         lines.push(match at {
@@ -1375,15 +1370,10 @@ fn lines(
             lines.push(format!("  {MUTED}{none}{RESET}"));
         }
     }
-    // Rows scrolled away from their heading show it in place of the first of them.
-    let heading = (top..list.selected)
-        .next()
-        .filter(|&at| !list.is_heading(at))
-        .and_then(|at| (0..at).rev().find(|&above| list.is_heading(above)));
-    for position in top..top + visible {
-        let position = match heading {
-            Some(heading) if position == top => heading,
-            _ => position,
+    for position in window {
+        let Some(position) = position else {
+            lines.push(String::new());
+            continue;
         };
         let index = list.rows[position];
         let is_current = current == Some(index);
@@ -1425,7 +1415,7 @@ fn lines(
     } else {
         0
     };
-    if visible < shown || filter.is_some() {
+    if !all || filter.is_some() {
         lines.push(format!(
             "  {MUTED}({at}/{}){}{RESET}",
             rows(shown),
@@ -1433,6 +1423,58 @@ fn lines(
         ));
     }
     lines
+}
+
+/// The positions of the rows to show in `room` lines around the selected one, `None` for the
+/// blank line above a heading, and whether all are shown. As in Scramjet, the selected row stays
+/// in the middle where it can. Rows scrolled away from their heading show it above them, and
+/// a heading shows only with a row under it.
+fn window(list: &List, room: usize) -> (Vec<Option<usize>>, bool) {
+    let shown = list.rows.len();
+    if shown == 0 {
+        return (Vec::new(), true);
+    }
+    let above = |top: usize| match list.is_heading(top) {
+        true => None,
+        false => (0..top).rev().find(|&at| list.is_heading(at)),
+    };
+    let lines = |top: usize, end: usize| {
+        let blanks = (top + 1..end).filter(|&at| list.is_heading(at)).count();
+        usize::from(above(top).is_some()) + end - top + blanks
+    };
+    let selected = list.selected;
+    let (mut top, mut end) = (selected, selected + 1);
+    if lines(top, end) > room {
+        return (vec![Some(selected)], shown == 1);
+    }
+    loop {
+        let mut grew = false;
+        if top > 0 && lines(top - 1, end) <= room {
+            top -= 1;
+            grew = true;
+        }
+        let next = end
+            + if list.is_heading(end.min(shown - 1)) {
+                2
+            } else {
+                1
+            };
+        if next <= shown && lines(top, next) <= room {
+            end = next;
+            grew = true;
+        }
+        if !grew {
+            break;
+        }
+    }
+    let mut window: Vec<_> = above(top).map(Some).into_iter().collect();
+    for at in top..end {
+        if at > top && list.is_heading(at) {
+            window.push(None);
+        }
+        window.push(Some(at));
+    }
+    (window, top == 0 && end == shown)
 }
 
 /// A question's lines for a terminal of `(width, height)`: a rule, the title, the options around
@@ -1648,6 +1690,7 @@ mod tests {
                 "> gpt ",
                 "  ",
                 "› gpt-5 one",
+                "",
                 "  ",
                 "  gpt-5-mini two",
                 "  gpt-5 two",
@@ -1823,25 +1866,57 @@ mod tests {
             moved.push(list.selected);
         }
         assert_eq!(moved, [7, 1, 7, 1, 2, 3, 5, 2]);
-        list.selected = 6;
-        // The first rows shown lost their heading above: it shows in the first one's place.
-        assert_eq!(
+        let shown = |list: &List| {
             plain(lines(
                 ("Pick", HINT, style::MUTED),
-                &list,
-                searched(&list),
+                list,
+                searched(list),
                 None,
                 (None, None),
                 (40, 24),
-                &row
-            )),
+                &row,
+            ))
+        };
+        list.selected = 7;
+        // The rows shown lost their heading above: it shows over them, taking a line.
+        assert_eq!(
+            shown(&list),
             [
                 "Pick  ↑↓ move · Enter select",
                 "  Esc cancel",
                 "  After 1",
-                "›   row 1.2",
+                "    row 1.2",
+                "›   row 1.3",
+                "  (6/6)",
+            ]
+        );
+        // A heading shows only with a row under it: not "After 1" alone under a group's last row.
+        list.selected = 3;
+        assert_eq!(
+            shown(&list),
+            [
+                "Pick  ↑↓ move · Enter select",
+                "  Esc cancel",
+                "  After 0",
+                "    row 0.2",
+                "›   row 0.3",
+                "  (3/6)",
+            ]
+        );
+        // With room for all, a blank line over each heading but the first.
+        list.visible = 10;
+        assert_eq!(
+            shown(&list)[2..],
+            [
+                "  After 0",
+                "    row 0.1",
+                "    row 0.2",
+                "›   row 0.3",
+                "",
+                "  After 1",
+                "    row 1.1",
+                "    row 1.2",
                 "    row 1.3",
-                "  (5/6)",
             ]
         );
     }

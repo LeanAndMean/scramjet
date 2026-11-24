@@ -75,17 +75,19 @@ impl Rows {
         rows
     }
 
-    /// Row `index` in `width` columns: its keys in a column as wide as the widest, at most half
-    /// the row, then what they do; a heading's text.
+    /// Row `index` in `width` columns: indented under its heading, its keys in a column as wide
+    /// as the widest, at most half the row, then what they do; a heading's text.
     fn shown(&self, index: usize, width: usize) -> String {
         if self.headings[index] {
             return clip(self.what[index], width);
         }
+        let width = width.saturating_sub(2);
         let widest = self.keys.iter().map(|keys| keys.width()).max().unwrap_or(0);
         let column = widest.min(width / 2);
         let keys = clip(&self.keys[index], column);
         let pad = " ".repeat(column.saturating_sub(keys.width()));
-        clip(&format!("{keys}{pad}  {}", self.what[index]), width)
+        let shown = clip(&format!("{keys}{pad}  {}", self.what[index]), width);
+        format!("  {shown}")
     }
 }
 
@@ -427,18 +429,18 @@ mod tests {
         let wide = rows.shown(1, 100);
         assert_eq!(
             wide,
-            format!("{:widest$}  Move cursor up / browse history", "Up")
+            format!("  {:widest$}  Move cursor up / browse history", "Up")
         );
         assert_eq!(
-            rows.shown(1, 40),
-            format!("{:20}  Move cursor up / …", "Up")
+            rows.shown(1, 42),
+            format!("  {:20}  Move cursor up / …", "Up")
         );
         let word_left = (rows.bindings.iter())
             .position(|&binding| binding == Some(Binding::CursorWordLeft))
             .unwrap();
         assert!(
-            rows.shown(word_left, 40)
-                .starts_with("Alt+Left / Ctrl+Lef…  ")
+            rows.shown(word_left, 42)
+                .starts_with("  Alt+Left / Ctrl+Lef…  ")
         );
         assert_eq!(
             rows.notes[1],
