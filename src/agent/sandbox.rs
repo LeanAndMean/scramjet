@@ -2556,8 +2556,17 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             ../notes/shared/deeper; grep -r PRIVATE ..; echo w > ../notes/shared/w && echo wrote; \
             echo done";
         let root = home.join("project");
+        // macOS's read-only sandbox keeps the temporary directory, holding this home, writable.
+        let confined = if cfg!(target_os = "macos") {
+            "wrote\n"
+        } else {
+            ""
+        };
         for (mut process, wrote) in [
-            (super::command(&root, script, &hidden, false).unwrap(), ""),
+            (
+                super::command(&root, script, &hidden, false).unwrap(),
+                confined,
+            ),
             (super::hiding(&root, script, &hidden).unwrap(), "wrote\n"),
         ] {
             let output = process.output().unwrap();
@@ -2660,9 +2669,14 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             .output()
             .unwrap();
         let errors = String::from_utf8_lossy(&output.stderr);
+        let listed = if cfg!(target_os = "macos") {
+            ""
+        } else {
+            "project\n"
+        };
         assert_eq!(
             String::from_utf8_lossy(&output.stdout),
-            "plain\nproject\nrefused\ndone\n",
+            format!("plain\n{listed}refused\ndone\n"),
             "{errors}"
         );
         // A project the user's denyRead names itself stays hidden.

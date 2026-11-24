@@ -527,16 +527,18 @@ mod tests {
         {
             let linked = scratch.0.join("linked-home");
             std::os::unix::fs::symlink(&home, &linked).unwrap();
+            // A session's root is the real path.
+            let real = std::fs::canonicalize(&home).unwrap();
             let found = places(
                 &[],
                 &[],
                 &SkillOptions::default(),
-                &home,
+                &real,
                 None,
                 Some(&linked),
             );
             let paths: Vec<_> = found.iter().map(|(path, _)| path.clone()).collect();
-            assert!(!paths.contains(&home.join(".agents/skills")), "{paths:?}");
+            assert!(!paths.contains(&real.join(".agents/skills")), "{paths:?}");
             assert_eq!(found.last().unwrap().0, linked.join(".agents/skills"));
         }
     }

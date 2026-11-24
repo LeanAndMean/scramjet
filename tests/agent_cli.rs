@@ -5251,7 +5251,8 @@ fn acp_sends_the_display_settings_and_the_session_s_context_files() {
     let opened = next(&messages);
     let session = opened["result"]["sessionId"].clone();
     let meta = &opened["result"]["_meta"]["io.github.leanandmean.scramjet"];
-    let agents = std::fs::canonicalize(&project).unwrap().join("AGENTS.md");
+    let real = std::fs::canonicalize(&project).unwrap();
+    let agents = real.join("AGENTS.md");
     assert_eq!(meta["contextFiles"], serde_json::json!([agents]), "{meta}");
     let path = std::path::Path::new(meta["path"].as_str().unwrap());
     assert!(path.starts_with(scratch.0.join("state")), "{meta}");
@@ -5275,7 +5276,7 @@ fn acp_sends_the_display_settings_and_the_session_s_context_files() {
     );
     let (reloaded, before) = until(&messages, |message| message["id"] == 3);
     assert_eq!(reloaded["result"], serde_json::json!({}), "{reloaded}");
-    let files = serde_json::json!([project.join("CLAUDE.md"), agents]);
+    let files = serde_json::json!([real.join("CLAUDE.md"), agents]);
     let told = (before.iter())
         .find(|message| message["method"] == "_io.github.leanandmean.scramjet/context_files")
         .unwrap_or_else(|| panic!("{before:?}"));
