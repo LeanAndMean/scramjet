@@ -454,14 +454,11 @@ fn start(
         warnings.extend(sandbox.grant_always(&root, &settings.allow_write()));
     }
     for directory in &options.add_dirs {
-        match &mut sandbox {
-            Some(sandbox) => match sandbox.grant(&root, directory) {
+        if let Some(sandbox) = &mut sandbox {
+            match sandbox.grant(&root, directory) {
                 Err(error) if error.ends_with("already writable") => {}
                 granted => _ = granted.map_err(|error| format!("--add-dir {error}"))?,
-            },
-            None => warnings.push(format!(
-                "--add-dir {directory}: everything is writable without --sandbox; ignored"
-            )),
+            }
         }
     }
     let config = AgentConfig {
@@ -491,6 +488,19 @@ fn start(
     let mut agent = Agent::start(config, choice).map_err(|e| e.to_string())?;
     agent.set_reads(settings.reads());
     agent.set_subagents(settings.subagents());
+    if agent.sandbox().is_none() {
+        warnings.extend(agent.grant_writable_always(&settings.allow_write()));
+        for directory in &options.add_dirs {
+            match agent.grant_writable(directory) {
+                Err(error) if error.ends_with("already writable") => {}
+                // What the reach hides is all a directory granted without a sandbox changes.
+                _ if !agent.reads().reach.kept() => warnings.push(format!(
+                    "--add-dir {directory}: everything is writable without --sandbox"
+                )),
+                granted => _ = granted.map_err(|error| format!("--add-dir {error}"))?,
+            }
+        }
+    }
     if let Some(skipped) = interactive::skipped_lines(&agent) {
         let path = agent.session_path().display();
         warnings.push(format!("session {path}: {skipped}"));

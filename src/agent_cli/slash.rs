@@ -744,6 +744,8 @@ fn sandbox_paths(agent: &Agent, allow_write: &[PathBuf]) -> Vec<(&'static str, S
         if !kept.is_empty() {
             rows.push(("Read-only in them:", listed(&kept)));
         }
+    } else if agent.reads().reach.kept() && !agent.writable().is_empty() {
+        rows.push(("Also writable:", listed(agent.writable())));
     }
     let reads = agent.reads();
     if !reads.deny.is_empty() {

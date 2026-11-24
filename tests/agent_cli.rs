@@ -2353,6 +2353,64 @@ fn commands_keep_to_the_reach_without_a_sandbox_and_write_as_they_are() {
     );
 }
 
+/// allowWrite's directories and `--add-dir`'s, which the reach would hide, are re-opened.
+#[test]
+#[cfg(target_os = "linux")]
+fn the_writable_directories_stay_writable_to_commands_without_a_sandbox() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-bash-written-{}", std::process::id())),
+    );
+    let home = scratch.0.join("home");
+    let [project, cache, added, other] =
+        ["project", "cache", "added", "other"].map(|name| home.join(name));
+    for directory in [&project, &cache, &added, &other] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let script = "echo c > ../cache/c.txt; echo a > ../added/a.txt; echo o > ../other/o.txt; \
+        ls -A .. | sort | tr '\\n' ' '; echo DONE-$((1+1))";
+    let (port, bodies) = serve_call("bash", serde_json::json!({"command": script}));
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({
+        "blockReadsOutsideWorkingDirectories": true,
+        "sandbox": {"filesystem": {"allowWrite": [cache]}},
+    });
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session", "-p", "hi", "--add-dir"])
+        .arg(&added)
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("--add-dir"), "{stderr}");
+    let answered = (0..2)
+        .map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap())
+        .nth(1)
+        .unwrap();
+    assert!(answered.contains("DONE-2"), "{answered} {stderr}");
+    // The home directory shows the project and the two granted directories, not `other`.
+    assert!(
+        answered.contains("added cache project DONE-2"),
+        "{answered}"
+    );
+    assert_eq!(std::fs::read_to_string(cache.join("c.txt")).unwrap(), "c\n");
+    assert_eq!(std::fs::read_to_string(added.join("a.txt")).unwrap(), "a\n");
+    assert!(!other.join("o.txt").exists());
+}
+
 #[test]
 fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
     let binary = &binary();

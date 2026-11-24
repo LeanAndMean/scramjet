@@ -138,7 +138,9 @@ but to NO_PROXY's hosts and this machine.
                          (sandbox-exec). `!` commands you type and MCP servers stay outside
   --add-dir DIR          let the sandbox's commands, write and edit change DIR too (its
                          .git, .scramjet and .agents kept read-only); repeatable. /sandbox
-                         and /add-dir grant more while working
+                         and /add-dir grant more while working. Without a sandbox, keeps
+                         DIR readable and writable where blockReadsOutsideWorkingDirectories
+                         would hide it
   --offline              no network at start, as SCRAMJET_OFFLINE=1: packages not cloned
                          yet are not cloned, and no newer release is looked for
   --verbose, --mode text, -ne, --no-extensions, -np, --no-prompt-templates

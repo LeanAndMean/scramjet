@@ -702,7 +702,8 @@ pub(super) struct Parent<'a> {
     pub reads: &'a sandbox::Reads,
     /// How children's tools are confined: their network, and what is hidden and re-opened.
     pub subagents: &'a sandbox::Subagents,
-    /// The agent's writable directories (`Sandbox::writable_roots`), which children's reach keeps.
+    /// The agent's writable directories (`Sandbox::writable_roots`, or `Agent::set_writable`'s
+    /// without a sandbox), which children's reach keeps.
     pub writable: Vec<PathBuf>,
     /// The agent's own sandbox, outside which no child writes.
     pub sandbox: Option<&'a sandbox::Sandbox>,

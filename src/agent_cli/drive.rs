@@ -64,6 +64,9 @@ impl Session {
         let current = self.agent.sandbox().cloned();
         match change {
             SandboxChange::Mode(None) => {
+                if let Some(sandbox) = current {
+                    self.agent.set_writable(sandbox.writable);
+                }
                 self.agent.set_sandbox(None);
                 self.settings.sandbox = None;
                 let said = "No sandbox: the agent's tools run with your access";
@@ -82,6 +85,10 @@ impl Session {
                         };
                         warnings = sandbox.grant_remembered(&root);
                         warnings.extend(sandbox.grant_always(&root, &self.settings.allow_write()));
+                        for path in self.agent.writable().to_vec() {
+                            _ = sandbox.grant(&root, &path.to_string_lossy());
+                        }
+                        self.agent.set_writable(Vec::new());
                         sandbox
                     }
                 };
@@ -103,30 +110,29 @@ impl Session {
                 Ok((said.to_owned(), self.remember()))
             }
             SandboxChange::Add(directory) => {
-                let Some(mut sandbox) = current else {
-                    let said = "No sandbox: the agent can change every file you can already";
-                    return Err(said.to_owned());
-                };
-                let path = sandbox.grant(&root, &directory)?;
-                self.agent.set_sandbox(Some(sandbox));
+                let path = self.grant(current, &directory)?;
                 let said = format!("{} is writable for this session", path.display());
                 Ok((said, Vec::new()))
             }
             SandboxChange::AddHere(directory) => {
-                let Some(mut sandbox) = current else {
-                    let said = "No sandbox: the agent can change every file you can already";
-                    return Err(said.to_owned());
-                };
-                let path = sandbox.grant(&root, &directory)?;
-                self.agent.set_sandbox(Some(sandbox));
+                let path = self.grant(current, &directory)?;
                 (self.settings).add_listed(false, PathList::Writable, &path);
                 let said = format!("{} is writable in this project", path.display());
                 Ok((said, self.remember()))
             }
             SandboxChange::Remove(directory) => {
                 let mut sandbox = current;
-                let revoked =
-                    (sandbox.as_mut()).and_then(|sandbox| sandbox.revoke(&root, &directory));
+                let revoked = match sandbox.as_mut() {
+                    Some(sandbox) => sandbox.revoke(&root, &directory),
+                    None => {
+                        let real = Sandbox::resolve(&root, &directory);
+                        let mut writable = self.agent.writable().to_vec();
+                        let index = writable.iter().position(|granted| *granted == real);
+                        let revoked = index.map(|index| writable.remove(index));
+                        self.agent.set_writable(writable);
+                        revoked
+                    }
+                };
                 let path = (revoked.clone()).unwrap_or_else(|| Sandbox::resolve(&root, &directory));
                 let forgotten = match Remembered::user().map(|kept| kept.remove(&root, &path)) {
                     Some(Ok(forgotten)) => forgotten,
@@ -134,7 +140,7 @@ impl Session {
                     None => false,
                 };
                 let listed = (self.settings).remove_listed(false, PathList::Writable, &path);
-                if revoked.is_some() {
+                if revoked.is_some() && sandbox.is_some() {
                     self.agent.set_sandbox(sandbox);
                 }
                 let said = match (revoked.is_some(), forgotten || listed) {
@@ -222,6 +228,22 @@ impl Session {
         }
     }
 
+    /// Makes `directory` writable for the session: in the sandbox, or without one where the
+    /// reach hides it; returns its real path.
+    fn grant(&mut self, current: Option<Sandbox>, directory: &str) -> Result<PathBuf, String> {
+        match current {
+            Some(mut sandbox) => {
+                let path = sandbox.grant(self.agent.root(), directory)?;
+                self.agent.set_sandbox(Some(sandbox));
+                Ok(path)
+            }
+            None if !self.agent.reads().reach.kept() => {
+                Err("No sandbox: the agent can change every file you can already".to_owned())
+            }
+            None => self.agent.grant_writable(directory),
+        }
+    }
+
     /// Keeps the sandbox's rows as they differ in this project now; the warning if not.
     fn remember(&self) -> Vec<String> {
         (self.settings.remember_project().err().into_iter())
@@ -251,7 +273,11 @@ impl Session {
             }
         }
         let mut warnings = Vec::new();
-        let session: Vec<PathBuf> = (current.iter().flat_map(|sandbox| &sandbox.writable))
+        let granted = match &current {
+            Some(sandbox) => &sandbox.writable[..],
+            None => self.agent.writable(),
+        };
+        let session: Vec<PathBuf> = (granted.iter())
             .filter(|path| !always.contains(path) && !listed.contains(path))
             .cloned()
             .collect();
@@ -270,13 +296,23 @@ impl Session {
                     writable: Vec::new(),
                 };
                 warnings.extend(sandbox.grant_always(root, &self.settings.allow_write()));
-                for path in session {
+                for path in &session {
                     _ = sandbox.grant(root, &path.to_string_lossy());
                 }
                 Some(sandbox)
             }
             None => None,
         };
+        self.agent.set_writable(Vec::new());
+        if sandbox.is_none() {
+            warnings.extend(
+                self.agent
+                    .grant_writable_always(&self.settings.allow_write()),
+            );
+            for path in &session {
+                _ = self.agent.grant_writable(&path.to_string_lossy());
+            }
+        }
         self.agent.set_sandbox(sandbox);
         self.apply_reads();
         let said = "This project's sandbox follows every project's default again";

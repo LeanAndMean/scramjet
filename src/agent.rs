@@ -677,6 +677,8 @@ pub struct Agent {
     hide_credentials: bool,
     /// The paths the user's settings hide as the credential stores are, and re-open (`set_reads`).
     reads: Reads,
+    /// The directories made writable without a sandbox (`set_writable`).
+    writable: Vec<PathBuf>,
     /// How subagents' tools are confined (`set_subagents`).
     subagents: Subagents,
     /// Whether the turn runs with no one to answer a question (`set_unattended`).
@@ -851,6 +853,7 @@ impl Agent {
             model_scope: Vec::new(),
             hide_credentials: false,
             reads: Reads::default(),
+            writable: Vec::new(),
             subagents: Subagents::default(),
             unattended: false,
             left_out: Vec::new(),
@@ -1914,6 +1917,69 @@ impl Agent {
     /// The paths the user's settings hide and re-open for the agent's own tools (`set_reads`).
     pub fn reads(&self) -> &Reads {
         &self.reads
+    }
+
+    /// The directories, by real path, that the user made writable besides the project while no
+    /// sandbox runs (`sandbox.filesystem.allowWrite`, `/add-dir`): the reach re-opens them, as a
+    /// sandbox's own writable ones (`Sandbox::writable`), which replace them while it runs.
+    pub fn set_writable(&mut self, directories: Vec<PathBuf>) {
+        self.writable = directories;
+    }
+
+    /// The directories made writable without a sandbox (`set_writable`).
+    pub fn writable(&self) -> &[PathBuf] {
+        &self.writable
+    }
+
+    /// Makes the directory `path` (relative to the project, or from `~`) writable while no
+    /// sandbox runs (`set_writable`), by its real path; refused when it is not a directory or is
+    /// writable already: in the project or in a directory granted so.
+    pub fn grant_writable(&mut self, path: &str) -> Result<PathBuf, String> {
+        let root = &self.config.root;
+        let real = std::fs::canonicalize(Sandbox::resolve(root, path))
+            .map_err(|error| format!("{path}: {error}"))?;
+        if !real.is_dir() {
+            return Err(format!("{path}: not a directory"));
+        }
+        let project = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        if real.starts_with(&project) || self.writable.iter().any(|w| real.starts_with(w)) {
+            return Err(format!("{}: already writable", real.display()));
+        }
+        self.writable.push(real.clone());
+        Ok(real)
+    }
+
+    /// Grants without a sandbox what a sandbox grants at its start: the directories granted
+    /// always in this project, then `allow_write` (the settings' `allowWrite`); says what could
+    /// not be.
+    pub fn grant_writable_always(&mut self, allow_write: &[PathBuf]) -> Vec<String> {
+        let mut said = Vec::new();
+        let remembered = match Remembered::user().map(|kept| kept.of(&self.config.root)) {
+            Some(Ok(listed)) => listed,
+            Some(Err(error)) => {
+                said.push(error);
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        for directory in remembered {
+            match self.grant_writable(&directory.to_string_lossy()) {
+                Err(error) if !error.ends_with("already writable") => said.push(format!(
+                    "{error}: granted always in this project; /sandbox remove {} forgets it",
+                    directory.display()
+                )),
+                _ => {}
+            }
+        }
+        for directory in allow_write {
+            match self.grant_writable(&directory.to_string_lossy()) {
+                Err(error) if !error.ends_with("already writable") => said.push(format!(
+                    "{error}: in sandbox.filesystem.allowWrite; not writable"
+                )),
+                _ => {}
+            }
+        }
+        said
     }
 
     /// How subagents' read-only tools are confined (the settings' `sandbox.subagents`): their

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.325.0 — Also writable without a sandbox
+
+### Changed
+
+- With no sandbox and Can read keeping the agent to the project or the system, `allowWrite`'s directories, `--add-dir`'s, `/add-dir`'s and those added on `/sandbox`'s Also writable rows stay readable and writable to commands and the file tools, where Can read would hide them: `uv run` can write `~/.cache/uv` once it is listed. `/sandbox` shows the Also writable rows in that case too.
+
 ## 2.324.1 — The read limit without a sandbox, fixed
 
 ### Fixed

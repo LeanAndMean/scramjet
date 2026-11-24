@@ -349,7 +349,12 @@ impl Interactive {
         let set = sandbox.is_some() && now.network != default.network;
         let (network, note) = here(network, note.to_owned(), set);
         rows.push(row("Network", network, note, Entry::Network));
-        if let Some(sandbox) = sandbox {
+        // Without a sandbox everything is writable but what the reach hides.
+        let writable = match sandbox {
+            Some(sandbox) => Some(&sandbox.writable[..]),
+            None => reach.kept().then(|| agent.writable()),
+        };
+        if let Some(writable) = writable {
             let root = agent.root();
             let always =
                 (Remembered::user().and_then(|kept| kept.of(root).ok())).unwrap_or_default();
@@ -367,23 +372,29 @@ impl Interactive {
                 true => Grant::Project,
                 false => Grant::Session,
             };
-            let mut granted: Vec<(PathBuf, Grant)> = (sandbox.writable.iter())
+            let mut granted: Vec<(PathBuf, Grant)> = (writable.iter())
                 .map(|path| (path.clone(), grant(path)))
                 .collect();
-            let others = always
-                .iter()
-                .filter(|path| !sandbox.writable.contains(path));
+            let others = always.iter().filter(|path| !writable.contains(path));
             granted.extend(others.map(|path| (path.clone(), Grant::Project)));
+            // What the reach hides is empty and unchangeable to commands, so hidden it is gone.
+            let back = match sandbox {
+                Some(_) => "read-only",
+                None => "hidden",
+            };
             for (path, grant) in granted {
                 let (mark, note) = match grant {
-                    Grant::Session => ("", "For this session. Enter makes it read-only again."),
+                    Grant::Session => (
+                        "",
+                        format!("For this session. Enter makes it {back} again."),
+                    ),
                     Grant::Project => (
                         " (set here)",
-                        "Writable in this project. Enter makes it read-only and forgets it.",
+                        format!("Writable in this project. Enter makes it {back} and forgets it."),
                     ),
                     Grant::Default => (
                         " (every project)",
-                        "In every project's default. Enter makes it read-only in this one.",
+                        format!("In every project's default. Enter makes it {back} in this one."),
                     ),
                 };
                 let value = format!("{}{mark}", shown(&path));

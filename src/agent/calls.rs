@@ -127,6 +127,13 @@ impl Agent {
             },
             hide_credentials: self.hide_credentials,
             reads: self.reads.clone(),
+            writable: match &self.config.sandbox {
+                Some(sandbox) => sandbox.writable_roots(&self.config.root),
+                None => (self.writable.iter())
+                    .filter(|path| path.is_dir())
+                    .cloned()
+                    .collect(),
+            },
             subagents: self.subagents.clone(),
             sandbox: self.config.sandbox.clone(),
             mcp: self.mcp.clone(),
@@ -548,6 +555,9 @@ struct Kit {
     coding_tools: Vec<String>,
     hide_credentials: bool,
     reads: sandbox::Reads,
+    /// The writable directories: the sandbox's (`Sandbox::writable_roots`), or those granted
+    /// without one, which the reach re-opens.
+    writable: Vec<PathBuf>,
     subagents: sandbox::Subagents,
     sandbox: Option<Sandbox>,
     mcp: Option<Arc<mcp::Servers>>,
@@ -577,8 +587,7 @@ impl Kit {
                 tools: &self.coding_tools,
                 reads: &self.reads,
                 subagents: &self.subagents,
-                writable: (self.sandbox.as_ref())
-                    .map_or_else(Vec::new, |sandbox| sandbox.writable_roots(&self.root)),
+                writable: self.writable.clone(),
                 sandbox: self.sandbox.as_ref(),
             },
             hide_credentials: self.hide_credentials,
@@ -651,9 +660,8 @@ impl Tools<'_> {
                     }
                 }
                 let root = self.parent.root;
-                let writable = self.sandbox.map(|sandbox| sandbox.writable_roots(root));
                 let reads = reads.opening(
-                    (std::iter::once(root.to_owned()).chain(writable.into_iter().flatten()))
+                    (std::iter::once(root.to_owned()).chain(self.parent.writable.iter().cloned()))
                         .chain(self.parent.given_to_read()),
                 );
                 let hidden = hide.then(|| match (self.sandbox, stores) {
