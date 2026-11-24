@@ -1248,6 +1248,13 @@ impl Connection {
         {
             return self.reopen(id, handle, &cwd, opening == Opening::Load);
         }
+        let named = match opening {
+            Opening::New => match self.named(params, &cwd) {
+                Ok(named) => named,
+                Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
+            },
+            Opening::Resume | Opening::Load => None,
+        };
         let file = match opening {
             Opening::New => None,
             Opening::Resume | Opening::Load => match self.resumable(params, &cwd) {
@@ -1280,7 +1287,8 @@ impl Connection {
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
         let directives = params["_meta"]["io.github.leanandmean.scramjet"]["directives"] != false;
         let thread = std::thread::spawn(move || {
-            let session = match start_session(&arguments, &cwd, &servers, file, directives) {
+            let saved = (file, named);
+            let session = match start_session(&arguments, &cwd, &servers, saved, directives) {
                 Ok(session) => session,
                 Err(error) => {
                     let _ = started.send(Err((INTERNAL_ERROR, error)));
@@ -1408,6 +1416,38 @@ impl Connection {
             return self.out.error(id, INVALID_PARAMS, "a turn is running");
         }
         let _ = handle.jobs.send(Job::Reopen(id.clone(), load));
+    }
+
+    /// The id `session/new`'s `_meta` gives the session, which names its file, if any: one no
+    /// session of this connection has and no file in its session directory.
+    fn named(&self, params: &Value, cwd: &Path) -> Result<Option<String>, String> {
+        let given = &params["_meta"]["io.github.leanandmean.scramjet"]["sessionId"];
+        if given.is_null() {
+            return Ok(None);
+        }
+        let valid = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+        let wanted = (given.as_str())
+            .filter(|id| (1..=128).contains(&id.len()) && id.chars().all(valid))
+            .ok_or("_meta sessionId must be 1 to 128 letters, digits, '-' or '_'")?;
+        if self.handle(&json!({"sessionId": wanted})).is_some() {
+            return Err(format!("session {wanted} is open on this connection"));
+        }
+        let directory = match &self.saved {
+            Saved::Nowhere => return Err("--no-session: no session file to name".into()),
+            Saved::In(directory) => super::given_path(directory, cwd),
+            Saved::ByProject => {
+                let root = super::project_root(Some(cwd.to_owned()))?;
+                scramjet::agent::session_directory(&root).map_err(|e| e.to_string())?
+            }
+        };
+        let file = directory.join(format!("{wanted}.jsonl"));
+        if std::fs::symlink_metadata(&file).is_ok() {
+            return Err(format!(
+                "session {wanted} exists ({}): resume or load it instead",
+                file.display()
+            ));
+        }
+        Ok(Some(wanted.to_owned()))
     }
 
     /// The file of the saved session `params` names, to resume in `cwd`: one of its project's
@@ -2076,23 +2116,24 @@ fn mcp_servers(servers: &Value) -> Result<Vec<McpServer>, String> {
 }
 
 /// Starts a session in `cwd` with the options `arguments` give, as the full screen starts one,
-/// or continues the saved session `file`, with the client's MCP `servers` beside the settings' (in place of those of the same name,
+/// named `id` when given, or continues the saved session `file`, with the client's MCP `servers` beside the settings' (in place of those of the same name,
 /// and started though the settings disable that name), without Scramjet's directives unless
 /// `directives` (`session/new`'s `_meta` `directives: false`).
 fn start_session(
     arguments: &[String],
     cwd: &Path,
     servers: &[McpServer],
-    file: Option<PathBuf>,
+    (file, id): (Option<PathBuf>, Option<String>),
     directives: bool,
 ) -> Result<Session, String> {
     let mut options = Options::parse(arguments.iter().map(OsString::from))?
         .ok_or("--help is not a session's option")?;
     options.prompt.no_directives |= !directives;
-    let choice = match (file, &options.start) {
-        (Some(file), _) => SessionChoice::Open(file),
-        (None, Launch::Unsaved) => SessionChoice::Unsaved,
-        (None, _) => SessionChoice::New,
+    let choice = match (file, id, &options.start) {
+        (Some(file), ..) => SessionChoice::Open(file),
+        (None, Some(id), _) => SessionChoice::Named(id),
+        (None, None, Launch::Unsaved) => SessionChoice::Unsaved,
+        (None, None, _) => SessionChoice::New,
     };
     let root = super::project_root(Some(cwd.to_owned()))?;
     let mut settings = Settings::load();

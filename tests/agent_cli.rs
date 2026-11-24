@@ -3596,6 +3596,99 @@ fn acp_sessions_leave_out_the_directives_when_the_client_or_the_settings_say() {
     assert_eq!(directed(settings, &metas[2..]), [false]);
 }
 
+#[test]
+#[cfg(unix)]
+fn acp_sessions_take_the_id_the_client_names_as_their_files_name() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-named-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done"}}"#.to_owned(),
+        r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ]
+    .to_vec();
+    let (port, _bodies) = serve_events(vec![reply]);
+    let saved = scratch.0.join("saved");
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let start = || {
+        let given = ["--session-dir", saved.to_str().unwrap()];
+        let (child, mut stdin, messages) =
+            acp_models(&scratch.0, port, models.clone(), settings.clone(), &given);
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": 1}}),
+        );
+        next(&messages);
+        (child, stdin, messages)
+    };
+    let named = |stdin: &mut std::process::ChildStdin, id: u64, name: serde_json::Value| {
+        let meta = serde_json::json!({"io.github.leanandmean.scramjet": {"sessionId": name}});
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/new",
+                "params": {"cwd": project, "mcpServers": [], "_meta": meta}}),
+        );
+    };
+    let (mut child, mut stdin, messages) = start();
+    named(&mut stdin, 2, serde_json::json!("task-42"));
+    let (opened, _) = until(&messages, |message| message["id"] == 2);
+    assert_eq!(opened["result"]["sessionId"], "task-42", "{opened}");
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
+            "params": {"sessionId": "task-42", "prompt": [{"type": "text", "text": "go"}]}}),
+    );
+    let (answer, _) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    // The same id again, one that is no file's name and one of the wrong type are refused.
+    for (id, name, said) in [
+        (4, serde_json::json!("task-42"), "open on this connection"),
+        (5, serde_json::json!("../x"), "must be 1 to 128"),
+        (6, serde_json::json!(7), "must be 1 to 128"),
+    ] {
+        named(&mut stdin, id, name);
+        let (refused, _) = until(&messages, |message| message["id"] == id);
+        assert_eq!(refused["error"]["code"], -32602, "{refused}");
+        let message = refused["error"]["message"].as_str().unwrap();
+        assert!(message.contains(said), "{message}");
+    }
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let file = saved.join("task-42.jsonl");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(
+        text.lines().count() > 2 && text.contains("\"Done\""),
+        "{text}"
+    );
+    // Another process refuses the saved session's id for a new session, and resumes it.
+    let (mut child, mut stdin, messages) = start();
+    named(&mut stdin, 2, serde_json::json!("task-42"));
+    let (refused, _) = until(&messages, |message| message["id"] == 2);
+    let message = refused["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("exists") && message.contains("resume"),
+        "{message}"
+    );
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/resume",
+            "params": {"sessionId": "task-42", "cwd": project, "mcpServers": []}}),
+    );
+    let (resumed, _) = until(&messages, |message| message["id"] == 3);
+    assert_eq!(resumed["result"]["sessionId"], "task-42", "{resumed}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+}
+
 /// The `tool_call` update and the completed one of a prompt turn in `project` whose reply
 /// calls `name` with `input`, for a client offering `capabilities`.
 #[cfg(unix)]

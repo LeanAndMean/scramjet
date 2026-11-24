@@ -1085,14 +1085,20 @@ impl Session {
     /// Starts a session for the project `root` in `directory`; a fork names the session it came
     /// from, `parent`, in its header, as Scramjet's `parentSession`.
     pub fn create(directory: &Path, root: &Path, parent: Option<&Path>) -> io::Result<Self> {
-        Self::start(directory, root, parent, false)
+        Self::start(directory, root, parent, false, None)
+    }
+
+    /// Starts a session for the project `root` saved as `<id>.jsonl` in `directory`, so that
+    /// `id` is its id; a file of that name already there is an error.
+    pub fn create_named(directory: &Path, root: &Path, id: &str) -> io::Result<Self> {
+        Self::start(directory, root, None, false, Some(id))
     }
 
     /// Starts a session for the project `root` in `directory` that a next step of the session
     /// `from` starts: its header names `from` as `parentSession`, as a fork's does, and says
     /// `nextStep`, so that a chain can be told from a fork.
     pub fn continuing(directory: &Path, root: &Path, from: &Path) -> io::Result<Self> {
-        Self::start(directory, root, Some(from), true)
+        Self::start(directory, root, Some(from), true, None)
     }
 
     fn start(
@@ -1100,12 +1106,13 @@ impl Session {
         root: &Path,
         parent: Option<&Path>,
         next_step: bool,
+        id: Option<&str>,
     ) -> io::Result<Self> {
         let continues = match (parent, next_step) {
             (Some(parent), true) => Some(std::path::absolute(parent)?),
             _ => None,
         };
-        let mut session = Self::begin(directory, |created| {
+        let mut session = Self::begin(directory, id, |created| {
             let mut header =
                 json!({"type":"session","version":1,"root":root,"created":created as u64});
             if let Some(parent) = parent {
@@ -1128,6 +1135,7 @@ impl Session {
     /// any prompt leaves no file.
     fn begin(
         directory: &Path,
+        id: Option<&str>,
         header: impl FnOnce(u128) -> io::Result<Vec<u8>>,
     ) -> io::Result<Self> {
         // A directory that cannot be made fails now, not at the first prompt.
@@ -1135,7 +1143,17 @@ impl Session {
             Err(error) if full(&error) => {}
             made => made?,
         }
-        let (path, created) = new_name(directory);
+        let (path, created) = match id {
+            Some(id) => {
+                let path = directory.join(format!("{id}.jsonl"));
+                if std::fs::symlink_metadata(&path).is_ok() {
+                    let message = format!("{} exists", path.display());
+                    return Err(io::Error::new(io::ErrorKind::AlreadyExists, message));
+                }
+                (path, now_ms() as u128)
+            }
+            None => new_name(directory),
+        };
         let held = header(created)?;
         Ok(Self {
             keep_in: kept::directory_for(&path),
@@ -1356,7 +1374,7 @@ impl Session {
         if !header.ends_with(b"\n") {
             header.push(b'\n');
         }
-        Self::begin(directory, |_| Ok(header))?.filled(lines)
+        Self::begin(directory, None, |_| Ok(header))?.filled(lines)
     }
 
     /// This session, just started, with `lines` after its header, written or held in memory as

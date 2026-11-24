@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.310.0 — Each tool call's run time, and sessions the ACP client names
+
+### Added
+
+- Each tool result in a session file keeps when its call started and how long it ran (`_scramjet_timing`, as each response has), the call's own run time when calls run together.
+- `scramjet acp`: `session/new`'s `_meta["io.github.leanandmean.scramjet"].sessionId` names the new session, which is saved as `<id>.jsonl` in the session directory and resumed or loaded by that id; an id already taken is refused.
+
 ## 2.309.0 — A minimal reach: the system's directories only
 
 ### Added

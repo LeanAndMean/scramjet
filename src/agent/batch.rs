@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// What a call shows, in order, and how it ended.
 enum Shown {
@@ -24,8 +24,42 @@ enum Shown {
     Other(Show),
     /// A question to the user, held back while another thread shows the calls (`pump`).
     Ask(Show),
-    Ended(Output, Usage),
+    Ended(Output, Usage, Option<Ran>),
 }
+
+/// When a call started running and how long it ran, saved with its result.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Ran {
+    started: SystemTime,
+    at: Instant,
+    elapsed: Duration,
+}
+
+impl Ran {
+    pub fn start() -> Self {
+        Self {
+            started: SystemTime::now(),
+            at: Instant::now(),
+            elapsed: Duration::ZERO,
+        }
+    }
+
+    pub fn end(mut self) -> Self {
+        self.elapsed = self.at.elapsed();
+        self
+    }
+
+    /// As saved with the result (`TIMING`): `started` in milliseconds since 1970 and
+    /// `duration_ms`.
+    pub fn saved(&self) -> Value {
+        let started = (self.started.duration_since(SystemTime::UNIX_EPOCH))
+            .map_or(0, |since| since.as_millis() as u64);
+        serde_json::json!({"started": started, "duration_ms": self.elapsed.as_millis() as u64})
+    }
+}
+
+/// A call's output, usage and run time.
+pub(super) type Ended = (Output, Usage, Option<Ran>);
 
 /// Any other display call, made on the thread that shows it.
 type Show = Box<dyn FnOnce(&mut dyn AgentUi) + Send>;
@@ -46,7 +80,7 @@ pub(super) struct Batch {
     cancel: Arc<AtomicBool>,
     /// Each call's display shows in its place as it runs (`AgentUi::running_calls`).
     together: bool,
-    ended: Vec<Option<(Output, Usage)>>,
+    ended: Vec<Option<Ended>>,
     /// Without `together`: what each call showed that waits for the calls before it.
     queues: Vec<VecDeque<Shown>>,
     /// Without `together`: the calls shown to their end.
@@ -59,8 +93,8 @@ pub(super) struct Batch {
 
 /// How waiting for a `Batch` ended.
 pub(super) enum Waited {
-    /// The outputs and usage of its calls, in order.
-    Ended(Vec<(Output, Usage)>),
+    /// The outputs, usage and run times of its calls, in order.
+    Ended(Vec<Ended>),
     /// The interface asked for a pause; the calls run on.
     Paused,
 }
@@ -101,7 +135,7 @@ impl Batch {
             let (to, calls, run, cancel) = (to.clone(), calls.clone(), run.clone(), cancel.clone());
             let done = done.clone();
             std::thread::spawn(move || {
-                let _ended = Ended(index, done.clone());
+                let _ended = Finished(index, done.clone());
                 let mut relay = Relay {
                     index,
                     to: to.clone(),
@@ -114,19 +148,24 @@ impl Batch {
                     ended = changed.wait(ended).unwrap_or_else(|e| e.into_inner());
                 }
                 drop(ended);
-                let (output, usage) = match parsed {
+                let (output, usage, ran) = match parsed {
                     // Nothing starts after a stop, not even what waited for the calls it stopped.
                     Ok(call) if cancel.load(Ordering::Relaxed) => {
                         relay.tool_result(call.name, super::calls::NOT_RUN, None, true);
-                        (
-                            Output::failure(super::calls::NOT_RUN.into()),
-                            Usage::default(),
-                        )
+                        let output = Output::failure(super::calls::NOT_RUN.into());
+                        (output, Usage::default(), None)
                     }
-                    Ok(call) => run(&call, &mut relay, &cancel),
-                    Err(error) => (Output::failure(format!("Error: {error}")), Usage::default()),
+                    Ok(call) => {
+                        let ran = Ran::start();
+                        let (output, usage) = run(&call, &mut relay, &cancel);
+                        (output, usage, Some(ran.end()))
+                    }
+                    Err(error) => {
+                        let output = Output::failure(format!("Error: {error}"));
+                        (output, Usage::default(), None)
+                    }
                 };
-                let _ = to.send((index, Shown::Ended(output, usage)));
+                let _ = to.send((index, Shown::Ended(output, usage, ran)));
             });
         }
         Self {
@@ -203,7 +242,7 @@ impl Batch {
                 Shown::Output(output) => ui.tool_output(&output),
                 Shown::Subagents(children) => ui.subagents(&children),
                 Shown::Other(show) | Shown::Ask(show) => show(ui),
-                Shown::Ended(output, usage) => self.ended[index] = Some((output, usage)),
+                Shown::Ended(output, usage, ran) => self.ended[index] = Some((output, usage, ran)),
             }
             return;
         }
@@ -230,8 +269,8 @@ impl Batch {
                 Shown::Output(output) => ui.tool_output(&output),
                 Shown::Subagents(children) => ui.subagents(&children),
                 Shown::Other(show) | Shown::Ask(show) => show(ui),
-                Shown::Ended(output, usage) => {
-                    self.ended[self.shown] = Some((output, usage));
+                Shown::Ended(output, usage, ran) => {
+                    self.ended[self.shown] = Some((output, usage, ran));
                     self.shown += 1;
                 }
             }
@@ -246,9 +285,9 @@ impl Drop for Batch {
 }
 
 /// Marks its call ended when dropped, even by a panic, so that the calls after it go on.
-struct Ended(usize, Arc<(Mutex<Vec<bool>>, Condvar)>);
+struct Finished(usize, Arc<(Mutex<Vec<bool>>, Condvar)>);
 
-impl Drop for Ended {
+impl Drop for Finished {
     fn drop(&mut self) {
         let (ended, changed) = &*self.1;
         ended.lock().unwrap_or_else(|e| e.into_inner())[self.0] = true;
@@ -508,7 +547,7 @@ mod tests {
             };
             let texts: Vec<_> = ended
                 .iter()
-                .map(|(output, _)| output.text.as_str())
+                .map(|(output, ..)| output.text.as_str())
                 .collect();
             assert_eq!(texts, ["Allow", "Allow"]);
             let waited: Vec<_> = seen.try_iter().collect();

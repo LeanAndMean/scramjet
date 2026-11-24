@@ -1,7 +1,7 @@
 //! A reply's tool calls: which run together, the approval question, the harness's own tools
 //! (questions, reports, suggestions, model switches, delegations, publications), and the
 //! coding tools and subagents.
-use super::batch::{self, Batch, Waited};
+use super::batch::{self, Batch, Ran, Waited};
 use super::commands::Sets;
 use super::providers::{ModelInfo, Providers};
 use super::sandbox::Sandbox;
@@ -195,9 +195,9 @@ impl Agent {
                         return Err(AgentError::Paused);
                     }
                 };
-                for (item, (output, usage)) in items.iter().zip(ran) {
+                for (item, (output, usage, ran)) in items.iter().zip(ran) {
                     self.usage.add(&usage);
-                    self.add_result(item, &output, ui)?;
+                    self.add_result(item, &output, ran, ui)?;
                 }
                 if cancel.load(Ordering::Relaxed) {
                     return Err(AgentError::Cancelled);
@@ -219,17 +219,18 @@ impl Agent {
                         next += 1;
                         continue;
                     }
+                    let start = Ran::start();
                     let called = match running.take() {
                         Some(batch) => Called::Running(batch),
                         None => self.call(item, ui, cancel),
                     };
-                    let (output, ends_turn) = match called {
-                        Called::Done(output, ends_turn) => (output, ends_turn),
+                    let (output, ends_turn, ran) = match called {
+                        Called::Done(output, ends_turn) => (output, ends_turn, Some(start.end())),
                         Called::Running(mut batch) => match batch.wait(ui, cancel) {
                             Waited::Ended(mut ran) => {
-                                let (output, usage) = ran.pop().expect("one call");
+                                let (output, usage, ran) = ran.pop().expect("one call");
                                 self.usage.add(&usage);
-                                (output, false)
+                                (output, false, ran)
                             }
                             Waited::Paused => {
                                 let running = Some(batch);
@@ -244,7 +245,7 @@ impl Agent {
                         },
                     };
                     ends &= ends_turn;
-                    self.add_result(item, &output, ui)?;
+                    self.add_result(item, &output, ran, ui)?;
                     next += 1;
                     if cancel.load(Ordering::Relaxed) {
                         // Every call gets a result, as in Pi, or the next request is refused.
@@ -299,17 +300,22 @@ impl Agent {
         }
     }
 
-    /// Adds `output` as the result of the call `item`, with what is shown of it on a resume.
+    /// Adds `output` as the result of the call `item`, with what is shown of it on a resume and
+    /// how long it ran.
     pub(super) fn add_result(
         &mut self,
         item: &Value,
         output: &Output,
+        ran: Option<Ran>,
         ui: &mut dyn AgentUi,
     ) -> Result<(), AgentError> {
         let mut result =
             json!({"type":"function_call_output","call_id":item["call_id"],"output":output.sent()});
         if output.failed {
             result[FAILED] = json!(true);
+        }
+        if let Some(ran) = ran {
+            result[super::TIMING] = ran.saved();
         }
         match &output.detail {
             Some(ToolDetail::Diff(diff)) => result[DIFF] = json!(diff),
@@ -2082,6 +2088,54 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone; {then}")})
         );
         assert!(outputs[2].1.contains("made"), "{:?}", outputs[2].1);
         assert_eq!(outputs[6].1, "three\n");
+        // Each result keeps how long its own call ran: the first command slept 0.3 s.
+        let ran: Vec<u64> = (agent.conversation().iter())
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| item[super::super::TIMING]["duration_ms"].as_u64().unwrap())
+            .collect();
+        assert_eq!(ran.len(), 7);
+        assert!(ran[0] >= 300 && ran[3] < 300, "{ran:?}");
+    }
+
+    #[test]
+    fn each_result_keeps_when_its_call_started_and_how_long_it_ran() {
+        if crate::agent::tests::missing("bash") {
+            return;
+        }
+        let (endpoint, server) = serve(vec![
+            tool_calls(&[("bash", json!({"command":"sleep 0.2; echo slept"}))]),
+            tool_calls(&[("no_such_tool", json!({}))]),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "calls-timing");
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+        let mut ui = Recorder::default();
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        let bodies = server.join().unwrap();
+        assert!(!bodies[2].to_string().contains("\"_scramjet_"));
+        let (_, saved, _) = Session::open(agent.session_path()).unwrap();
+        let timings: Vec<&Value> = (saved.iter())
+            .filter(|item| item["type"] == "function_call_output")
+            .map(|item| &item[super::super::TIMING])
+            .collect();
+        assert_eq!(timings.len(), 2);
+        // The command ran in the background, the unknown tool's refusal on the turn's thread.
+        assert!(
+            timings[0]["duration_ms"].as_u64() >= Some(200),
+            "{timings:?}"
+        );
+        assert!(
+            timings[1]["duration_ms"].as_u64() < Some(200),
+            "{timings:?}"
+        );
+        assert!(
+            timings[0]["started"].as_u64() >= Some(before),
+            "{timings:?}"
+        );
+        assert!(timings[1]["started"].as_u64() >= timings[0]["started"].as_u64());
     }
 
     #[test]

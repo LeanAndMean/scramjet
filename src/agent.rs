@@ -409,6 +409,8 @@ pub enum SessionChoice {
     Open(PathBuf),
     /// A new session of the project with all of this session file's (`Session::fork_from`).
     Fork(PathBuf),
+    /// A new session saved as `<id>.jsonl` in the session directory (`Session::create_named`).
+    Named(String),
     /// A new session saved nowhere (`--no-session`): it and those made from it (`/new`,
     /// `/fork`, …) are kept in a directory of their own until the agent ends.
     Unsaved,
@@ -778,6 +780,10 @@ impl Agent {
             (_, Some(path)) | (SessionChoice::Open(path), _) => Session::open(&path)?,
             (SessionChoice::Fork(source), _) => {
                 Session::fork_from(&directory()?, &config.root, &source)?
+            }
+            (SessionChoice::Named(id), None) => {
+                let created = Session::create_named(&directory()?, &config.root, &id)?;
+                (created, Vec::new(), Vec::new())
             }
             (choice, None) => {
                 let directory = match choice {
