@@ -251,6 +251,27 @@ The user runs large swarms over `scramjet acp` from a proprietary repository of 
 
 Dropped: admission inside one process for thousands of children and S5's target of about 8,000 requests in flight in one process. Overload control lives with the client. What stays: the invariants under [Resource bounds and admission](#resource-bounds-and-admission) for what one process does hold (bounded buffers, every attempt cancellable, uncertain effects never re-run), the 8 children per process, and the shared Retry-After wait while retries are on. The session profile and the dispatch tool are designed in `docs/RPC.md` and `docs/DESIGN.md` and signed off at a steer before they are built.
 
+**The dispatch tool and its file contract** (proposed at the second steer of 2026-11-23, for sign-off at a steer; nothing of it built yet). One agent hands batches of tasks to a runner outside the process, which runs them where and how it likes (ACP sessions on HPC nodes, a queue, anything), and reads their results from files, so it neither holds the children nor spends its context on them. Scramjet documents the contract (a user guide page, once built), so that any runner can serve it:
+
+- **Where:** the user's settings name two directories, `"dispatch": {"inbox": "/gpfs/runner/inbox", "out": "/gpfs/runner/out"}`, which a session profile (`docs/RPC.md`, section 3) may also give; without them the tool is not offered. Plain files, so that they work across machines on a shared filesystem, where change notification does not.
+- **Submitting:** a batch named NAME (letters, digits, `-` and `_`) is `<inbox>/NAME.jsonl`, one JSON object a line, each a task: Scramjet requires nothing of a line but that it is an object, and suggests `id` and `prompt`, with `profile` in a session profile's shape for a runner that drives `scramjet acp`. It is written under a name starting with `.` and renamed into place, so the runner never reads half a batch; an optional `<inbox>/NAME.why` (the agent's reason, plain text) is in place before it. The runner ignores names starting with `.`.
+- **Status:** `<out>/NAME/status.json`, `{"state", "summary", "updatedAt", "counts"?}`, `state` one of `running`, `done`, `failed`, `refused` (the runner will not run it, with why) or `stopped` (stopped on the runner's side), `counts` `{total, done, failed}` while it runs. The runner writes it, also by a renamed temporary file, before it takes the batch out of the inbox, so a submitted batch is always in one place or the other. A NAME never runs twice at once: a batch whose NAME is queued or running is `refused`.
+- **Results:** `<out>/NAME/results.jsonl`, a line a task (`id`, `state`, `summary`, and what the runner adds), and `<out>/NAME/log`, the runner's own words. No cancel in this first contract.
+
+The tool, `dispatch`, offered to the main agent only (subagents stay read-only):
+
+- `{tasks, name?, why?}` submits: `tasks` is a list of objects, or `file`, a JSONL file in the project the agent wrote, for batches too large to pass as arguments (tens of thousands of tasks are a script's output, not a model's). Every line is checked before anything is written; an empty batch, or a NAME already queued or with a status that is not finished, is refused without writing. Without `name`, NAME is the session's id and the call's, so it is known from the call alone.
+- It then waits on the status: read every second, its `summary` and `counts` shown as the call's output so far, with no time limit (a batch may take hours). Escape stops the wait, never the batch: the result says it still runs and how to wait again. When the status is finished, the result is its `state` and `summary`, with the paths of `results.jsonl` and the log, which `read` and `grep` may read (the `out` directory is opened to them, read-only, as what Scramjet gives the agent to read is). Their contents stay out of the context until the agent reads them.
+- `{wait: NAME}` only waits, and never writes to the inbox. A session that ended mid-call answers that call on its resume, as every interrupted call is answered (`answer_interrupted_calls`), but naming its batch and the `wait` to call, since the batch may be running: the agent waits again, and nothing is submitted twice. A NAME found in neither place was never taken by the runner, which the result says, leaving it to the agent to submit again.
+
+**How it would be checked:** a small scripted runner in the tests (takes a batch, writes `running`, then results and `done`; refuses a NAME running) for submitting, waiting, Escape and a resume mid-wait; the rename order checked by a runner that lists the inbox in a loop and must never see a partial file.
+
+**For the steer to answer:**
+
+1. The names: `dispatch` for the tool and the setting, `inbox` and `out` for the directories.
+2. A finished NAME submitted again (the runner overwriting its results), or every NAME used once.
+3. `file` for large batches in the first version, or only `tasks` until a runner needs more.
+
 ### What the context holds, shown (2026-11-17)
 
 User decisions from `/rs:steer` on 2026-11-17. Hiding what the model is given keeps users from troubleshooting it:
