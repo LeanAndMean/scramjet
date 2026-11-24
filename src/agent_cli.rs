@@ -489,7 +489,11 @@ fn start(
     agent.set_reads(settings.reads());
     agent.set_subagents(settings.subagents());
     if agent.sandbox().is_none() {
-        warnings.extend(agent.grant_writable_always(&settings.allow_write()));
+        let said = agent.grant_writable_always(&settings.allow_write());
+        // Kept for a later Can read change; with nothing hidden, everything is writable.
+        if agent.reads().reach.kept() {
+            warnings.extend(said);
+        }
         for directory in &options.add_dirs {
             match agent.grant_writable(directory) {
                 Err(error) if error.ends_with("already writable") => {}

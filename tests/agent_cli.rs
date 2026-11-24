@@ -2409,6 +2409,30 @@ fn the_writable_directories_stay_writable_to_commands_without_a_sandbox() {
     assert_eq!(std::fs::read_to_string(cache.join("c.txt")).unwrap(), "c\n");
     assert_eq!(std::fs::read_to_string(added.join("a.txt")).unwrap(), "a\n");
     assert!(!other.join("o.txt").exists());
+    // With nothing hidden, an allowWrite directory missing is no cause for a warning.
+    let settings = serde_json::json!({
+        "sandbox": {"filesystem": {"allowWrite": [home.join("missing")]}},
+    });
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let (port, _bodies) = serve_call("bash", serde_json::json!({"command": "true"}));
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session", "-p", "hi"])
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("allowWrite"), "{stderr}");
 }
 
 #[test]
@@ -6568,6 +6592,13 @@ fn acp_shows_and_changes_the_sandbox_through_the_extension_as_slash_sandbox() {
             .starts_with("No sandbox"),
         "{no_network}"
     );
+    // Without a sandbox, the reach kept to the project and the system hides what is taken out.
+    let added = ask(method, serde_json::json!({"add": extra}))["result"].clone();
+    let said = format!("{} is writable for this session", extra.display());
+    assert_eq!(added["message"], said, "{added}");
+    let removed = ask(method, serde_json::json!({"remove": extra}))["result"].clone();
+    let said = format!("{} is hidden again", extra.display());
+    assert_eq!(removed["message"], said, "{removed}");
     for wrong in [
         serde_json::json!({"mode": "open"}),
         serde_json::json!({"network": "yes"}),

@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.325.1 — Also writable without a sandbox, fixed
+
+### Fixed
+
+- Without a sandbox and with Can read hiding nothing, an `allowWrite` directory that does not exist no longer warns "not writable" at every start: everything is writable then.
+- `/sandbox remove` without a sandbox says the directory is hidden again where Can read hides it, and that everything stays writable where it hides nothing, rather than "read-only again".
+
 ## 2.325.0 — Also writable without a sandbox
 
 ### Changed

@@ -140,19 +140,25 @@ impl Session {
                     None => false,
                 };
                 let listed = (self.settings).remove_listed(false, PathList::Writable, &path);
+                let hidden_again = sandbox.is_none();
                 if revoked.is_some() && sandbox.is_some() {
                     self.agent.set_sandbox(sandbox);
                 }
+                let shown = path.display();
                 let said = match (revoked.is_some(), forgotten || listed) {
-                    (true, true) => format!(
-                        "{} is no longer writable in this project; read-only again",
-                        path.display()
-                    ),
-                    (false, true) => {
-                        format!("{} is no longer writable in this project", path.display())
-                    }
-                    (true, false) => format!("{} is read-only again", path.display()),
                     (false, false) => return Err(format!("{directory} was not granted")),
+                    _ if hidden_again && !self.agent.reads().reach.kept() => format!(
+                        "{shown} is no longer granted; without a sandbox everything stays writable"
+                    ),
+                    (true, true) if hidden_again => {
+                        format!("{shown} is no longer writable in this project; hidden again")
+                    }
+                    (true, false) if hidden_again => format!("{shown} is hidden again"),
+                    (true, true) => {
+                        format!("{shown} is no longer writable in this project; read-only again")
+                    }
+                    (false, true) => format!("{shown} is no longer writable in this project"),
+                    (true, false) => format!("{shown} is read-only again"),
                 };
                 Ok((said, self.remember()))
             }
