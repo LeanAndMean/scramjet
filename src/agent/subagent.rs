@@ -59,7 +59,8 @@ pub(super) fn definition() -> Value {
     let isolation = json!({"type":"string","enum":[worktree::ISOLATION],
         "description":"\"worktree\" runs the agent in a git worktree of its own, on a new branch \
 from HEAD (uncommitted changes are not in it): removed afterwards if the agent changed nothing, \
-else its path and branch are in the result."});
+else its path and branch are in the result. A chain's steps share one, each seeing what the \
+earlier changed."});
     let item = |task: &str| {
         json!({"type":"object","properties":{
             "agent":{"type":"string","description":"Name of the agent to invoke"},
@@ -745,17 +746,22 @@ struct Job<'a> {
     warnings: Vec<String>,
     /// The worktree it runs in, with `isolation: worktree`.
     worktree: Option<worktree::Worktree>,
+    /// A chain step's: its worktree came from an earlier step, and is finished with the chain.
+    shared: Option<bool>,
     /// Why it cannot run, such as a worktree not made.
     failure: Option<String>,
 }
 
 impl<'a> Job<'a> {
+    /// A chain's step passes the chain's worktree as `shared`, taken if the step asks for one
+    /// (made if none is yet) and given back with the job.
     fn new(
         task: &'a Task,
         text: String,
         agents: &'a [Definition],
         parent: &Parent,
         sandbox: &Result<(), String>,
+        mut shared: Option<&mut Option<worktree::Worktree>>,
     ) -> Self {
         let agent = agents.iter().find(|agent| agent.name == task.agent);
         let mut cwd = match &task.cwd {
@@ -763,15 +769,28 @@ impl<'a> Job<'a> {
             None => parent.root.to_owned(),
         };
         let (mut worktree, mut failure) = (None, None);
+        let earlier = shared.as_deref_mut().and_then(Option::take);
+        let continued = earlier.is_some();
         if agent.is_some_and(|agent| agent.worktree) || task.worktree && agent.is_some() {
-            let made = match parent.worktrees {
-                Some(state) => worktree::Worktree::add(parent.root, &cwd, state),
-                None => Err("isolation \"worktree\": no state directory".to_owned()),
+            let made = match (earlier, parent.worktrees) {
+                (Some(earlier), _) => match earlier.inside(&cwd) {
+                    Ok(inside) => Ok((earlier, inside)),
+                    Err(error) => {
+                        if let Some(shared) = shared.as_deref_mut() {
+                            *shared = Some(earlier);
+                        }
+                        Err(error)
+                    }
+                },
+                (None, Some(state)) => worktree::Worktree::add(parent.root, &cwd, state),
+                (None, None) => Err("isolation \"worktree\": no state directory".to_owned()),
             };
             match made {
                 Ok((made, inside)) => (worktree, cwd) = (Some(made), inside),
                 Err(error) => failure = Some(error),
             }
+        } else if let (Some(earlier), Some(shared)) = (earlier, shared.as_deref_mut()) {
+            *shared = Some(earlier);
         }
         let (tools, writer, warnings) = match agent {
             Some(agent) => {
@@ -811,6 +830,7 @@ impl<'a> Job<'a> {
             tools,
             writer,
             warnings,
+            shared: shared.map(|_| continued),
             worktree,
             failure,
         }
@@ -1068,7 +1088,9 @@ is added or changed.",
         format!("Unknown agent: \"{name}\". Available agents: {available}.{warnings}")
     };
     let sandbox = sandbox::available();
-    let job = |task, text| Job::new(task, text, &discovery.agents, parent, &sandbox);
+    let job = |task, text, shared: Option<&mut Option<worktree::Worktree>>| {
+        Job::new(task, text, &discovery.agents, parent, &sandbox, shared)
+    };
     ui.tool_running(std::time::Instant::now());
     let mut shown = Children {
         mode: match mode {
@@ -1087,7 +1109,7 @@ is added or changed.",
     };
     let (text, failed, runs) = match &mode {
         Mode::Single(task) => {
-            let runs = runner(&[job(task, task.task.clone())], &mut shown);
+            let runs = runner(&[job(task, task.task.clone(), None)], &mut shown);
             let run = &runs[0];
             let text = match &run.error {
                 Some((reason, _)) => {
@@ -1101,13 +1123,19 @@ is added or changed.",
             let mut runs: Vec<Run> = Vec::new();
             let mut previous = String::new();
             let mut ended = None;
+            // The steps that ask for a worktree share one, so each sees what the earlier changed.
+            let mut shared = None;
             for (index, step) in steps.iter().enumerate() {
                 if cancel.load(Ordering::Relaxed) {
                     ended = Some("Chain was aborted before the next step".to_owned());
                     break;
                 }
                 let task = step.task.replace("{previous}", &previous);
-                let run = runner(&[job(step, task)], &mut shown).remove(0);
+                let mut jobs = [job(step, task, Some(&mut shared))];
+                let run = runner(&jobs, &mut shown).remove(0);
+                if let Some(worktree) = jobs[0].worktree.take() {
+                    shared = Some(worktree);
+                }
                 if run.error.is_some() {
                     let text = format!(
                         "Chain stopped at step {} ({}): {}",
@@ -1122,11 +1150,10 @@ is added or changed.",
                 previous = run.output.clone();
                 runs.push(run);
             }
+            let main = parent.sandbox.map(|sandbox| (sandbox, parent.root));
+            let kept = shared.and_then(|worktree| worktree.finish(main));
             match ended {
                 Some(text) => {
-                    // The step that failed names its own in its result.
-                    let done = runs.iter().filter(|run| run.error.is_none());
-                    let kept = done.filter_map(|run| run.kept.clone());
                     let text = std::iter::once(text).chain(kept);
                     (text.collect::<Vec<_>>().join("\n\n"), true, runs)
                 }
@@ -1140,8 +1167,7 @@ is added or changed.",
                     } else {
                         last
                     };
-                    let kept = runs.iter().filter_map(|run| run.kept.as_deref());
-                    let last = std::iter::once(last.as_str()).chain(kept);
+                    let last = std::iter::once(last.as_str()).chain(kept.as_deref());
                     let last = last.collect::<Vec<_>>().join("\n\n");
                     (with_warnings(last, &runs), false, runs)
                 }
@@ -1150,7 +1176,7 @@ is added or changed.",
         Mode::Parallel(tasks) => {
             let jobs: Vec<Job> = tasks
                 .iter()
-                .map(|task| job(task, task.task.clone()))
+                .map(|task| job(task, task.task.clone(), None))
                 .collect();
             let runs = runner(&jobs, &mut shown);
             let succeeded = runs.iter().filter(|run| run.error.is_none()).count();
@@ -1239,7 +1265,9 @@ fn run_jobs(
                         }
                         (None, None) => Run::failed(job.name, None, unknown(job.name)),
                     };
-                    run.kept = kept(job, parent);
+                    if job.shared.is_none() {
+                        run.kept = kept(job, parent);
+                    }
                     let _ = sender.send((index, Event::Done(run)));
                 }
             });
@@ -1265,7 +1293,7 @@ fn run_jobs(
         .zip(jobs)
         .map(|(run, job)| {
             run.unwrap_or_else(|| Run {
-                kept: kept(job, parent),
+                kept: job.shared.is_none().then(|| kept(job, parent)).flatten(),
                 ..Run::failed(
                     job.name,
                     Some("aborted"),
@@ -1426,8 +1454,12 @@ fn run_child(
     );
     let mut task = format!("Task: {}", job.task);
     if let Some(worktree) = &job.worktree {
+        let whose = match job.shared {
+            Some(true) => "that this chain's earlier steps worked in, with what they changed",
+            _ => "of your own",
+        };
         task += &format!(
-            "\n\nYou work in a git worktree of {} of your own, at {}, on the branch {}: what is \
+            "\n\nYou work in a git worktree of {} {whose}, at {}, on the branch {}: what is \
 under {0} is at the same place under {1}. Git's own files stay read-only: leave your changes \
 uncommitted.",
             worktree.top.display(),

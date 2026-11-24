@@ -1,6 +1,6 @@
 //! A git worktree of a child's own, as Claude Code's `isolation: "worktree"`: made on a new branch
-//! from the repository's `HEAD`, removed after the child if it changed nothing, else left for the
-//! parent with its path and branch in the result.
+//! from the repository's `HEAD` (one for all a chain's steps that ask for it), removed after the
+//! child if it changed nothing, else left for the parent with its path and branch in the result.
 
 use std::{
     path::{Path, PathBuf},
@@ -77,7 +77,6 @@ impl Worktree {
             &top,
             &["worktree", "add", "-q", "-b", &branch, &shown, &base],
         )?;
-        let cwd = crate::os::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
         let worktree = Self {
             path,
             branch,
@@ -85,24 +84,33 @@ impl Worktree {
             git_dir,
             base,
         };
-        let inside = match cwd.strip_prefix(&worktree.top) {
-            Ok(relative) => worktree.path.join(relative),
-            Err(_) => worktree.path.clone(),
+        match worktree.inside(cwd) {
+            Ok(inside) => Ok((worktree, inside)),
+            Err(error) => {
+                worktree.finish(None);
+                Err(error)
+            }
+        }
+    }
+
+    /// Where `cwd` of the repository is in the worktree.
+    pub(super) fn inside(&self, cwd: &Path) -> Result<PathBuf, String> {
+        let cwd = crate::os::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
+        let inside = match cwd.strip_prefix(&self.top) {
+            Ok(relative) => self.path.join(relative),
+            Err(_) => self.path.clone(),
         };
         // What HEAD lacks (an untracked directory) is made; what a symlink in HEAD leads out of
         // the worktree is refused, as the child may write there whatever the main sandbox.
-        let inside = std::fs::create_dir_all(&inside)
-            .and_then(|()| crate::os::canonicalize(&inside))
+        (std::fs::create_dir_all(&inside).and_then(|()| crate::os::canonicalize(&inside)))
             .ok()
-            .filter(|real| real.starts_with(&worktree.path));
-        let Some(inside) = inside else {
-            worktree.finish(None);
-            return Err(format!(
-                "isolation \"worktree\": {} is not a directory in the worktree",
-                cwd.display()
-            ));
-        };
-        Ok((worktree, inside))
+            .filter(|real| real.starts_with(&self.path))
+            .ok_or_else(|| {
+                format!(
+                    "isolation \"worktree\": {} is not a directory in the worktree",
+                    cwd.display()
+                )
+            })
     }
 
     /// Whether a submodule's directory, empty in a new worktree and unseen by `git status`

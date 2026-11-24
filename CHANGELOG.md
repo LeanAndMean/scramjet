@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.320.0 — A chain's subagents share their worktree
+
+### Changed
+
+- The steps of a `subagent` chain that run with `isolation: worktree` share one worktree, so a later step sees and builds on what an earlier one changed; before, each step got a fresh worktree from `HEAD`, and the chain left one per writing step. The chain's result names the worktree once, when it ends.
+
 ## 2.319.0 — Your own agents listed, and worktrees a sandbox cannot remove
 
 ### Changed

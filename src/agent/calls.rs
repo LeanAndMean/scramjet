@@ -1119,10 +1119,18 @@ here (sandbox.subagents.mode)\n\nkept.txt says original";
             tool_call(
                 "call_5",
                 subagent::NAME,
-                json!({"chain":[{"agent":"writer","task":"Add"},{"agent":"nobody","task":"Then"}]}),
+                json!({"chain":[{"agent":"writer","task":"Add"},{"agent":"reader","task":"Look"},
+                    {"agent":"writer","task":"Extend"},{"agent":"nobody","task":"Then"}]}),
             ),
             tool_call("call_6", "write", json!({"path":"b.txt","content":"b"})),
             reply("added"),
+            reply("looked"),
+            tool_call(
+                "call_7",
+                "bash",
+                json!({"command":"cat b.txt; echo c > c.txt"}),
+            ),
+            reply("extended"),
             reply("done"),
         ]);
         let (mut agent, scratch) = agent(endpoint, "subagent-worktree");
@@ -1172,16 +1180,41 @@ worktree\n---\n\nWrite.\n",
             .turn("chain", &mut Recorder::default(), &cancel)
             .unwrap();
         let bodies = server.join().unwrap();
-        assert_eq!(bodies.len(), 12);
-        // A chain that stops still names the worktree an earlier step kept.
-        let chain = last_output(&bodies[11]);
+        assert_eq!(bodies.len(), 15);
+        // A chain's writers share one worktree, the later seeing what the earlier wrote; a chain
+        // that stops still names it.
+        let chain = last_output(&bodies[14]);
         assert!(
-            chain.starts_with("Chain stopped at step 2 (nobody): "),
+            chain.starts_with("Chain stopped at step 4 (nobody): "),
             "{chain}"
         );
+        assert_eq!(chain.matches("Worktree kept with").count(), 1, "{chain}");
         assert!(
             chain.contains("\n\nWorktree kept with uncommitted changes: "),
             "{chain}"
+        );
+        let first = bodies[9]["input"][0]["content"].as_str().unwrap();
+        let later = bodies[12]["input"][0]["content"].as_str().unwrap();
+        assert!(first.contains(" of your own, at "), "{first}");
+        assert!(
+            later.contains(" that this chain's earlier steps worked in"),
+            "{later}"
+        );
+        let at = |task: &str| {
+            task.split(", at ")
+                .nth(1)
+                .unwrap()
+                .split(',')
+                .next()
+                .unwrap()
+                .to_owned()
+        };
+        assert_eq!(at(first), at(later));
+        assert_eq!(last_output(&bodies[13]), "b");
+        let chained = PathBuf::from(at(first));
+        assert_eq!(
+            std::fs::read_to_string(chained.join("c.txt")).unwrap(),
+            "c\n"
         );
         let real = std::fs::canonicalize(&root).unwrap();
         let worktrees = subagent::worktree::directory(&state, &real);
