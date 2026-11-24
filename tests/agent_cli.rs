@@ -7021,7 +7021,7 @@ fn acp_follows_a_terminals_session_read_only() {
         ],
         |_| Duration::ZERO,
     );
-    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 200000}]);
     // Little kept, so that `/compact` has something to summarize.
     let settings =
         serde_json::json!({"hideCredentials": "never", "compaction": {"keepRecentTokens": 1}});

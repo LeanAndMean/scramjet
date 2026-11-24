@@ -4,6 +4,14 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.304.0 — Compaction within a turn on every known window
+
+### Changed
+
+- Automatic compaction is checked before each request of a turn on every model whose context window is known, not only on local runtimes: a server such as vLLM 0.34.0 does not refuse a prompt past its window but shortens the reply, so a long turn of tool calls went on with ever shorter answers.
+- `compaction.reserveTokens` and `keepRecentTokens` are each held to a quarter of any known window, not only a local runtime's: on a 16k window the defaults (16384 and 20000) never compacted, and compaction after an overflow kept more than the window holds.
+- An automatic compaction that fails is not tried again before every later request of the same turn; the next prompt tries again.
+
 ## 2.303.3 — A cancelled package clone is not taken as installed
 
 ### Fixed

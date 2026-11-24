@@ -46,6 +46,7 @@ impl Agent {
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
         self.follow_runtime(ui, true, cancel);
+        self.compaction_failed = false;
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
         self.suggestion = suggest::Pending::Nothing;
@@ -373,7 +374,7 @@ finish and is not checked on. Reply to continue.",
                     }
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui, false, cancel);
-                    self.compact_for_runtime(ui, cancel)?;
+                    self.compact_within_turn(ui, cancel)?;
                     let parts = self.instruction_parts();
                     let mut request = self.request_with(&parts);
                     self.fit_for_runtime(&mut request, &mut past_window_said, ui);

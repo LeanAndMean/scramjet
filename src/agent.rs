@@ -597,6 +597,8 @@ pub struct Agent {
     suggestion: suggest::Pending,
     /// The commands delegated in this turn, with their arguments.
     delegated: Vec<(String, String)>,
+    /// An automatic compaction failed in this turn: it is not tried again before its next requests.
+    compaction_failed: bool,
     /// Files the next prompt sends.
     attached: Option<Attached>,
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
@@ -805,6 +807,7 @@ impl Agent {
             interrupted: None,
             suggestion: suggest::Pending::Nothing,
             delegated: Vec::new(),
+            compaction_failed: false,
             attached: None,
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),

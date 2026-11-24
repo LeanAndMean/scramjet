@@ -831,18 +831,18 @@ impl Agent {
         self.config.compacting.automatic && should_compact(tokens, window, self.info.input, reserve)
     }
 
-    /// The settings' `reserveTokens` and `keepRecentTokens`, each at most a quarter of the window
-    /// on a model a local runtime serves: their defaults suit Scramjet's 200k windows, and on
-    /// Ollama's 32k or 40k one compaction would never run, or keep nearly everything.
+    /// The settings' `reserveTokens` and `keepRecentTokens`, each at most a quarter of a known
+    /// window: their defaults suit Scramjet's 200k windows, and on a 16k or 40k one compaction
+    /// would never run, or keep nearly everything.
     pub(super) fn reserve_and_kept(&self) -> (u64, u64) {
         let Compacting {
             reserve,
             keep_recent,
             ..
         } = self.config.compacting;
-        match (self.info.runtime, self.info.window) {
-            (Some(_), Some(window)) => (reserve.min(window / 4), keep_recent.min(window / 4)),
-            _ => (reserve, keep_recent),
+        match self.info.window {
+            Some(window) => (reserve.min(window / 4), keep_recent.min(window / 4)),
+            None => (reserve, keep_recent),
         }
     }
 
@@ -886,6 +886,7 @@ impl Agent {
         }
         match self.auto_compact(AutoCompaction::Threshold, ui, cancel) {
             Err(AgentError::CompactionFailed(error)) => {
+                self.compaction_failed = true;
                 ui.compaction_failed(&error);
                 Ok(())
             }
@@ -893,19 +894,25 @@ impl Agent {
         }
     }
 
-    /// Before each request of a turn on a model a local runtime serves, the threshold check:
-    /// such a runtime cuts a prompt longer than its window instead of refusing it (Ollama 0.40.16
-    /// answers 200, keeps half its window and reports the tokens it kept), so neither an overflow
-    /// error nor the reported usage shows it, and the request is measured by estimate too.
-    pub(super) fn compact_for_runtime(
+    /// Before each request of a turn, the threshold check: not every server refuses a prompt
+    /// longer than its window (vLLM 0.34.0 shortens the reply instead). A local runtime may cut
+    /// the prompt instead (Ollama 0.40.16 answers 200, keeps half its window and reports the
+    /// tokens it kept), so neither an overflow error nor the reported usage shows it, and its
+    /// request is measured by estimate too; elsewhere the reported context counts, else the
+    /// estimate.
+    pub(super) fn compact_within_turn(
         &mut self,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        if self.info.runtime.is_none() {
+        if self.info.window.is_none() || self.compaction_failed {
             return Ok(());
         }
-        self.compact_if_full(self.runtime_context(), ui, cancel)
+        let tokens = match self.info.runtime {
+            Some(_) => self.context_size().unwrap_or(0).max(self.request_tokens()),
+            None => self.context_size().unwrap_or_else(|| self.request_tokens()),
+        };
+        self.compact_if_full(tokens, ui, cancel)
     }
 
     /// On a model a local runtime serves, makes `request` fit the window less the reserve for
@@ -985,13 +992,11 @@ impl Agent {
         }
     }
 
-    /// The larger of the context as reported and the next request by estimate: its instructions,
-    /// tools and conversation at chars/4.
-    fn runtime_context(&self) -> u64 {
+    /// The next request by estimate: its instructions, tools and conversation at chars/4.
+    fn request_tokens(&self) -> u64 {
         let tools = serde_json::to_string(&self.tool_definitions()).unwrap_or_default();
         let base = (self.instructions().chars().count() + tools.chars().count()) as u64;
-        let estimated = base.div_ceil(4) + estimate(&self.conversation);
-        self.context_size().unwrap_or(0).max(estimated)
+        base.div_ceil(4) + estimate(&self.conversation)
     }
 }
 
@@ -1640,11 +1645,11 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
     fn the_settings_reserve_and_kept_tokens_say_when_and_how_far() {
         let (endpoint, server) = serve(vec![stream(&fixture::text_events(
             "done",
-            full_usage(10_000),
+            full_usage(70_000),
         ))]);
         let (mut roomy, _scratch) = agent(endpoint, "auto-reserve-small");
         seed_long_conversation(&mut roomy);
-        roomy.set_context_window(Some(20_000));
+        roomy.set_context_window(Some(80_000));
         roomy.set_compacting(Compacting {
             reserve: 5_000,
             ..Default::default()
@@ -1656,13 +1661,13 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         assert!(ui.compactions.is_empty());
 
         let (endpoint, server) = serve(vec![
-            stream(&fixture::text_events("done", full_usage(10_000))),
+            stream(&fixture::text_events("done", full_usage(70_000))),
             stream(&fixture::text_events("summary", fixture::known_usage())),
             stream(&fixture::text_events("prefix", fixture::known_usage())),
         ]);
         let (mut tight, _scratch) = agent(endpoint, "auto-reserve-large");
         seed_long_conversation(&mut tight);
-        tight.set_context_window(Some(20_000));
+        tight.set_context_window(Some(80_000));
         tight.set_compacting(Compacting {
             reserve: 12_000,
             keep_recent: 1,
@@ -1671,7 +1676,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         tight.turn("continue", &mut ui, &cancel).unwrap();
         assert_eq!(
             ui.compactions,
-            [(10_000, 1, Some(AutoCompaction::Threshold))]
+            [(70_000, 1, Some(AutoCompaction::Threshold))]
         );
         let requests = server.join().unwrap();
         assert_eq!(requests[1]["max_output_tokens"], 9_600);
@@ -1688,12 +1693,12 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
     #[test]
     fn a_full_context_is_compacted_after_the_turn() {
         let (endpoint, server) = serve(vec![
-            stream(&fixture::text_events("done", full_usage(10_000))),
+            stream(&fixture::text_events("done", full_usage(70_000))),
             stream(&fixture::text_events("summary", fixture::known_usage())),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "auto-threshold");
         seed_long_conversation(&mut agent);
-        agent.set_context_window(Some(20_000));
+        agent.set_context_window(Some(80_000));
         let mut ui = Recorder::default();
         agent
             .turn("continue", &mut ui, &AtomicBool::new(false))
@@ -1701,7 +1706,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         assert_eq!(ui.replies, ["done"]);
         assert_eq!(
             ui.compactions,
-            [(10_000, 3, Some(AutoCompaction::Threshold))]
+            [(70_000, 3, Some(AutoCompaction::Threshold))]
         );
         assert_eq!(
             ui.waits,
@@ -1728,12 +1733,12 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
     #[test]
     fn a_failed_automatic_compaction_is_reported_as_such_after_the_reply() {
         let (endpoint, server) = serve(vec![
-            stream(&fixture::text_events("done", full_usage(10_000))),
+            stream(&fixture::text_events("done", full_usage(70_000))),
             b"HTTP/1.1 400 Bad Request\r\ncontent-length: 4\r\n\r\nnope".to_vec(),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "auto-threshold-failed");
         seed_long_conversation(&mut agent);
-        agent.set_context_window(Some(20_000));
+        agent.set_context_window(Some(80_000));
         let mut ui = Recorder::default();
         let error = agent
             .turn("continue", &mut ui, &AtomicBool::new(false))
@@ -1766,7 +1771,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
             stream(&fixture::text_events("compacted first", full_usage(100))),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "auto-before-prompt");
-        agent.set_context_window(Some(40_000));
+        agent.set_context_window(Some(80_000));
         // A turn cancelled after a tool call: its output is not in the last response's count.
         let cancelled = |producer: &str| {
             vec![
@@ -1780,7 +1785,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         let mut ui = Recorder::default();
         for (producer, prompt) in [("other", "one"), ("m", "two"), ("m", "three")] {
             agent.conversation = cancelled(producer);
-            agent.usage.context_tokens = Some(20_000);
+            agent.usage.context_tokens = Some(60_000);
             agent
                 .turn(prompt, &mut ui, &AtomicBool::new(false))
                 .unwrap();
@@ -1795,7 +1800,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         );
         assert_eq!(
             ui.compactions,
-            [(25_000, 3, Some(AutoCompaction::Threshold))]
+            [(65_000, 3, Some(AutoCompaction::Threshold))]
         );
         assert_eq!(
             ui.waits,
@@ -1858,7 +1863,7 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
     }
 
     #[test]
-    fn the_threshold_check_the_runtime_window_comes_before_each_request_of_a_turn() {
+    fn the_threshold_check_comes_before_each_request_of_a_turn() {
         let call = || {
             let events = fixture::call_events(r#"{"command":"true"}"#, full_usage(23_000));
             let text = serde_json::to_string(&events).unwrap();
@@ -1873,12 +1878,10 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
                 responses.extend(runtime_says("m", 30_000));
             }
             responses.push(call());
-            if runtime.is_some() {
-                responses.push(stream(&fixture::text_events(
-                    "summary",
-                    fixture::known_usage(),
-                )));
-            }
+            responses.push(stream(&fixture::text_events(
+                "summary",
+                fixture::known_usage(),
+            )));
             responses.push(stream(&fixture::text_events(
                 "done",
                 fixture::known_usage(),
@@ -1906,28 +1909,31 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
                     .collect::<Vec<_>>(),
             )
         };
-        // Ollama answers a prompt past its window, cut: compaction comes before the request.
-        let (ui, requests) = run(
-            Some(crate::agent::local::Runtime::Ollama),
-            "runtime-threshold",
-        );
-        assert_eq!(
-            ui.waits,
-            [
-                Purpose::Reply,
-                Purpose::Compaction(Some(AutoCompaction::Threshold)),
-                Purpose::Reply
-            ]
-        );
-        assert_eq!(requests[2]["input"][0], summary_message("summary"));
-        assert_eq!(
-            requests[2]["input"].as_array().unwrap().last().unwrap()["type"],
-            "function_call_output"
-        );
-        // A provider refuses one with an error, so the request goes as Scramjet sends it.
-        let (ui, requests) = run(None, "provider-threshold");
-        assert_eq!(ui.waits, [Purpose::Reply, Purpose::Reply]);
-        assert_eq!(requests[1]["input"][0]["content"], "remember the goal");
+        // Ollama answers a prompt past its window, cut, and vLLM with a shorter reply: on
+        // either, as on any provider, compaction comes before the request.
+        for (runtime, name) in [
+            (
+                Some(crate::agent::local::Runtime::Ollama),
+                "runtime-threshold",
+            ),
+            (None, "provider-threshold"),
+        ] {
+            let (ui, requests) = run(runtime, name);
+            assert_eq!(
+                ui.waits,
+                [
+                    Purpose::Reply,
+                    Purpose::Compaction(Some(AutoCompaction::Threshold)),
+                    Purpose::Reply
+                ]
+            );
+            let last = requests.len() - 1;
+            assert_eq!(requests[last]["input"][0], summary_message("summary"));
+            assert_eq!(
+                requests[last]["input"].as_array().unwrap().last().unwrap()["type"],
+                "function_call_output"
+            );
+        }
     }
 
     #[test]
@@ -2121,11 +2127,12 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
     }
 
     #[test]
-    fn a_runtime_model_keeps_at_most_a_quarter_of_its_window_in_reserve_and_whole() {
-        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "runtime-quarter");
-        agent.set_context_window(Some(40_960));
+    fn a_known_window_keeps_at_most_a_quarter_of_itself_in_reserve_and_whole() {
+        let (mut agent, _scratch) = agent(([127, 0, 0, 1], 9).into(), "window-quarter");
+        agent.set_context_window(None);
         assert_eq!(agent.reserve_and_kept(), (16_384, 20_000));
-        assert!(agent.full(24_577, 40_960));
+        agent.set_context_window(Some(40_960));
+        assert_eq!(agent.reserve_and_kept(), (10_240, 10_240));
         agent.info.runtime = Some(crate::agent::local::Runtime::Ollama);
         assert_eq!(agent.reserve_and_kept(), (10_240, 10_240));
         assert!(!agent.full(30_720, 40_960));
