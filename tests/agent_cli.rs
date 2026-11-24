@@ -2268,22 +2268,48 @@ fn the_file_tools_keep_to_the_reach_without_a_sandbox() {
     assert!(!listed.contains("away.md"), "{listed}");
 }
 
+/// Also in a linked worktree of a repository outside the project, with the state directory in
+/// the hidden home directory, which holds the own tmux servers' sockets, and with the credential
+/// variables, which hideCredentials (`never` by default) leaves.
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn commands_keep_to_the_reach_without_a_sandbox_and_write_as_they_are() {
     let binary = &binary();
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-bash-reach-{}", std::process::id())),
     );
     let home = scratch.0.join("home");
-    let (project, other) = (home.join("project"), home.join("other"));
-    for directory in [&project, &other] {
+    let (main, project, other) = (home.join("main"), home.join("project"), home.join("other"));
+    for directory in [&main, &other] {
         std::fs::create_dir_all(directory).unwrap();
     }
     std::fs::write(other.join("away.md"), "MARK-away\n").unwrap();
+    let git = |arguments: &[&str]| {
+        let output = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-C"])
+            .arg(&main)
+            .args(arguments)
+            .env("HOME", &home)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+    git(&[
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "wt",
+        project.to_str().unwrap(),
+    ]);
     let config = scratch.0.join("config");
     std::fs::create_dir_all(config.join("scramjet")).unwrap();
-    let script = "cat ../other/away.md; ls -A .. | wc -l; echo made > made.txt; echo DONE-$((1+1))";
+    let script = "cat ../other/away.md; ls -A .. | wc -l; echo made > made.txt; \
+        git status --short --branch | head -1; echo VAR-$SCRAMJET_TEST_TOKEN; \
+        tmux -L scramjet-probe new-session -d 'sleep 5' && echo TMUX-OK; \
+        tmux -L scramjet-probe kill-server; echo DONE-$((1+1))";
     let (port, bodies) = serve_call("bash", serde_json::json!({"command": script}));
     let models = serde_json::json!({"providers": {"test": {
         "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
@@ -2296,9 +2322,11 @@ fn commands_keep_to_the_reach_without_a_sandbox_and_write_as_they_are() {
         .args(["--retries", "0", "--no-session", "-p", "hi"])
         .current_dir(&project)
         .env("HOME", &home)
-        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_STATE_HOME", home.join(".local/state"))
         .env("XDG_CONFIG_HOME", &config)
         .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .env("SCRAMJET_TEST_TOKEN", "shown")
+        .env_remove("TMUX_TMPDIR")
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -2310,8 +2338,15 @@ fn commands_keep_to_the_reach_without_a_sandbox_and_write_as_they_are() {
         .unwrap();
     assert!(answered.contains("DONE-2"), "{answered} {stderr}");
     assert!(!answered.contains("MARK-away"), "{answered}");
-    // The home directory shows only the project.
-    assert!(answered.contains("\\n1\\nDONE-2"), "{answered}");
+    // The home directory shows only the project, the worktree's repository and the state
+    // directory.
+    assert!(answered.contains("\\n3\\n## wt\\n"), "{answered}");
+    assert!(answered.contains("VAR-shown"), "{answered}");
+    let tmux = Command::new("tmux").arg("-V").output();
+    if tmux.is_ok_and(|output| output.status.success()) {
+        assert!(answered.contains("TMUX-OK"), "{answered}");
+    }
+    assert!(!answered.contains("hideCredentials"), "{answered}");
     assert_eq!(
         std::fs::read_to_string(project.join("made.txt")).unwrap(),
         "made\n"

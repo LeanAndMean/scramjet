@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.324.1 — The read limit without a sandbox, fixed
+
+### Fixed
+
+- With `/sandbox`'s Can read keeping commands to it without a sandbox (2.324.0), `hideCredentials` decides again whether credential variables and stores are hidden: the read limit alone no longer took `GH_TOKEN` and the like from commands, nor kept `allowRead` from re-opening `~/.config/gh`. In a project that is a linked worktree, git works again (its repository's Git directories stay readable), and tmux starts servers again.
+- Re-opening `/mnt/wslg` (`allowRead`) in a hidden `/mnt` no longer shows commands WSL's second mount of the whole filesystem at `/mnt/wslg/distro`, without a sandbox or in one.
+
 ## 2.324.0 — Commands keep to the read limit without a sandbox
 
 ### Changed

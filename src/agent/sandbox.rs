@@ -489,8 +489,7 @@ fn protected(root: &Path) -> Vec<PathBuf> {
 /// The Git directories outside `root` that the `.git` file of it or a directory above names, as
 /// a linked worktree's: kept readable, for Git to work there, wherever they are (under `/tmp`,
 /// the sandbox's own), but in what is `granted` writable.
-#[cfg(unix)]
-fn linked_git(root: &Path, granted: &[PathBuf]) -> Vec<PathBuf> {
+pub(super) fn linked_git(root: &Path, granted: &[PathBuf]) -> Vec<PathBuf> {
     let dotgit = root.ancestors().map(|directory| directory.join(".git"));
     let Some(dotgit) = dotgit.into_iter().find(|dotgit| dotgit.exists()) else {
         return Vec::new();
@@ -816,6 +815,10 @@ pub(super) struct Hidden {
     /// Whether `/add-dir` re-opens a path outside the reach: only with the main
     /// agent's sandbox on, which grants it.
     grantable: bool,
+    /// Whether the credential stores and variables are left as they are, as `hideCredentials`
+    /// leaves them without a sandbox, and only what the settings hide is.
+    #[cfg_attr(windows, allow(dead_code))]
+    stores_shown: bool,
 }
 
 impl Hidden {
@@ -824,8 +827,23 @@ impl Hidden {
     /// directories `named` (the providers' `credentialFiles`), those `reads` denies but
     /// re-opens, and this user's tmux servers.
     pub(super) fn current(named: &[PathBuf], reads: &Reads) -> Hidden {
+        Hidden::stores(named, reads).apart_from_tmux()
+    }
+
+    /// `current` but the credential stores and variables: only what `reads` hides.
+    pub(super) fn settings(reads: &Reads) -> Hidden {
+        let mut hidden = Hidden {
+            stores_shown: true,
+            ..Default::default()
+        };
+        hidden.limit(reads);
+        hidden.apart_from_tmux()
+    }
+
+    /// These, with this user's tmux servers hidden.
+    fn apart_from_tmux(self) -> Hidden {
         #[cfg_attr(windows, allow(unused_mut))]
-        let mut hidden = Hidden::stores(named, reads);
+        let mut hidden = self;
         #[cfg(unix)]
         {
             let base = std::env::var_os("TMUX_TMPDIR").filter(|base| !base.is_empty());
@@ -848,18 +866,21 @@ impl Hidden {
             .collect();
         let mut hidden =
             std::env::home_dir().map_or_else(Hidden::default, |home| Hidden::under(&home, also));
-        hidden.deny(&reads.deny);
+        hidden.limit(reads);
+        hidden
+    }
+
+    /// Hides what `reads` denies and what its reach leaves out, but what it re-opens.
+    fn limit(&mut self, reads: &Reads) {
+        self.deny(&reads.deny);
         match (reads.reach, std::env::home_dir()) {
-            (Reach::Minimal, _) if cfg!(unix) => {
-                hidden.deny_outside(&outside_system(Path::new("/")))
-            }
+            (Reach::Minimal, _) if cfg!(unix) => self.deny_outside(&outside_system(Path::new("/"))),
             (Reach::Project | Reach::Minimal, Some(home)) => {
-                hidden.reach(&home, |name| std::env::var_os(name))
+                self.reach(&home, |name| std::env::var_os(name))
             }
             _ => {}
         }
-        hidden.allow(&reads.allow);
-        hidden
+        self.allow(&reads.allow);
     }
 
     /// These, with the reach's refusal naming `/add-dir`, which a sandbox on can grant.
@@ -1040,7 +1061,16 @@ impl Hidden {
             self.identities.extend(identity(&real));
             self.directories.push(real);
         }
-        // Inside what `denyRead` hides, it cannot be made: there commands start no server.
+        // Re-opened where the reach alone hides it; inside what `denyRead` hides, commands start
+        // no server.
+        if let Some(own) = &own {
+            let innermost = (self.denied.iter())
+                .filter(|denied| own.starts_with(denied))
+                .max_by_key(|denied| denied.components().count());
+            if innermost.is_some_and(|denied| self.outside.contains(denied)) {
+                self.allow(std::slice::from_ref(own));
+            }
+        }
         self.tmux = own.filter(|own| !self.covered(own, false));
     }
 
@@ -1068,6 +1098,7 @@ impl Hidden {
             allowed: Vec::new(),
             allowed_identities: Vec::new(),
             grantable: false,
+            stores_shown: false,
         }
     }
 
@@ -1292,7 +1323,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
             reopened: hidden.allowed.iter().map(|path| (path, true)).collect(),
         };
         let mut process = seatbelt::open(root, hiding);
-        hide_variables(&mut process);
+        hide_variables(&mut process, hidden);
         if let Some(own) = &hidden.tmux {
             process.env("TMUX_TMPDIR", own);
         }
@@ -1302,11 +1333,12 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
     }
     let mut process = Command::new(launcher());
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
-    // Before what is hidden, which may hold it read-only.
-    if Path::new(WSLG_DISTRO).is_dir() {
+    hide(&mut process, hidden, &|_| true);
+    // After what is hidden, as re-opening a directory above it would uncover it; not where it
+    // is hidden, whose empty directory has no room for it.
+    if Path::new(WSLG_DISTRO).is_dir() && !hidden.covered(Path::new(WSLG_DISTRO), false) {
         process.args(["--tmpfs", WSLG_DISTRO, "--remount-ro", WSLG_DISTRO]);
     }
-    hide(&mut process, hidden, &|_| true);
     if let Some(own) = &hidden.tmux {
         process.env("TMUX_TMPDIR", own);
     }
@@ -1415,9 +1447,6 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
         process.arg(if *writable { "--bind" } else { "--ro-bind" });
         process.arg(path).arg(path);
     }
-    if Path::new(WSLG).is_dir() {
-        process.args(["--tmpfs", WSLG]);
-    }
     let in_writable = |path: &Path| {
         (mounts.iter())
             .filter(|(mount, _)| path.starts_with(mount))
@@ -1425,6 +1454,10 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
             .is_some_and(|(_, writable)| *writable)
     };
     hide(&mut process, hidden, &in_writable);
+    // After what is hidden, as `hiding` mounts WSLg's distro directory.
+    if Path::new(WSLG).is_dir() && !hidden.covered(Path::new(WSLG), false) {
+        process.args(["--tmpfs", WSLG]);
+    }
     for kept in &kept {
         process.arg("--ro-bind").arg(kept).arg(kept);
     }
@@ -1488,6 +1521,7 @@ fn closed(
     // on the network.
     let writable = |path: &PathBuf| closed.writable.iter().any(|root| path.starts_with(root));
     let reopened = (hidden.allowed.iter())
+        .filter(|path| Some(*path) != hidden.tmux.as_ref())
         .map(|path| (path, writable(path)))
         .collect();
     closed.hidden = seatbelt::Hiding {
@@ -1496,16 +1530,16 @@ fn closed(
         reopened,
     };
     let mut process = seatbelt::closed(root, closed);
-    hide_variables(&mut process);
+    hide_variables(&mut process, hidden);
     process
 }
 
-/// Leaves out the environment variables that hold credentials and those that lead tmux to the
-/// server the agent runs in.
+/// Leaves out the environment variables that hold credentials, unless `hidden` shows the
+/// stores, and those that lead tmux to the server the agent runs in.
 #[cfg(unix)]
-fn hide_variables(process: &mut Command) {
+fn hide_variables(process: &mut Command, hidden: &Hidden) {
     for (name, _) in std::env::vars_os() {
-        if holds_credential(&name.to_string_lossy()) {
+        if !hidden.stores_shown && holds_credential(&name.to_string_lossy()) {
             process.env_remove(name);
         }
     }
@@ -1526,7 +1560,7 @@ fn hide(process: &mut Command, hidden: &Hidden, writable: &dyn Fn(&Path) -> bool
         Directory(&'a PathBuf),
         Allowed(&'a PathBuf),
     }
-    hide_variables(process);
+    hide_variables(process, hidden);
     let (files, directories) = hidden.mounted();
     let mut mounts: Vec<Mount> = (files.map(Mount::File))
         .chain(directories.map(Mount::Directory))
@@ -2673,6 +2707,46 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         );
     }
 
+    /// Re-opening `/mnt/wslg` in a hidden `/mnt` leaves WSL's second mount of `/` empty, with and
+    /// without a sandbox; hiding `/mnt` alone still starts.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn wslg_s_mount_of_the_root_stays_hidden_where_wslg_is_re_opened() {
+        if !std::path::Path::new(super::WSLG_DISTRO).is_dir() {
+            return;
+        }
+        let root = std::env::temp_dir();
+        let script = "ls -A /mnt/wslg/distro | wc -l; ls -A /mnt | wc -l";
+        let sandbox = super::Sandbox {
+            mode: super::SandboxMode::ReadOnly,
+            network: false,
+            writable: Vec::new(),
+        };
+        for (allow, unconfined, confined) in
+            [(true, "0\n1\n", "0\n1\n"), (false, "0\n0\n", "0\n0\n")]
+        {
+            let mut hidden = super::Hidden::default();
+            hidden.deny(&[std::path::PathBuf::from("/mnt")]);
+            if allow {
+                hidden.allow(&[std::path::PathBuf::from(super::WSLG)]);
+            }
+            for (process, expected) in [
+                (super::hiding(&root, script, &hidden), unconfined),
+                (super::sandboxed(&root, script, &hidden, &sandbox), confined),
+            ] {
+                let output = process.unwrap().output().unwrap();
+                let errors = String::from_utf8_lossy(&output.stderr);
+                assert_eq!(
+                    String::from_utf8_lossy(&output.stdout),
+                    expected,
+                    "{errors}"
+                );
+            }
+        }
+    }
+
+    /// Linux's: BSD's `wc` pads its count, and how Seatbelt lists a hidden directory is untried.
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_project_only_reach_hides_the_home_directory_but_what_the_agent_needs() {
         let home = std::env::temp_dir().join(format!("scramjet-reach-{}", std::process::id()));

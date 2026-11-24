@@ -710,7 +710,8 @@ pub(super) struct Parent<'a> {
 
 impl Parent<'_> {
     /// What Scramjet gave the agent to read, which the project-only reach keeps: the command
-    /// sets', skills' and the user's agents' directories, and this project's sessions.
+    /// sets', skills' and the user's agents' directories, this project's sessions, and the Git
+    /// directories of a linked worktree it is in.
     pub(super) fn given_to_read(&self) -> Vec<PathBuf> {
         let sets = (self.sources.sets.list().iter()).map(|set| set.directory.clone());
         let skills =
@@ -719,11 +720,13 @@ impl Parent<'_> {
         let sessions = super::session::directory(self.root).ok();
         let root = crate::os::canonicalize(self.root).unwrap_or_else(|_| self.root.to_owned());
         let worktrees = (self.worktrees).map(|state| worktree::directory(state, &root));
+        let git = sandbox::linked_git(&root, &[]);
         (sets
             .chain(skills)
             .chain(agents)
             .chain(sessions)
-            .chain(worktrees))
+            .chain(worktrees)
+            .chain(git))
         .collect()
     }
 }

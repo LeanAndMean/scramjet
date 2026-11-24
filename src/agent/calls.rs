@@ -639,8 +639,8 @@ impl Tools<'_> {
                     true => self.parent.reads.without_reach(),
                     false => self.parent.reads.clone(),
                 };
-                let mut hide =
-                    self.hide_credentials || self.sandbox.is_some() || reads.reach.kept();
+                let stores = self.hide_credentials || self.sandbox.is_some();
+                let mut hide = stores || reads.reach.kept();
                 if shell && self.sandbox.is_none() && !tools::HIDES_COMMANDS {
                     if self.parent.reads.reach.kept() {
                         not_kept(ui);
@@ -656,9 +656,11 @@ impl Tools<'_> {
                     (std::iter::once(root.to_owned()).chain(writable.into_iter().flatten()))
                         .chain(self.parent.given_to_read()),
                 );
-                let hidden = hide.then(|| match self.sandbox {
-                    Some(_) => sandbox::Hidden::current(named, &reads).grantable(),
-                    None => sandbox::Hidden::current(named, &reads),
+                let hidden = hide.then(|| match (self.sandbox, stores) {
+                    (Some(_), _) => sandbox::Hidden::current(named, &reads).grantable(),
+                    (None, true) => sandbox::Hidden::current(named, &reads),
+                    // The reach alone leaves the credentials as hideCredentials says.
+                    (None, false) => sandbox::Hidden::settings(&reads),
                 });
                 let progress = &mut |output: &str| ui.tool_output(output);
                 let output = match (self.sandbox, &hidden) {
@@ -668,7 +670,7 @@ impl Tools<'_> {
                     _ => call.run(root, hidden.as_ref(), cancel, progress),
                 };
                 let mut output = output.unwrap_or_else(failure);
-                if hidden.is_some() && output.failed && tools::is_shell(call.name) {
+                if stores && hidden.is_some() && output.failed && tools::is_shell(call.name) {
                     let command = call.arguments["command"].as_str().unwrap_or_default();
                     if needs_a_store(command) {
                         output.text += &stores_hidden(self.sandbox.is_some());
