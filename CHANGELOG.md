@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.304.1 — Sessions saving the settings at once
+
+### Fixed
+
+- Many ACP sessions in one `scramjet acp` choosing a model or thinking level at once no longer fail with `settings not saved`: each write of the settings, and of a login's model list, now has a temporary file of its own, and the settings file is locked while it is read and written again, so one session's change no longer drops another's.
+
 ## 2.304.0 — Compaction within a turn on every known window
 
 ### Changed

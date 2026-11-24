@@ -2355,6 +2355,10 @@ impl Settings {
         let Some(path) = &self.path else {
             return Ok(());
         };
+        // Another session's change between the read and the rename would be lost without it.
+        std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
+        let lock = File::create(path.with_extension("lock"))?;
+        lock.lock()?;
         let mut object = read_object(path).map_err(io::Error::other)?;
         change(&mut object);
         write_object(path, object).map_err(io::Error::other)
@@ -3558,6 +3562,33 @@ or false; ignored"
     }
 
     #[test]
+    fn sessions_saving_at_once_all_save_and_keep_each_others_keys() {
+        let scratch = Scratch::new("concurrent-save");
+        let path = scratch.0.join("settings.json");
+        let threads: Vec<_> = (0..16)
+            .map(|index| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let settings = Settings::read(Some(path));
+                    for round in 0..20 {
+                        settings
+                            .save(&format!("session{index}"), json!(round))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let expected: Map<String, Value> = (0..16)
+            .map(|index| (format!("session{index}"), json!(19)))
+            .collect();
+        assert_eq!(saved, Value::Object(expected));
+    }
+
+    #[test]
     fn saving_keeps_the_other_keys_and_a_broken_file_is_not_overwritten() {
         let scratch = Scratch::new("save");
         let path = scratch.0.join("config/scramjet-rs/settings.json");
@@ -3603,11 +3634,12 @@ or false; ignored"
             std::fs::read_to_string(&path).unwrap(),
             "{\"hideThinkingBlock\": tru"
         );
-        // Nothing is left beside it.
-        assert_eq!(
-            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
-            1
-        );
+        // Nothing is left beside it but the lock.
+        let left: Vec<_> = (std::fs::read_dir(path.parent().unwrap()).unwrap())
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left.len(), 2, "{left:?}");
+        assert!(left.iter().any(|name| name == "settings.lock"), "{left:?}");
     }
 
     #[test]

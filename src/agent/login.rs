@@ -336,7 +336,7 @@ pub(super) fn make(path: &Path) {
 pub(super) fn save_list(path: &Path, list: &Value) -> Result<(), String> {
     let failed = |error: std::io::Error| format!("{}: {error}", path.display());
     std::fs::create_dir_all(path.parent().unwrap_or(Path::new("."))).map_err(failed)?;
-    let written = path.with_extension(format!("{}.tmp", std::process::id()));
+    let written = super::tools::temporary_beside(path);
     let text = serde_json::to_string_pretty(list).unwrap_or_default() + "\n";
     let saved = std::fs::write(&written, text).and_then(|()| std::fs::rename(&written, path));
     if saved.is_err() {

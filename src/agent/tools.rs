@@ -10,7 +10,7 @@ use std::{
     process::{Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex, PoisonError, RwLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -667,15 +667,23 @@ pub fn write_replacing(path: &Path, text: &str) -> io::Result<()> {
         }
         Err(error) => return Err(error),
     };
-    let mut temporary = target.clone().into_os_string();
-    temporary.push(format!(".{}.tmp", std::process::id()));
-    let temporary = PathBuf::from(temporary);
+    let temporary = temporary_beside(&target);
     let written =
         std::fs::write(&temporary, text).and_then(|()| std::fs::rename(&temporary, &target));
     if written.is_err() {
         let _ = std::fs::remove_file(&temporary);
     }
     written
+}
+
+/// A name beside `path` for a write to rename over it, which no other write of this process or
+/// another's takes at the same time: ACP's sessions save the same files from their own threads.
+pub fn temporary_beside(path: &Path) -> PathBuf {
+    static WRITES: AtomicU64 = AtomicU64::new(0);
+    let write = WRITES.fetch_add(1, Ordering::Relaxed);
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(format!(".{}.{write}.tmp", std::process::id()));
+    PathBuf::from(temporary)
 }
 
 /// A path in the home directory as `~/...`, as Scramjet shows tool paths.
