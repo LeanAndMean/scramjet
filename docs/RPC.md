@@ -59,10 +59,10 @@ ACP lets a connection hold several sessions, so a client may open several thread
 - **`session/resume`:** the same without the replay. Either, of a session open on the connection, goes on with it between turns (its MCP servers kept, the load replaying its branch); a session not known gets `-32002` with `data.sessionId`, from every method.
 - **`session/list`** `{cwd?, cursor?}`: `/resume`'s list, newest first, 50 a page, every project's when `cwd` is omitted. Each has `sessionId`, `cwd`, `title` (its name, else its first prompt), `updatedAt`, and `_meta` with `parentSession` (its chain) and the session file's path.
 - **`session/close`:** cancels the session's turn and drops its driver; the file stays. **`session/delete`:** as Ctrl+D in `/resume` (to the trash where a `trash` command exists): refused for a session active on the connection.
-- **A session profile** (proposed at the second steer of 2026-11-23, for sign-off at a steer; nothing of it built yet): below.
+- **A session profile** (signed off at the steer of 2026-11-24; not built yet): below.
 - **Forks, branches, the tree, names:** extensions (section 8). A new session from a next step's `freshSession` or `/clear` in the core sends `_io.github.leanandmean.scramjet/session_changed` `{sessionId, newSessionId}` to a client that knows the extension, whose updates then carry the new id; either id reaches the session. Other clients keep the id they know for the thread, which goes on in the new session, said in an agent message (a notice with `session.notices`); `session/list` shows both files.
 
-### A session profile (proposed)
+### A session profile (signed off 2026-11-24)
 
 A runner driving many sessions over one `scramjet acp` gives each task its own instructions, tools and reach. Today every session takes the process's launch options and the user's settings, so a runner starts a process per kind of task, and defines a provider in `models.json` for each combination of output limit and reasoning effort; and a model chosen with `session/set_config_option` is saved in the settings, which many sessions do at once. A profile sets these per session, in `session/new`'s `_meta["io.github.leanandmean.scramjet"].profile`:
 
@@ -88,18 +88,18 @@ Each key is a launch option for that session alone, every one optional:
 - `systemPrompt`, `appendSystemPrompt` (a string or a list): `--system-prompt` and `--append-system-prompt`, as text, never a file's name (a runner reads its own files). `contextFiles: false` is `--no-context-files`; `directives` is today's `directives` key, which stays accepted beside it.
 - `tools`: `--tools`, the only tools of the session, Scramjet's own among them only when named. A name the session cannot offer (unknown, or `powershell` where there is none) refuses the request.
 - **The reach.** A profile with any of `read`, `writable`, `allowWrite` or `network` runs the session's commands in the sandbox, whatever the launch options and settings say: `workspace-write` when `writable` is true (the session's folder, `cwd`, and `allowWrite`'s directories writable), else `read-only`; reads kept to the minimal reach (2.309.0: the system's directories, the project, what Scramjet gives the agent to read) and `read`'s paths, read-only; `network` false unless true. `read`, `grep` and `find` keep to the same reach. The user's `denyRead` still applies and the credential stores stay hidden: a profile narrows what the user's settings allow and re-opens no store (`allowRead`'s rule). Where the sandbox cannot start (no bubblewrap, native Windows, where nothing hides reads), `session/new` is refused with why, rather than running the session unconfined.
-- **Subagents** of such a session keep to its reach and `read` paths, read-only and off the network, as subagents ship.
+- **Subagents** of such a session keep to its reach and `read` paths, read-only and off the network, whatever `sandbox.subagents` says (steer of 2026-11-24: subagents that write in a profiled session wait for a need, when this is revisited).
 - `model`, `thinkingLevel`, `maxTokens` (the second step): the session's model as `provider/id`, its level and its output limit (`--max-output-tokens`, at most the model's own); a model the session's providers do not offer refuses the request. `session/set_config_option` still changes model and level, for the session only: a session with a profile never saves them in the settings, nor in `last-used-models.json`.
 
 A key not listed, or a value of the wrong type, refuses the request with `-32602` naming it, so that a misspelt `writable` never runs a task with more than meant. The profile is saved in the session file as an entry of its own (system prompt included, as `/system-prompt` shows it anyway; never an MCP server's `env` or `headers`), and `session/resume` and `session/load` apply it again; one given with them replaces it from then on, saved likewise. `session/new`'s result `_meta` repeats the reach as `sandbox` answers it (`mode`, `network`, `granted`, `summary`), so a runner can check what a session got.
 
 **How it would be checked:** a scripted provider that keeps each request shows each session's instructions, tools, `max_tokens` and reasoning effort; two sessions with different profiles in one `scramjet acp` run a command each that lists `/home`, writes the project and reaches the network, each seeing only its own reach (`scripts/try-sandbox.py`'s checks, over ACP); many sessions choosing models at once leave the settings unchanged.
 
-**For the steer to answer:**
+**Answered at the steer of 2026-11-24** (the user's sign-off):
 
-1. The reach a profile sets: the minimal one with `read`'s paths, or the user's own (`blockReadsOutsideWorkingDirectories`) with `read` added to it.
-2. A profile at `session/resume` replacing the saved one, or refused once one is saved.
-3. The two steps in this order (instructions, tools and reach first; model, level and output limit next), or together.
+1. The reach a profile sets is the minimal one with `read`'s paths, not the user's own: what the profile says is what the session gets, the same on every machine, and nothing of the home directory reaches a partly trusted model.
+2. A profile given at `session/resume` or `session/load` replaces the saved one from then on (saved likewise), so a runner can retry a task with other limits without losing its context.
+3. Two steps, in this order: instructions, tools and reach first; model, level and output limit next.
 
 ## 4. A prompt turn
 
