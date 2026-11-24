@@ -549,6 +549,8 @@ pub(super) struct Settings {
     allow_read: Vec<String>,
     /// `blockReadsOutsideWorkingDirectories` (also under `permissions`): the project-only reach.
     project_only: bool,
+    /// `sandbox.launcher`: the program started in bubblewrap's place; `None`: `bwrap`.
+    pub(super) sandbox_launcher: Option<PathBuf>,
     /// `sandbox.subagents.network`.
     subagent_network: bool,
     /// `sandbox.subagents.blockReadsOutsideWorkingDirectories`; `None`: the main agent's.
@@ -703,6 +705,7 @@ impl Settings {
             deny_read: Vec::new(),
             allow_read: Vec::new(),
             project_only: false,
+            sandbox_launcher: None,
             subagent_network: false,
             subagent_project_only: None,
             subagent_deny_read: None,
@@ -1150,6 +1153,19 @@ impl Settings {
                 None => {}
                 Some(Value::Bool(network)) => self.sandbox_network = *network,
                 Some(_) => wrong.push(("sandbox.network", "true or false")),
+            }
+            match sandbox.get("launcher") {
+                None => {}
+                // A name alone is found on `PATH`, as `bwrap` is.
+                Some(Value::String(launcher))
+                    if !launcher.trim().is_empty() && !launcher.contains(['/', '\\']) =>
+                {
+                    self.sandbox_launcher = Some(PathBuf::from(launcher.trim()))
+                }
+                Some(Value::String(launcher)) if !launcher.trim().is_empty() => {
+                    self.sandbox_launcher = Some(self.resolve(launcher))
+                }
+                Some(_) => wrong.push(("sandbox.launcher", "a program")),
             }
             match sandbox.get("filesystem") {
                 None => {}
@@ -2665,6 +2681,19 @@ mod tests {
             assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
             assert_eq!((settings.sandbox, settings.sandbox_network), (mode, false));
         }
+        for (launcher, expected) in [
+            ("wrap-bwrap", Some(PathBuf::from("wrap-bwrap"))),
+            ("bin/wrap", Some(scratch.0.join("bin/wrap"))),
+            ("~/wrap", Some(std::env::home_dir().unwrap().join("wrap"))),
+        ] {
+            let text = format!(r#"{{"sandbox": {{"launcher": "{launcher}"}}}}"#);
+            let settings = settings_with(&scratch, &text);
+            assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+            assert_eq!(settings.sandbox_launcher, expected);
+        }
+        let wrong = settings_with(&scratch, r#"{"sandbox": {"launcher": ["bwrap"]}}"#);
+        assert_eq!(wrong.sandbox_launcher, None);
+        assert!(wrong.warnings[0].ends_with("sandbox.launcher must be a program; ignored"));
         let wrong = settings_with(&scratch, r#"{"sandbox": true, "sandboxNetwork": "no"}"#);
         assert_eq!((wrong.sandbox, wrong.sandbox_network), (None, true));
         assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);

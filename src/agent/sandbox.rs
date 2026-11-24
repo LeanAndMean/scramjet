@@ -25,6 +25,21 @@ pub(super) const PROGRAM: &str = "the low-integrity helper";
 #[cfg(not(any(target_os = "macos", windows)))]
 pub(super) const PROGRAM: &str = "bwrap";
 
+/// `sandbox.launcher`: the program started with bubblewrap's arguments in its place.
+static LAUNCHER: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+
+/// Sets the program started with bubblewrap's arguments (`None`: `bwrap`, found on `PATH`), such
+/// as a wrapper that runs it differently where its own `pivot_root` fails.
+pub fn set_launcher(launcher: Option<PathBuf>) {
+    *LAUNCHER.write().unwrap_or_else(|e| e.into_inner()) = launcher;
+}
+
+#[cfg(unix)]
+fn launcher() -> PathBuf {
+    let launcher = LAUNCHER.read().unwrap_or_else(|e| e.into_inner());
+    launcher.clone().unwrap_or_else(|| PathBuf::from(PROGRAM))
+}
+
 /// What a sandboxed command cannot run on this system, for the agent's instructions: Seatbelt
 /// refuses setuid programs, `ps` among them, and lists no other process to `pgrep` or `pkill`.
 pub(super) const UNRUNNABLE: &str = match cfg!(target_os = "macos") {
@@ -1139,7 +1154,7 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
         super::tools::bash_runs(&mut process, command);
         return Ok(process);
     }
-    let mut process = Command::new(PROGRAM);
+    let mut process = Command::new(launcher());
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
     hide(&mut process, hidden, &|_| true);
     if let Some(own) = &hidden.tmux {
@@ -1195,7 +1210,7 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
     if cfg!(target_os = "macos") {
         return Ok(closed(root, hidden, writable, network, &granted, &kept));
     }
-    let mut process = Command::new(PROGRAM);
+    let mut process = Command::new(launcher());
     process.args([
         "--unshare-all",
         "--die-with-parent",
@@ -1468,12 +1483,16 @@ pub(super) fn available() -> Result<(), String> {
         false,
     )?
     .stdin(Stdio::null())
-    .output()
-    .map_err(|error| format!("cannot start {PROGRAM}: {error}"))?;
+    .output();
+    let program = match cfg!(target_os = "macos") {
+        true => PROGRAM.to_owned(),
+        false => crate::os::tilde(&launcher()),
+    };
+    let output = output.map_err(|error| format!("cannot start {program}: {error}"))?;
     match output.status.success() {
         true => Ok(()),
         false => Err(format!(
-            "{PROGRAM} failed: {}",
+            "{program} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )),
     }

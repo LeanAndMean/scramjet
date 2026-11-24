@@ -190,6 +190,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         settings.shell_command_prefix.clone(),
     );
     scramjet::agent::set_user_shell(settings.default_shell);
+    scramjet::agent::set_launcher(settings.sandbox_launcher.clone());
     scramjet::agent::set_images(settings.resize_images, settings.block_images);
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let session_dir = (options.session_dir.as_deref())

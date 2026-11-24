@@ -77,7 +77,7 @@ pub use providers::{KeyFrom, Providers, Sources, unmet_engine};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::{Choice, Reply, TYPE_SOMETHING};
 pub use request::{CacheRetention, set_cache_retention};
-pub use sandbox::{Reads, Remembered, Sandbox, SandboxMode, Subagents};
+pub use sandbox::{Reads, Remembered, Sandbox, SandboxMode, Subagents, set_launcher};
 pub use session::{
     Branch, Found, Label, ModelChange, Reading, Removal, Session, SessionInfo,
     directory as session_directory, projects_directory, read_branch, read_conversation,

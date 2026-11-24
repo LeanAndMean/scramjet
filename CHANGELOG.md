@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.308.0 — A launcher in bubblewrap's place
+
+### Added
+
+- `sandbox.launcher` (Linux): a program started with Bubblewrap's arguments instead of the first `bwrap` on `PATH`, such as a wrapper for machines where `bwrap` alone cannot start. It serves the sandbox, the stores hidden by `hideCredentials` and subagents' commands; a launcher that cannot start is named in the refusal.
+
 ## 2.307.0 — No shared wait with retries turned off
 
 ### Changed

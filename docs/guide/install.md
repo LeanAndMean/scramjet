@@ -20,7 +20,7 @@ Each takes the newest release, prereleases included (`SCRAMJET_VERSION=2.143.1` 
 
 ## By hand
 
-Each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive per platform (`scramjet-VERSION-ARCH-OS.tar.gz`, holding only the program) and their `SHA256SUMS`. Unpack it (`tar -xzf`, also on Windows 10 and later) into a directory on your `PATH`; `scramjet update self` then takes newer releases. The programs are not signed: on macOS, one downloaded through a browser is refused until `xattr -d com.apple.quarantine scramjet` (a download with `curl` is not marked). Linux's need glibc 2.31 or newer. On Linux, subagents' tools, and the agent's with `hideCredentials` set, need Bubblewrap (`bwrap`; `apt install bubblewrap`).
+Each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive per platform (`scramjet-VERSION-ARCH-OS.tar.gz`, holding only the program) and their `SHA256SUMS`. Unpack it (`tar -xzf`, also on Windows 10 and later) into a directory on your `PATH`; `scramjet update self` then takes newer releases. The programs are not signed: on macOS, one downloaded through a browser is refused until `xattr -d com.apple.quarantine scramjet` (a download with `curl` is not marked). Linux's need glibc 2.31 or newer. On Linux, subagents' tools, and the agent's with `hideCredentials` set, need Bubblewrap (`bwrap`; `apt install bubblewrap`), or the program the `sandbox.launcher` setting names in its place ([configuration](configuration.md)).
 
 ## Beside Scramjet 1
 

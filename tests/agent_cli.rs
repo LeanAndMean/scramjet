@@ -1886,6 +1886,79 @@ fn shell_path_and_shell_command_prefix_run_the_agents_commands() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn the_settings_launcher_starts_the_sandbox_in_bubblewraps_place() {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = &binary();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-launcher-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let log = scratch.0.join("launched");
+    let wrapper = config.join("scramjet/wrap-bwrap");
+    let script = format!(
+        "#!/bin/sh\necho \"$@\" >> '{}'\nexec bwrap \"$@\"\n",
+        log.display()
+    );
+    std::fs::write(&wrapper, script).unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let run = |launcher: &str| {
+        let (port, bodies) = serve_call("bash", serde_json::json!({"command": "echo inside"}));
+        let models = serde_json::json!({"providers": {"test": {
+            "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+            "models": [{"id": "claude-test"}],
+        }}});
+        std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+        let settings = serde_json::json!({"sandbox": {"mode": "read-only", "launcher": launcher}});
+        std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+        let output = program(binary)
+            .args(["--retries", "0", "--no-session", "-p", "hi"])
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let second = (output.status.success())
+            .then(|| bodies.recv_timeout(Duration::from_secs(20)).unwrap())
+            .map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap());
+        (output.status.success(), second, stderr)
+    };
+    let (ok, missing, stderr) = run("no-such-launcher");
+    assert!(!ok && missing.is_none(), "{stderr}");
+    assert!(stderr.contains("cannot start no-such-launcher"), "{stderr}");
+    // Relative to the settings file, as its other paths.
+    let (ok, second, stderr) = run("./wrap-bwrap");
+    if stderr.contains("bwrap failed") || stderr.contains("wrap-bwrap failed") {
+        eprintln!("passed over without bubblewrap: {stderr}");
+        return;
+    }
+    assert!(ok, "{stderr}");
+    let second: serde_json::Value = serde_json::from_str(&second.unwrap()).unwrap();
+    let messages = second["messages"].as_array().unwrap();
+    let result = messages.last().unwrap()["content"][0]["content"].to_string();
+    assert!(result.contains("inside"), "{result}");
+    let launched = std::fs::read_to_string(&log).unwrap();
+    // The check that the sandbox starts, then the command, in the project.
+    let chdir = format!("--chdir {} --", project.display());
+    assert_eq!(launched.lines().count(), 2, "{launched}");
+    assert!(
+        launched
+            .lines()
+            .all(|line| line.starts_with("--unshare-all")),
+        "{launched}"
+    );
+    assert!(
+        launched.lines().nth(1).unwrap().contains(&chdir),
+        "{launched}"
+    );
+}
+
 #[test]
 fn the_settings_sandbox_hides_what_deny_read_names_but_allow_read_and_writes_where_allow_write_says()
  {
