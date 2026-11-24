@@ -1,7 +1,8 @@
 //! The system instructions of the agent and of its subagents.
 use super::{
-    Commands, Problem, Skills, SystemPrompt, mcp, publish, question, sandbox::Hidden, status,
-    subagent, suggest, switch,
+    Commands, Problem, Skills, SystemPrompt, mcp, publish, question,
+    sandbox::{Hidden, Sandbox},
+    status, subagent, suggest, switch,
 };
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -378,7 +379,8 @@ fn skills_section(read: bool, skills: &Skills) -> String {
 
 /// A subagent's instructions, as Pi builds a child's: its tools and guidelines, the agent's own
 /// text, the context files from `cwd` (and the `agent_directory`) and the `skills`, then the date
-/// and directory.
+/// and directory. A `writer` is the sandbox in which it may change files.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn child(
     cwd: &Path,
     tools: &[&str],
@@ -387,17 +389,24 @@ pub(super) fn child(
     agent_directory: Option<&Path>,
     hidden: &Hidden,
     network: bool,
+    writer: Option<&Sandbox>,
 ) -> String {
-    let listed: Vec<&str> = tools
+    let sandboxed = match writer {
+        Some(_) => "in a sandbox",
+        None => "in a read-only sandbox",
+    };
+    let listed: Vec<String> = tools
         .iter()
         .map(|tool| match *tool {
-            "read" => "- read: Read file contents",
-            "grep" => "- grep: Search file contents for patterns (respects .gitignore)",
-            "find" => "- find: Find files by glob pattern (respects .gitignore)",
-            "ls" => "- ls: List directory contents",
-            "powershell" => "- powershell: Execute PowerShell commands in a read-only sandbox",
-            "cmd" => "- cmd: Execute cmd.exe command lines in a read-only sandbox",
-            _ => "- bash: Execute bash commands (ls, grep, find, etc.) in a read-only sandbox",
+            "read" => "- read: Read file contents".to_owned(),
+            "grep" => "- grep: Search file contents for patterns (respects .gitignore)".to_owned(),
+            "find" => "- find: Find files by glob pattern (respects .gitignore)".to_owned(),
+            "ls" => "- ls: List directory contents".to_owned(),
+            "write" => "- write: Create or overwrite files".to_owned(),
+            "edit" => "- edit: Make precise file edits with exact text replacement".to_owned(),
+            "powershell" => format!("- powershell: Execute PowerShell commands {sandboxed}"),
+            "cmd" => format!("- cmd: Execute cmd.exe command lines {sandboxed}"),
+            _ => format!("- bash: Execute bash commands (ls, grep, find, etc.) {sandboxed}"),
         })
         .collect();
     let mut guidelines = Vec::new();
@@ -420,9 +429,12 @@ pub(super) fn child(
 disks can be changed, except in a TEMP of their own discarded after each command"
                 .to_owned(),
             false => format!(
-                "- bash runs in a read-only sandbox {}, writable only in {}{}{}",
+                "- bash runs {sandboxed} {}{}{}{}",
                 super::sandbox::network_said(network),
-                super::sandbox::TEMPORARY,
+                match writer {
+                    Some(_) => String::new(),
+                    None => format!(", writable only in {}", super::sandbox::TEMPORARY),
+                },
                 if super::sandbox::UNRUNNABLE.is_empty() {
                     ""
                 } else {
@@ -432,7 +444,27 @@ disks can be changed, except in a TEMP of their own discarded after each command
             ),
         });
     }
-    guidelines.push("- No file can be changed: you only read and report".to_owned());
+    guidelines.push(match writer {
+        None => "- No file can be changed: you only read and report".to_owned(),
+        Some(writer) => {
+            let listed = |paths: Vec<PathBuf>| {
+                (paths.iter().map(|path| path.display().to_string()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let kept = writer.protected_paths(cwd);
+            let kept = match kept.is_empty() {
+                true => String::new(),
+                false => format!("; kept read-only within them: {}", listed(kept)),
+            };
+            format!(
+                "- Files can be changed only in {} (and in {}){kept}. Your final reply says what \
+you changed",
+                listed(writer.writable_roots(cwd)),
+                super::sandbox::TEMPORARY
+            )
+        }
+    });
     guidelines.push("- Be concise in your responses".to_owned());
     guidelines.push("- Show file paths clearly when working with files".to_owned());
     let mut text = format!(
@@ -1144,6 +1176,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             None,
             &hidden,
             false,
+            None,
         );
         assert!(text.contains("Kept.") && !text.contains("SECRET"), "{text}");
     }
@@ -1166,6 +1199,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             None,
             &Hidden::default(),
             false,
+            None,
         );
         let listed = "Be brief.\n\nThe following skills provide specialized instructions for \
 specific tasks.\n";
@@ -1176,8 +1210,17 @@ specific tasks.\n";
         );
         assert!(text.contains(&end), "{text}");
         assert!(
-            !child(cwd, &["bash"], "", &skills, None, &Hidden::default(), false)
-                .contains("<available_skills>")
+            !child(
+                cwd,
+                &["bash"],
+                "",
+                &skills,
+                None,
+                &Hidden::default(),
+                false,
+                None
+            )
+            .contains("<available_skills>")
         );
     }
 }

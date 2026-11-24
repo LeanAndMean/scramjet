@@ -560,6 +560,10 @@ pub(super) struct Settings {
     subagent_deny_read: Option<Vec<String>>,
     /// `sandbox.subagents.filesystem.allowRead`, as written; `None`: the main agent's.
     subagent_allow_read: Option<Vec<String>>,
+    /// `sandbox.subagents.mode`.
+    subagent_mode: SandboxMode,
+    /// `sandbox.subagents.filesystem.allowWrite`, as written.
+    subagent_allow_write: Vec<String>,
     pub(super) steering_mode: Delivery,
     pub(super) follow_up_mode: Delivery,
     /// The directories of the installed command sets: `commandSets`' (a relative one is
@@ -712,6 +716,8 @@ impl Settings {
             subagent_reach: None,
             subagent_deny_read: None,
             subagent_allow_read: None,
+            subagent_mode: SandboxMode::ReadOnly,
+            subagent_allow_write: Vec::new(),
             steering_mode: Delivery::All,
             follow_up_mode: Delivery::OneAtATime,
             command_sets: Vec::new(),
@@ -1202,10 +1208,10 @@ impl Settings {
         }
     }
 
-    /// `sandbox.subagents`: their network, off unless it says, and the `denyRead` and `allowRead`
-    /// that replace, each given, the main agent's for them.
+    /// `sandbox.subagents`: their network, off unless it says, their mode and `allowWrite`,
+    /// read-only unless they say, and the `denyRead` and `allowRead` that replace, each given,
+    /// the main agent's for them.
     fn apply_subagents(&mut self, path: &str, subagents: &Map<String, Value>) {
-        const READ_ONLY: &str = "is not taken: subagents are read-only";
         let mut wrong = |key: &str, why: &str| {
             (self.warnings).push(format!("{path}: sandbox.subagents.{key} {why}; ignored"))
         };
@@ -1221,8 +1227,14 @@ impl Settings {
                 None => wrong(BLOCK_READS, &format!("must be {REACHES}")),
             },
         }
-        if subagents.contains_key("mode") {
-            wrong("mode", READ_ONLY);
+        match subagents.get("mode").map(Value::as_str) {
+            None => {}
+            Some(Some(name)) => match SandboxMode::parse(name) {
+                Some(Some(mode)) => self.subagent_mode = mode,
+                Some(None) => wrong("mode", "is not taken: subagents always run in a sandbox"),
+                None => wrong("mode", r#"must be "read-only" or "workspace-write""#),
+            },
+            Some(None) => wrong("mode", r#"must be "read-only" or "workspace-write""#),
         }
         let filesystem = match subagents.get("filesystem") {
             None => return,
@@ -1244,8 +1256,12 @@ impl Settings {
             }
         }
         for key in ["allowWrite", "writable_roots"] {
-            if filesystem.contains_key(key) {
-                wrong(&format!("filesystem.{key}"), READ_ONLY);
+            if !filesystem.contains_key(key) {
+                continue;
+            }
+            match paths(filesystem, key) {
+                Ok(entries) => self.subagent_allow_write.extend(entries),
+                Err(()) => wrong(&format!("filesystem.{key}"), "must be a list of paths"),
             }
         }
     }
@@ -1282,6 +1298,10 @@ impl Settings {
                 allow: resolved(&self.subagent_allow_read, &self.allow_read),
                 reach: self.subagent_reach.unwrap_or(self.reach),
             },
+            mode: self.subagent_mode,
+            writable: (self.subagent_allow_write.iter())
+                .map(|entry| self.resolve(entry))
+                .collect(),
         }
     }
 
@@ -2784,6 +2804,7 @@ mod tests {
             scramjet::agent::Subagents {
                 network: false,
                 reads: main.clone(),
+                ..Default::default()
             }
         );
         let absolute = |path: &str| std::path::absolute(path).unwrap();
@@ -2806,15 +2827,32 @@ mod tests {
                     allow: vec![absolute("/main/ok")],
                     reach: Reach::Everything,
                 },
+                ..Default::default()
             }
         );
+        let writers = settings_with(
+            &scratch,
+            r#"{"sandbox": {"subagents": {"mode": "workspace-write",
+                "filesystem": {"allowWrite": ["/w"], "writable_roots": ["own"]}}}}"#,
+        );
+        assert!(writers.warnings.is_empty(), "{:?}", writers.warnings);
+        let subagents = writers.subagents();
+        assert_eq!(subagents.mode, SandboxMode::WorkspaceWrite);
+        assert_eq!(subagents.writable, [absolute("/w"), scratch.0.join("own")]);
         let wrong = settings_with(
             &scratch,
-            r#"{"sandbox": {"subagents": {"network": "yes", "mode": "workspace-write",
-                "filesystem": {"allowRead": "~", "allowWrite": ["/w"]}}}}"#,
+            r#"{"sandbox": {"subagents": {"network": "yes", "mode": "rw",
+                "filesystem": {"allowRead": "~", "allowWrite": "/w"}}}}"#,
         );
         assert_eq!(wrong.subagents(), scramjet::agent::Subagents::default());
         assert_eq!(wrong.warnings.len(), 4, "{:?}", wrong.warnings);
+        let off = settings_with(&scratch, r#"{"sandbox": {"subagents": {"mode": "off"}}}"#);
+        assert_eq!(off.subagents().mode, SandboxMode::ReadOnly);
+        assert!(
+            off.warnings[0].ends_with("subagents always run in a sandbox; ignored"),
+            "{:?}",
+            off.warnings
+        );
         let wrong = settings_with(&scratch, r#"{"sandbox": {"subagents": []}}"#);
         assert!(
             wrong.warnings[0].ends_with("sandbox.subagents must be an object; ignored"),

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.316.0 — Subagents that write
+
+### Added
+
+- `sandbox.subagents.mode: "workspace-write"` lets a subagent whose agent file lists `write` or `edit` change files in its working directory, its `.git`, `.scramjet` and `.agents` kept read-only, with its commands in a sandbox where only that directory is writable; `sandbox.subagents.filesystem.allowWrite` adds directories. With the main agent's own sandbox on, a subagent writes only where the main agent may. Subagents stay read-only by default, and on Windows.
+
 ## 2.315.0 — A reopened session's compactions over ACP
 
 ### Added

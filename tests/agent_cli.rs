@@ -2137,7 +2137,8 @@ fn subagents_take_the_main_agents_hidden_paths_and_their_own_network_from_the_se
     );
     assert!(answered.contains("NET-2"), "{answered} {stderr}");
     assert!(!answered.contains("PRIVATE"), "{answered}");
-    // Their own list replaces the main agent's; the network stays off by default.
+    // Their own list replaces the main agent's; the network stays off by default, and an agent
+    // listing no write or edit stays read-only where subagents may write.
     let (asked, answered, stderr) = run(serde_json::json!({"filesystem": {"denyRead": hidden},
         "subagents": {"filesystem": {"denyRead": []}, "mode": "workspace-write"}}));
     assert!(
@@ -2146,10 +2147,7 @@ fn subagents_take_the_main_agents_hidden_paths_and_their_own_network_from_the_se
     );
     assert!(answered.contains("OFF-4"), "{answered} {stderr}");
     assert!(answered.contains("PRIVATE-plan"), "{answered}");
-    assert!(
-        stderr.contains("sandbox.subagents.mode is not taken: subagents are read-only; ignored"),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("sandbox.subagents"), "{stderr}");
 }
 
 #[test]

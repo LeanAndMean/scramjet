@@ -1,0 +1,71 @@
+{
+  "size": "100x48",
+  "settings": {
+    "sandbox": {"subagents": {"mode": "workspace-write"}}
+  },
+  "config": {
+    "agents/fixer.md": "---\nname: fixer\ndescription: Makes small fixes\ntools: read, bash, write, edit\n---\n\nMake the change asked, then say what you changed.\n"
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Add a notes file",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "fixer",
+          "task": "Write NOTES.md and fill .git/description"
+        }
+      }
+    ],
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "NOTES.md",
+          "content": "Notes\n"
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo more >> NOTES.md; cat NOTES.md; echo x > .git/description"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Wrote NOTES.md; .git/description stays read-only."
+      }
+    ],
+    [
+      {
+        "text": "The fixer wrote NOTES.md."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "The fixer wrote"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "expanded"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}

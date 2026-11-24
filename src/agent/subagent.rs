@@ -1,8 +1,9 @@
 //! Scramjet's `subagent` tool (`subagent/index.ts`): the model hands tasks to agents defined in
 //! markdown files, each run with a context of its own and its final reply as the result. Here
-//! the children run in this process with the parent's endpoint, and get read-only tools only:
+//! the children run in this process with the parent's endpoint, and get read-only tools:
 //! `read`, `grep`, `find` and `ls`, and bash in the read-only sandbox, none of which shows the
-//! user's credential stores.
+//! user's credential stores; `write` and `edit` too, for an agent that lists them, where
+//! `sandbox.subagents` lets children write, bash then in a sandbox of their own.
 
 use super::yaml;
 use super::{
@@ -122,6 +123,13 @@ pub(super) struct Definition {
 }
 
 impl Definition {
+    /// Whether its file lists `write` or `edit` and does not disallow it.
+    fn writes(&self) -> bool {
+        (self.tools.iter().flatten()).any(|tool| {
+            matches!(tool.as_str(), "write" | "edit") && !self.disallowed.contains(tool)
+        })
+    }
+
     fn problems(&self) -> impl Iterator<Item = Problem> {
         (self.diagnostics.iter()).map(|text| Problem::in_file(text.clone(), &self.path))
     }
@@ -647,6 +655,8 @@ pub(super) struct Parent<'a> {
     pub subagents: &'a sandbox::Subagents,
     /// The agent's writable directories (`Sandbox::writable_roots`), which children's reach keeps.
     pub writable: Vec<PathBuf>,
+    /// The agent's own sandbox, outside which no child writes.
+    pub sandbox: Option<&'a sandbox::Sandbox>,
 }
 
 impl Parent<'_> {
@@ -675,6 +685,8 @@ struct Job<'a> {
     /// The level its requests ask for, at most the parent's (`child_effort`).
     effort: Option<String>,
     tools: Vec<&'static str>,
+    /// Where its `write`, `edit` and commands may change files, when it has `write` or `edit`.
+    writer: Option<sandbox::Sandbox>,
     warnings: Vec<String>,
 }
 
@@ -687,9 +699,27 @@ impl<'a> Job<'a> {
         sandbox: &Result<(), String>,
     ) -> Self {
         let agent = agents.iter().find(|agent| agent.name == task.agent);
-        let (tools, warnings) = agent
-            .map(|agent| child_tools(agent, parent.tools, sandbox))
-            .unwrap_or_default();
+        let cwd = match &task.cwd {
+            Some(cwd) => tools::resolve(parent.root, cwd),
+            None => parent.root.to_owned(),
+        };
+        let (tools, writer, warnings) = match agent {
+            Some(agent) => {
+                let (writes, said) = match (agent.writes(), sandbox) {
+                    (false, _) => (Err(String::new()), Vec::new()),
+                    _ if cfg!(windows) => (Err(WINDOWS.to_owned()), Vec::new()),
+                    (true, Err(error)) => (
+                        Err(format!("the sandbox is unavailable ({error})")),
+                        Vec::new(),
+                    ),
+                    (true, Ok(())) => parent.subagents.writer(parent.root, &cwd, parent.sandbox),
+                };
+                let (tools, mut warnings) = child_tools(agent, parent.tools, sandbox, &writes);
+                warnings.extend(said);
+                (tools, writes.ok(), warnings)
+            }
+            None => Default::default(),
+        };
         let model = agent.map_or("", |agent| agent.model.as_deref().unwrap_or(parent.model));
         let info = match model == parent.model {
             true => parent.info.clone(),
@@ -699,14 +729,12 @@ impl<'a> Job<'a> {
             name: &task.agent,
             agent,
             task: text,
-            cwd: match &task.cwd {
-                Some(cwd) => tools::resolve(parent.root, cwd),
-                None => parent.root.to_owned(),
-            },
+            cwd,
             model: parent.providers.reference(model),
             info,
             effort: agent.and(child_effort(task.effort.as_deref(), parent.effort)),
             tools,
+            writer,
             warnings,
         }
     }
@@ -1180,12 +1208,18 @@ fn low_integrity_said(ui: &mut dyn AgentUi) {
     }
 }
 
+/// Why subagents' `write` and `edit` are left out on Windows, whose low integrity level keeps
+/// them off every local disk.
+const WINDOWS: &str = "subagents cannot write on Windows";
+
 /// The child's tools: those its file lists, or else the read-only ones of the parent's `inherited`,
-/// that are read-only and available, but those it disallows, with warnings about the others.
+/// that are read-only and available, and `write` and `edit` where `writes` lets it, but those it
+/// disallows, with warnings about the others.
 fn child_tools(
     agent: &Definition,
     inherited: &[String],
     sandbox: &Result<(), String>,
+    writes: &Result<sandbox::Sandbox, String>,
 ) -> (Vec<&'static str>, Vec<String>) {
     let inherited: Vec<String> = (inherited.iter())
         .filter(|tool| READ_ONLY.contains(&tool.as_str()))
@@ -1210,16 +1244,21 @@ fn child_tools(
             Some(known) if !tools::found(known) => missing.push(tool),
             Some(known) if !tools.contains(known) => tools.push(*known),
             Some(_) => {}
+            None if matches!(tool, "write" | "edit") && writes.is_ok() => {
+                let tool = if tool == "write" { "write" } else { "edit" };
+                if !tools.contains(&tool) {
+                    tools.push(tool);
+                }
+            }
             None if matches!(tool, "write" | "edit") => writers.push(tool),
             None => missing.push(tool),
         }
     }
     let mut warnings = agent.diagnostics.clone();
-    if !writers.is_empty() {
-        warnings.push(format!(
-            "{}: left out, as subagents run read-only here",
-            writers.join(", ")
-        ));
+    if let Err(why) = writes
+        && !writers.is_empty()
+    {
+        warnings.push(format!("{}: left out, as {why}", writers.join(", ")));
     }
     if let Err(error) = sandbox
         && !unconfined.is_empty()
@@ -1264,10 +1303,13 @@ fn run_child(
     let info = &job.info;
     let effort = &job.effort;
     let network = parent.subagents.network;
+    let writer = job.writer.as_ref();
+    let writable = writer.map_or_else(Vec::new, |writer| writer.writable_roots(&job.cwd));
     let reads = (parent.subagents.reads).opening(
         [parent.root.to_owned(), job.cwd.clone()]
             .into_iter()
             .chain(parent.writable.iter().cloned())
+            .chain(writable.iter().cloned())
             .chain(parent.given_to_read()),
     );
     let instructions = instructions::child(
@@ -1278,6 +1320,7 @@ fn run_child(
         parent.agent_directory,
         &sandbox::Hidden::stores(parent.providers.credential_files(), &reads.without_reach()),
         network,
+        writer,
     );
     let mut input = vec![json!({"role":"user","content":format!("Task: {}", job.task)})];
     for _ in 0..MAX_STEPS {
@@ -1289,7 +1332,7 @@ fn run_child(
             "model": info.id,
             "instructions": instructions,
             "input": input,
-            "tools": tools::child_definitions(tools, network),
+            "tools": tools::child_definitions(tools, network, &writable),
             "tool_choice": "auto",
             "parallel_tool_calls": true,
             "stream": true,
@@ -1370,13 +1413,15 @@ fn run_child(
                         name: call.name.to_owned(),
                         summary: call.summary(),
                     }));
-                    match tools.contains(&call.name) {
-                        true => call
-                            .run_read_only(&job.cwd, &hidden, network, cancel)
-                            .map(|output| output.sent())
-                            .unwrap_or_else(|error| json!(format!("Error: {error}"))),
-                        false => json!(tools::not_found(call.name, tools)),
-                    }
+                    let ran = match (tools.contains(&call.name), writer) {
+                        (false, _) => Ok(Output::failure(tools::not_found(call.name, tools))),
+                        (true, Some(writer)) => {
+                            call.run_in_sandbox(&job.cwd, writer, &hidden, cancel, &mut |_| {})
+                        }
+                        (true, None) => call.run_read_only(&job.cwd, &hidden, network, cancel),
+                    };
+                    ran.map(|output| output.sent())
+                        .unwrap_or_else(|error| json!(format!("Error: {error}")))
                 }
                 Err(error) => json!(format!("Error: {error}")),
             };
@@ -1676,15 +1721,16 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
     #[cfg_attr(windows, ignore = "Windows' shells differ: children_on_windows_…")]
     fn children_get_only_the_read_only_tools_they_list() {
         let sandbox = Ok(());
+        let read_only = Err("subagents run read-only here (sandbox.subagents.mode)".to_owned());
         let all = tools::DEFAULT_TOOLS.map(str::to_owned);
         // A file listing none takes the parent's read-only tools, without a word of the others.
-        let (tools, warnings) = child_tools(&agent(None, ""), &all, &sandbox);
+        let (tools, warnings) = child_tools(&agent(None, ""), &all, &sandbox, &read_only);
         assert_eq!(tools, ["read", "bash", "grep", "find", "ls"]);
         assert_eq!(warnings, ["noted"]);
         let narrowed = ["read", "edit", "grep"].map(str::to_owned);
-        let (tools, _) = child_tools(&agent(None, ""), &narrowed, &sandbox);
+        let (tools, _) = child_tools(&agent(None, ""), &narrowed, &sandbox, &read_only);
         assert_eq!(tools, ["read", "grep"]);
-        let (tools, warnings) = child_tools(&agent(None, "bash, grep"), &all, &sandbox);
+        let (tools, warnings) = child_tools(&agent(None, "bash, grep"), &all, &sandbox, &read_only);
         assert_eq!(
             (tools, warnings),
             (vec!["read", "find", "ls"], vec!["noted".into()])
@@ -1693,19 +1739,46 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             &agent(Some("read, grep, find, ls, bash, read, web, write"), "find"),
             &narrowed,
             &sandbox,
+            &read_only,
         );
         assert_eq!(tools, ["read", "grep", "ls", "bash"]);
         assert_eq!(
             warnings,
             [
                 "noted",
-                "write: left out, as subagents run read-only here",
+                "write: left out, as subagents run read-only here (sandbox.subagents.mode)",
                 "web: not available to subagents here"
             ]
         );
+        // Where children may write, an agent listing write or edit has them; one listing none
+        // still has the read-only tools alone.
+        let writes = Ok(sandbox::Sandbox {
+            mode: sandbox::SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        });
+        let listed = agent(Some("read, edit, write, edit, bash"), "");
+        let (tools, warnings) = child_tools(&listed, &all, &sandbox, &writes);
+        assert_eq!(
+            (tools, warnings),
+            (vec!["read", "edit", "write", "bash"], vec!["noted".into()])
+        );
+        let (tools, _) = child_tools(&agent(None, ""), &all, &sandbox, &writes);
+        assert_eq!(tools, ["read", "bash", "grep", "find", "ls"]);
+        let (tools, _) = child_tools(
+            &agent(Some("read, write"), "write"),
+            &all,
+            &sandbox,
+            &writes,
+        );
+        assert_eq!(tools, ["read"]);
         let missing = Err("no bwrap".to_owned());
-        let (tools, warnings) =
-            child_tools(&agent(Some("read, grep, ls, bash"), ""), &all, &missing);
+        let (tools, warnings) = child_tools(
+            &agent(Some("read, grep, ls, bash"), ""),
+            &all,
+            &missing,
+            &read_only,
+        );
         assert_eq!(tools, ["read", "grep", "ls"]);
         assert_eq!(
             warnings,
@@ -1723,14 +1796,16 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             true => "bash",
             false => "powershell",
         };
-        let (tools, warnings) = child_tools(&agent(Some("read, bash, cmd"), ""), &[], &Ok(()));
+        let none = Err(WINDOWS.to_owned());
+        let (tools, warnings) =
+            child_tools(&agent(Some("read, bash, cmd"), ""), &[], &Ok(()), &none);
         assert_eq!(
             (tools, warnings),
             (vec!["read", shell, "cmd"], vec!["noted".into()])
         );
         let missing = Err("x".to_owned());
         let listed = agent(Some("read, powershell, cmd"), "");
-        let (tools, warnings) = child_tools(&listed, &[], &missing);
+        let (tools, warnings) = child_tools(&listed, &[], &missing, &none);
         assert_eq!(tools, ["read"]);
         assert_eq!(
             warnings,
@@ -1739,7 +1814,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
                 "powershell, cmd: left out, as the read-only sandbox is unavailable (x)"
             ]
         );
-        let described = tools::child_definitions(&["bash", "powershell", "cmd"], false);
+        let described = tools::child_definitions(&["bash", "powershell", "cmd"], false, &[]);
         for tool in described.as_array().unwrap() {
             let description = tool["description"].as_str().unwrap();
             assert!(description.contains(tools::LOW_INTEGRITY), "{description}");

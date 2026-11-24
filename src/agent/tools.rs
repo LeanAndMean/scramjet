@@ -198,13 +198,40 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     Value::Array(tools)
 }
 
-/// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls` and the
-/// shells.
-pub(super) fn child_definitions(names: &[&str], network: bool) -> Value {
-    let tools = ["read", "grep", "find", "ls", "bash", "powershell", "cmd"]
-        .into_iter()
-        .filter(|tool| names.contains(tool))
-        .map(|tool| definition(tool, true, network));
+/// The definitions of a subagent's tools, `names` among `read`, `grep`, `find`, `ls`, `write`,
+/// `edit` and the shells; bash's says it can write in `writable`, if any.
+pub(super) fn child_definitions(names: &[&str], network: bool, writable: &[PathBuf]) -> Value {
+    let tools = [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "write",
+        "edit",
+        "bash",
+        "powershell",
+        "cmd",
+    ]
+    .into_iter()
+    .filter(|tool| names.contains(tool))
+    .map(|tool| {
+        let mut definition = definition(tool, true, network);
+        if tool == "bash" && !writable.is_empty() {
+            let listed: Vec<String> = (writable.iter())
+                .map(|path| path.display().to_string())
+                .collect();
+            definition["description"] = json!(format!(
+                "Run a bash command in the working directory, in a sandbox {}: files can be \
+changed only in {} (but their .git, .scramjet and .agents) and in {}. Returns combined \
+stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after \
+the output.",
+                super::sandbox::network_said(network),
+                listed.join(", "),
+                super::sandbox::TEMPORARY
+            ));
+        }
+        definition
+    });
     Value::Array(tools.collect())
 }
 

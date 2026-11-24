@@ -160,9 +160,10 @@ const SANDBOX_OWN: [&str; 4] = ["/dev", "/proc", "/run", "/tmp"];
 
 /// How the main agent's tools are confined (`--sandbox`, settings `sandbox.mode` and
 /// `sandbox.network`), with Codex's names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SandboxMode {
     /// Every file read-only to bash, and `write` and `edit` refused.
+    #[default]
     ReadOnly,
     /// The same, with the project writable but `PROTECTED`.
     WorkspaceWrite,
@@ -691,12 +692,78 @@ fn kept_in_reach(
     kept
 }
 
-/// How subagents' read-only tools are confined (the settings' `sandbox.subagents`): whether their
-/// commands reach the network, and the paths hidden from them and re-opened.
+/// How subagents' tools are confined (the settings' `sandbox.subagents`): whether their
+/// commands reach the network, the paths hidden from them and re-opened, and where those whose
+/// agent lists `write` or `edit` may write.
 #[derive(Default, Clone, PartialEq, Debug)]
 pub struct Subagents {
     pub network: bool,
     pub reads: Reads,
+    /// `workspace-write`: a child's working directory writable, but what `PROTECTED` names.
+    pub mode: SandboxMode,
+    /// `sandbox.subagents.filesystem.allowWrite`: directories writable to them too.
+    pub writable: Vec<PathBuf>,
+}
+
+impl Subagents {
+    /// The sandbox of a child that may write, working in `cwd` of the project `root`: `cwd`
+    /// writable in `workspace-write`, and `writable`'s directories, each only where the sandbox
+    /// of the main agent, `main`, lets it write too. Else why it writes nowhere. Also what of
+    /// `writable` could not be granted.
+    pub(super) fn writer(
+        &self,
+        root: &Path,
+        cwd: &Path,
+        main: Option<&Sandbox>,
+    ) -> (Result<Sandbox, String>, Vec<String>) {
+        if self.mode == SandboxMode::ReadOnly && self.writable.is_empty() {
+            let why = "subagents run read-only here (sandbox.subagents.mode)";
+            return (Err(why.to_owned()), Vec::new());
+        }
+        let allowed = |path: &Path| main.is_none_or(|main| main.check_write(root, path).is_ok());
+        let mut capped = false;
+        let mut sandbox = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            network: self.network,
+            writable: Vec::new(),
+        };
+        if self.mode == SandboxMode::WorkspaceWrite {
+            match allowed(&std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned())) {
+                true => sandbox.mode = SandboxMode::WorkspaceWrite,
+                false => capped = true,
+            }
+        }
+        let mut said = Vec::new();
+        for directory in &self.writable {
+            match sandbox.grant(cwd, &directory.to_string_lossy()) {
+                Ok(real) if !allowed(&real) => {
+                    sandbox.writable.pop();
+                    capped = true;
+                    said.push(format!(
+                        "{}: in sandbox.subagents.filesystem.allowWrite; not writable, as the \
+main agent's sandbox leaves it read-only",
+                        real.display()
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.ends_with("already writable") => {}
+                Err(error) => said.push(format!(
+                    "{error}: in sandbox.subagents.filesystem.allowWrite; not writable"
+                )),
+            }
+        }
+        if !sandbox.writable_roots(cwd).is_empty() {
+            return (Ok(sandbox), said);
+        }
+        let why = match capped {
+            true => format!(
+                "the main agent's sandbox leaves {} read-only",
+                cwd.display()
+            ),
+            false => "none of sandbox.subagents.filesystem.allowWrite can be written".to_owned(),
+        };
+        (Err(why), said)
+    }
 }
 
 /// How a subagent's tools describe the network its read-only sandbox has.
@@ -1565,6 +1632,54 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn subagents_write_in_their_directories_only_where_the_main_sandbox_does_too() {
+        use super::{Sandbox, SandboxMode, Subagents};
+        let base = std::env::temp_dir().join(format!("scramjet-writers-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(base.clone());
+        let (project, scratch) = (base.join("project"), base.join("scratch"));
+        for directory in [&project, &scratch] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let real = |path: &std::path::Path| std::fs::canonicalize(path).unwrap();
+        let subagents = Subagents {
+            writable: vec![scratch.clone(), "/proc".into(), base.join("gone")],
+            ..Default::default()
+        };
+        let (writer, said) = subagents.writer(&project, &project, None);
+        let writer = writer.unwrap();
+        assert_eq!(writer.mode, SandboxMode::ReadOnly);
+        assert_eq!(writer.writable_roots(&project), [real(&scratch)]);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(
+            said[0].starts_with("/proc: the sandbox keeps /proc its own"),
+            "{said:?}"
+        );
+        let main = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        let (writer, said) = subagents.writer(&project, &project, Some(&main));
+        assert!(
+            writer
+                .unwrap_err()
+                .starts_with("the main agent's sandbox leaves")
+        );
+        assert!(
+            said[0].ends_with("as the main agent's sandbox leaves it read-only"),
+            "{said:?}"
+        );
+        let both = Subagents {
+            mode: SandboxMode::WorkspaceWrite,
+            ..subagents
+        };
+        let writer = both.writer(&project, &project, Some(&main)).0.unwrap();
+        assert_eq!(writer.writable_roots(&project), [real(&project)]);
+        let (none, _) = Subagents::default().writer(&project, &project, None);
+        assert!(none.unwrap_err().ends_with("(sandbox.subagents.mode)"));
+    }
 
     #[test]
     fn sandboxed_commands_read_but_cannot_write_or_connect() {

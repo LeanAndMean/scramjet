@@ -1,6 +1,6 @@
 ---
 name: general-purpose
-description: General-purpose agent for researching complex questions and multi-step investigations that need judgment across many files, such as how a subsystem works, why something fails, or what a change would touch. Use it when a search may not find the right match in the first few tries. Read-only, like every subagent.
+description: General-purpose agent for researching complex questions and multi-step investigations that need judgment across many files, such as how a subsystem works, why something fails, or what a change would touch. Use it when a search may not find the right match in the first few tries. Read-only.
 tools: Read, Grep, Glob, LS, Bash
 ---
 

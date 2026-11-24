@@ -21,7 +21,7 @@ A scenario (scripts/screens/*.json) holds:
     "size":     COLUMNSxROWS, unless --size gives one;
     "files":    the project's files, committed to a Git repository first;
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
-    "config":   more files beside the settings, by name, such as "words.txt";
+    "config":   more files beside the settings, by name, such as "words.txt" or "agents/x.md";
     "model":    the scripted server's model (default gpt-6-luna);
     "window":   its context window, unknown unless given;
     "total":    the total tokens each response reports, so the context's size is known, its input
@@ -383,6 +383,7 @@ def main():
         with open(os.path.join(work, 'config/scramjet/settings.json'), 'w') as file:
             json.dump(settings, file)
         for name, text in scenario.get('config', {}).items():
+            os.makedirs(os.path.dirname(os.path.join(work, 'config/scramjet', name)), exist_ok=True)
             with open(os.path.join(work, 'config/scramjet', name), 'w') as file:
                 file.write(text)
         env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'),

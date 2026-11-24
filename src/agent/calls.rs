@@ -576,6 +576,7 @@ impl Kit {
                 subagents: &self.subagents,
                 writable: (self.sandbox.as_ref())
                     .map_or_else(Vec::new, |sandbox| sandbox.writable_roots(&self.root)),
+                sandbox: self.sandbox.as_ref(),
             },
             hide_credentials: self.hide_credentials,
             sandbox: self.sandbox.as_ref(),
@@ -966,7 +967,7 @@ You review code.\n",
         );
         assert_eq!(std::fs::read_to_string(&kept).unwrap(), "original\n");
         let result = "Agent invocation warnings:\n- write: left out, as subagents run read-only \
-here\n\nkept.txt says original";
+here (sandbox.subagents.mode)\n\nkept.txt says original";
         assert_eq!(last_output(&bodies[4]), result);
         assert_eq!(agent.usage.requests, 5);
         assert_eq!(ui.replies, ["done"]);
@@ -1030,7 +1031,7 @@ here\n\nkept.txt says original";
         close(agent.usage.cost, 5.0 * each);
         assert_eq!(
             run.warnings,
-            ["write: left out, as subagents run read-only here"]
+            ["write: left out, as subagents run read-only here (sandbox.subagents.mode)"]
         );
         assert_eq!(ui.children.last(), Some(ended));
         assert_eq!(ui.children.len(), 1 + 3 + 3 + 1);
@@ -1081,6 +1082,117 @@ here\n\nkept.txt says original";
             "{:?}",
             ui.shown
         );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "subagents cannot write on Windows")]
+    fn a_subagent_writes_where_sandbox_subagents_lets_it_and_the_main_sandbox_does_too() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let task = json!({"agent":"writer","task":"Change it"});
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", subagent::NAME, task.clone()),
+            tool_call(
+                "call_2",
+                "bash",
+                json!({"command":"echo ran > ran.txt; echo x > .git/config; cat .git/config"}),
+            ),
+            tool_call(
+                "call_3",
+                "write",
+                json!({"path":"written.txt","content":"new"}),
+            ),
+            tool_call(
+                "call_4",
+                "edit",
+                json!({"path":"written.txt","edits":[{"oldText":"new","newText":"edited"}]}),
+            ),
+            tool_call(
+                "call_5",
+                "write",
+                json!({"path":".git/hooks/pre-commit","content":"x"}),
+            ),
+            reply("changed"),
+            reply("done"),
+            // With the main agent's sandbox read-only, the same agent writes nothing.
+            tool_call("call_6", subagent::NAME, task),
+            reply("nothing to change"),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "subagent-writes");
+        let root = agent.root().to_owned();
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/config"), "a\n").unwrap();
+        let agents = root.join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("writer.md"),
+            "---\nname: writer\ndescription: Writes\ntools: read, bash, write, edit\n---\n\nWrite.\n",
+        )
+        .unwrap();
+        agent.agents_directory = Some(agents);
+        agent.set_subagents(sandbox::Subagents {
+            mode: SandboxMode::WorkspaceWrite,
+            ..Default::default()
+        });
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("write", &mut Recorder::default(), &cancel)
+            .unwrap();
+        agent.set_sandbox(Some(Sandbox {
+            mode: SandboxMode::ReadOnly,
+            network: false,
+            writable: Vec::new(),
+        }));
+        agent
+            .turn("again", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 10);
+        let child = &bodies[1];
+        let names: Vec<_> = (child["tools"].as_array().unwrap().iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["read", "write", "edit", "bash"]);
+        let real = std::fs::canonicalize(&root).unwrap();
+        let instructions = child["instructions"].as_str().unwrap();
+        let said = format!("- Files can be changed only in {}", real.display());
+        assert!(instructions.contains(&said), "{instructions}");
+        assert!(
+            instructions.contains("kept read-only within them"),
+            "{instructions}"
+        );
+        let bash = last_output(&bodies[2]);
+        assert!(bash.contains("a\n"), "{bash}");
+        assert_eq!(
+            std::fs::read_to_string(root.join("ran.txt")).unwrap(),
+            "ran\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join(".git/config")).unwrap(),
+            "a\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("written.txt")).unwrap(),
+            "edited"
+        );
+        let refused = last_output(&bodies[5]);
+        assert!(
+            refused.contains("kept read-only in the sandbox"),
+            "{refused}"
+        );
+        assert!(!root.join(".git/hooks/pre-commit").exists());
+        assert_eq!(last_output(&bodies[6]), "changed");
+        // The second child: read-only tools alone, and a warning saying why.
+        let names: Vec<_> = (bodies[8]["tools"].as_array().unwrap().iter())
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["read", "bash"]);
+        let result = last_output(&bodies[9]);
+        let why = format!(
+            "- write, edit: left out, as the main agent's sandbox leaves {} read-only",
+            root.display()
+        );
+        assert!(result.contains(&why), "{result}");
     }
 
     #[test]
