@@ -278,6 +278,13 @@ User decisions from `/rs:steer` on 2026-11-24, after the user found that `/sandb
 - **Applying and saving.** A change applies at once (the reach too, no longer waiting for a new session) and is remembered for this project: the next session there, a resumed one included, starts with it. One key saves the configuration as the default for every project. A project remembers only the rows changed there; the others follow the default, so a later default reaches projects that never changed them. Rows set for this project are marked, and one key resets the project to the defaults. Kept in the user's configuration keyed by project, as `sandbox-grants.json` is, never read from a repository, so a cloned repository cannot loosen its own sandbox.
 - **`/settings`' headings** are told apart from its rows at a glance (the theme's heading color, bold, a blank line above, the rows indented beneath), and no heading shows without any of its rows (paged down, "Display" stood empty above "Input").
 
+### The draft and its undo (second steer of 2026-11-24)
+
+User decisions from the second `/rs:steer` of 2026-11-24, after the user saw that users may type for 20 minutes and lose it all: by exiting (Ctrl+C twice, or Ctrl+Z taken for undo, which suspends), or by clearing the editor with Ctrl+C.
+
+- **A draft survives.** The unsent prompt is saved with its session a few seconds after it changes and at every exit, and a resumed session starts with it.
+- **Undo reaches and goes back far enough.** Undo has a default key in Windows Terminal and Ctrl+Z on native Windows, and redo exists. Several steps back work; the history is bounded, and kept with the draft across a restart. Its size and grouping are the loop's.
+
 ### What the context holds, shown (2026-11-17)
 
 User decisions from `/rs:steer` on 2026-11-17. Hiding what the model is given keeps users from troubleshooting it:
