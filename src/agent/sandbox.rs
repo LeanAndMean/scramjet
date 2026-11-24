@@ -790,8 +790,10 @@ impl Hidden {
         let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
         if in_processes(&real) {
             return format!(
-                "{}: a process's own files, hidden as they hold credentials (its environment)",
-                path.display()
+                "{}: in a process's directory of /proc ({}), all hidden from the file tools as \
+                 its environment holds credentials; bash can read what is there",
+                path.display(),
+                real.display()
             );
         }
         let store = (self.files.iter().chain(&self.directories))

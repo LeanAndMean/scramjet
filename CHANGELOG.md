@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.303.2 — A clearer refusal for /proc
+
+### Fixed
+
+- The file tools' refusal of a process's directory in `/proc` names the real path and says `bash` can read it: `/proc/mounts` and `/proc/net` lead into `/proc/self`, and were refused as if they held the environment.
+
 ## 2.303.1 — Processes' files hidden from the file tools
 
 ### Fixed

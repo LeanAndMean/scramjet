@@ -2501,9 +2501,13 @@ disjoint regions."
             &format!("{own}/environ"),
             &parent,
             "/proc/self/root/proc/self/environ",
+            "/proc/mounts",
         ] {
             let refused = run("read", json!({"path": path})).unwrap_err();
-            assert!(refused.contains("a process's own files"), "{refused}");
+            assert!(
+                refused.contains("in a process's directory of /proc"),
+                "{refused}"
+            );
         }
         for name in ["ls", "find", "grep"] {
             let arguments = json!({"path": "/proc/self", "pattern": "*"});
