@@ -170,6 +170,14 @@ impl Listing {
     async fn read(&self) -> Result<Vec<Value>, String> {
         let given = configured::headers(&self.headers, &self.commanded).await;
         let given = given.map_err(|problem| format!("{}: {problem}", self.provider))?;
+        let listed = self.read_with(&given.headers).await;
+        if listed.is_err() {
+            configured::forget(&self.commanded);
+        }
+        listed
+    }
+
+    async fn read_with(&self, given: &[(String, String)]) -> Result<Vec<Value>, String> {
         let mut headers: Vec<(&str, &str)> = (given.iter())
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();

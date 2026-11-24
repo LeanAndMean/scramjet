@@ -154,6 +154,8 @@ pub(super) struct Failure {
     pub refused: bool,
     /// The model or the provider's filter declined to answer.
     pub refusal: bool,
+    /// The provider answered 401: the key or token sent was not taken.
+    pub unauthorized: bool,
 }
 
 /// A failure nothing says another attempt may cure, such as a file's.
@@ -179,6 +181,7 @@ impl Failure {
             quota: None,
             refused: false,
             refusal: false,
+            unauthorized: false,
         }
     }
     /// A failure the provider explained, classified by its error code, then by its message.
@@ -439,6 +442,7 @@ async fn exchange(
                 quota: None,
                 refused: false,
                 refusal: false,
+                unauthorized: status == hyper::StatusCode::UNAUTHORIZED,
             }),
         }
     } else {

@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.306.0 — Key commands run once, not for every request
+
+### Changed
+
+- An `apiKey` or header given as `!command` in `models.json` or `auth.json` is kept for 5 minutes rather than run for each request, as Claude Code keeps its `apiKeyHelper`'s: requests made together wait for one run, and a 401 runs it again and sends the request once more. `SCRAMJET_KEY_COMMAND_TTL_MS` sets the time; `0` runs it for each request as before.
+
 ## 2.305.0 — Directives only where they apply, or none
 
 ### Added

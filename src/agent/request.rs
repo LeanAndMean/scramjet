@@ -481,7 +481,10 @@ pub(super) fn send(
     let mut failed = Vec::new();
     let model = request["model"].as_str().unwrap_or_default();
     let max_wait = retries.max_wait.unwrap_or(Duration::MAX);
+    // A kept `!command` value refused is run again once, at once, as Claude Code's `apiKeyHelper`.
+    let mut renewed = false;
     loop {
+        let mut kept = false;
         // A wait longer than the settings allow is the provider's to refuse again.
         while let Some(left) = super::cooldown::take(route, model, max_wait) {
             on(Sending::Cooling(left));
@@ -507,7 +510,10 @@ pub(super) fn send(
                     }
                 })?;
                 let given = match given {
-                    Ok(given) => given,
+                    Ok(given) => {
+                        kept = given.kept;
+                        given.headers
+                    }
                     Err(problem) => {
                         let problem = format!("{}: {problem}", route.provider);
                         break 'sent client::Failure::new(problem, false);
@@ -574,6 +580,11 @@ pub(super) fn send(
                     .take(300)
                     .collect(),
             });
+        }
+        if failure.unauthorized && kept && !renewed {
+            super::configured::forget(&route.commanded);
+            renewed = true;
+            continue;
         }
         if let (true, Some(runtime)) = (failure.refused, info.runtime) {
             // A runtime nothing listens for has not been started: waiting will not start it.
@@ -2124,8 +2135,9 @@ by {after} (ID: {after}) until a later change."
 
     #[test]
     #[cfg_attr(windows, ignore = "runs `sh` commands")]
-    fn a_key_command_runs_for_each_request_and_one_that_fails_sends_nothing() {
+    fn a_key_command_is_kept_until_a_401_and_one_that_fails_sends_nothing() {
         let choice = |delta: Value, finish: Value| json!({"id":"c","choices":[{"index":0,"delta":delta,"finish_reason":finish}]});
+        let refused = "{\"error\":{\"message\":\"invalid key\"}}";
         let (endpoint, server) = serve_requests(vec![
             completions_stream(&[
                 choice(
@@ -2135,6 +2147,11 @@ by {after} (ID: {after}) until a later change."
                 ),
                 choice(json!({}), json!("tool_calls")),
             ]),
+            format!(
+                "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{refused}",
+                refused.len()
+            )
+            .into_bytes(),
             completions_stream(&[
                 choice(json!({"content":"Read."}), json!(null)),
                 choice(json!({}), json!("stop")),
@@ -2161,10 +2178,13 @@ by {after} (ID: {after}) until a later change."
         agent.turn("Read notes.txt", &mut ui, &cancel).unwrap();
         assert_eq!(ui.replies, ["Read."]);
         let requests = server.join().unwrap();
-        let keys: Vec<bool> = (requests.iter().enumerate())
-            .map(|(n, (head, _))| head.contains(&format!("authorization: bearer k{n}\r\n")))
+        // The first key serves the second request too; refused, the command runs again.
+        let keys: Vec<bool> = (requests.iter().zip([0, 0, 1]))
+            .map(|((head, _), n)| head.contains(&format!("authorization: bearer k{n}\r\n")))
             .collect();
-        assert_eq!(keys, [true, true]);
+        assert_eq!(keys, [true, true, true]);
+        assert_eq!(std::fs::read_to_string(&count).unwrap(), "\n\n");
+        assert!(ui.retries.is_empty());
         // Not sent, not tried again: the server is gone, and a connection would say so.
         agent.config.providers = providers("!echo sk-secret; exit 4");
         agent.set_model("qwen3").unwrap();
