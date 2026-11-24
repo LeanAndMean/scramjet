@@ -321,16 +321,10 @@ impl Interactive {
         rows.push(row("Can change", change, note, Entry::Change));
         let mut read = reach_name(reach).to_owned();
         let mut note = format!("{} Enter chooses.", reach_note(reach));
-        if reach.kept() && (cfg!(windows) || sandbox.is_none()) {
+        if reach.kept() && cfg!(windows) {
             read += " (read, grep and find only)";
-            note = match cfg!(windows) {
-                true => "Windows cannot hide files from commands: only read, grep and find keep \
-                         to it."
-                    .to_owned(),
-                false => "Without a sandbox only read, grep and find keep to it; commands do in \
-                          one."
-                    .to_owned(),
-            };
+            note = "Windows cannot hide files from commands: only read, grep and find keep to it."
+                .to_owned();
         }
         let (read, note) = here(&read, note, now.reach != default.reach);
         rows.push(row("Can read", read, note, Entry::Read));

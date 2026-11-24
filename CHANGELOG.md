@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.324.0 — Commands keep to the read limit without a sandbox
+
+### Changed
+
+- On Linux and macOS, `/sandbox`'s Can read (`blockReadsOutsideWorkingDirectories`) now keeps commands to it also when the agent can change anything: what it leaves out is hidden from them as from read, grep and find, and stays unchanged; the rest stays writable. Only on Windows does the row still say "read, grep and find only".
+
 ## 2.323.0 — Headings that read as headings
 
 ### Changed

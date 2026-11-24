@@ -2269,6 +2269,56 @@ fn the_file_tools_keep_to_the_reach_without_a_sandbox() {
 }
 
 #[test]
+#[cfg(unix)]
+fn commands_keep_to_the_reach_without_a_sandbox_and_write_as_they_are() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-bash-reach-{}", std::process::id())),
+    );
+    let home = scratch.0.join("home");
+    let (project, other) = (home.join("project"), home.join("other"));
+    for directory in [&project, &other] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    std::fs::write(other.join("away.md"), "MARK-away\n").unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let script = "cat ../other/away.md; ls -A .. | wc -l; echo made > made.txt; echo DONE-$((1+1))";
+    let (port, bodies) = serve_call("bash", serde_json::json!({"command": script}));
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({"blockReadsOutsideWorkingDirectories": true});
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session", "-p", "hi"])
+        .current_dir(&project)
+        .env("HOME", &home)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{stderr}");
+    let answered = (0..2)
+        .map(|_| bodies.recv_timeout(Duration::from_secs(20)).unwrap())
+        .nth(1)
+        .unwrap();
+    assert!(answered.contains("DONE-2"), "{answered} {stderr}");
+    assert!(!answered.contains("MARK-away"), "{answered}");
+    // The home directory shows only the project.
+    assert!(answered.contains("\\n1\\nDONE-2"), "{answered}");
+    assert_eq!(
+        std::fs::read_to_string(project.join("made.txt")).unwrap(),
+        "made\n"
+    );
+}
+
+#[test]
 fn images_are_resized_sent_as_they_are_or_blocked_as_the_settings_say() {
     let binary = &binary();
     let scratch =
@@ -6307,13 +6357,7 @@ fn the_sandbox_shown_lists_what_the_settings_hide_grant_and_re_open() {
         off.contains(&format!("Hidden: {}.", notes.display())),
         "{off}"
     );
-    assert!(
-        off.ends_with(
-            "Commands are not kept to the reach without a sandbox, only read, grep and \
-find are; /sandbox workspace-write keeps them to it too."
-        ),
-        "{off}"
-    );
+    assert!(!off.contains("read, grep and find"), "{off}");
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }

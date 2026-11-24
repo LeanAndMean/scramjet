@@ -1597,7 +1597,7 @@ fn bash(
         Some(hidden) => {
             let process = sandbox::hiding(root, command, hidden)?;
             run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress).map_err(
-                |error| format!("{error}; it hides the credential stores from this command"),
+                |error| format!("{error}; it hides from this command what the settings hide"),
             )?
         }
     };

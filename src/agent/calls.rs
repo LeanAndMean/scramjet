@@ -633,8 +633,9 @@ impl Tools<'_> {
                 ui.tool_running(std::time::Instant::now());
                 let named = self.parent.providers.credential_files();
                 let shell = tools::is_shell(call.name);
-                // Commands are kept within the reach only when confined; the file tools always.
-                let reads = match shell && self.sandbox.is_none() {
+                // Without a sandbox commands are kept within the reach where the stores can be
+                // hidden from them (not on Windows); the file tools always.
+                let reads = match shell && self.sandbox.is_none() && !tools::HIDES_COMMANDS {
                     true => self.parent.reads.without_reach(),
                     false => self.parent.reads.clone(),
                 };

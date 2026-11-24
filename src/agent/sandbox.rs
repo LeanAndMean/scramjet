@@ -1302,12 +1302,13 @@ pub(super) fn hiding(root: &Path, command: &str, hidden: &Hidden) -> Result<Comm
     }
     let mut process = Command::new(launcher());
     process.args(["--dev-bind", "/", "/", "--die-with-parent"]);
+    // Before what is hidden, which may hold it read-only.
+    if Path::new(WSLG_DISTRO).is_dir() {
+        process.args(["--tmpfs", WSLG_DISTRO, "--remount-ro", WSLG_DISTRO]);
+    }
     hide(&mut process, hidden, &|_| true);
     if let Some(own) = &hidden.tmux {
         process.env("TMUX_TMPDIR", own);
-    }
-    if Path::new(WSLG_DISTRO).is_dir() {
-        process.args(["--tmpfs", WSLG_DISTRO, "--remount-ro", WSLG_DISTRO]);
     }
     process.arg("--chdir").arg(root).arg("--");
     process.arg(super::tools::shell_program()?);
@@ -2627,6 +2628,51 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
         );
     }
 
+    /// Without a sandbox, in the real `/`: what the reach hides stays hidden and unwritable, the
+    /// project and the rest writable.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_minimal_reach_keeps_commands_to_it_also_with_everything_writable() {
+        let home = std::env::home_dir().unwrap();
+        let root = home.join(format!(".scramjet-test-unconfined-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
+        std::fs::create_dir_all(&root).unwrap();
+        let outside = std::env::temp_dir().join(format!("scramjet-open-{}", std::process::id()));
+        let _outside = crate::agent::tests::ScratchDir::new(outside.clone());
+        std::fs::create_dir_all(&outside).unwrap();
+        let reads = super::Reads {
+            reach: super::Reach::Minimal,
+            ..Default::default()
+        };
+        let mut hidden = super::Hidden::stores(&[], &reads.opening([root.clone()]));
+        hidden.tmux = None;
+        let script = format!(
+            "echo made > new.txt && cat new.txt; ls /usr/bin/env; ls -A {} | wc -l; \
+             ls -A /var | wc -l; touch /var/x 2>/dev/null || echo refused; \
+             echo out > {}/file && echo outside; echo done",
+            home.display(),
+            outside.display()
+        );
+        let output = super::hiding(&root, &script, &hidden)
+            .unwrap()
+            .output()
+            .unwrap();
+        let errors = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "made\n/usr/bin/env\n1\n0\nrefused\noutside\ndone\n",
+            "{errors}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("new.txt")).unwrap(),
+            "made\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(outside.join("file")).unwrap(),
+            "out\n"
+        );
+    }
+
     #[test]
     fn the_project_only_reach_hides_the_home_directory_but_what_the_agent_needs() {
         let home = std::env::temp_dir().join(format!("scramjet-reach-{}", std::process::id()));
@@ -2700,18 +2746,19 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             network: false,
             writable: Vec::new(),
         };
-        let output = super::sandboxed(&root, script, &hidden, &sandbox)
-            .unwrap()
-            .output()
-            .unwrap();
-        let errors = String::from_utf8_lossy(&output.stderr);
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "plain\nindex\n[user]\n\tname = Someone\ntoolchain\ncargo\ntool\n\
-             .cargo\n.config\n.gitconfig\n.local\n.rustup\nrepos\n0\ndone\n",
-            "{errors}"
-        );
-        assert!(!errors.contains("PRIVATE"), "{errors}");
+        let sandboxed = super::sandboxed(&root, script, &hidden, &sandbox).unwrap();
+        let unconfined = super::hiding(&root, script, &hidden).unwrap();
+        for mut process in [sandboxed, unconfined] {
+            let output = process.output().unwrap();
+            let errors = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "plain\nindex\n[user]\n\tname = Someone\ntoolchain\ncargo\ntool\n\
+                 .cargo\n.config\n.gitconfig\n.local\n.rustup\nrepos\n0\ndone\n",
+                "{errors}"
+            );
+            assert!(!errors.contains("PRIVATE"), "{errors}");
+        }
         assert!(hidden.check(&root.join("a.txt")).is_ok());
         assert!(hidden.check(&home.join(".gitconfig")).is_ok());
         for (path, why) in [

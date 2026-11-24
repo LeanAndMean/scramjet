@@ -685,26 +685,16 @@ pub(super) fn sandbox_summary(agent: &Agent, allow_write: &[PathBuf]) -> String 
         .join(" ")
 }
 
-/// Without a sandbox, that commands are not kept to what the settings hide as the file tools
-/// are: on Windows to none of it, elsewhere not to the project-only reach.
+/// On Windows without a sandbox, that commands are not kept to what the settings hide as the
+/// file tools are.
 fn unconfined_note(agent: &Agent) -> Option<String> {
     let reads = agent.reads();
-    if agent.sandbox().is_some() {
-        return None;
-    }
-    match cfg!(windows) {
-        true if reads.reach.kept() || !reads.deny.is_empty() => Some(
+    (cfg!(windows) && agent.sandbox().is_none() && (reads.reach.kept() || !reads.deny.is_empty()))
+        .then(|| {
             "Commands are not kept to what is hidden: Windows cannot hide files from them; only \
 read, grep and find are."
-                .to_owned(),
-        ),
-        false if reads.reach.kept() => Some(
-            "Commands are not kept to the reach without a sandbox, only read, grep and find are; \
-/sandbox workspace-write keeps them to it too."
-                .to_owned(),
-        ),
-        _ => None,
-    }
+                .to_owned()
+        })
 }
 
 /// The sandbox's paths, labeled: writable, granted but gone, always granted here, and read-only
