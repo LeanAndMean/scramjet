@@ -486,14 +486,20 @@ fn protected(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The Git directories outside `root` that its `.git` file names, as a linked worktree's: kept
-/// readable, for Git to work there, wherever they are (under `/tmp`, the sandbox's own).
+/// The Git directories outside `root` that the `.git` file of it or a directory above names, as
+/// a linked worktree's: kept readable, for Git to work there, wherever they are (under `/tmp`,
+/// the sandbox's own), but in what is `granted` writable.
 #[cfg(unix)]
-fn linked_git(root: &Path) -> Vec<PathBuf> {
-    let gitdir = pointed_to(&root.join(".git"));
+fn linked_git(root: &Path, granted: &[PathBuf]) -> Vec<PathBuf> {
+    let dotgit = root.ancestors().map(|directory| directory.join(".git"));
+    let Some(dotgit) = dotgit.into_iter().find(|dotgit| dotgit.exists()) else {
+        return Vec::new();
+    };
+    let gitdir = pointed_to(&dotgit);
     let common = gitdir.as_deref().and_then(common_dir);
     (gitdir.into_iter().chain(common))
         .filter(|real| !real.starts_with(root))
+        .filter(|real| !granted.iter().any(|directory| real.starts_with(directory)))
         .collect()
 }
 
@@ -1383,7 +1389,7 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
         (granted.iter().filter(|directory| **directory != real_root)).map(|d| (d.clone(), true)),
     );
     let mut kept = kept;
-    kept.extend(linked_git(&real_root));
+    kept.extend(linked_git(&real_root, &granted));
     kept.retain(|path| !hidden.overlaps(path));
     // What stays read-only in a writable directory, the project too, is pinned there from the
     // innermost writable mount holding it; a pin in a read-only one would make it writable.
@@ -1646,6 +1652,41 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn a_linked_worktrees_git_directories_are_found_from_below_and_left_where_granted() {
+        let base = std::env::temp_dir().join(format!("scramjet-linked-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(base.clone());
+        let (main, linked) = (base.join("main"), base.join("linked"));
+        std::fs::create_dir_all(&main).unwrap();
+        let git = |arguments: &[&str]| {
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&main)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(arguments)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "a"]);
+        git(&["worktree", "add", "-q", &linked.to_string_lossy()]);
+        std::fs::create_dir(linked.join("src")).unwrap();
+        let common = std::fs::canonicalize(main.join(".git")).unwrap();
+        let below = std::fs::canonicalize(linked.join("src")).unwrap();
+        let found = super::linked_git(&below, &[]);
+        assert!(found.contains(&common), "{found:?}");
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(
+            super::linked_git(&below, std::slice::from_ref(&common)),
+            Vec::<std::path::PathBuf>::new()
+        );
+        assert_eq!(
+            super::linked_git(&std::fs::canonicalize(&main).unwrap(), &[]),
+            Vec::<std::path::PathBuf>::new()
+        );
+    }
 
     #[test]
     fn subagents_write_in_their_directories_only_where_the_main_sandbox_does_too() {

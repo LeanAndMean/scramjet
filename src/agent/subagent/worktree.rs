@@ -45,20 +45,25 @@ fn git(directory: &Path, arguments: &[&str]) -> Result<String, String> {
 }
 
 impl Worktree {
-    /// A worktree of the repository holding `cwd`, under `state`'s, and where `cwd` is in it.
-    pub(super) fn add(cwd: &Path, state: &Path) -> Result<(Self, PathBuf), String> {
+    /// A worktree of the repository holding `cwd`, under the project `root`'s in `state`, and
+    /// where `cwd` is in it.
+    pub(super) fn add(root: &Path, cwd: &Path, state: &Path) -> Result<(Self, PathBuf), String> {
         let why = |error: String| format!("isolation \"worktree\" needs a git repository: {error}");
         let top = PathBuf::from(git(cwd, &["rev-parse", "--show-toplevel"]).map_err(why)?);
-        let top = std::fs::canonicalize(&top).unwrap_or(top);
+        let top = crate::os::canonicalize(&top).unwrap_or(top);
         let base = git(&top, &["rev-parse", "--verify", "-q", "HEAD"])
             .map_err(|_| "isolation \"worktree\" needs a commit to start from".to_owned())?;
         let mut bytes = [0u8; 6];
         getrandom::getrandom(&mut bytes).map_err(|error| error.to_string())?;
         let name: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
         let name = format!("agent-{name}");
-        let parent = directory(state, &top);
+        let parent = directory(
+            state,
+            &crate::os::canonicalize(root).unwrap_or(root.to_owned()),
+        );
         std::fs::create_dir_all(&parent)
             .map_err(|error| format!("{}: {error}", parent.display()))?;
+        let parent = crate::os::canonicalize(&parent).unwrap_or(parent);
         let path = parent.join(&name);
         let branch = format!("worktree-{name}");
         let shown = path.to_string_lossy();
@@ -66,20 +71,46 @@ impl Worktree {
             &top,
             &["worktree", "add", "-q", "-b", &branch, &shown, &base],
         )?;
-        let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
-        let inside = match cwd.strip_prefix(&top) {
-            Ok(relative) => path.join(relative),
-            Err(_) => path.clone(),
+        let cwd = crate::os::canonicalize(cwd).unwrap_or_else(|_| cwd.to_owned());
+        let worktree = Self {
+            path,
+            branch,
+            top,
+            base,
         };
-        Ok((
-            Self {
-                path,
-                branch,
-                top,
-                base,
-            },
-            inside,
-        ))
+        let inside = match cwd.strip_prefix(&worktree.top) {
+            Ok(relative) => worktree.path.join(relative),
+            Err(_) => worktree.path.clone(),
+        };
+        // What HEAD lacks (an untracked directory) is made; what a symlink in HEAD leads out of
+        // the worktree is refused, as the child may write there whatever the main sandbox.
+        let inside = std::fs::create_dir_all(&inside)
+            .and_then(|()| crate::os::canonicalize(&inside))
+            .ok()
+            .filter(|real| real.starts_with(&worktree.path));
+        let Some(inside) = inside else {
+            worktree.finish();
+            return Err(format!(
+                "isolation \"worktree\": {} is not a directory in the worktree",
+                cwd.display()
+            ));
+        };
+        Ok((worktree, inside))
+    }
+
+    /// Whether a submodule's directory, empty in a new worktree and unseen by `git status`
+    /// (and by `git worktree remove`), has files.
+    fn submodule_written(&self) -> bool {
+        let Ok(staged) = git(&self.path, &["ls-files", "--stage", "-z"]) else {
+            return true;
+        };
+        (staged.split('\0'))
+            .filter_map(|entry| entry.strip_prefix("160000 "))
+            .filter_map(|entry| entry.split_once('\t'))
+            .any(|(_, path)| {
+                std::fs::read_dir(self.path.join(path))
+                    .is_ok_and(|mut entries| entries.next().is_some())
+            })
     }
 
     /// Removes the worktree and its branch if the child changed nothing; else what the parent
@@ -90,7 +121,7 @@ impl Worktree {
             &self.path,
             &["status", "--porcelain", "--untracked-files=all"],
         )
-        .map(|status| !status.is_empty());
+        .map(|status| !status.is_empty() || self.submodule_written());
         let head = git(&self.path, &["rev-parse", "HEAD"]);
         let commits = match &head {
             Ok(head) if *head != self.base => git(
@@ -127,24 +158,25 @@ merged or dropped: git worktree remove --force {path} && git branch -D {}",
 mod tests {
     use super::*;
 
+    fn commit(root: &Path) {
+        let commit = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "a",
+        ];
+        git(root, &commit).unwrap();
+    }
+
     fn repository(root: &Path) {
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/a.txt"), "a\n").unwrap();
-        for arguments in [
-            &["init", "-q"][..],
-            &["add", "."],
-            &[
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@t",
-                "commit",
-                "-qm",
-                "a",
-            ],
-        ] {
-            git(root, arguments).unwrap();
-        }
+        git(root, &["init", "-q"]).unwrap();
+        git(root, &["add", "."]).unwrap();
+        commit(root);
     }
 
     #[test]
@@ -153,7 +185,7 @@ mod tests {
         let _scratch = crate::agent::tests::ScratchDir::new(base.clone());
         let (project, state) = (base.join("project"), base.join("state"));
         repository(&project);
-        let (unchanged, cwd) = Worktree::add(&project.join("src"), &state).unwrap();
+        let (unchanged, cwd) = Worktree::add(&project, &project.join("src"), &state).unwrap();
         assert_eq!(cwd, unchanged.path.join("src"));
         assert!(cwd.join("a.txt").exists());
         assert!(unchanged.path.starts_with(state.join("worktrees")));
@@ -162,7 +194,7 @@ mod tests {
         let branches = git(&project, &["branch", "--list", &unchanged.branch]).unwrap();
         assert!(branches.is_empty(), "{branches}");
 
-        let (changed, cwd) = Worktree::add(&project, &state).unwrap();
+        let (changed, cwd) = Worktree::add(&project, &project, &state).unwrap();
         std::fs::write(cwd.join("new.txt"), "new\n").unwrap();
         let note = changed.finish().unwrap();
         assert!(
@@ -173,9 +205,55 @@ mod tests {
         assert!(changed.path.join("new.txt").exists());
         assert!(!project.join("new.txt").exists());
 
+        // A directory HEAD lacks is made; one a symlink in HEAD leads out of is refused.
+        std::fs::create_dir_all(project.join("untracked")).unwrap();
+        let (made, cwd) = Worktree::add(&project, &project.join("untracked"), &state).unwrap();
+        assert_eq!(cwd, made.path.join("untracked"));
+        assert!(cwd.is_dir());
+        assert_eq!(made.finish(), None);
+        std::fs::remove_dir(project.join("untracked")).unwrap();
+        std::os::unix::fs::symlink(&base, project.join("out")).unwrap();
+        git(&project, &["add", "out"]).unwrap();
+        commit(&project);
+        std::fs::remove_file(project.join("out")).unwrap();
+        std::fs::create_dir(project.join("out")).unwrap();
+        let error = Worktree::add(&project, &project.join("out"), &state)
+            .err()
+            .unwrap();
+        assert!(
+            error.ends_with("is not a directory in the worktree"),
+            "{error}"
+        );
+
+        // Files in a submodule's directory, which git status does not see, keep the worktree.
+        let module = base.join("module");
+        repository(&module);
+        let url = module.to_string_lossy();
+        let add = [
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &url,
+            "m",
+        ];
+        git(&project, &add).unwrap();
+        commit(&project);
+        let (untouched, _) = Worktree::add(&project, &project, &state).unwrap();
+        assert_eq!(untouched.finish(), None);
+        let (written, cwd) = Worktree::add(&project, &project, &state).unwrap();
+        std::fs::write(cwd.join("m/new.txt"), "new\n").unwrap();
+        let note = written.finish().unwrap();
+        assert!(
+            note.starts_with("Worktree kept with uncommitted changes"),
+            "{note}"
+        );
+        assert!(cwd.join("m/new.txt").exists());
+
         let outside = base.join("outside");
         std::fs::create_dir_all(&outside).unwrap();
-        let error = Worktree::add(&outside, &state).err().unwrap();
+        let error = Worktree::add(&outside, &outside, &state).err().unwrap();
         assert!(
             error.starts_with("isolation \"worktree\" needs a git repository"),
             "{error}"

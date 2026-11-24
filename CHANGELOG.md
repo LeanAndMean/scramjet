@@ -4,6 +4,17 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.318.1 — Subagent worktrees kept when they should be
+
+### Fixed
+
+- A subagent's worktree is kept when the subagent wrote only into a submodule's directory; before, `git status` missed those files and the worktree was removed with them.
+- A chain that stops or is aborted names the worktrees its earlier steps kept.
+- A `cwd` that `HEAD` lacks is made in the worktree rather than left missing, which failed every command there; a symlink in `HEAD` cannot take the subagent's writes out of its worktree.
+- On Windows, a subagent's worktree can be made: its directory's name no longer carries the `?` of a `\\?\` path, which Windows refuses.
+- With a project in a subdirectory of its repository, the main agent can read the worktrees kept for it, even with reads outside the working directory blocked.
+- In a linked worktree, a `.git` the user granted writable by name stays writable in the sandbox, and git works there from a subdirectory too.
+
 ## 2.318.0 — A worktree for each subagent
 
 ### Added

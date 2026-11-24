@@ -1116,6 +1116,14 @@ here (sandbox.subagents.mode)\n\nkept.txt says original";
             ),
             reply("looked"),
             reply("done"),
+            tool_call(
+                "call_5",
+                subagent::NAME,
+                json!({"chain":[{"agent":"writer","task":"Add"},{"agent":"nobody","task":"Then"}]}),
+            ),
+            tool_call("call_6", "write", json!({"path":"b.txt","content":"b"})),
+            reply("added"),
+            reply("done"),
         ]);
         let (mut agent, scratch) = agent(endpoint, "subagent-worktree");
         let root = agent.root().to_owned();
@@ -1160,17 +1168,30 @@ worktree\n---\n\nWrite.\n",
         agent
             .turn("look", &mut Recorder::default(), &cancel)
             .unwrap();
+        agent
+            .turn("chain", &mut Recorder::default(), &cancel)
+            .unwrap();
         let bodies = server.join().unwrap();
-        assert_eq!(bodies.len(), 8);
+        assert_eq!(bodies.len(), 12);
+        // A chain that stops still names the worktree an earlier step kept.
+        let chain = last_output(&bodies[11]);
+        assert!(
+            chain.starts_with("Chain stopped at step 2 (nobody): "),
+            "{chain}"
+        );
+        assert!(
+            chain.contains("\n\nWorktree kept with uncommitted changes: "),
+            "{chain}"
+        );
         let real = std::fs::canonicalize(&root).unwrap();
         let worktrees = subagent::worktree::directory(&state, &real);
+        let task = bodies[1]["input"][0]["content"].as_str().unwrap();
         let kept: Vec<_> = (std::fs::read_dir(&worktrees).unwrap())
             .map(|entry| entry.unwrap().path())
+            .filter(|kept| task.contains(&format!("at {},", kept.display())))
             .collect();
-        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(kept.len(), 1, "{kept:?} {task}");
         let kept = &kept[0];
-        let task = bodies[1]["input"][0]["content"].as_str().unwrap();
-        assert!(task.contains(&format!("at {},", kept.display())), "{task}");
         // Git works there, its repository under /tmp, which the sandbox replaces.
         let bash = last_output(&bodies[3]);
         assert!(bash.starts_with(&format!("{}\n", kept.display())), "{bash}");
@@ -1194,14 +1215,14 @@ worktree\n---\n\nWrite.\n",
         );
         // The reader changed nothing: its worktree and branch are gone.
         assert_eq!(last_output(&bodies[7]), "looked");
-        assert_eq!(std::fs::read_dir(&worktrees).unwrap().count(), 1);
+        assert_eq!(std::fs::read_dir(&worktrees).unwrap().count(), 2);
         let branches = git(&["branch", "--format=%(refname:short)"]);
         assert_eq!(
             branches
                 .lines()
                 .filter(|b| b.starts_with("worktree-"))
                 .count(),
-            1
+            2
         );
         assert!(branches.contains(&branch), "{branches}");
     }

@@ -716,7 +716,8 @@ impl Parent<'_> {
             (self.skills.list().iter()).filter_map(|skill| skill.path.parent().map(Path::to_owned));
         let agents = self.sources.user.map(Path::to_owned);
         let sessions = super::session::directory(self.root).ok();
-        let worktrees = (self.worktrees).map(|state| worktree::directory(state, self.root));
+        let root = crate::os::canonicalize(self.root).unwrap_or_else(|_| self.root.to_owned());
+        let worktrees = (self.worktrees).map(|state| worktree::directory(state, &root));
         (sets
             .chain(skills)
             .chain(agents)
@@ -764,7 +765,7 @@ impl<'a> Job<'a> {
         let (mut worktree, mut failure) = (None, None);
         if agent.is_some_and(|agent| agent.worktree) || task.worktree && agent.is_some() {
             let made = match parent.worktrees {
-                Some(state) => worktree::Worktree::add(&cwd, state),
+                Some(state) => worktree::Worktree::add(parent.root, &cwd, state),
                 None => Err("isolation \"worktree\": no state directory".to_owned()),
             };
             match made {
@@ -1116,7 +1117,13 @@ is added or changed.",
                 runs.push(run);
             }
             match ended {
-                Some(text) => (text, true, runs),
+                Some(text) => {
+                    // The step that failed names its own in its result.
+                    let done = runs.iter().filter(|run| run.error.is_none());
+                    let kept = done.filter_map(|run| run.kept.clone());
+                    let text = std::iter::once(text).chain(kept);
+                    (text.collect::<Vec<_>>().join("\n\n"), true, runs)
+                }
                 None => {
                     let last = runs
                         .last()
