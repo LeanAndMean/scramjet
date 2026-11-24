@@ -1653,18 +1653,11 @@ static GROUPS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 pub(super) struct Group(u32);
 
 impl Group {
-    /// In a session of its own (`os::own_session`); `own_console`: with a console of its own
-    /// too (`os::own_session_and_console`).
-    pub(super) fn spawn(
-        command: &mut Command,
-        own_console: bool,
-    ) -> io::Result<(std::process::Child, Self)> {
+    /// `command` from `os::own_session` or `os::own_session_and_console`.
+    pub(super) fn spawn(command: &mut Command) -> io::Result<(std::process::Child, Self)> {
         // Held while spawning, so that none starts once `end_commands` has run.
         let mut groups = GROUPS.lock().unwrap_or_else(PoisonError::into_inner);
-        let child = match own_console {
-            true => crate::os::own_session_and_console(command).spawn()?,
-            false => crate::os::own_session(command).spawn()?,
-        };
+        let child = crate::os::spawn_session(command)?;
         crate::os::hold_group(&child);
         let group = child.id();
         groups.push(group);
@@ -2054,10 +2047,10 @@ pub(super) fn run_sandboxed(
     run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress)
 }
 
-/// Runs `process` until it ends, `cancel` is set or, if given, `timeout` passes; `own_console`
-/// as `Group::spawn`.
+/// Runs `process` until it ends, `cancel` is set or, if given, `timeout` passes, in a session of
+/// its own; `own_console`: with a console of its own too (`os::own_session_and_console`).
 fn run_process(
-    mut process: Command,
+    process: Command,
     program: &str,
     own_console: bool,
     timeout: Option<Duration>,
@@ -2066,11 +2059,16 @@ fn run_process(
 ) -> Result<Ran, String> {
     let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
     let (mut child, group) = {
+        let mut process = match own_console {
+            true => crate::os::own_session_and_console(process),
+            false => crate::os::own_session(process),
+        }
+        .map_err(|e| format!("cannot start {program}: {e}"))?;
         process
             .stdin(Stdio::null())
             .stdout(writer.try_clone().map_err(|e| e.to_string())?)
             .stderr(writer);
-        let spawned = Group::spawn(&mut process, own_console);
+        let spawned = Group::spawn(&mut process);
         // It holds the pipe's write ends, which must close for the output to end.
         drop(process);
         spawned.map_err(|e| format!("cannot start {program}: {e}"))?

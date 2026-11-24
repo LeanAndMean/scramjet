@@ -3,6 +3,7 @@ mod agent_cli;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    scramjet::os::session_helper();
     scramjet::os::low_integrity();
     scramjet::os::keep_own_handles();
     match agent_cli::execute(std::env::args_os().skip(1)) {

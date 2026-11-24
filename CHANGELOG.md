@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.304.2 — Commands started without copying the agent
+
+### Fixed
+
+- The agent's commands start several times faster (about 1 ms each rather than 6–8 ms, measured with `scripts/bench-commands.py`), and no longer slow down as the agent's memory grows, which made commands one at a time and costly with many sessions in one `scramjet acp` (`LeanAndMean/scramjet#3`): Scramjet now starts itself as a small helper that makes the command's session, rather than copying its whole process for each command.
+
 ## 2.304.1 — Sessions saving the settings at once
 
 ### Fixed

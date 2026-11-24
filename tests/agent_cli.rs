@@ -1742,6 +1742,58 @@ self` updates it\n",
     assert_eq!(packages(), serde_json::json!([]));
 }
 
+/// The agent's commands start through its `__setsid` helper, which `Command` starts with
+/// `posix_spawn` rather than a fork of the agent: each is a session of its own, with no
+/// terminal to ask on, its process group the one a cancellation kills.
+#[test]
+#[cfg(unix)]
+fn the_agents_commands_run_in_sessions_of_their_own() {
+    let binary = &binary();
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-setsid-{}", std::process::id())));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let (port, bodies) = serve_bash_call(
+        "echo \"sid=$(ps -o sid= -p $$ | tr -d ' ') pgid=$(ps -o pgid= -p $$ | tr -d ' ') \
+pid=$$ parent=$(ps -o comm= -p $PPID)\"",
+    );
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    std::fs::write(config.join("scramjet/settings.json"), settings.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session", "-p", "hi"])
+        .current_dir(&project)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let _first = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+    let second = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+    let second: serde_json::Value = serde_json::from_str(&second).unwrap();
+    let result = second["messages"].as_array().unwrap().last().unwrap()["content"][0].clone();
+    let text = result["content"].to_string();
+    let field = |name: &str| {
+        let start = text.find(&format!("{name}=")).unwrap() + name.len() + 1;
+        text[start..]
+            .split([' ', '\\', '"'])
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(field("sid"), field("pid"), "{text}");
+    assert_eq!(field("pgid"), field("pid"), "{text}");
+    assert_eq!(field("parent"), "scramjet", "{text}");
+}
+
 #[test]
 #[cfg(unix)]
 fn shell_path_and_shell_command_prefix_run_the_agents_commands() {

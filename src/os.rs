@@ -487,34 +487,146 @@ pub fn own_group(command: &mut Command) -> &mut Command {
     command
 }
 
-/// As `own_group`, and on Unix in a session of its own, with no controlling terminal, as Scramjet
-/// 1's `detached` commands: what asks there for a passphrase, a host key or a password (ssh,
-/// sudo) fails at once rather than wait on scramjet-rs's terminal for an answer nobody sees.
-pub fn own_session(command: &mut Command) -> &mut Command {
+/// The first argument that starts scramjet-rs as `own_session`'s helper.
+pub const SESSION: &str = "__setsid";
+
+/// This program, to start as `SESSION`'s helper, once `session_helper` has said it serves it.
+#[cfg(unix)]
+static HELPER: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// On Unix, when the command line starts with `SESSION`, never returns: makes this process a
+/// session of its own, then runs in its place the program the rest of the command line gives,
+/// as `own_session` asks. Otherwise has `own_session` start its commands through this program.
+/// Run first in `main`.
+pub fn session_helper() {
     #[cfg(unix)]
-    // SAFETY: `setsid` is async-signal-safe, as what runs between `fork` and `exec` must be. It
-    // makes the process a group leader too, which `kill_group` and `end_group` reach.
-    unsafe {
-        std::os::unix::process::CommandExt::pre_exec(command, || {
-            Ok(rustix::process::setsid().map(drop)?)
-        });
+    {
+        use std::os::unix::process::CommandExt;
+        let mut arguments = std::env::args_os().skip(1);
+        if arguments.next().is_some_and(|first| first == SESSION) {
+            let program = arguments.next().unwrap_or_default();
+            let error = match rustix::process::setsid() {
+                Ok(_) => Command::new(&program).args(arguments).exec(),
+                Err(error) => error.into(),
+            };
+            eprintln!("scramjet: cannot start {}: {error}", program.display());
+            std::process::exit(127);
+        }
+        // The running file, even once an update has replaced or removed it.
+        let own = match Path::new("/proc/self/exe").exists() {
+            true => Some(PathBuf::from("/proc/self/exe")),
+            false => std::env::current_exe().ok(),
+        };
+        if let Some(own) = own {
+            let _ = HELPER.set(own);
+        }
+    }
+}
+
+/// `command`, to start with `spawn_session`, as `own_group` and on Unix in a session of its own,
+/// with no controlling terminal, as Scramjet 1's `detached` commands: what asks there for a
+/// passphrase, a host key or a password (ssh, sudo) fails at once rather than wait on
+/// scramjet-rs's terminal for an answer nobody sees. Set its input and output on what this
+/// returns: on Unix it is `SESSION`'s helper given `command`'s program, arguments, variables and
+/// directory, nothing else of it, so that `Command` starts it with `posix_spawn` rather than a
+/// fork of the whole agent, which takes milliseconds per command once the agent holds hundreds of
+/// megabytes. Without the helper (`session_helper` not run, as in unit tests), `command` with a
+/// `setsid` before its program, which needs that fork. A program not found fails here, as
+/// `spawn` would have.
+pub fn own_session(command: Command) -> std::io::Result<Command> {
+    #[cfg(unix)]
+    {
+        let Some(helper) = HELPER.get() else {
+            let mut command = command;
+            // SAFETY: `setsid` is async-signal-safe, as what runs between `fork` and `exec` must
+            // be.
+            unsafe {
+                std::os::unix::process::CommandExt::pre_exec(&mut command, || {
+                    Ok(rustix::process::setsid().map(drop)?)
+                });
+            }
+            return Ok(command);
+        };
+        if !found(&command) {
+            return Err(rustix::io::Errno::NOENT.into());
+        }
+        let mut session = Command::new(helper);
+        session.arg(SESSION).arg(command.get_program());
+        session.args(command.get_args());
+        for (name, value) in command.get_envs() {
+            match value {
+                Some(value) => session.env(name, value),
+                None => session.env_remove(name),
+            };
+        }
+        if let Some(directory) = command.get_current_dir() {
+            session.current_dir(directory);
+        }
+        Ok(session)
     }
     #[cfg(windows)]
-    own_group(command);
-    command
+    {
+        let mut command = command;
+        own_group(&mut command);
+        Ok(command)
+    }
+}
+
+/// Whether `command`'s program, if a bare name, is on the `PATH` it will run with.
+#[cfg(unix)]
+fn found(command: &Command) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    let program = command.get_program();
+    if program.as_encoded_bytes().contains(&b'/') {
+        return true;
+    }
+    let path = match command.get_envs().find(|(name, _)| *name == "PATH") {
+        Some((_, path)) => path.map(ToOwned::to_owned),
+        None => std::env::var_os("PATH"),
+    };
+    let Some(path) = path else {
+        return true;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        std::fs::metadata(directory.join(program))
+            .is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0)
+    })
 }
 
 /// As `own_session`, and on Windows with a console of its own that has no window, so that the
 /// code page it sets, and what it or its programs write to the console rather than their output,
 /// stay out of scramjet-rs's.
-pub fn own_session_and_console(command: &mut Command) -> &mut Command {
-    own_session(command);
+pub fn own_session_and_console(command: Command) -> std::io::Result<Command> {
     #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(
-        command,
-        windows::NEW_GROUP | windows::NO_WINDOW,
-    );
-    command
+    let command = {
+        let mut command = own_session(command)?;
+        std::os::windows::process::CommandExt::creation_flags(
+            &mut command,
+            windows::NEW_GROUP | windows::NO_WINDOW,
+        );
+        command
+    };
+    #[cfg(unix)]
+    let command = own_session(command)?;
+    Ok(command)
+}
+
+/// Starts `command` from `own_session`, returning once its session is made, so that
+/// `kill_group` and `end_group` reach all it starts.
+pub fn spawn_session(command: &mut Command) -> std::io::Result<std::process::Child> {
+    #[cfg_attr(windows, allow(unused_mut))]
+    let mut child = command.spawn()?;
+    #[cfg(unix)]
+    {
+        let pid = rustix::process::Pid::from_child(&child);
+        while rustix::process::getsid(Some(pid)).is_ok_and(|session| session != pid) {
+            if child.try_wait()?.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(50));
+        }
+    }
+    Ok(child)
 }
 
 /// `own_group` for tokio's commands.
@@ -948,6 +1060,32 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_session_commands_program_is_looked_for_on_the_path_it_will_run_with() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch =
+            Scratch(std::env::temp_dir().join(format!("os-found-{}", std::process::id())));
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        let program = scratch.0.join("tool");
+        std::fs::write(&program, "#!/bin/sh\n").unwrap();
+        let with_path = |name: &str| {
+            let mut command = Command::new(name);
+            command.env("PATH", &scratch.0);
+            found(&command)
+        };
+        assert!(!with_path("tool"), "not executable");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(with_path("tool"));
+        assert!(!with_path("sh"), "the command's PATH, not this process's");
+        assert!(found(&Command::new("sh")));
+        assert!(
+            found(&Command::new("./not-here")),
+            "a path is left to start"
+        );
+        assert!(!found(&Command::new("scramjet-no-such-program")));
     }
 
     #[test]

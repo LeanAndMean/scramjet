@@ -106,14 +106,18 @@ impl Exec for System<'_> {
             .current_dir(self.root)
             // Neither may wait for a password on the terminal, which the session owns.
             .env("GH_PROMPT_DISABLED", "1")
-            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_TERMINAL_PROMPT", "0");
+        let Ok(mut command) = crate::os::own_session(command) else {
+            return Ran::default();
+        };
+        command
             .stdin(match input {
                 Some(_) => Stdio::piped(),
                 None => Stdio::null(),
             })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let Ok((mut child, group)) = super::tools::Group::spawn(&mut command, false) else {
+        let Ok((mut child, group)) = super::tools::Group::spawn(&mut command) else {
             return Ran::default();
         };
         let writer = child.stdin.take().map(|mut stdin| {

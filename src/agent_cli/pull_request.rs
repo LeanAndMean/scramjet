@@ -125,17 +125,17 @@ fn run(
         .current_dir(root)
         .env("GH_PROMPT_DISABLED", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .env("GIT_OPTIONAL_LOCKS", "0");
     if let Some(path) = path {
         command.env("PATH", path);
     }
     // Nothing they start may ask on the session's terminal, or open a console window.
-    let mut child = scramjet::os::own_session_and_console(&mut command)
-        .spawn()
-        .ok()?;
+    let mut command = scramjet::os::own_session_and_console(command).ok()?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = scramjet::os::spawn_session(&mut command).ok()?;
     scramjet::os::hold_group(&child);
     let mut stdout = child.stdout.take()?;
     let reader = std::thread::spawn(move || {
