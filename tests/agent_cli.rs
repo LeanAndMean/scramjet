@@ -7862,10 +7862,9 @@ fn acp_lists_resumes_closes_and_deletes_saved_sessions() {
     assert_eq!(answer["error"]["code"], -32002, "{answer}");
     assert_eq!(answer["error"]["data"]["sessionId"], started[0], "{answer}");
 
-    // Resumed in another folder, unknown or not an id: refused, an unknown one named.
+    // Unknown, not an id, or open in another folder: refused, an unknown one named.
     let resume = |session: &serde_json::Value, cwd: &std::path::Path| serde_json::json!({"sessionId": session, "cwd": cwd, "mcpServers": []});
     for (params, code) in [
-        (resume(&started[0], &other), -32602),
         (resume(&"1-2".into(), &project), -32002),
         (resume(&"../other".into(), &project), -32002),
         (resume(&started[2], &other), -32602),
@@ -7910,8 +7909,9 @@ fn acp_lists_resumes_closes_and_deletes_saved_sessions() {
         ],
         "{before:?}"
     );
-    // Resumed, it replays nothing and goes on from its conversation.
-    let (answer, before) = request(&mut stdin, "session/resume", resume(&started[0], &project));
+    // Resumed, in another folder too, it replays nothing and goes on from its conversation
+    // there, still listed with its first project's sessions.
+    let (answer, before) = request(&mut stdin, "session/resume", resume(&started[0], &other));
     assert!(answer["result"]["configOptions"].is_array(), "{answer}");
     assert!(before.is_empty(), "{before:?}");
     let prompt = serde_json::json!([{"type": "text", "text": "and then"}]);
@@ -7922,6 +7922,22 @@ fn acp_lists_resumes_closes_and_deletes_saved_sessions() {
     assert!(
         body.contains("more of it") && body.contains("and then"),
         "{body}"
+    );
+    let there = format!("Current working directory: {}", other.display());
+    assert!(body.contains(&there), "{body}");
+    let answer = request(
+        &mut stdin,
+        "session/list",
+        serde_json::json!({"cwd": project}),
+    )
+    .0;
+    let listed: Vec<_> = (answer["result"]["sessions"].as_array().unwrap().iter())
+        .map(|session| (session["sessionId"].clone(), session["cwd"].clone()))
+        .collect();
+    assert_eq!(
+        listed[0],
+        (started[0].clone(), project.to_str().into()),
+        "{answer}"
     );
 
     // Deleting an open session is refused; a closed one goes from the list, and deleting it
@@ -8047,8 +8063,6 @@ fn acp_loads_a_saved_session_replaying_its_branch() {
     request(&mut stdin, "session/close", params);
 
     let load = |cwd: &std::path::Path| serde_json::json!({"sessionId": session, "cwd": cwd, "mcpServers": []});
-    let (answer, _) = request(&mut stdin, "session/load", load(&scratch.0));
-    assert_eq!(answer["error"]["code"], -32602, "{answer}");
     let (answer, replayed) = request(&mut stdin, "session/load", load(&project));
     assert!(answer["result"]["configOptions"].is_array(), "{answer}");
     let updates: Vec<serde_json::Value> = (replayed.iter())

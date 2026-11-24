@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.317.0 — Resume an ACP session in another folder
+
+### Changed
+
+- `scramjet acp` resumes and loads a saved session in the `cwd` the client gives, though it started in another project, rather than refusing it: it goes on there, its file where it was. A session open in another folder is still refused until the client closes it.
+
 ## 2.316.0 — Subagents that write
 
 ### Added

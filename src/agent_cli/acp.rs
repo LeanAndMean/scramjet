@@ -1426,7 +1426,7 @@ impl Connection {
         let root = super::project_root(Some(cwd.to_owned())).unwrap_or_else(|_| cwd.to_owned());
         if root != handle.root {
             let message = format!(
-                "the session is in {}, not {}",
+                "the session is open in {}, not {}: close it first to resume it there",
                 handle.root.display(),
                 root.display()
             );
@@ -1470,8 +1470,9 @@ impl Connection {
         Ok(Some(wanted.to_owned()))
     }
 
-    /// The file of the saved session `params` names, to resume in `cwd`: one of its project's
-    /// sessions with a conversation, not open on this connection.
+    /// The file of the saved session `params` names, to resume in `cwd`: a session with a
+    /// conversation, not open on this connection. One of another project's goes on in `cwd`, as
+    /// ACP's `cwd` says, its file staying where it is.
     fn resumable(&self, params: &Value, cwd: &Path) -> Result<PathBuf, (i64, String)> {
         let invalid = |message: String| (INVALID_PARAMS, message);
         let wanted = params["sessionId"].as_str().unwrap_or_default();
@@ -1512,14 +1513,7 @@ impl Connection {
                 "session {wanted} is open in {holder}: follow it with watch"
             )));
         }
-        match info.root {
-            Some(found) if found != root => Err(invalid(format!(
-                "session {wanted} is in {}, not {}",
-                found.display(),
-                root.display()
-            ))),
-            _ => Ok(file),
-        }
+        Ok(file)
     }
 
     /// `/resume`'s sessions, newest first, those of the folder `params` names or every
