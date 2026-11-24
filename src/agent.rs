@@ -95,8 +95,8 @@ pub use tools::{
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{
     AgentUi, Answer, ChildItem, ChildRun, ChildState, ChildUsage, Children, CompactRead,
-    Delegation, Ending, Purpose, Saved, ToolDetail, UserCommand, publication_choices, show_entries,
-    show_items,
+    Delegation, Ending, Purpose, Saved, Times, ToolDetail, UserCommand, publication_choices,
+    show_entries, show_items,
 };
 
 use providers::ModelInfo;

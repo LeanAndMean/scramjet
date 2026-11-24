@@ -128,7 +128,7 @@ A key not listed, or a value of the wrong type, refuses the request with `-32602
 - `entry` `{sessionId, entryId, kind, messageId?, toolCallId?, compactionId?}`: a live turn saved an entry, with `tree`'s `kind` (`prompt`, `command`, `reply`, `reasoning`, `toolResult` or `compaction`) and the id of the update that showed it: a reply's or reasoning's `messageId`, a tool result's `toolCallId`, a compaction's `compactionId` (`messageId` without `session.compaction`), a prompt's `messageId` when a `user_message_chunk` showed it (a next step's, a command's expansion); the client's own prompt has none. Sent after the updates it names; a call's own entry, a branch summary, a `!` command and a stopped turn are not named.
 - `question` `{sessionId, question}`: the turn ended on a question the client was not asked with a form (freetext, or any without `elicitation.form`), its text; the next prompt answers it. Sent just before the turn's response.
 - `queued` `{sessionId, promptId, queue}`: the prompt of request `promptId`, sent during a turn, waits in `queue` (`steering` or `followUp`) until the agent takes it. Sent before it can be taken.
-- `user_command`: a `!` command's start `{sessionId, command, include}` and the same with `result` when it ends (section 8's `bash`).
+- `user_command`: a `!` command's start `{sessionId, command, include}` and the same with `result` when it ends (section 8's `bash`). `session/load` and `watch` replay each saved `!` and `!!` command where it went in, once, with its `result` and its `entryId`.
 - `session_changed`: section 3.
 
 ## 5. Requests to the client
@@ -194,7 +194,7 @@ Methods named `_io.github.leanandmean.scramjet/<name>`, following ACP's reverse-
 | `unwatch` `{sessionId}` | Ends that watch, if any: `{}`. |
 | `state`, `events` | Section 9. |
 
-`entryId` is an entry's line in the session file. Lines are append-only, so the id stays valid for the session. `session/load`'s replayed messages, reasoning, tool calls and compactions carry theirs as `_meta["io.github.leanandmean.scramjet"].entryId`: a tool call its result's line, the one `tree` lists, or its call's when it has none. A live turn's are told by the `entry` notification (section 4).
+`entryId` is an entry's line in the session file. Lines are append-only, so the id stays valid for the session. `session/load`'s replayed messages, reasoning, tool calls and compactions carry theirs as `_meta["io.github.leanandmean.scramjet"].entryId`: a tool call its result's line, the one `tree` lists, or its call's when it has none. Beside it, what was saved of their times, each `{startedAt, durationMs}` (`startedAt` in UTC to the millisecond): a tool call's run as `ran`, from its result, and a response's as `response`, with `firstOutputMs`, on the updates of the response's last item (its text, its reasoning or its last call). Prompts and `!` commands keep no time. A live turn's are told by the `entry` notification (section 4).
 
 **Not offered:** `/settings`, themes, `/hotkeys`, `/keybindings`, the clipboard and `/changelog` (the client has its own); `install`, `update` and packages (subcommands for a terminal).
 

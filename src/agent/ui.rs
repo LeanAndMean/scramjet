@@ -3,7 +3,7 @@
 use super::tools::{self, Call};
 use super::{
     Agent, AgentError, AutoCompaction, Choice, Compaction, DIFF, FAILED, PROBE, Reply, SUBAGENTS,
-    StreamProgress, TYPED, Tokens, compaction, message_text, publish, question, status,
+    StreamProgress, TIMING, TYPED, Tokens, compaction, message_text, publish, question, status,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -83,9 +83,10 @@ pub trait AgentUi {
     /// The images, as `data:` URLs, of the stored prompt or tool result shown next, for an
     /// interface that shows them.
     fn images(&mut self, _urls: &[&str]) {}
-    /// The line in the session file of the stored item shown next, for an interface that names
-    /// entries; called only when showing a resumed conversation's items with their lines.
-    fn entry(&mut self, _line: Option<usize>) {}
+    /// The line in the session file of the stored item shown next, and what was saved of its
+    /// times, for an interface that names entries; called only when showing a resumed
+    /// conversation's items with their lines.
+    fn entry(&mut self, _line: Option<usize>, _times: Times) {}
     /// The running turn wrote what it showed as `saved` on `line` of the session file.
     fn saved(&mut self, _saved: Saved, _line: usize) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
@@ -262,6 +263,16 @@ pub enum ToolDetail {
     Subagents(Children),
     /// What a publication call proposed, each field under a markdown heading.
     Publication(String),
+}
+
+/// What was saved of a stored item's times, each `{started, duration_ms, …}` as saved
+/// (`_scramjet_timing`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Times {
+    /// The response's, when the item is its last.
+    pub response: Option<Value>,
+    /// A tool call's run, from its result.
+    pub ran: Option<Value>,
 }
 
 /// A read that Scramjet shows in one line, with its result only if it failed, until expanded;
@@ -465,14 +476,32 @@ pub fn show_entries(
             ui.images(&urls);
         }
     };
-    // A reply's calls are stored before their results, but each showed in turn as it ran.
-    let mut calls: Vec<(&str, &str, Option<Call>, Option<usize>)> = Vec::new();
-    let unanswered = |calls: &mut Vec<(&str, &str, Option<Call>, Option<usize>)>,
-                      ui: &mut dyn AgentUi| {
-        for (id, _, call, line) in calls.drain(..) {
+    let saved = |item: &Value| {
+        Some(item.get(TIMING)?)
+            .filter(|timing| timing.is_object())
+            .cloned()
+    };
+    // A reply's calls are stored before their results, but each showed in turn as it ran: each
+    // with its id, name, line and its response's timing.
+    type Pending<'a> = (
+        &'a str,
+        &'a str,
+        Option<Call<'a>>,
+        Option<usize>,
+        Option<Value>,
+    );
+    let mut calls: Vec<Pending<'_>> = Vec::new();
+    let unanswered = |calls: &mut Vec<Pending<'_>>, ui: &mut dyn AgentUi| {
+        for (id, _, call, line, response) in calls.drain(..) {
             if let Some(call) = call {
                 if named {
-                    ui.entry(line);
+                    ui.entry(
+                        line,
+                        Times {
+                            response,
+                            ran: None,
+                        },
+                    );
                 }
                 ui.tool_input(id, &call.arguments);
                 ui.tool_call(call.name, &call.summary(), compact(&call).as_ref());
@@ -501,7 +530,19 @@ pub fn show_entries(
             unanswered(&mut calls, ui);
         }
         if named {
-            ui.entry(line);
+            let times = match item["type"].as_str() {
+                Some("function_call_output") => Times {
+                    response: (calls.iter())
+                        .find(|(id, ..)| *id == item["call_id"].as_str().unwrap_or_default())
+                        .and_then(|(.., response)| response.clone()),
+                    ran: saved(item),
+                },
+                _ => Times {
+                    response: saved(item),
+                    ran: None,
+                },
+            };
+            ui.entry(line, times);
         }
         match item["type"].as_str() {
             Some("message") => ui.assistant(&message_text(item)),
@@ -520,12 +561,13 @@ pub fn show_entries(
                 item["name"].as_str().unwrap_or_default(),
                 Call::parse(item).ok(),
                 line,
+                saved(item),
             )),
             Some("function_call_output") => {
                 let id = item["call_id"].as_str().unwrap_or_default();
                 let (name, call) = match calls.iter().position(|(call_id, ..)| *call_id == id) {
                     Some(index) => {
-                        let (_, name, call, _) = calls.remove(index);
+                        let (_, name, call, ..) = calls.remove(index);
                         (name, call)
                     }
                     None => ("", None),

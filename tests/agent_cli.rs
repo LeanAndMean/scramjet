@@ -5500,10 +5500,10 @@ fn acp_runs_bang_commands_between_and_during_turns_through_the_extension() {
     assert_eq!(answered(&messages).0["result"]["stopReason"], "end_turn");
     let first = bodies.recv_timeout(Duration::from_secs(5)).unwrap();
     let second = bodies.recv_timeout(Duration::from_secs(5)).unwrap();
-    let messages = |body: &str| {
+    let sent = |body: &str| {
         serde_json::from_str::<serde_json::Value>(body).unwrap()["messages"].to_string()
     };
-    let (first, second) = (messages(&first), messages(&second));
+    let (first, second) = (sent(&first), sent(&second));
     assert!(first.contains("Ran `pwd; exit 3`"), "{first}");
     assert!(first.contains("Ran `sleep 30`"), "{first}");
     // `!!`'s output is never sent; one ending during a turn goes with the next prompt.
@@ -5512,6 +5512,45 @@ fn acp_runs_bang_commands_between_and_during_turns_through_the_extension() {
         "{first}"
     );
     assert!(second.contains("Ran `echo during`"), "{second}");
+    // Loaded again, the session replays each command where it went in, as it ended.
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 11, "method": "session/load",
+            "params": {"sessionId": session, "cwd": project, "mcpServers": []}}),
+    );
+    let (loaded, replayed) = answered(&messages);
+    assert!(loaded["result"].is_object(), "{loaded}");
+    let shown: Vec<_> = (replayed.iter())
+        .filter_map(|message| match message["method"].as_str() {
+            Some("_io.github.leanandmean.scramjet/user_command") => {
+                let params = &message["params"];
+                assert_eq!(params["sessionId"], session, "{params}");
+                assert!(params["entryId"].is_u64(), "{params}");
+                let result = &params["result"];
+                Some(format!(
+                    "{} {} {} {}",
+                    params["command"], params["include"], result["exitCode"], result["cancelled"]
+                ))
+            }
+            _ => message["params"]["update"]["content"]["text"]
+                .as_str()
+                .map(str::to_owned),
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            r#""pwd; exit 3" true 3 false"#,
+            r#""echo secret" false 0 false"#,
+            r#""sleep 30" true null true"#,
+            "first",
+            "Hello.",
+            r#""echo during" true 0 false"#,
+            "second",
+            "Hello.",
+        ],
+        "{replayed:?}"
+    );
     drop(stdin);
     assert!(child.wait().unwrap().success());
 }
@@ -7977,6 +8016,31 @@ fn acp_loads_a_saved_session_replaying_its_branch() {
     assert_eq!(entry(&updates[4]), listed("reply"));
     assert_eq!(entry(&updates[1]), entry(&updates[2]));
     assert!((entry(&updates[0]) + 1..entry(&updates[3])).contains(&entry(&updates[1])));
+    // A call carries its run's saved time, and a response's last item the response's.
+    let times = |update: &serde_json::Value, key: &str| {
+        update["_meta"]["io.github.leanandmean.scramjet"][key].clone()
+    };
+    let ran = times(call, "ran");
+    assert!(ran["durationMs"].is_u64(), "{call}");
+    let started = ran["startedAt"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{call}"));
+    assert!(
+        started.len() == 24 && started.ends_with('Z') && started.as_bytes()[19] == b'.',
+        "{started}"
+    );
+    for update in [call, &updates[4]] {
+        let response = times(update, "response");
+        assert!(response["durationMs"].is_u64(), "{update}");
+        assert!(response["firstOutputMs"].is_u64(), "{update}");
+    }
+    let replied = times(call, "response");
+    assert!(replied["startedAt"].as_str().unwrap() <= started, "{call}");
+    for update in [&updates[0], &updates[1], &updates[2]] {
+        assert!(times(update, "response").is_null(), "{update}");
+        assert!(times(update, "ran").is_null(), "{update}");
+    }
+    assert!(times(&updates[4], "ran").is_null());
     // The live turn's call carried the same input.
     let live_call = (live.iter())
         .map(|message| &message["params"]["update"])

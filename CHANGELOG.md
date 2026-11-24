@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.313.0 — A reopened session's commands and times over ACP
+
+### Added
+
+- `scramjet acp`'s `session/load` and `watch` replay the session's `!` and `!!` commands, each as a `user_command` with how it ended, and give replayed tool calls and replies their saved times (`ran`, `response`: when they started and how long they took), so a client can show a reopened session's call durations.
+
 ## 2.312.0 — ACP clients see what the full screen shows
 
 ### Added

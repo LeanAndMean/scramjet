@@ -13,7 +13,7 @@ use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
     Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose,
     Remembered, Reopened, Reply, SandboxMode, SessionChoice, Shell, StreamProgress, TYPE_SOMETHING,
-    Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
+    Times, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -1828,6 +1828,20 @@ fn live_sessions() -> Vec<Value> {
 }
 
 /// `at` in ISO 8601, in UTC to the second.
+/// A saved timing (`{started, duration_ms, first_output_ms?}`) as ACP's updates give it:
+/// `startedAt` in UTC to the millisecond, `durationMs`, and `firstOutputMs` when saved.
+fn times(saved: &Value) -> Value {
+    let started = saved["started"].as_u64().unwrap_or(0);
+    let at = std::time::UNIX_EPOCH + Duration::from_millis(started);
+    let stamp = utc_time(at);
+    let started_at = format!("{}.{:03}Z", stamp.trim_end_matches('Z'), started % 1000);
+    let mut shown = json!({"startedAt": started_at, "durationMs": saved["duration_ms"]});
+    if saved["first_output_ms"].is_u64() {
+        shown["firstOutputMs"] = saved["first_output_ms"].clone();
+    }
+    shown
+}
+
 fn utc_time(at: std::time::SystemTime) -> String {
     let seconds = (at.duration_since(std::time::UNIX_EPOCH)).map_or(0, |since| since.as_secs());
     let (year, month, day) = super::usage::civil_date((seconds / 86_400) as i64);
@@ -3156,6 +3170,8 @@ struct Updates {
     thinking: bool,
     /// The session file's line of the item replayed now, which its updates carry as `entryId`.
     entry: Option<usize>,
+    /// What was saved of that item's times, which its updates carry with the line.
+    times: Times,
     /// The ids given to the calls whose results are not saved yet, by the model's.
     call_ids: HashMap<String, String>,
     /// The message that showed the prompt saved next, if one did.
@@ -3230,6 +3246,7 @@ impl Updates {
             unsettled: false,
             thinking: false,
             entry: None,
+            times: Times::default(),
             call_ids: HashMap::new(),
             prompt_shown: None,
             taken_ids: Default::default(),
@@ -3243,7 +3260,8 @@ impl Updates {
         self.stamp(&mut update);
         lock(&self.log).update(&self.out, &self.session, update);
     }
-    /// A replayed message, reasoning, tool call or compaction carries its entry's line.
+    /// A replayed message, reasoning, tool call or compaction carries its entry's line, and the
+    /// times saved of it: a tool call's run (`ran`), a response's of its last item's updates.
     fn stamp(&self, update: &mut Value) {
         let kinds = [
             "user_message_chunk",
@@ -3255,7 +3273,14 @@ impl Updates {
         if let (true, Some(line)) = (self.replaying, self.entry)
             && kinds.contains(&update["sessionUpdate"].as_str().unwrap_or(""))
         {
-            add_meta(update, json!({"entryId": line}));
+            let mut fields = json!({"entryId": line});
+            let saved = [("response", &self.times.response), ("ran", &self.times.ran)];
+            for (key, timing) in saved {
+                if let Some(timing) = timing {
+                    fields[key] = times(timing);
+                }
+            }
+            add_meta(update, fields);
         }
     }
     /// Sends the replayed tool call held, if any.
@@ -3872,8 +3897,8 @@ impl AgentUi for Updates {
         self.call.model_id = call_id.to_owned();
         self.call.arguments = arguments.clone();
     }
-    fn entry(&mut self, line: Option<usize>) {
-        self.entry = line;
+    fn entry(&mut self, line: Option<usize>, times: Times) {
+        (self.entry, self.times) = (line, times);
     }
     /// Names the update that showed what was saved, for a client that knows the extension.
     fn saved(&mut self, saved: scramjet::agent::Saved, line: usize) {
@@ -3975,7 +4000,19 @@ impl AgentUi for Updates {
         self.call_update(update);
     }
     fn command_started(&mut self, _command: &str, _include: bool) {}
-    fn command_result(&mut self, _ran: &UserCommand) {}
+    /// Replayed, as `bash` tells it when it ends; live, `bash` itself tells it.
+    fn command_result(&mut self, shown: &UserCommand) {
+        if !self.replaying || !self.scramjet {
+            return;
+        }
+        self.flush();
+        let mut params = json!({"sessionId": self.session, "command": shown.command,
+            "include": shown.include, "result": ran(shown)});
+        if let Some(line) = self.entry {
+            params["entryId"] = json!(line);
+        }
+        lock(&self.log).notify(&self.out, USER_COMMAND, params);
+    }
     fn stopped(&mut self, error: Option<&str>) {
         if self.replaying {
             if let Some(error) = error {
