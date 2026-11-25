@@ -1,8 +1,8 @@
 //! Turns the markdown of streamed replies into terminal styles, as Scramjet renders them: strong,
 //! emphasized and struck text, code spans, links, headings, lists, block quotes, rules, fenced and
 //! indented code blocks, highlighted when they name their language, tables and line breaks. A
-//! marker is shown as typed unless its span closes on the same line, so text after an opening
-//! marker waits until the span closes or the line ends. A table's lines wait until it ends, as its
+//! marker is shown as typed unless its span closes in the same paragraph, so text after an
+//! opening marker waits until the span closes or the paragraph ends. A table's lines wait until it ends, as its
 //! columns are fitted to all its rows, and so does a highlighted code line. A blank line waits for
 //! the next, as Scramjet shows a run of them as one, and none between a list's items; and, as
 //! Scramjet's, blocks the text did not separate are shown with a blank line between them.
@@ -148,6 +148,18 @@ pub struct Markdown {
     /// The line before ended in a backslash, a line break if the next line goes on with its
     /// text and shown otherwise: the style it is shown in, and whether its newline came.
     broken: Option<(&'static str, bool)>,
+    /// The end of the paragraph's line before, from a span it did not close, which waits for
+    /// the next line to close it.
+    carry: Option<Carry>,
+}
+
+struct Carry {
+    text: String,
+    /// The character before `text`, as `Markdown::before`.
+    before: Option<char>,
+    style: &'static str,
+    /// Its line's newline came.
+    newline: bool,
 }
 
 /// A block quote: its content rendered as blocks of their own, as Scramjet's, each line shown
@@ -247,6 +259,7 @@ impl Markdown {
             quoting: false,
             plain: "",
             broken: None,
+            carry: None,
         }
     }
 
@@ -297,10 +310,32 @@ impl Markdown {
             self.pending.pop();
             self.broken = Some((style, false));
         }
-        let mut out = self.advance(true);
+        // As CommonMark's, a span goes on in the paragraph's next line.
+        let mut out = String::new();
+        if let Line::Text(style) = self.line
+            && self.broken.is_none()
+            && matches!(self.previous, Some(Block::Paragraph | Block::List))
+        {
+            out = self.inline(false, style);
+            let mut chars: Vec<char> = self.before.into_iter().collect();
+            let from = chars.len();
+            chars.extend(self.pending.chars());
+            let open = from < chars.len() && matches!(span(&chars, from, true), Span::Literal(_));
+            if open && self.pending.starts_with(['`', '*', '_', '~']) {
+                self.carry = Some(Carry {
+                    text: std::mem::take(&mut self.pending),
+                    before: self.before,
+                    style,
+                    newline: false,
+                });
+                return self.ended_line(out);
+            }
+        }
+        out += &self.advance(true);
         match self.line {
             // A blank line, or one of spaces, which in a code block show after its indent.
             Line::Start => {
+                out += &self.release();
                 out += &self.flush_table();
                 let mut line = std::mem::take(&mut self.pending);
                 let Some(fence) = self.block.filter(|fence| !fence.indented) else {
@@ -361,6 +396,31 @@ impl Markdown {
         self.ended_line(out)
     }
 
+    /// The carried text, its spans that did not close shown as typed, and its newline.
+    fn release(&mut self) -> String {
+        let Some(carry) = self.carry.take() else {
+            return String::new();
+        };
+        let restore = format!("{RESET}{}{}", self.base, carry.style);
+        let mut chars: Vec<char> = carry.before.into_iter().collect();
+        let from = chars.len();
+        chars.extend(carry.text.chars());
+        let end = self.line_end(carry.style);
+        let mut out = spans(&chars, from, true, &restore, Some(&end)).0 + &end;
+        if carry.newline {
+            out.push('\n');
+        }
+        out
+    }
+
+    /// What ends a text line in `style`.
+    fn line_end(&self, style: &str) -> String {
+        match style {
+            "" => String::new(),
+            _ => format!("{RESET}{}", self.base),
+        }
+    }
+
     fn ended_line(&mut self, out: String) -> String {
         self.line = Line::Start;
         self.before = None;
@@ -373,6 +433,7 @@ impl Markdown {
     pub fn finish(&mut self) -> String {
         let empty = !self.ended && self.line == Line::Start && self.pending.is_empty();
         let mut out = self.end_line();
+        out += &self.release();
         out += &self.close_quote();
         self.quoting = false;
         if let Some((style, newline)) = self.broken.take() {
@@ -474,6 +535,10 @@ impl Markdown {
             let text = quote.inner.push("\n");
             return quote.show(&text);
         }
+        if let Some(carry) = &mut self.carry {
+            carry.newline = true;
+            return String::new();
+        }
         if std::mem::take(&mut self.blank) {
             self.blanks += 1;
             return String::new();
@@ -497,6 +562,10 @@ impl Markdown {
             let Some(kind) = self.decide(ended) else {
                 return out;
             };
+            let joined = matches!(kind, Kind::Text) && self.blanks == 0 && self.carry.is_some();
+            if !joined {
+                out += &self.release();
+            }
             let lazy = |held| (self.quote.as_ref()).is_some_and(|q| q.inner.continues(held));
             let kind = match kind {
                 Kind::Text if lazy(false) => Kind::Lazy,
@@ -550,7 +619,13 @@ impl Markdown {
             if let Some(block) = block {
                 self.previous = Some(block);
             }
+            let shown = out.len();
             self.line = self.start(kind, &mut out);
+            if let Some(carry) = self.carry.take() {
+                let lead = out.split_off(shown);
+                self.pending = format!("{}\n{lead}{}", carry.text, self.pending);
+                self.before = carry.before;
+            }
         }
         match self.line {
             Line::Start | Line::Fence | Line::Held | Line::Rule => {}
@@ -888,7 +963,7 @@ impl Markdown {
         let mut chars: Vec<char> = self.before.into_iter().collect();
         let from = chars.len();
         chars.extend(self.pending.chars());
-        let (out, at) = spans(&chars, from, ended, &restore);
+        let (out, at) = spans(&chars, from, ended, &restore, Some(&self.line_end(style)));
         if at > from {
             self.before = Some(chars[at - 1]);
         }
@@ -1157,10 +1232,29 @@ fn cell_lines(text: &str, width: usize) -> Vec<String> {
 
 /// The spans of `chars` from `from` that are complete, rendered, restoring `restore` after each,
 /// and where the first that is not starts.
-fn spans(chars: &[char], from: usize, ended: bool, restore: &str) -> (String, usize) {
+/// Before a line break at the top, `top` is what ends the line, as `end_line` does.
+fn spans(
+    chars: &[char],
+    from: usize,
+    ended: bool,
+    restore: &str,
+    top: Option<&str>,
+) -> (String, usize) {
     let mut out = String::new();
     let mut at = from;
     while at < chars.len() {
+        // A line break the paragraph went on after: the next line's start, its spans' styles
+        // set again after it.
+        if chars[at] == '\n' {
+            let lead = lead(&chars[at + 1..]);
+            out += top.unwrap_or(RESET);
+            out.extend(&chars[at..at + 1 + lead]);
+            if top.is_none() {
+                out += restore;
+            }
+            at += 1 + lead;
+            continue;
+        }
         match span(chars, at, ended) {
             Span::Plain => {
                 out.push(chars[at]);
@@ -1209,7 +1303,12 @@ fn spans(chars: &[char], from: usize, ended: bool, restore: &str) -> (String, us
 
 /// Complete text with its spans rendered.
 fn complete(chars: &[char], restore: &str) -> String {
-    spans(chars, 0, true, restore).0
+    spans(chars, 0, true, restore, None).0
+}
+
+/// The indent a line the paragraph went on in starts with.
+fn lead(chars: &[char]) -> usize {
+    chars.iter().take_while(|&&c| c == ' ' || c == HANG).count()
 }
 
 fn run(chars: &[char], at: usize) -> usize {
@@ -1263,7 +1362,21 @@ fn code_span(chars: &[char], at: usize, ended: bool) -> Span {
             if j + m == chars.len() && !ended {
                 return Span::Wait;
             }
-            let mut content: String = chars[at + n..j].iter().collect();
+            // As CommonMark's, a line break in a code span is a space.
+            let mut content = String::new();
+            let mut k = at + n;
+            while k < j {
+                match chars[k] {
+                    '\n' => {
+                        content.push(' ');
+                        k += 1 + lead(&chars[k + 1..j]);
+                    }
+                    c => {
+                        content.push(c);
+                        k += 1;
+                    }
+                }
+            }
             if content.len() > 2
                 && content.starts_with(' ')
                 && content.ends_with(' ')
@@ -1561,6 +1674,36 @@ mod tests {
     }
 
     #[test]
+    fn spans_go_on_in_the_paragraphs_next_lines_as_in_scramjet() {
+        assert_eq!(
+            rendered_alike(80, "Run `cargo\ntest` now."),
+            "Run \x1b[36mcargo test\x1b[0m now."
+        );
+        assert_eq!(
+            rendered_alike(80, "A **very\nbold** b."),
+            "A \x1b[1mvery\x1b[0m\n\x1b[0m\x1b[1mbold\x1b[0m b."
+        );
+        assert_eq!(
+            rendered_alike(80, "- *a\n  b* c"),
+            "\x1b[36m-\x1b[0m \x1b[3ma\x1b[0m\n  \x1b[0m\x1b[3mb\x1b[0m c"
+        );
+        assert_eq!(
+            render(&["> ~~a\n> b~~"]),
+            "\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m \x1b[9ma\x1b[0m\n\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m \
+\x1b[0m\x1b[2;3m\x1b[9mb\x1b[0m\x1b[2;3m\x1b[0m"
+        );
+        // Spans the paragraph's end, a blank line, another block or a heading leaves unclosed.
+        for (text, shown) in [
+            ("a **b\nc", "a **b\nc"),
+            ("a **b\n\nc**", "a **b\n\nc**"),
+            ("a `b\n- c`", "a `b\n- c`"),
+            ("## a *b\nc*", "a *b\n\nc*"),
+        ] {
+            assert_eq!(super::super::text::plain(&rendered_alike(80, text)), shown);
+        }
+    }
+
+    #[test]
     fn unclosed_markers_stay_as_typed() {
         for text in [
             "f(**kwargs) and 2**10 and a ` tick",
@@ -1581,8 +1724,9 @@ mod tests {
         assert_eq!(markdown.push("see **this"), "see ");
         assert_eq!(markdown.push(" part** now"), "\x1b[1mthis part\x1b[0m now");
         assert_eq!(markdown.push(" `open"), " ");
-        assert_eq!(markdown.end_line(), "`open");
-        assert_eq!(markdown.push("\n# T"), "\n\n\x1b[1;4;33mT");
+        // An open span at a paragraph line's end waits for the next line, which may close it.
+        assert_eq!(markdown.end_line(), "");
+        assert_eq!(markdown.push("\n# T"), "`open\n\n\x1b[1;4;33mT");
         // Whether a marker opens depends on the text before it, already shown.
         assert_eq!(markdown.push("\nx**"), "\x1b[0m\n\nx");
         assert_eq!(markdown.push("y** z"), "**y** z");

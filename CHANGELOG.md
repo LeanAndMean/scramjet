@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.8 — Styles across a paragraph's lines
+
+### Fixed
+
+- Bold, italic, struck text and code spans that a reply opens on one line of a paragraph and closes on a later one are styled, as in Scramjet, instead of showing their markers as typed; a code span's line break shows as a space. A span left open waits for the paragraph's next line before it shows.
+
 ## 2.344.7 — Five minutes' cache writes priced
 
 ### Fixed
