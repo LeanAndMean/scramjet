@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.343.0 — A refused write points to asking
+
+### Changed
+
+- In the sandbox, a command that fails on a write the sandbox refused ("Read-only file system", such as a tool's cache in your home directory) now tells the agent it can ask you for that directory with `request_permissions`, rather than leaving it to work around the failure.
+
 ## 2.342.3 — The ACP guide followed
 
 ### Fixed

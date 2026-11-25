@@ -43,7 +43,7 @@ pub(super) fn directory() -> Option<PathBuf> {
 }
 
 /// Has this thread's sessions keep their lines in `directory`, whatever their path.
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(in crate::agent) fn keep_in(directory: &Path) {
     TEST_DIRECTORY.with(|kept| *kept.borrow_mut() = Some(directory.to_owned()));
 }

@@ -105,7 +105,7 @@ A change applies at once, the reach too, and is remembered for this project: the
 
 Without the screen, `/sandbox MODE`, `/sandbox network on|off` and `/sandbox remove DIR` change it at once, remembered as the screen's changes are, and `/sandbox add DIR` for the session only. `/add-dir DIR` (or `--add-dir DIR` at start, as in Claude Code) makes another directory writable too, its own `.git`, `.scramjet` and `.agents` kept read-only unless granted by name; with no sandbox it only re-opens a directory Can read hides.
 
-The agent is told what is writable, and asks for more with `request_permissions`, naming the directories and why. You allow it for the session, always for this project (kept by the project's path in `sandbox-grants.json` beside your settings, never in the repository, listed by `/sandbox` and forgotten by `/sandbox remove DIR`), or deny it. In `-p` and in the steps autopilot runs no one answers, so it is refused.
+The agent is told what is writable, and asks for more with `request_permissions`, naming the directories and why; when a command fails on a write the sandbox refused ("Read-only file system", on macOS "Operation not permitted"), it is reminded that it can ask. You allow it for the session, always for this project (kept by the project's path in `sandbox-grants.json` beside your settings, never in the repository, listed by `/sandbox` and forgotten by `/sandbox remove DIR`), or deny it. In `-p` and in the steps autopilot runs no one answers, so it is refused.
 
 ### What it leaves out
 

@@ -2884,10 +2884,7 @@ fn models_that_replied_before_a_compaction_are_still_on_the_branch() {
 }
 
 #[test]
-#[cfg_attr(
-    not(target_os = "linux"),
-    ignore = "writes to /dev/full, which only Linux has"
-)]
+#[cfg(target_os = "linux")]
 fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
     let directory = ScratchDir::new(
         std::env::temp_dir().join(format!("scramjet-agent-kept-{}", std::process::id())),

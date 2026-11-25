@@ -126,6 +126,7 @@ impl Agent {
                 None => self.config.tools.clone(),
             },
             hide_credentials: self.hide_credentials,
+            asks_for_writes: self.config.sandbox.is_some() && self.offers(permissions::NAME),
             offline: self.offline && self.config.sandbox.is_none(),
             reads: self.reads.clone(),
             writable: match &self.config.sandbox {
@@ -555,6 +556,8 @@ struct Kit {
     /// The coding tools of this run, which children take by default.
     coding_tools: Vec<String>,
     hide_credentials: bool,
+    /// Whether the agent can ask for more of the sandbox's reach (`request_permissions`).
+    asks_for_writes: bool,
     /// Whether commands are kept off the network with no sandbox (`Agent::set_offline`).
     offline: bool,
     reads: sandbox::Reads,
@@ -594,6 +597,7 @@ impl Kit {
                 sandbox: self.sandbox.as_ref(),
             },
             hide_credentials: self.hide_credentials,
+            asks_for_writes: self.asks_for_writes,
             offline: self.offline,
             sandbox: self.sandbox.as_ref(),
             mcp: self.mcp.as_deref(),
@@ -605,6 +609,7 @@ impl Kit {
 pub(super) struct Tools<'a> {
     parent: subagent::Parent<'a>,
     hide_credentials: bool,
+    asks_for_writes: bool,
     offline: bool,
     sandbox: Option<&'a Sandbox>,
     mcp: Option<&'a mcp::Servers>,
@@ -696,6 +701,13 @@ impl Tools<'_> {
                         output.text += &stores_hidden(self.sandbox.is_some());
                     }
                 }
+                if let Some(sandbox) = self.sandbox.filter(|_| self.asks_for_writes)
+                    && output.failed
+                    && shell
+                    && output.text.contains(REFUSED_WRITE)
+                {
+                    output.text += &write_refused(sandbox);
+                }
                 (output, Usage::default())
             }
         };
@@ -746,6 +758,27 @@ fn stores_hidden(sandbox: bool) -> String {
          to work around, and the login itself is likely fine. If the task needs this access, \
          stop and tell the user, who can {way_out}. If it does not, the command was out of the \
          task's scope: go on without it."
+    )
+}
+
+/// What a write the sandbox refuses makes a command print: bubblewrap mounts what it keeps
+/// read-only, and Seatbelt denies the write.
+const REFUSED_WRITE: &str = match cfg!(target_os = "macos") {
+    true => "Operation not permitted",
+    false => "Read-only file system",
+};
+
+/// What a failed command whose output shows a refused write is told after it, as Codex flags a
+/// likely sandbox denial: a model meeting a tool's read-only cache otherwise works around it
+/// rather than asking (a practice run of 2026-11-25).
+fn write_refused(sandbox: &Sandbox) -> String {
+    format!(
+        "\n\nScramjet: \"{REFUSED_WRITE}\" here likely means the sandbox ({}) refused a write \
+         outside the directories it lets commands change. If the task needs that write (a \
+         tool's cache or settings, say), ask the user with `{}`, naming the directory and why; \
+         do not work around the sandbox. If it does not, go on without it.",
+        sandbox.mode.name(),
+        permissions::NAME
     )
 }
 
@@ -1642,6 +1675,38 @@ worktree\n---\n\nWrite.\n",
         assert!(agent.sandbox().unwrap().writable.is_empty());
         let asked = (ui.shown.iter()).filter(|shown| shown.starts_with("choose Allow writing"));
         assert_eq!(asked.count(), 2);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
+    fn a_write_the_sandbox_refuses_points_the_model_to_asking_for_it() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", json!({ "command": "echo x > .git/made" })),
+            tool_call("call_2", "bash", json!({ "command": "echo no; exit 1" })),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "refused-write");
+        std::fs::create_dir_all(agent.root().join(".git")).unwrap();
+        agent.set_sandbox(Some(Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        }));
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("write", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        let refused = last_output(&bodies[1]);
+        assert!(
+            refused.contains("likely means the sandbox (workspace-write) refused a write")
+                && refused.contains("ask the user with `request_permissions`"),
+            "{refused}"
+        );
+        let failed = last_output(&bodies[2]);
+        assert!(!failed.contains("Scramjet:"), "{failed}");
+        assert!(!agent.root().join(".git/made").exists());
     }
 
     #[test]
