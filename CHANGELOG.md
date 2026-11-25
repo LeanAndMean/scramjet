@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.6 — A quoted table that ends without a blank quote line
+
+### Fixed
+
+- A table inside a quote (`> | a |` lines) vanished from a reply when the quote ended without a `>` blank line, as before a blank line, a list or a heading; it now shows, and a line after it without its `>` goes on in the quote as Scramjet shows it, not as one of the table's rows.
+- A quoted table's quote style no longer runs into the text after the quote, and holds after a header cell's bold.
+
 ## 2.347.5 — A refused write behind a pipe
 
 ### Fixed

@@ -129,6 +129,9 @@ pub struct Markdown {
     lists: Vec<List>,
     /// The line before can go on in a line not indented under its item's text, as a paragraph.
     lazy: bool,
+    /// The current line came to this quote's renderer without its `>`, as a lazy line. As
+    /// Scramjet's, it ends a table's rows, and is no delimiter under a header that had its `>`.
+    lazily: bool,
     /// The current line's indent as written.
     indent: usize,
     /// The ended line was blank; and the blank lines whose newlines wait for the next line.
@@ -209,6 +212,8 @@ struct Table {
     newline: bool,
     /// A blank line between blocks can go before it (`Markdown::separable`).
     separable: bool,
+    /// Each of its lines came lazily (`Markdown::lazily`), so lazy lines go on in it.
+    lazy: bool,
 }
 
 enum Span {
@@ -257,6 +262,7 @@ impl Markdown {
             table: None,
             lists: Vec::new(),
             lazy: false,
+            lazily: false,
             indent: 0,
             blank: false,
             blanks: 0,
@@ -471,11 +477,12 @@ impl Markdown {
         let Some(mut quote) = self.quote.take() else {
             return String::new();
         };
-        quote.inner.end_line();
+        // A table's lines held until this blank or lazy line show with it.
+        let mut text = quote.inner.end_line();
         // An item's quote that showed nothing still shows the item, as Scramjet's.
         let ended = quote.inner.blank || quote.inner.blanks > 0;
         quote.inner.blanks = 0;
-        let text = quote.inner.finish();
+        text += &quote.inner.finish();
         let shown = quote.show(&text);
         match quote.bullet {
             Some(bullet) => bullet + if ended { "\n" } else { "" },
@@ -483,16 +490,15 @@ impl Markdown {
         }
     }
 
-    /// Whether a line of text, or a table's line if `held`, goes on in the paragraph or table the
-    /// text before ended in, as CommonMark's lazy lines, in the innermost quote.
-    fn continues(&self, held: bool) -> bool {
+    /// Whether a line of text or a table's goes on in the paragraph or table the text before
+    /// ended in, as CommonMark's lazy lines, in the innermost quote.
+    fn continues(&self) -> bool {
         if self.blank || self.blanks > 0 || self.block.is_some() {
             return false;
         }
         match &self.quote {
-            Some(quote) => quote.inner.continues(held),
-            None if (self.table.as_ref()).is_some_and(|table| table.rows.is_some()) => held,
-            // A line that may start a table may also be a paragraph's.
+            Some(quote) => quote.inner.continues(),
+            // As Scramjet's, a quoted table's rows end there, and the line goes on in the quote.
             None if self.table.is_some() => true,
             None => self.lazy && matches!(self.previous, Some(Block::Paragraph | Block::List)),
         }
@@ -579,10 +585,9 @@ impl Markdown {
             if !joined {
                 out += &self.release();
             }
-            let lazy = |held| (self.quote.as_ref()).is_some_and(|q| q.inner.continues(held));
+            let lazy = || (self.quote.as_ref()).is_some_and(|q| q.inner.continues());
             let kind = match kind {
-                Kind::Text if lazy(false) => Kind::Lazy,
-                Kind::Held if lazy(true) => Kind::Lazy,
+                Kind::Text | Kind::Held if lazy() => Kind::Lazy,
                 kind => kind,
             };
             if !matches!(kind, Kind::Quote | Kind::Lazy) {
@@ -687,7 +692,8 @@ impl Markdown {
         let item = self.lists[..self.within(indent)].last();
         let relative = indent - item.map_or(0, |list| list.written);
         // As marked's tables, whose rows go on in any line that starts no other block.
-        let row = (self.table.as_ref()).is_some_and(|table| table.rows.is_some());
+        let row = (self.table.as_ref())
+            .is_some_and(|table| table.rows.is_some() && (table.lazy || !self.lazily));
         // As CommonMark's indented code, which cannot go on with a paragraph's text.
         if relative >= 4 && (!self.lazy || row) {
             return Some(Kind::Indented);
@@ -854,6 +860,9 @@ impl Markdown {
             Kind::Lazy => {
                 self.pending = text.to_owned();
                 self.quoting = true;
+                if let Some(quote) = &mut self.quote {
+                    quote.inner.lazily = true;
+                }
                 Line::Quote(false)
             }
             // As Scramjet's, whose lines wrapped from a paragraph's start where it does, not
@@ -932,6 +941,9 @@ impl Markdown {
                         owed: true,
                     }));
                 }
+                if let Some(quote) = &mut self.quote {
+                    quote.inner.lazily = false;
+                }
                 let rest = &text[1..];
                 let space = rest.is_empty();
                 self.pending = rest.strip_prefix(' ').unwrap_or(rest).to_owned();
@@ -1001,29 +1013,30 @@ impl Markdown {
     /// Takes a table's line, or one that may start a table; returns what shows now, the line
     /// before when it did not start a table.
     fn hold(&mut self, line: String) -> String {
+        let lazily = self.lazily;
         match &mut self.table {
-            Some(Table {
-                rows: Some(rows),
-                header,
-                lines,
-                newline,
-                ..
-            }) => {
-                let mut cells = cells(&line);
-                cells.resize(header.len(), String::new());
-                rows.push(cells);
-                lines.push(line);
-                *newline = false;
-                return String::new();
-            }
-            Some(table) if delimiter(&line, table.header.len()) => {
-                table.rows = Some(Vec::new());
+            Some(table) if table.lazy || !lazily => {
+                table.lazy &= lazily;
+                match &mut table.rows {
+                    Some(rows) => {
+                        let mut cells = cells(&line);
+                        cells.resize(table.header.len(), String::new());
+                        rows.push(cells);
+                    }
+                    None if delimiter(&line, table.header.len()) => table.rows = Some(Vec::new()),
+                    None => return self.start_table(line),
+                }
                 table.lines.push(line);
                 table.newline = false;
                 return String::new();
             }
             _ => {}
         }
+        self.start_table(line)
+    }
+
+    /// Shows the table or line held before, and holds `line` as one that may start a table.
+    fn start_table(&mut self, line: String) -> String {
         let out = self.flush_table();
         let text = line.trim_start_matches(' ');
         self.table = Some(Table {
@@ -1033,6 +1046,7 @@ impl Markdown {
             rows: None,
             newline: false,
             separable: self.separable,
+            lazy: self.lazily,
         });
         out
     }
@@ -1051,13 +1065,22 @@ impl Markdown {
             false => String::new(),
         };
         self.previous = Some(block);
-        out += &match &table.rows {
-            Some(rows) => self.table_lines(&table, rows).join("\n"),
+        let lines = match &table.rows {
+            Some(rows) => self.table_lines(&table, rows),
             None => {
                 let chars: Vec<char> = table.lines[0].chars().collect();
-                complete(&chars, &format!("{RESET}{}", self.base))
+                vec![complete(&chars, &format!("{RESET}{}", self.base))]
             }
         };
+        // As Scramjet's, a quote's style holds across the table's own styles, to each line's end.
+        let restore = format!("{RESET}{}{}", self.base, self.plain);
+        let lines: Vec<String> = match self.plain {
+            "" => lines,
+            _ => (lines.iter())
+                .map(|line| line.replace(RESET, &restore) + &self.line_end(self.plain))
+                .collect(),
+        };
+        out += &lines.join("\n");
         if table.newline {
             out.push('\n');
         }
@@ -2130,6 +2153,60 @@ mod tests {
             render(&["> - **a** b"]),
             format!("{border}\x1b[36m-\x1b[0m{quote} \x1b[1ma\x1b[0m{quote} b\x1b[0m")
         );
+    }
+
+    #[test]
+    fn a_quoted_table_ends_at_a_line_without_its_border_as_in_scramjet() {
+        // Each checked against Scramjet's renderer: the table shows whatever line ends the
+        // quote, and a lazy line goes on in the quote as a block of its own, never a row.
+        let table = "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘";
+        let cases = [
+            ("> | t |\n> |-|\n> | 1 |\n\nafter", format!("{table}\n\nafter")),
+            ("> | t |\n> |-|\n> | 1 |\n- item", format!("{table}\n\n- item")),
+            ("> | t |\n> |-|\n> | 1 |\n# H", format!("{table}\n\nH")),
+            (
+                "> | t |\n> |-|\n> | 1 |\n```\nc\n```",
+                format!("{table}\n\n```\n  c\n```"),
+            ),
+            ("> | t |\n> |-|\n> | 1 |\nlazy\nmore", format!("{table}\n│\n│ lazy\n│ more")),
+            ("> x\n> | t |\n> |-|\n> | 1 |\nlazy", format!("│ x\n│\n{table}\n│\n│ lazy")),
+            ("> | t |\n> |-|\n> | 1 |\n| 2 |\n| 3 |", format!("{table}\n│\n│ | 2 |\n│ | 3 |")),
+            (
+                "> | t |\n> |-|\n> | 1 |\n| 2 |\n> |-|",
+                format!("{table}\n│\n│ ┌───┐\n│ │ 2 │\n│ ├───┤\n│ └───┘"),
+            ),
+            (
+                "> | t |\n> |-|\n> | 1 |\n> lazy\nmore",
+                "│ ┌──────┐\n│ │ t    │\n│ ├──────┤\n│ │ 1    │\n│ ├──────┤\n│ │ lazy │\n│ └──────┘\n│\n│ more".into(),
+            ),
+            ("> > | t |\n> > |-|\nmore", "│ │ ┌───┐\n│ │ │ t │\n│ │ ├───┤\n│ │ └───┘\n│ │\n│ │ more".into()),
+            ("- > | t |\n  > |-|\nlazy", "- │ ┌───┐\n  │ │ t │\n  │ ├───┤\n  │ └───┘\n  │\n  │ lazy".into()),
+            // A delimiter without its `>` makes no table of a header with one.
+            ("> | t |\n|-|\n|1|", "│ | t |\n│ |-|\n│ |1|".into()),
+            ("> > | t |\n> |-|", "│ │ | t |\n│ │ |-|".into()),
+            ("> | t |\n| u |", "│ | t |\n│ | u |".into()),
+            ("> a\n| t |\n> |-|", "│ a\n│\n│ ┌───┐\n│ │ t │\n│ ├───┤\n│ └───┘".into()),
+            // A table goes on in lazy lines while all its lines came so.
+            (
+                "> a\n| t |\n> |-|\n|1|",
+                "│ a\n│\n│ ┌───┐\n│ │ t │\n│ ├───┤\n│ └───┘\n│\n│ |1|".into(),
+            ),
+            (
+                "> a\n| t |\n|-|\n> |1|\n|2|",
+                "│ a\n│\n│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ |2|".into(),
+            ),
+        ];
+        for (text, shown) in cases {
+            let lines = plain(&rendered_alike(30, text));
+            let lines: Vec<&str> = lines.lines().map(str::trim_end).collect();
+            assert_eq!(lines.join("\n"), shown, "{text:?}");
+        }
+        // The quote's style holds across a cell's own and ends with each line, not after it.
+        let (border, quote) = ("\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ", "\x1b[2;3m");
+        let shown = render(&["> | t |\n> |-|\n\nafter"]);
+        let header = format!("{border}│ \x1b[1mt\x1b[0m{quote} │\x1b[0m\n");
+        assert!(shown.contains(&header), "{shown:?}");
+        assert!(shown.ends_with("└───┘\x1b[0m\n\nafter"), "{shown:?}");
     }
 
     #[test]
