@@ -733,14 +733,12 @@ fn a_model_whose_program_lists_it_no_longer_says_where_it_came_from() {
     let program = scratch.0.join("list");
     let list = |providers: Value| {
         let output = json!({"version": 1, "providers": providers});
-        std::fs::write(&program, format!("#!/bin/sh\necho '{output}'\n")).unwrap();
+        script(&program, &format!("echo '{output}'"));
     };
     list(
         json!({"proxy": {"baseUrl": "http://127.0.0.1:9", "api": "anthropic-messages",
         "models": [{"id": "m"}]}}),
     );
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(
         &file,
         json!({
