@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.335.1 — A README for new users
+
+### Changed
+
+- The README, which the program carries for the agent's own questions about it, is written for someone new: what Scramjet does, with screenshots, a short section per feature linking to its guide, and up front that tool calls run without asking and outside a sandbox unless you choose `--ask` or `--sandbox`. Its Status, which heads each release's notes, now says macOS is used by several people, three people use Windows daily and a Raspberry Pi 5 runs the recent releases.
+
 ## 2.335.0 — Google Gemini with an API key
 
 ### Added

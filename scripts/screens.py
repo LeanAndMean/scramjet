@@ -20,6 +20,9 @@ A scenario (scripts/screens/*.json) holds:
 
     "size":     COLUMNSxROWS, unless --size gives one;
     "files":    the project's files, committed to a Git repository first;
+    "project":  the project's directory in a scratch home directory (HOME; RUSTUP_HOME and CARGO_HOME
+                stay yours), such as "words", its branch main, so the footer shows ~/words (main);
+                else a scratch "project";
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
     "config":   more files beside the settings, by name, such as "words.txt" or "agents/x.md";
     "model":    the scripted server's model (default gpt-6-luna);
@@ -364,7 +367,8 @@ def main():
     work = tempfile.mkdtemp(prefix='screens-')
     servers = []
     try:
-        project = os.path.join(work, 'project')
+        home = os.path.join(work, 'home')
+        project = os.path.join(home, scenario['project']) if 'project' in scenario else os.path.join(work, 'project')
         for name, text in scenario.get('files', {}).items():
             path = os.path.join(project, name)
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -373,6 +377,8 @@ def main():
         os.makedirs(project, exist_ok=True)
         git = ['git', '-c', 'user.name=screens', '-c', 'user.email=screens@localhost']
         subprocess.run(['git', 'init', '-q'], cwd=project, check=True)
+        if 'project' in scenario:
+            subprocess.run(['git', 'symbolic-ref', 'HEAD', 'refs/heads/main'], cwd=project, check=True)
         subprocess.run(git + ['add', '-A'], cwd=project, check=True)
         subprocess.run(git + ['commit', '-q', '--allow-empty', '-m', 'scenario'], cwd=project, check=True)
         settings = dict(scenario.get('settings', {}))
@@ -401,6 +407,11 @@ def main():
                 file.write('#!/bin/sh\necho "$@" >> %s\n' % os.path.join(work, 'opened.txt'))
             os.chmod(path, 0o755)
         env['PATH'] = os.path.join(work, 'bin') + os.pathsep + env.get('PATH', '')
+        if 'project' in scenario:
+            # Toolchains such as rustup's stay where they are.
+            for name, directory in [('RUSTUP_HOME', '.rustup'), ('CARGO_HOME', '.cargo')]:
+                env.setdefault(name, os.path.join(os.path.expanduser('~'), directory))
+            env['HOME'] = home
         env.update({name: text.replace('{root}', ROOT) for name, text in scenario.get('env', {}).items()})
 
         # The scripted server is the first provider, offering the scenario's model.

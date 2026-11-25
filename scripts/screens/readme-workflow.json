@@ -1,0 +1,89 @@
+{
+  "size": "100x31",
+  "project": "words",
+  "model": "claude-opus-5-5",
+  "window": 200000,
+  "total": 24100,
+  "files": {
+    ".gitignore": "target\n",
+    "Cargo.toml": "[package]\nname = \"words\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    "src/lib.rs": "/// Splits `text` into words.\npub fn words(text: &str) -> Vec<&str> {\n    text.split(' ').collect()\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn splits_on_spaces() {\n        assert_eq!(words(\"a b  c\"), [\"a\", \"b\", \"c\"]);\n    }\n}\n",
+    "notes/issue-12.md": "# 12: words() should keep quoted phrases together\n\n`words(\"say \\\"hello world\\\"\")` should give `[\"say\", \"hello world\"]`.\n",
+    ".scramjet/work/commands/work:plan.md": "---\ndescription: Plan an issue in stages\nargument-hint: <issue>\nnext:\n  mode: closed\n  candidates:\n    - name: work:build\n    - name: work:review\n---\nRead notes/issue-$1.md and the code it touches, then write a staged plan to notes/plan-$1.md.\n",
+    ".scramjet/work/commands/work:review.md": "---\ndescription: Review a plan before it is built\nargument-hint: <issue>\nnext:\n  mode: closed\n  candidates:\n    - name: work:build\n---\nReview notes/plan-$1.md against the code.\n",
+    ".scramjet/work/commands/work:build.md": "---\ndescription: Build a plan's next stage\nargument-hint: <issue>\nnext:\n  mode: closed\n  candidates:\n    - name: work:review\n---\nBuild the next stage of notes/plan-$1.md.\n"
+  },
+  "prompt": "/work:plan 12",
+  "replies": [
+    [
+      {
+        "reasoning": "The issue asks for quoted phrases. I'll read it and the splitter.",
+        "pace": 0.2
+      },
+      {
+        "call": "read",
+        "arguments": {
+          "path": "notes/issue-12.md"
+        }
+      }
+    ],
+    [
+      {
+        "call": "read",
+        "arguments": {
+          "path": "src/lib.rs"
+        }
+      }
+    ],
+    [
+      {
+        "reasoning": "Two stages: a tokenizer first, then words on top of it.",
+        "pace": 0.3
+      },
+      {
+        "call": "write",
+        "arguments": {
+          "path": "notes/plan-12.md",
+          "content": "# Plan for 12\n\n1. A tokenizer that keeps a quoted run as one word, with tests for nested and unclosed quotes.\n2. `words` built on it; the callers' tests unchanged.\n"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The plan is in `notes/plan-12.md`: a tokenizer that keeps quoted runs together, then `words` built on it.",
+        "pace": 0.12
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Planned issue 12 in two stages, in `notes/plan-12.md`.",
+          "next_steps": [
+            {
+              "message": "/work:build 12",
+              "fresh_session": true,
+              "reason": "Build stage 1, the tokenizer, in a fresh session."
+            },
+            {
+              "message": "/work:review 12",
+              "fresh_session": true,
+              "reason": "Have the plan reviewed before building it."
+            }
+          ],
+          "recommended_next_step": 0
+        }
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "Select next step"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "next-steps"
+    }
+  ]
+}
