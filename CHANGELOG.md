@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.5 — A refused write behind a pipe
+
+### Fixed
+
+- In the sandbox, a command whose refused write was piped through `tail` or `head`, and so ended well, got no reminder that the agent can ask for the write; it now does when an error message says "Read-only file system" (on macOS "Operation not permitted").
+
 ## 2.347.4 — A list item opening a quote
 
 ### Fixed

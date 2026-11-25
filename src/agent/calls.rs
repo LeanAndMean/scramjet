@@ -707,9 +707,8 @@ impl Tools<'_> {
                     }
                 }
                 if let Some(sandbox) = self.sandbox.filter(|_| self.asks_for_writes)
-                    && output.failed
                     && shell
-                    && output.text.contains(REFUSED_WRITE)
+                    && shows_refused_write(&output.text, output.failed)
                 {
                     output.text += &write_refused(sandbox);
                 }
@@ -773,7 +772,19 @@ const REFUSED_WRITE: &str = match cfg!(target_os = "macos") {
     false => "Read-only file system",
 };
 
-/// What a failed command whose output shows a refused write is told after it, as Codex flags a
+/// Whether a command's output shows a write the sandbox refused: anywhere in a failed command's,
+/// and in one that ended well (a failure piped through `tail`, say) only as an error message
+/// gives it (`touch: x: …`, Python's `[Errno 30] …`), so that text merely naming it is not taken.
+fn shows_refused_write(text: &str, failed: bool) -> bool {
+    match failed {
+        true => text.contains(REFUSED_WRITE),
+        false => [": ", "] "]
+            .iter()
+            .any(|before| text.contains(&format!("{before}{REFUSED_WRITE}"))),
+    }
+}
+
+/// What a command whose output shows a refused write is told after it, as Codex flags a
 /// likely sandbox denial: a model meeting a tool's read-only cache otherwise works around it
 /// rather than asking (a practice run of 2026-11-25).
 fn write_refused(sandbox: &Sandbox) -> String {
@@ -1682,6 +1693,16 @@ worktree\n---\n\nWrite.\n",
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", json!({ "command": "echo x > .git/made" })),
             tool_call("call_2", "bash", json!({ "command": "echo no; exit 1" })),
+            tool_call(
+                "call_3",
+                "bash",
+                json!({ "command": "{ echo x > .git/piped; } 2>&1 | tail -1" }),
+            ),
+            tool_call(
+                "call_4",
+                "bash",
+                json!({ "command": "echo 'it says \"Read-only file system\"'" }),
+            ),
             reply("done"),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "refused-write");
@@ -1704,6 +1725,13 @@ worktree\n---\n\nWrite.\n",
         );
         let failed = last_output(&bodies[2]);
         assert!(!failed.contains("Scramjet:"), "{failed}");
+        let piped = last_output(&bodies[3]);
+        assert!(
+            piped.contains("likely means the sandbox (workspace-write) refused a write"),
+            "{piped}"
+        );
+        let named = last_output(&bodies[4]);
+        assert!(!named.contains("Scramjet:"), "{named}");
         assert!(!agent.root().join(".git/made").exists());
     }
 
