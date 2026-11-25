@@ -80,8 +80,8 @@ pub use request::{CacheRetention, set_cache_retention};
 pub use sandbox::{Reach, Reads, Remembered, Sandbox, SandboxMode, Subagents, set_launcher};
 pub use session::{
     Branch, Found, Label, ModelChange, Reading, Removal, Session, SessionInfo,
-    directory as session_directory, ephemeral, keep_records_apart, projects_directory, read_branch,
-    read_conversation, records_directory, state_directory,
+    directory as session_directory, draft, ephemeral, keep_records_apart, projects_directory,
+    read_branch, read_conversation, records_directory, state_directory,
 };
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};

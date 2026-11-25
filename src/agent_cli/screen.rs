@@ -40,6 +40,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod drafts;
 mod draw;
 mod input;
 mod link;
@@ -48,7 +49,7 @@ mod transcript;
 
 use draw::Activity;
 use input::Source;
-pub(super) use link::{Handle, Relisting};
+pub(super) use link::{Handle, Relisting, keep_draft};
 use mouse::{Click, Copying, Edge, Pasting, Selection, Thumb};
 use transcript::{Place, Transcript};
 
@@ -136,6 +137,10 @@ enum ToScreen {
     /// Opens the file in `$VISUAL` or `$EDITOR` with the terminal as the shell left it, and
     /// replies once the editor exited.
     Edit(PathBuf, mpsc::Sender<Result<(), String>>),
+    /// The draft goes with the session saved at this file (`App::drafting`).
+    Drafting(Option<PathBuf>),
+    /// Writes the draft now, replying once written: the process exits.
+    KeepDraft(mpsc::Sender<()>),
     Quit,
 }
 
@@ -289,6 +294,8 @@ struct Sides {
 struct App {
     editor: Editor,
     draft: Draft,
+    /// Where the draft is kept, and how far it was written.
+    drafts: drafts::Drafts,
     transcript: Transcript,
     /// The conversation and where it was scrolled to, while the theme editor's sample session
     /// or `/usage`'s report is shown in its place.
@@ -382,6 +389,7 @@ impl App {
         Self {
             footer: Footer::new(&sides.root),
             draft: editor.draft(String::new()),
+            drafts: drafts::Drafts::default(),
             editor,
             transcript: Transcript::default(),
             before_dialog: None,
@@ -448,6 +456,7 @@ impl App {
             loop {
                 match messages.try_recv() {
                     Ok(ToScreen::Quit) | Err(TryRecvError::Disconnected) => {
+                        self.keep_draft();
                         self.stop_shells();
                         let retained = self.retain_transcript.then(|| self.retained());
                         drop(screen);
@@ -460,6 +469,10 @@ impl App {
                         return Ok(());
                     }
                     Ok(ToScreen::Terminal(sequence)) => to_terminal(&sequence)?,
+                    Ok(ToScreen::KeepDraft(reply)) => {
+                        self.keep_draft();
+                        let _ = reply.send(());
+                    }
                     Ok(ToScreen::Edit(file, reply)) => {
                         drop(screen);
                         raw.suspend();
@@ -524,6 +537,9 @@ impl App {
             }
             if let Some(theme) = &self.theme {
                 wait = wait.min(theme.due(Instant::now()));
+            }
+            if let Some(due) = self.draft_due() {
+                wait = wait.min(due);
             }
             if self.copying.is_some() || self.pasting.is_some() {
                 wait = wait.min(FRAME);
@@ -758,7 +774,11 @@ impl App {
                 self.after_dialog();
                 self.replay();
             }
-            ToScreen::Terminal(_) | ToScreen::Edit(..) | ToScreen::Quit => {}
+            ToScreen::Drafting(session) => self.drafting(session),
+            ToScreen::Terminal(_)
+            | ToScreen::Edit(..)
+            | ToScreen::KeepDraft(_)
+            | ToScreen::Quit => {}
         }
     }
 
@@ -1014,7 +1034,10 @@ impl App {
     /// (`AgentUi::pause`).
     fn command(&mut self, text: String) {
         match Builtin::parse(&text) {
-            Some(Builtin::Exit) => return self.exit(),
+            Some(Builtin::Exit) => {
+                self.draft = self.editor.draft(String::new());
+                return self.exit();
+            }
             Some(Builtin::Reload) => {
                 self.draft = self.editor.draft(String::new());
                 return self.draft.set_note(Note::Info(RELOAD_BUSY.to_owned()));

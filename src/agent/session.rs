@@ -12,6 +12,7 @@ use std::{
 };
 
 mod changes;
+pub mod draft;
 mod index;
 pub(super) mod kept;
 
@@ -1640,6 +1641,8 @@ impl Session {
     pub(super) fn delete_with(path: &Path, trash: &str) -> io::Result<Removal> {
         read(path)?;
         kept::forget(path);
+        // What is left of it is the user's to delete with it.
+        let _ = draft::write(path, None);
         let trash = std::process::Command::new(trash)
             .arg(path)
             .stdin(std::process::Stdio::null())

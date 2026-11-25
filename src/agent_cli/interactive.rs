@@ -198,6 +198,7 @@ impl Interactive {
         if !resumed {
             self.show_banner();
         }
+        self.drafting();
         notices.splice(0..0, self.problem_notices());
         if self.screen.is_some() {
             notices.extend(update::start_check());
@@ -607,6 +608,17 @@ impl Interactive {
         }
     }
 
+    /// Keeps the prompt being typed with the session now.
+    fn drafting(&self) {
+        if let Some(screen) = &self.screen {
+            let agent = &self.session.agent;
+            let saved = agent
+                .session_saved()
+                .then(|| agent.session_path().to_path_buf());
+            screen.drafting(saved);
+        }
+    }
+
     /// Starts the next prompt with `text`.
     pub(super) fn set_text(&mut self, text: String) {
         if let Some(screen) = &self.screen {
@@ -815,6 +827,7 @@ impl Front for Interactive {
     /// The conversation shown again; a resumed or imported session's prompts are those Up
     /// recalls, and one in another folder brings its themes, completions and problems.
     fn session_changed(&mut self, message: &str, change: Change) {
+        self.drafting();
         if change == Change::New {
             return self.started_again();
         }

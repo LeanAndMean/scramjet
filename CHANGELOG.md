@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.327.0 — The prompt kept with its session
+
+### Added
+
+- The prompt you are typing is no longer lost when you leave: it is kept with its session a few seconds after each change and at every exit (Ctrl+C, Ctrl+D, the terminal closing), and resuming the session (`-c`, `-r`, `/resume`) brings it back, with its undo steps. Leaving with Ctrl+C or Ctrl+D right after Ctrl+C cleared the prompt keeps the prompt it cleared, and `-c` also continues a new session whose prompt was never sent.
+
+### Changed
+
+- Undo keeps the last 200 steps of a prompt (at most 2 MB of text), dropping the oldest, where it kept every step.
+
 ## 2.326.3 — The home directory through a symlink, and MCP servers that end at start
 
 ### Fixed

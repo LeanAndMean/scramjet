@@ -184,6 +184,10 @@ impl Link {
             bottom: settings.bottom,
         });
     }
+    /// The prompt being typed is kept with the session saved at `session`, if any.
+    pub(in crate::agent_cli) fn drafting(&self, session: Option<PathBuf>) {
+        self.send(ToScreen::Drafting(session));
+    }
     pub(in crate::agent_cli) fn moved(&self, root: PathBuf) {
         self.send(ToScreen::Moved(root));
     }
@@ -327,6 +331,24 @@ impl Link {
     }
 }
 
+/// What asks the screen to write its draft as the process exits on a signal (`keep_draft`).
+static KEEPING: Mutex<Option<(mpsc::Sender<ToScreen>, PipeWriter)>> = Mutex::new(None);
+
+/// Has the screen, if one is shown, write its draft, waiting `within` at most: the process exits
+/// on a signal. A screen handing the terminal to an external editor does not answer.
+pub(in crate::agent_cli) fn keep_draft(within: Duration) {
+    let keeping = KEEPING.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some((to, wake)) = keeping.as_ref() else {
+        return;
+    };
+    let (reply, kept) = mpsc::channel();
+    if to.send(ToScreen::KeepDraft(reply)).is_ok() {
+        let _ = (&*wake).write(&[0]);
+        drop(keeping);
+        let _ = kept.recv_timeout(within);
+    }
+}
+
 /// The screen's thread, and what the user enters from it.
 pub(in crate::agent_cli) struct Handle {
     pub(in crate::agent_cli) link: Link,
@@ -390,6 +412,8 @@ impl Handle {
                 app.run(raw, &messages, woken)
             }
         })?;
+        *KEEPING.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((to.clone(), wake.try_clone()?));
         Ok(Self {
             link: Link {
                 to,
@@ -442,6 +466,10 @@ impl Handle {
         let Some(thread) = self.thread.take() else {
             return Ok(());
         };
+        KEEPING
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
         self.link.send(ToScreen::Quit);
         let joined = thread.join();
         eprint!("{}", super::held_panics());

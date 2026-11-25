@@ -121,6 +121,7 @@ pub(super) fn on_signal(signal: i32) {
 fn exit(startup: Option<&console::Mode>) -> ! {
     #[cfg(unix)]
     stop_editor();
+    screen::keep_draft(std::time::Duration::from_secs(1));
     if let Some(prompt) = PROMPT.lock().unwrap_or_else(PoisonError::into_inner).take() {
         let _ = std::fs::remove_file(prompt);
     }

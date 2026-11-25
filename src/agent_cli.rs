@@ -317,9 +317,22 @@ fn session_choice(
     Ok(Some(match start {
         Start::New | Start::Resume => SessionChoice::New,
         Start::Continue => {
-            let latest = Session::latest(&directory()?).map_err(|e| e.to_string())?;
-            match latest {
-                Some(path) if live::holder(&path).is_some() => {
+            let directory = directory()?;
+            let latest = Session::latest(&directory).map_err(|e| e.to_string())?;
+            let written = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
+            // A session left with only an unsent prompt, kept as no session file is before its
+            // first, goes on if it is newer than the latest written.
+            let drafted = agent::draft::newest_unwritten(&directory).filter(|(path, at)| {
+                live::holder(path).is_none()
+                    && latest
+                        .as_deref()
+                        .and_then(written)
+                        .is_none_or(|then| *at > then)
+            });
+            let id = |path: &Path| Some(path.file_stem()?.to_str()?.to_owned());
+            match (latest, drafted.and_then(|(path, _)| id(&path))) {
+                (_, Some(id)) => SessionChoice::Named(id),
+                (Some(path), None) if live::holder(&path).is_some() => {
                     let named = path.display().to_string();
                     return open(path, &named);
                 }

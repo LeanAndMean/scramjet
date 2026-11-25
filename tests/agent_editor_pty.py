@@ -15,6 +15,7 @@ import shutil
 import signal
 import socket
 import ssl
+import stat
 import struct
 import subprocess
 import sys
@@ -2113,7 +2114,9 @@ def bang_commands(read, until, send, output):
 def failed_after_bang(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen(' secret')
-    send(b'hello\r')
+    # The prompt Ctrl+C cleared as the session was left comes back with it.
+    ending(read, output, ['> !!echo secret'])
+    send(b'\x03hello\r')
     on_screen('Error: provider: cannot connect')
     send(b'\x03\x04')
 
@@ -2435,6 +2438,78 @@ run(['--retries', '0', '--session', ran], failed_after_bang)
 stopped = [item for item in map(json.loads, open(ran)) if item.get('type') == 'turn_stopped']
 assert len(stopped) == 1 and stopped[0]['error'].startswith('provider: cannot connect'), stopped
 run(['--session', ran], resumed_bang_and_error)
+
+
+def draft_left(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'keep this prompt')
+    ending(read, output, ['> keep this prompt'])
+    # Ctrl+C clears it, and twice more exits: the draft kept is the one cleared.
+    send(b'\x03')
+    ending(read, output, EMPTY)
+    send(b'\x03')
+    on_screen('Ctrl+C again')
+    send(b'\x03')
+
+
+def draft_back(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    ending(read, output, ['> keep this prompt'])
+    # Its undo steps came with it.
+    send(b'\x1f')
+    ending(read, output, ['> keep this'])
+    # What is typed just before a hangup is kept too.
+    send(b' and more')
+    ending(read, output, ['> keep this and more'])
+
+
+def draft_sent(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    ending(read, output, ['> keep this and more'])
+    send(b'\r')
+    on_screen('Error: provider: cannot connect')
+    send(b'\x04')
+
+
+def draft_for_resume(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'left for /resume')
+    ending(read, output, ['> left for /resume'])
+    send(b'\x03\x04')
+
+
+def draft_resumed(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    # In a new session, `/resume` brings back the prompt left in the one resumed.
+    send(b'/resume\r')
+    on_screen('Resume session')
+    send(b'\r')
+    on_screen('\u2713 Resumed session')
+    ending(read, output, ['> left for /resume'])
+    send(b'\x15\x04')
+
+
+# A prompt left unsent in a session never written goes on with `--continue`, as a session would.
+drafted_state = os.path.join(work, 'drafted-state')
+in_drafted = {'XDG_STATE_HOME': drafted_state}
+run([], draft_left, variables=in_drafted)
+drafted = glob.glob(os.path.join(drafted_state, 'scramjet', 'drafts', '*', '*.json'))
+assert len(drafted) == 1 and not glob.glob(os.path.join(drafted_state, 'scramjet', 'sessions', '*', '*.jsonl'))
+assert stat.S_IMODE(os.stat(drafted[0]).st_mode) == 0o600, drafted
+assert json.load(open(drafted[0]))['text'] == 'keep this prompt', drafted
+run(['--continue'], draft_back, variables=in_drafted, status=129, signal=signal.SIGHUP)
+run(['--continue', '--retries', '0'], draft_sent, variables=in_drafted)
+assert not os.path.exists(drafted[0]), 'a prompt sent is no longer kept'
+(written,) = glob.glob(os.path.join(drafted_state, 'scramjet', 'sessions', '*', '*.jsonl'))
+stem = lambda path: os.path.basename(path).split('.')[0]
+assert stem(written) == stem(drafted[0]), (written, drafted)
+prompts = [item['content'] for item in map(json.loads, open(written)) if item.get('role') == 'user']
+assert prompts == ['keep this and more'], prompts
+run(['--continue'], draft_for_resume, variables=in_drafted)
+run([], draft_resumed, variables=in_drafted)
 known = set(session_files())
 run(['--retries', '0'], edited_in_editor,
     variables={'VISUAL': edit_script + ' --wait', 'EDITOR': failing_script, 'TMPDIR': scratch})

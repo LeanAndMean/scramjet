@@ -28,6 +28,11 @@ const DOUBLE_ESCAPE: Duration = Duration::from_millis(500);
 pub(super) const NOTE_TIME: Duration = Duration::from_secs(3);
 const TAB: &str = "    ";
 const INDENT: usize = 2;
+/// The most undo steps a draft keeps, and the most text they hold together; the oldest go.
+const UNDO_STEPS: usize = 200;
+const UNDO_BYTES: usize = 2 << 20;
+/// The version of what `Kept` writes.
+const KEPT_VERSION: u32 = 1;
 
 #[derive(Clone, Default)]
 pub(super) struct Buffer {
@@ -632,8 +637,21 @@ impl Editor {
         buffer.set(text);
         Draft {
             buffer,
+            revision: revised(),
             ..Draft::default()
         }
+    }
+
+    /// The draft `kept` was taken from, its undo steps with it; `None` for what no draft keeps.
+    pub(super) fn restored(&self, kept: Kept) -> Option<Draft> {
+        if kept.version != KEPT_VERSION {
+            return None;
+        }
+        let mut draft = self.draft(String::new());
+        draft.buffer = kept.text.buffer()?;
+        draft.undo = kept.undo.into_iter().filter_map(Step::buffer).collect();
+        cap(&mut draft.undo);
+        Some(draft)
     }
 
     /// Adds `text`, deleted, to the kill ring; it joins the latest one when `join`, before it
@@ -662,6 +680,8 @@ impl Editor {
             last,
             jump,
             shown_rows,
+            cleared,
+            revision,
         } = draft;
         let escape = key.is(Binding::Interrupt);
         if escape {
@@ -703,6 +723,7 @@ impl Editor {
             _ => None,
         };
         let jumping = jump.take();
+        let was_cleared = std::mem::take(cleared);
         let changed = match &key {
             // The jump's key again cancels it; a key that types no character cancels it and
             // does what it does.
@@ -805,6 +826,7 @@ impl Editor {
             }
             _ if key == Key::Idle || key.is(Binding::Suspend) => {
                 *exit_armed = armed;
+                *cleared = was_cleared;
                 *note = noted;
                 *last = previous;
                 *jump = jumping;
@@ -845,6 +867,18 @@ impl Editor {
             }
             _ if self.dialog && key.is(Binding::SelectCancel) => return Action::Exit,
             _ if self.dialog && empty && key.is(Binding::Exit) => return Action::Exit,
+            // Ctrl+C twice exits rather than clears: the draft kept is the one it cleared.
+            _ if empty && was_cleared && (key.is(Binding::Clear) || key.is(Binding::Exit)) => {
+                if armed || !key.is(Binding::Clear) {
+                    if let Some(before) = undo.pop() {
+                        *buffer = before;
+                        *revision = revised();
+                    }
+                    return Action::Exit;
+                }
+                (*exit_armed, *cleared) = (true, true);
+                true
+            }
             _ if escape && self.double_escape && buffer.text.trim().is_empty() => {
                 if last_escape.is_some_and(|at| at.elapsed() < DOUBLE_ESCAPE) {
                     *last_escape = None;
@@ -890,6 +924,7 @@ impl Editor {
                 true
             }
             _ if key.is(Binding::Clear) => {
+                *cleared = true;
                 *buffer = Buffer::default();
                 *completion = None;
                 *browsing = None;
@@ -979,6 +1014,9 @@ impl Editor {
         if extending.is_none() {
             buffer.anchor = None;
         }
+        if buffer.text != prior.text || buffer.cursor != prior.cursor {
+            *revision = revised();
+        }
         if let Some(space) = typed.filter(|_| buffer.text != prior.text) {
             *last = Last::Typing;
             if !space && previous == Last::Typing {
@@ -987,6 +1025,7 @@ impl Editor {
         }
         if buffer.text != prior.text && !browsing_on && !undoing {
             undo.push(prior);
+            cap(undo);
         }
         Action::Edited(changed)
     }
@@ -1069,6 +1108,64 @@ pub(super) struct Draft {
     /// How many rows the prompt had room for when last drawn, a page for the keys that
     /// select one.
     shown_rows: Cell<usize>,
+    /// The last key cleared the text (Ctrl+C), which an exit next takes back.
+    cleared: bool,
+    /// Changes with the text, the cursor or the undo steps, and differs between drafts.
+    revision: u64,
+}
+
+/// A new `Draft::revision`.
+fn revised() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Drops the oldest of `undo`'s steps past `UNDO_STEPS`, or past `UNDO_BYTES` of text.
+fn cap(undo: &mut Vec<Buffer>) {
+    let mut bytes = 0;
+    let kept = (undo.iter().rev())
+        .take(UNDO_STEPS)
+        .take_while(|step| {
+            bytes += step.text.len();
+            bytes <= UNDO_BYTES
+        })
+        .count();
+    undo.drain(..undo.len() - kept);
+}
+
+/// What a draft keeps across a restart: its text and cursor, and its undo steps, the latest
+/// last.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+pub(super) struct Kept {
+    version: u32,
+    #[serde(flatten)]
+    text: Step,
+    undo: Vec<Step>,
+}
+
+/// A text and the byte its cursor is at.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+struct Step {
+    text: String,
+    cursor: usize,
+}
+
+impl Step {
+    fn of(buffer: &Buffer) -> Self {
+        Self {
+            text: buffer.text.clone(),
+            cursor: buffer.cursor,
+        }
+    }
+
+    /// The buffer, unless the cursor is not between characters of the text.
+    fn buffer(self) -> Option<Buffer> {
+        self.text.is_char_boundary(self.cursor).then_some(Buffer {
+            text: self.text,
+            cursor: self.cursor,
+            anchor: None,
+        })
+    }
 }
 
 /// What the status row says until the next key, about a key or what it did.
@@ -1103,6 +1200,24 @@ pub(super) enum Action {
 impl Draft {
     pub(super) fn text(&self) -> &str {
         &self.buffer.text
+    }
+
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Whether there is anything to keep across a restart.
+    pub(super) fn keeps(&self) -> bool {
+        !self.buffer.text.is_empty() || !self.undo.is_empty()
+    }
+
+    /// What to keep across a restart; `None` when there is nothing to keep.
+    pub(super) fn kept(&self) -> Option<Kept> {
+        self.keeps().then(|| Kept {
+            version: KEPT_VERSION,
+            text: Step::of(&self.buffer),
+            undo: self.undo.iter().map(Step::of).collect(),
+        })
     }
 
     /// Whether an `@` search runs, whose entries `Editor::poll` shows once found.
@@ -1171,9 +1286,11 @@ impl Draft {
         let mut undo = std::mem::take(&mut self.undo);
         if text != self.buffer.text {
             undo.push(self.buffer.clone());
+            cap(&mut undo);
         }
         *self = Self {
             undo,
+            revision: revised(),
             ..Self::default()
         };
         self.buffer.set(text);
@@ -1506,6 +1623,77 @@ mod tests {
         draft.replace("forked".into());
         type_in(&mut editor, &mut draft, b"\x1f");
         assert_eq!(draft.text(), "");
+    }
+
+    #[test]
+    fn a_draft_comes_back_with_its_undo_steps_capped() {
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft(String::new());
+        assert_eq!(draft.kept(), None);
+        type_in(&mut editor, &mut draft, b"one two\x1b[D");
+        let revision = draft.revision();
+        let kept = serde_json::to_vec(&draft.kept().unwrap()).unwrap();
+        let back = serde_json::from_slice(&kept).unwrap();
+        let mut back = editor.restored(back).unwrap();
+        assert_ne!(back.revision(), revision);
+        assert_eq!((back.text(), back.buffer.cursor), ("one two", 6));
+        type_in(&mut editor, &mut back, b"\x1f");
+        assert_eq!(back.text(), "one");
+        // A cursor between a character's bytes is no draft's, nor another version's.
+        let wrong = r#"{"version":1,"text":"é","cursor":1,"undo":[]}"#;
+        assert!(
+            editor
+                .restored(serde_json::from_str(wrong).unwrap())
+                .is_none()
+        );
+        let later = r#"{"version":2,"text":"","cursor":0,"undo":[]}"#;
+        assert!(
+            editor
+                .restored(serde_json::from_str(later).unwrap())
+                .is_none()
+        );
+        // Typing on past the cap drops the oldest words, by count and by size.
+        let mut long = editor.draft(String::new());
+        type_in(
+            &mut editor,
+            &mut long,
+            " w".repeat(UNDO_STEPS + 50).as_bytes(),
+        );
+        assert_eq!(long.undo.len(), UNDO_STEPS);
+        assert_eq!(long.undo[0].text.len(), 100);
+        let mut big = editor.draft("x".repeat(UNDO_BYTES / 4));
+        type_in(&mut editor, &mut big, b" a b c d e");
+        assert_eq!(big.undo.len(), 3);
+        assert!(big.undo.iter().map(|step| step.text.len()).sum::<usize>() <= UNDO_BYTES);
+    }
+
+    #[test]
+    fn exiting_right_after_clearing_keeps_the_draft_it_cleared() {
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft(String::new());
+        let press = |editor: &mut Editor, draft: &mut Draft, input: &[u8]| {
+            keys(input)
+                .into_iter()
+                .map(|key| editor.key(draft, key, false))
+                .last()
+        };
+        type_in(&mut editor, &mut draft, b"long prompt");
+        assert_eq!(
+            press(&mut editor, &mut draft, b"\x03\x03"),
+            Some(Action::Edited(true))
+        );
+        assert_eq!(draft.text(), "");
+        assert_eq!(press(&mut editor, &mut draft, b"\x03"), Some(Action::Exit));
+        assert_eq!(draft.text(), "long prompt");
+        // Ctrl+D likewise, and the clear stays undoable when the user goes on typing.
+        type_in(&mut editor, &mut draft, b"\x03");
+        assert_eq!(press(&mut editor, &mut draft, b"\x04"), Some(Action::Exit));
+        assert_eq!(draft.text(), "long prompt");
+        type_in(&mut editor, &mut draft, b"\x03x\x7f");
+        assert_eq!(press(&mut editor, &mut draft, b"\x04"), Some(Action::Exit));
+        assert_eq!(draft.text(), "");
+        type_in(&mut editor, &mut draft, b"\x1f\x1f\x1f");
+        assert_eq!(draft.text(), "long prompt");
     }
 
     #[test]
