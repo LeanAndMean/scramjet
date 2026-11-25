@@ -112,13 +112,14 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 ## Guides
 
 - [Getting started](docs/guide/getting-started.md): a first session, step by step: a model, a task, steering, going back, a workflow.
-- [Installing](docs/guide/install.md): the installers, by hand, beside Scramjet 1, from source.
+- [Installing](docs/guide/install.md): the installers, by hand, beside Scramjet 1, from source; where Scramjet keeps its files, and uninstalling.
 - [Providers and logins](docs/guide/providers.md): `/login`, `models.json`, model catalogs, proxies, local models.
 - [Sessions and keys](docs/guide/sessions.md): the command line, the full screen, session trees, key bindings.
 - [Command sets](docs/guide/command-sets.md): installing, packages, running commands and their next steps.
 - [Configuration](docs/guide/configuration.md): settings, context files, credentials, the sandbox, MCP servers, themes.
 - [In an editor (ACP)](docs/guide/acp.md).
 - [Coming from Claude Code, Codex or Scramjet 1](docs/guide/migration.md).
+- [Troubleshooting](docs/guide/troubleshooting.md): what to do when something fails, and reporting it.
 - [Terminals](docs/TERMINALS.md): what each terminal does with copying, pasting and keys.
 - `scramjet --help`: every option, key and built-in command; in a session, `/hotkeys` and `/settings`.
 

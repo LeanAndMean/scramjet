@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.335.4 — Troubleshooting and uninstalling
+
+### Added
+
+- A troubleshooting guide (`docs/guide/troubleshooting.md`): the wrong `scramjet` on `PATH`, a missing model, providers' errors (keys, waits, certificates, proxies), Bubblewrap missing or refused by Ubuntu's AppArmor, keys a terminal keeps, pasting, MCP servers, missing commands, and reporting a problem without sharing a whole session.
+- The installing guide says where Scramjet keeps its files and how to uninstall it, its files and subagents' worktrees included, leaving what Scramjet 1 still reads.
+
 ## 2.335.3 — Getting started
 
 ### Added

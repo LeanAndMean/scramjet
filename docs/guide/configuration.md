@@ -6,7 +6,7 @@
 
 `/settings` shows every setting under headings (Model, Display, Input, Conversation, Tools and safety, Commands and sets), each with a line saying what it does; typing shows only the settings whose name, value, heading or description has each word typed; also each command's next steps, publication approval, and what the session loaded from where, with any problems (Enter on a file opens it in `$EDITOR`).
 
-Scramjet's settings (`~/.config/scramjet/settings.json`) and sessions (`~/.local/state/scramjet/sessions/`, or `--session-dir`) are apart from Scramjet 1's, with the same setting names. Your own agents (`~/.config/scramjet/agents`), skills (`~/.config/scramjet/skills`), themes, `SYSTEM.md` and global `CLAUDE.md`/`AGENTS.md` are in `~/.config/scramjet/` too. It shares Scramjet 1's `autonomy.yaml` files (the next steps that continue by themselves), `~/.config/scramjet/autonomy.yaml` included.
+Scramjet's settings (`~/.config/scramjet/settings.json`) and sessions (`~/.local/state/scramjet/sessions/`, or `--session-dir`) are apart from Scramjet 1's, with the same setting names. Your own agents (`~/.config/scramjet/agents`), skills (`~/.config/scramjet/skills`), themes, `SYSTEM.md` and global `CLAUDE.md`/`AGENTS.md` are in `~/.config/scramjet/` too. It shares Scramjet 1's `autonomy.yaml` files (the next steps that continue by themselves), `~/.config/scramjet/autonomy.yaml` included. [Where Scramjet keeps its files](install.md#where-scramjet-keeps-its-files) lists the rest.
 
 ## Context files and skills
 

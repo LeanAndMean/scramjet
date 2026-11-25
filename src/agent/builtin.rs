@@ -52,6 +52,7 @@ const DOCS: &[(&str, &str)] = doc_files![
     "docs/guide/migration.md",
     "docs/guide/providers.md",
     "docs/guide/sessions.md",
+    "docs/guide/troubleshooting.md",
 ];
 
 /// Where a release writes what it carries.
