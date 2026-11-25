@@ -6022,6 +6022,70 @@ fn acp_sends_the_display_settings_and_the_session_s_context_files() {
 
 #[test]
 #[cfg(unix)]
+fn a_reload_makes_writable_what_allow_write_lists_now() {
+    // Not under /tmp, which the sandbox replaces.
+    let scratch = Scratch(
+        std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("scramjet-cli-reload-write-{}", std::process::id())),
+    );
+    let (project, extra) = (scratch.0.join("project"), scratch.0.join("extra"));
+    std::fs::create_dir_all(&project).unwrap();
+    let command = format!("echo x >> {0}/f; wc -l < {0}/f", extra.display());
+    let (port, _bodies) =
+        serve_events(call_events("bash", serde_json::json!({"command": command})));
+    let settings = |listed: serde_json::Value| {
+        serde_json::json!({"hideCredentials": "never",
+            "sandbox": {"mode": "workspace-write", "filesystem": {"allowWrite": listed}}})
+    };
+    let (mut child, mut stdin, messages) =
+        acp_with(&scratch.0, port, settings(serde_json::json!([extra])), &[]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let (opened, _) = until(&messages, |message| message["id"] == 2);
+    let session = opened["result"]["sessionId"].clone();
+    let config = scratch.0.join("config/scramjet/settings.json");
+    let mut id = 2;
+    let mut turn = |stdin: &mut std::process::ChildStdin| {
+        id += 2;
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id - 1,
+                "method": "_io.github.leanandmean.scramjet/reload"}),
+        );
+        until(&messages, |message| message["id"] == id - 1);
+        send(
+            stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "session/prompt",
+                "params": {"sessionId": session, "prompt": [{"type": "text", "text": "go"}]}}),
+        );
+        let (answer, _) = until(&messages, |message| message["id"] == id);
+        assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+    };
+
+    // Made after the start: writable once reloaded.
+    std::fs::create_dir_all(&extra).unwrap();
+    turn(&mut stdin);
+    assert_eq!(std::fs::read_to_string(extra.join("f")).unwrap(), "x\n");
+
+    // No longer listed: read-only once reloaded.
+    std::fs::write(&config, settings(serde_json::json!([])).to_string()).unwrap();
+    turn(&mut stdin);
+    assert_eq!(std::fs::read_to_string(extra.join("f")).unwrap(), "x\n");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-key-{}", std::process::id())));

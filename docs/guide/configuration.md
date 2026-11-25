@@ -57,7 +57,7 @@ The `sandbox` setting is an object of Claude Code's shape with Codex's modes (a 
 }
 ```
 
-- `allowWrite` (Codex's `writable_roots` is read too) makes directories writable in the sandbox in every project, such as a tool's cache in the home directory (uv's `~/.cache/uv`, which `uv run` writes).
+- `allowWrite` (Codex's `writable_roots` is read too) makes directories writable in the sandbox in every project, such as a tool's cache in the home directory (uv's `~/.cache/uv`, which `uv run` writes). A directory that does not exist is not writable; `/reload` applies the list again, so one made or added since the start becomes writable, and one taken out is read-only again.
 - `denyRead` hides files and directories as the credential stores are hidden: from commands, from `read`, `grep` and `find`, and from subagents, in the turns that hide the stores (as `hideCredentials` says, and every turn in the sandbox).
 - `allowRead` makes what is in a `denyRead` directory readable again (writable where it would be), but never a credential store, which only `hideCredentials` shows; what `denyRead` names deeper in it stays hidden. The project and the directories the sandbox makes writable are re-opened so too.
 

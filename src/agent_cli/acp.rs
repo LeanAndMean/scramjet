@@ -2350,7 +2350,7 @@ impl Acp {
     /// `reload` in this session: the settings and what they name read again, what is wrong in
     /// them said, and the commands, options and context files listed again.
     fn reload(&mut self) {
-        self.session.reload(&self.servers);
+        let unwritable = self.session.reload(&self.servers);
         if let Some(profile) = &self.profile
             && let Err(error) = profile.confine(&mut self.session.agent, &self.session.settings)
         {
@@ -2378,7 +2378,8 @@ impl Acp {
                     .iter()
                     .map(|problem| problem.text.clone()),
             )
-            .chain(self.session.agent.providers().problems().iter().cloned());
+            .chain(self.session.agent.providers().problems().iter().cloned())
+            .chain(unwritable);
         for problem in problems.collect::<Vec<_>>() {
             self.ui.say("warning", &problem);
         }

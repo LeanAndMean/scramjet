@@ -28,8 +28,10 @@ pub(super) struct Session {
 impl Session {
     /// `/reload`'s part in the session: the settings read again, with `servers` (a client's) over
     /// their MCP servers, and the shell, tools, command sets, skills, MCP servers, retries,
-    /// compaction and providers taken from them.
-    pub(super) fn reload(&mut self, servers: &[McpServer]) {
+    /// compaction, providers and `allowWrite`'s directories taken from them; returns what could
+    /// not be made writable.
+    pub(super) fn reload(&mut self, servers: &[McpServer]) -> Vec<String> {
+        let listed = self.settings.allow_write();
         self.settings.reload();
         with_servers(&mut self.settings, servers);
         let settings = &self.settings;
@@ -55,6 +57,35 @@ impl Session {
             settings.sources(),
             scramjet::agent::login::Logins::user(),
         ));
+        self.allow_write_again(&listed)
+    }
+
+    /// Grants `allowWrite`'s directories as the settings list them now, after `listed` was
+    /// granted: one listed since, or made since the start, becomes writable, and one no longer
+    /// listed is taken back.
+    fn allow_write_again(&mut self, listed: &[PathBuf]) -> Vec<String> {
+        let root = self.agent.root().to_owned();
+        let now = self.settings.allow_write();
+        let real = |path: &PathBuf| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let gone: Vec<PathBuf> = (listed.iter())
+            .filter(|path| !now.contains(path))
+            .map(real)
+            .collect();
+        match self.agent.sandbox().cloned() {
+            Some(mut sandbox) => {
+                sandbox.writable.retain(|path| !gone.contains(path));
+                let mut warnings = sandbox.grant_remembered(&root);
+                warnings.extend(sandbox.grant_always(&root, &now));
+                self.agent.set_sandbox(Some(sandbox));
+                warnings
+            }
+            None => {
+                let mut writable = self.agent.writable().to_vec();
+                writable.retain(|path| !gone.contains(path));
+                self.agent.set_writable(writable);
+                self.agent.grant_writable_always(&now)
+            }
+        }
     }
 
     /// Makes `change` to the agent's sandbox for the rest of the session, as `/sandbox` does;

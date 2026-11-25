@@ -560,7 +560,7 @@ tools into its page",
     /// start.
     pub(super) fn reload(&mut self) {
         self.save_hide_thinking();
-        self.session.reload(&[]);
+        let unwritable = self.session.reload(&[]);
         self.discover_themes();
         self.use_theme();
         self.keybindings = keymap::load(self.session.settings.path());
@@ -576,6 +576,9 @@ tools into its page",
         }
         for problem in self.session.agent.providers().problems().to_vec() {
             self.ui().notice(&problem);
+        }
+        for warning in unwritable {
+            self.ui().notice(&warning);
         }
         let done = "Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files";
         self.say_styled(style::MUTED, done);

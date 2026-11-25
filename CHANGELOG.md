@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.342.1 — allowWrite on /reload
+
+### Fixed
+
+- `/reload` (and ACP's reload) applies `sandbox.filesystem.allowWrite` again: a directory added to it, or made since the start, becomes writable, and one taken out of it is read-only again; before, both waited for a restart.
+
 ## 2.342.0 — Mistyped settings named
 
 ### Changed
