@@ -3840,6 +3840,189 @@ fn acp_sessions_leave_out_the_directives_when_the_client_or_the_settings_say() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn acp_session_profiles_give_each_session_its_instructions_tools_and_reach() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-profile-{}", std::process::id())),
+    );
+    let (first, second) = (scratch.0.join("first"), scratch.0.join("second"));
+    // Outside /tmp, which the sandbox gives a fresh one: the minimal reach hides /var.
+    let outside = Scratch(std::path::PathBuf::from(format!(
+        "/var/tmp/scramjet-cli-acp-profile-{}",
+        std::process::id()
+    )));
+    let refs = outside.0.join("refs");
+    for directory in [&first, &second, &refs] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let note = refs.join("note");
+    std::fs::write(&note, "from the refs\n").unwrap();
+    let secret = outside.0.join("secret");
+    std::fs::write(&secret, "the secret\n").unwrap();
+    // Never accepted: a connection reaches it only on the network outside the sandbox.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closed.local_addr().unwrap().port();
+    let command = format!(
+        "cat {} 2>/dev/null || echo secret:hidden; \
+cat {} 2>/dev/null || echo refs:hidden; \
+touch made 2>/dev/null && echo wrote || echo read-only; \
+(echo > /dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo online || echo offline",
+        secret.display(),
+        note.display()
+    );
+    let (provider, bodies) = serve_call("bash", serde_json::json!({"command": command}));
+    let models = serde_json::json!([{"id": "claude-test", "contextWindow": 100000}]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) = acp_models(&scratch.0, provider, models, settings, &[]);
+    let mut id = 0;
+    let mut ask = |method: &str, params: serde_json::Value| {
+        id += 1;
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        );
+        until(&messages, |message| message["id"] == id)
+    };
+    ask("initialize", serde_json::json!({"protocolVersion": 1}));
+    let ours =
+        |profile| serde_json::json!({"io.github.leanandmean.scramjet": {"profile": profile}});
+    let refused = ask(
+        "session/new",
+        serde_json::json!({"cwd": first, "mcpServers": [],
+            "_meta": ours(serde_json::json!({"writeable": true}))}),
+    )
+    .0;
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    assert_eq!(
+        refused["error"]["message"], "profile.writeable is not a profile key",
+        "{refused}"
+    );
+    // A path given as the instructions is their text, never the file's.
+    let confined = serde_json::json!({
+        "systemPrompt": note,
+        "contextFiles": false,
+        "tools": ["read", "bash"],
+        "read": [refs],
+        "writable": true,
+    });
+    let opened = ask(
+        "session/new",
+        serde_json::json!({"cwd": first, "mcpServers": [], "_meta": ours(confined.clone())}),
+    )
+    .0;
+    let meta = &opened["result"]["_meta"]["io.github.leanandmean.scramjet"];
+    let sandbox = &meta["sandbox"];
+    assert_eq!(sandbox["mode"], "workspace-write", "{opened}");
+    assert_eq!(sandbox["network"], false, "{opened}");
+    assert_eq!(sandbox["reach"], "minimal", "{opened}");
+    let path = meta["path"].as_str().unwrap().to_owned();
+    let one = opened["result"]["sessionId"].clone();
+    let other = serde_json::json!({"appendSystemPrompt": "Task two.", "tools": ["bash"]});
+    let opened = ask(
+        "session/new",
+        serde_json::json!({"cwd": second, "mcpServers": [], "_meta": ours(other)}),
+    )
+    .0;
+    let sandbox = &opened["result"]["_meta"]["io.github.leanandmean.scramjet"]["sandbox"];
+    assert_eq!(sandbox["mode"], "danger-full-access", "{opened}");
+    let two = opened["result"]["sessionId"].clone();
+
+    let mut run = |session: &serde_json::Value| {
+        let (answer, updates) = ask(
+            "session/prompt",
+            serde_json::json!({"sessionId": session,
+                "prompt": [{"type": "text", "text": "go"}]}),
+        );
+        assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+        let body: serde_json::Value =
+            serde_json::from_str(&bodies.recv_timeout(Duration::from_secs(20)).unwrap()).unwrap();
+        bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        let output = (updates.iter())
+            .map(|message| &message["params"]["update"])
+            .find(|update| update["status"] == "completed")
+            .map(|update| update["rawOutput"].to_string() + &update["content"].to_string())
+            .unwrap();
+        (body, output)
+    };
+    let (body, output) = run(&one);
+    let system = body["system"].to_string();
+    assert!(system.contains(&note.display().to_string()), "{system}");
+    assert!(!system.contains("from the refs"), "{system}");
+    let tools: Vec<&str> = (body["tools"].as_array().unwrap().iter())
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert_eq!(tools, ["read", "bash"], "{body}");
+    assert!(output.contains("secret:hidden"), "{output}");
+    assert!(output.contains("from the refs"), "{output}");
+    assert!(
+        output.contains("wrote") && output.contains("offline"),
+        "{output}"
+    );
+    assert!(first.join("made").exists());
+
+    let (body, output) = run(&two);
+    let system = body["system"].to_string();
+    assert!(system.contains("Task two."), "{system}");
+    assert!(!system.contains(&note.display().to_string()), "{system}");
+    assert!(output.contains("the secret"), "{output}");
+    assert!(
+        output.contains("from the refs") && output.contains("online"),
+        "{output}"
+    );
+
+    let method = "_io.github.leanandmean.scramjet/sandbox";
+    let changed = ask(
+        method,
+        serde_json::json!({"sessionId": one, "network": true}),
+    )
+    .0;
+    assert_eq!(changed["error"]["code"], -32602, "{changed}");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    let line = (saved.lines())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|line| line["type"] == "profile")
+        .unwrap();
+    assert_eq!(line["profile"], confined, "{saved}");
+
+    // A resumed session runs with its saved profile, and one given then replaces it.
+    ask("session/close", serde_json::json!({"sessionId": one}));
+    let resumed = ask(
+        "session/resume",
+        serde_json::json!({"sessionId": one, "cwd": first, "mcpServers": []}),
+    )
+    .0;
+    let sandbox = &resumed["result"]["_meta"]["io.github.leanandmean.scramjet"]["sandbox"];
+    assert_eq!(sandbox["mode"], "workspace-write", "{resumed}");
+    ask("session/close", serde_json::json!({"sessionId": one}));
+    let replaced = serde_json::json!({"network": true});
+    let resumed = ask(
+        "session/resume",
+        serde_json::json!({"sessionId": one, "cwd": first, "mcpServers": [],
+            "_meta": ours(replaced.clone())}),
+    )
+    .0;
+    let sandbox = &resumed["result"]["_meta"]["io.github.leanandmean.scramjet"]["sandbox"];
+    assert_eq!(sandbox["mode"], "read-only", "{resumed}");
+    assert_eq!(sandbox["network"], true, "{resumed}");
+    let again = ask(
+        "session/resume",
+        serde_json::json!({"sessionId": one, "cwd": first, "mcpServers": [],
+            "_meta": ours(replaced.clone())}),
+    )
+    .0;
+    assert_eq!(again["error"]["code"], -32602, "{again}");
+    let saved = std::fs::read_to_string(&path).unwrap();
+    let last = (saved.lines())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .rfind(|line| line["type"] == "profile")
+        .unwrap();
+    assert_eq!(last["profile"], replaced, "{saved}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    drop(closed);
+}
+
+#[test]
 #[cfg(unix)]
 fn acp_bare_and_ephemeral_sessions_read_none_of_the_users_directories_and_leave_nothing() {
     let scratch =
@@ -5394,7 +5577,7 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     for message in &seen {
         let text = message.to_string();
         assert!(
-            !text.contains("sk-acp") && !text.contains("sk-unknown") && !text.contains("two"),
+            !text.contains("sk-acp") && !text.contains("sk-unknown") && !text.contains("sk two"),
             "{text}"
         );
     }

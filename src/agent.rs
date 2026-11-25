@@ -81,7 +81,7 @@ pub use sandbox::{Reach, Reads, Remembered, Sandbox, SandboxMode, Subagents, set
 pub use session::{
     Branch, Found, Label, ModelChange, Reading, Removal, Session, SessionInfo,
     directory as session_directory, draft, ephemeral, keep_records_apart, projects_directory,
-    read_branch, read_conversation, records_directory, state_directory,
+    read_branch, read_conversation, read_profile, records_directory, state_directory,
 };
 pub use shell::Shell;
 pub use skills::{Skill, SkillOptions, Skills};
@@ -323,6 +323,10 @@ pub struct SystemPrompt {
     /// `--no-directives` (or the `directives` setting off): without the `# Scramjet`
     /// orientation and Scramjet's directives.
     pub no_directives: bool,
+    /// `system` is text, never a file's name (an ACP session profile's).
+    pub system_text: bool,
+    /// `append`'s entries are texts, never files' names.
+    pub append_text: bool,
 }
 
 /// The reasoning effort levels a model takes, and the current one, as Shift+Tab cycles
@@ -1902,6 +1906,11 @@ impl Agent {
         self.session.record_autopilot(on)?;
         self.autopilot = on;
         Ok(())
+    }
+
+    /// Saves the session profile the turns that follow run with (ACP's).
+    pub fn record_profile(&mut self, profile: &Value) -> Result<(), AgentError> {
+        Ok(self.session.record_profile(profile)?)
     }
 
     /// Whether the coding tools of the turns that follow keep out of the user's credential

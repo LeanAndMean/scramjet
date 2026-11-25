@@ -302,7 +302,8 @@ impl Branch {
                     | "model_change"
                     | "thinking_level_change"
                     | "command_state"
-                    | "autopilot",
+                    | "autopilot"
+                    | "profile",
                 ) => {}
                 Some("function_call") if entry["name"] == super::status::RECORD => {}
                 Some("compaction") => items.push(summary_message(

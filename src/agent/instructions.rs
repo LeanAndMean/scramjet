@@ -521,10 +521,11 @@ pub(super) struct Loaded {
 }
 
 impl Loaded {
-    /// The text `source` gives: the contents of the file it names, else itself.
-    fn read(&mut self, source: &str, opening: bool, hidden: &Hidden) -> Option<String> {
+    /// The text `source` gives: the contents of the file it names, else itself; itself when it is
+    /// `text`.
+    fn read(&mut self, source: &str, opening: bool, text: bool, hidden: &Hidden) -> Option<String> {
         let path = Path::new(source);
-        if !path.exists() {
+        if text || !path.exists() {
             return Some(source.to_owned());
         }
         let read = hidden
@@ -583,19 +584,25 @@ pub(super) fn load(
             })?;
         Some(path.to_string_lossy().into_owned())
     };
-    let opening = (prompt.system.clone()).or_else(|| found("SYSTEM.md", &mut loaded.problems));
-    if let Some(source) = opening {
+    let opening = match &prompt.system {
+        Some(given) => Some((given.clone(), prompt.system_text)),
+        None => found("SYSTEM.md", &mut loaded.problems).map(|file| (file, false)),
+    };
+    if let Some((source, text)) = opening {
         loaded.opening =
-            (loaded.read(&source, true, hidden)).filter(|text| !text.trim().is_empty());
+            (loaded.read(&source, true, text, hidden)).filter(|text| !text.trim().is_empty());
     }
-    let appended = match prompt.append.is_empty() {
-        true => (found("APPEND_SYSTEM.md", &mut loaded.problems))
-            .into_iter()
-            .collect(),
-        false => prompt.append.clone(),
+    let (appended, texts) = match prompt.append.is_empty() {
+        true => (
+            (found("APPEND_SYSTEM.md", &mut loaded.problems))
+                .into_iter()
+                .collect(),
+            false,
+        ),
+        false => (prompt.append.clone(), prompt.append_text),
     };
     for source in appended {
-        if let Some(text) = loaded.read(&source, false, hidden) {
+        if let Some(text) = loaded.read(&source, false, texts, hidden) {
             let text = text.trim_end();
             if !text.is_empty() {
                 loaded.appended.push(text.to_owned());

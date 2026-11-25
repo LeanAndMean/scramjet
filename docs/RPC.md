@@ -59,7 +59,7 @@ ACP lets a connection hold several sessions, so a client may open several thread
 - **`session/resume`:** the same without the replay. Either, of a session open on the connection, goes on with it between turns (its MCP servers kept, the load replaying its branch); a session not known gets `-32002` with `data.sessionId`, from every method.
 - **`session/list`** `{cwd?, cursor?}`: `/resume`'s list, newest first, 50 a page, every project's when `cwd` is omitted. Each has `sessionId`, `cwd`, `title` (its name, else its first prompt), `updatedAt`, and `_meta` with `parentSession` (its chain) and the session file's path.
 - **`session/close`:** cancels the session's turn and drops its driver; the file stays. **`session/delete`:** as Ctrl+D in `/resume` (to the trash where a `trash` command exists): refused for a session active on the connection.
-- **A session profile** (signed off at the steer of 2026-11-24; not built yet): below.
+- **A session profile** (signed off at the steer of 2026-11-24; its first step built in 2.330.0): below.
 - **Forks, branches, the tree, names:** extensions (section 8). A new session from a next step's `freshSession` or `/clear` in the core sends `_io.github.leanandmean.scramjet/session_changed` `{sessionId, newSessionId}` to a client that knows the extension, whose updates then carry the new id; either id reaches the session. Other clients keep the id they know for the thread, which goes on in the new session, said in an agent message (a notice with `session.notices`); `session/list` shows both files.
 
 ### A session profile (signed off 2026-11-24)
@@ -100,6 +100,8 @@ A key not listed, or a value of the wrong type, refuses the request with `-32602
 1. The reach a profile sets is the minimal one with `read`'s paths, not the user's own: what the profile says is what the session gets, the same on every machine, and nothing of the home directory reaches a partly trusted model.
 2. A profile given at `session/resume` or `session/load` replaces the saved one from then on (saved likewise), so a runner can retry a task with other limits without losing its context.
 3. Two steps, in this order: instructions, tools and reach first; model, level and output limit next.
+
+**The first step as built (2.330.0):** `model`, `thinkingLevel` and `maxTokens` are refused as not supported yet. A profile given with `session/resume` or `session/load` of a session open on the connection is refused until `session/close`. `/sandbox` (the extension) cannot change a profiled reach. A `read` path under `/tmp` stays hidden on Linux, where the sandbox gives each command a fresh `/tmp`. The full screen resuming a profiled session runs it with the user's settings.
 
 ## 4. A prompt turn
 

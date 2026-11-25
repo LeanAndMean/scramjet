@@ -320,6 +320,8 @@ struct Context {
     context_tokens: Option<u64>,
     command: Option<Value>,
     autopilot: Option<bool>,
+    /// The latest session profile on the path (ACP's `session/new` `_meta`), as given.
+    profile: Option<Value>,
 }
 
 fn read(path: &Path) -> io::Result<Entries> {
@@ -505,6 +507,7 @@ impl Entries {
             context_tokens: None,
             command: None,
             autopilot: None,
+            profile: None,
         };
         let items = &mut context.items;
         for entry in self.path(leaf) {
@@ -543,6 +546,8 @@ impl Entries {
                 context.command = Some(value.clone());
             } else if value["type"] == "autopilot" {
                 context.autopilot = value["on"].as_bool();
+            } else if value["type"] == "profile" {
+                context.profile = Some(value["profile"].clone());
             } else {
                 if let Some(producer) = value[super::PRODUCER].as_str() {
                     context.model = Some(producer.to_owned());
@@ -745,6 +750,13 @@ pub fn read_conversation(path: &Path) -> io::Result<(Vec<Value>, Vec<Option<usiz
     let items = entries.context(path, entries.tail)?.items;
     let lines = entries.lines_of(entries.tail, &items);
     Ok((items, lines))
+}
+
+/// The session profile saved last on the current branch of the session at `path`, read without
+/// opening it.
+pub fn read_profile(path: &Path) -> io::Result<Option<Value>> {
+    let entries = read(path)?;
+    Ok(entries.context(path, entries.tail)?.profile)
 }
 
 /// A session read to be shown before a later one of its chain, without opening it.
@@ -1928,6 +1940,11 @@ impl Session {
         self.append(&json!({"type":"autopilot","on":on}))
     }
 
+    /// Saves the session profile the turns that follow run with.
+    pub fn record_profile(&mut self, profile: &Value) -> io::Result<()> {
+        self.append(&json!({"type":"profile","profile":profile}))
+    }
+
     pub(super) fn compacted_files(&self) -> &FileLists {
         &self.files
     }
@@ -1964,7 +1981,7 @@ impl Session {
         let kind = item["type"].as_str();
         let used = !matches!(
             kind,
-            Some("model_change" | "thinking_level_change" | "autopilot")
+            Some("model_change" | "thinking_level_change" | "autopilot" | "profile")
         );
         let unused = self.unused;
         self.unused &= !used;

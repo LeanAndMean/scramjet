@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.330.0 — Session profiles over ACP
+
+### Added
+
+- `scramjet acp`: a session `profile` in `session/new`'s `_meta` gives that session its own instructions, tools and sandboxed reach (read-only paths, writable directories, network), saved with the session and applied again when it is resumed; the result says the sandbox it got. See the ACP guide.
+
 ## 2.329.0 — Undo and redo keys that reach
 
 ### Changed

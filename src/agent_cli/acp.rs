@@ -9,6 +9,7 @@ use super::drive::{
 use super::live::State;
 use super::settings::Settings;
 use super::slash::Builtin;
+use profile::Profile;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
     Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose, Reach,
@@ -32,6 +33,7 @@ use std::{
 };
 
 mod display;
+mod profile;
 mod sign_in;
 mod watch;
 
@@ -1289,9 +1291,21 @@ impl Connection {
             Ok(servers) => servers,
             Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
         };
+        let asked = match &params["_meta"]["io.github.leanandmean.scramjet"]["profile"] {
+            Value::Null => None,
+            given => match Profile::parse(given) {
+                Ok(profile) => Some(profile),
+                Err(error) => return self.out.error(id, INVALID_PARAMS, &error),
+            },
+        };
         if opening != Opening::New
             && let Some(handle) = self.handle(params)
         {
+            if asked.is_some() {
+                let message = "the session is open on this connection: close it first to give \
+it another profile";
+                return self.out.error(id, INVALID_PARAMS, message);
+            }
             return self.reopen(id, handle, &cwd, opening == Opening::Load);
         }
         let named = match opening {
@@ -1312,6 +1326,21 @@ impl Connection {
                 Err((code, message)) => return self.out.error(id, code, &message),
             },
         };
+        let saved = match (&asked, &file) {
+            (None, Some(file)) => match scramjet::agent::read_profile(file) {
+                Ok(None) => None,
+                Ok(Some(saved)) => match Profile::parse(&saved) {
+                    Ok(profile) => Some(profile),
+                    Err(error) => {
+                        let message = format!("the session's saved profile: {error}");
+                        return self.out.error(id, INVALID_PARAMS, &message);
+                    }
+                },
+                Err(error) => return self.out.error(id, INTERNAL_ERROR, &error.to_string()),
+            },
+            _ => None,
+        };
+        let profile = (asked, saved);
         let (started, starts) = mpsc::channel::<Result<(String, PathBuf), (i64, String)>>();
         let (jobs, given) = mpsc::channel();
         let (cancel, turn) = (Arc::<AtomicBool>::default(), Arc::<Mutex<Turn>>::default());
@@ -1333,21 +1362,37 @@ impl Connection {
         let (arguments, out, answered) = (self.arguments.clone(), self.out.clone(), id.clone());
         let directives = params["_meta"]["io.github.leanandmean.scramjet"]["directives"] != false;
         let thread = std::thread::spawn(move || {
-            let saved = (file, named);
-            let session = match start_session(&arguments, &cwd, &servers, saved, directives) {
+            let (asked, kept) = profile;
+            let profile = asked.clone().or(kept);
+            let chosen = (file, named);
+            let session = start_session(
+                &arguments,
+                &cwd,
+                &servers,
+                chosen,
+                directives,
+                profile.as_ref(),
+            );
+            let mut session = match session {
                 Ok(session) => session,
                 Err(error) => {
-                    let _ = started.send(Err((INTERNAL_ERROR, error)));
+                    let _ = started.send(Err(error));
                     return;
                 }
             };
+            if let Some(asked) = &asked
+                && let Err(error) = session.agent.record_profile(&asked.given)
+            {
+                let _ = started.send(Err((INTERNAL_ERROR, error.to_string())));
+                return;
+            }
             if opening == Opening::New
                 && let Some(why) = session.agent.login_needed()
             {
                 let _ = started.send(Err((AUTH_REQUIRED, auth_required(&why))));
                 return;
             }
-            let mut front = worker.front(session, servers);
+            let mut front = worker.front(session, servers, profile);
             front.live(State::Idle);
             if opening == Opening::Load {
                 front.replay();
@@ -2180,24 +2225,30 @@ fn mcp_servers(servers: &Value) -> Result<Vec<McpServer>, String> {
 /// Starts a session in `cwd` with the options `arguments` give, as the full screen starts one,
 /// named `id` when given, or continues the saved session `file`, with the client's MCP `servers` beside the settings' (in place of those of the same name,
 /// and started though the settings disable that name), without Scramjet's directives unless
-/// `directives` (`session/new`'s `_meta` `directives: false`).
+/// `directives` (`session/new`'s `_meta` `directives: false`), and with `profile` over the
+/// options, whose reach refuses the session where the sandbox cannot start.
 fn start_session(
     arguments: &[String],
     cwd: &Path,
     servers: &[McpServer],
     (file, id): (Option<PathBuf>, Option<String>),
     directives: bool,
-) -> Result<Session, String> {
-    let mut options = Options::parse(arguments.iter().map(OsString::from))?
-        .ok_or("--help is not a session's option")?;
+    profile: Option<&Profile>,
+) -> Result<Session, (i64, String)> {
+    let failed = |error: String| (INTERNAL_ERROR, error);
+    let mut options = (Options::parse(arguments.iter().map(OsString::from)).map_err(failed)?)
+        .ok_or(failed("--help is not a session's option".into()))?;
     options.prompt.no_directives |= !directives;
+    if let Some(profile) = profile {
+        profile.apply(&mut options);
+    }
     let choice = match (file, id, &options.start) {
         (Some(file), ..) => SessionChoice::Open(file),
         (None, Some(id), _) => SessionChoice::Named(id),
         (None, None, Launch::Unsaved) => SessionChoice::Unsaved,
         (None, None, _) => SessionChoice::New,
     };
-    let root = super::project_root(Some(cwd.to_owned()))?;
+    let root = super::project_root(Some(cwd.to_owned())).map_err(failed)?;
     let mut settings = Settings::load();
     settings.in_project(&root);
     settings.retries_given = options.retries;
@@ -2210,15 +2261,19 @@ fn start_session(
         Some(_) => "--models",
         None => "settings: enabledModels",
     };
-    let (agent, warnings) = super::start(
+    let (mut agent, warnings) = super::start(
         options,
         (root, session_dir),
         choice,
         &settings,
         (&patterns, source),
-    )?;
+    )
+    .map_err(failed)?;
     for warning in warnings {
         eprintln!("scramjet: {warning}");
+    }
+    if let Some(profile) = profile {
+        (profile.confine(&mut agent, &settings)).map_err(|error| (INVALID_PARAMS, error))?;
     }
     Ok(Session {
         agent,
@@ -2245,7 +2300,7 @@ struct Worker {
 }
 
 impl Worker {
-    fn front(self, session: Session, servers: Vec<McpServer>) -> Acp {
+    fn front(self, session: Session, servers: Vec<McpServer>, profile: Option<Profile>) -> Acp {
         let mut log = lock(&self.log);
         log.asks = session.agent.asks();
         if let Some(sandbox) = session.agent.sandbox() {
@@ -2282,6 +2337,7 @@ impl Worker {
             models: Vec::new(),
             shown: Value::Null,
             servers,
+            profile,
         }
     }
 }
@@ -2306,6 +2362,8 @@ struct Acp {
     shown: Value,
     /// The MCP servers the client gave the session.
     servers: Vec<McpServer>,
+    /// The session's profile, given or saved.
+    profile: Option<Profile>,
 }
 
 /// How a prompt's turns ended.
@@ -2333,7 +2391,7 @@ impl Acp {
         let agent = &self.session.agent;
         let files = json!(agent.context_files());
         lock(&self.ui.log).context_files = files.clone();
-        let mut meta = json!({"contextFiles": files});
+        let mut meta = json!({"contextFiles": files, "sandbox": self.sandbox_state()});
         if agent.unsaved_directory().is_none() {
             meta["path"] = json!(agent.session_path());
         }
@@ -2345,6 +2403,12 @@ impl Acp {
     /// them said, and the commands, options and context files listed again.
     fn reload(&mut self) {
         self.session.reload(&self.servers);
+        if let Some(profile) = &self.profile
+            && let Err(error) = profile.confine(&mut self.session.agent, &self.session.settings)
+        {
+            self.ui
+                .say("warning", &format!("the session's profile: {error}"));
+        }
         let files = json!(self.session.agent.context_files());
         let mut log = lock(&self.ui.log);
         if log.context_files != files {
@@ -2734,11 +2798,23 @@ impl Acp {
     /// Answers request `id` with the MCP servers, as `/mcp` lists them.
     /// Makes `change`, if any, and answers with the sandbox as it is then.
     fn sandbox(&mut self, id: &Value, change: Option<SandboxChange>) {
+        if change.is_some() && self.profile.as_ref().is_some_and(Profile::confines) {
+            let message = "the session's profile sets its reach: resume it with another profile";
+            return self.ui.out.error(id, INVALID_PARAMS, message);
+        }
         let (message, warnings) = match change.map(|change| self.session.change_sandbox(change)) {
             None => (None, Vec::new()),
             Some(Ok((said, warnings))) => (Some(said), warnings),
             Some(Err(error)) => return self.ui.out.error(id, INVALID_PARAMS, &error),
         };
+        let mut result = self.sandbox_state();
+        result["message"] = json!(message);
+        result["warnings"] = json!(warnings);
+        self.ui.out.respond(id, result);
+    }
+
+    /// The session's sandbox, as `/sandbox` answers it.
+    fn sandbox_state(&self) -> Value {
         let agent = &self.session.agent;
         let sandbox = agent.sandbox();
         let mode = sandbox.map_or(FULL_ACCESS, |sandbox| sandbox.mode.name());
@@ -2751,16 +2827,13 @@ impl Acp {
             .collect();
         let others = always.iter().filter(|path| !granted.contains(path));
         listed.extend(others.map(|path| json!({"path": path, "always": true, "granted": false})));
-        let result = json!({
+        json!({
             "mode": mode,
             "network": sandbox.map_or(!agent.offline(), |sandbox| sandbox.network),
             "reach": reach_name(agent.reads().reach),
             "granted": listed,
             "summary": super::slash::sandbox_summary(agent, &self.session.settings.allow_write()),
-            "message": message,
-            "warnings": warnings,
-        });
-        self.ui.out.respond(id, result);
+        })
     }
 
     fn mcp_servers(&mut self, id: &Value) {

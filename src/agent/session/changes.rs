@@ -43,7 +43,7 @@ impl ModelChanges {
                 self.items = self.items - cut + 1;
             }
             Some("model_change") => self.changed(model, value["model"].as_str()),
-            Some("thinking_level_change" | "command_state" | "autopilot") => {}
+            Some("thinking_level_change" | "command_state" | "autopilot" | "profile") => {}
             kind => {
                 let call = value["call_id"].as_str().unwrap_or_default();
                 if kind == Some("function_call") && value["name"] == crate::agent::switch::NAME {

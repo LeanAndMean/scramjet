@@ -325,8 +325,12 @@ impl Agent {
         // The command's state and the `/autopilot` toggles saved after an entry are the state
         // there; `/tree` does not list them.
         if prompt.is_none() {
-            let state =
-                |value: &Value| value["type"] == "command_state" || value["type"] == "autopilot";
+            let state = |value: &Value| {
+                matches!(
+                    value["type"].as_str(),
+                    Some("command_state" | "autopilot" | "profile")
+                )
+            };
             while let Some(next) =
                 (entries.iter()).find(|next| next.parent == leaf && state(&next.value))
             {
