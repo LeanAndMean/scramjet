@@ -167,7 +167,7 @@ impl Catalog {
         }
     }
 
-    fn save(&self, body: &str, etag: Option<&str>) -> Result<(), String> {
+    pub(super) fn save(&self, body: &str, etag: Option<&str>) -> Result<(), String> {
         let Some(file) = &self.file else {
             return Ok(());
         };
@@ -296,6 +296,38 @@ pub(super) fn offered(text: &str) -> Result<Offered, String> {
         }
     }
     Ok(offered)
+}
+
+/// The models the catalog `text` lists of its provider `id`, as `models.json` models, newest
+/// first by release date, but those its own server or protocol routes elsewhere: what describes
+/// a provider's own list, which names its models only.
+pub(super) fn described(text: &str, id: &str) -> Result<Vec<Value>, String> {
+    let mut providers: Map<String, Value> = serde_json::from_str(text)
+        .map_err(|error| format!("is not a model catalog (models.dev's shape): {error}"))?;
+    let listed = (providers.remove(id)).ok_or_else(|| format!("lists no provider {id}"))?;
+    let released: Vec<(String, String)> = (listed["models"].as_object().into_iter().flatten())
+        .map(|(key, model)| {
+            let id = model["id"].as_str().unwrap_or(key).to_owned();
+            let date = model["release_date"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned();
+            (id, date)
+        })
+        .collect();
+    let released = |model: &Value| {
+        let found = released.iter().find(|(id, _)| model["id"] == id.as_str());
+        found.map_or("", |(_, date)| date.as_str()).to_owned()
+    };
+    let listed = Listed::deserialize(listed).map_err(|error| format!("lists {id} as {error}"))?;
+    let entry = provider(id, listed).map_err(|why| format!("lists {id}, but {why}"))?;
+    let models = entry["models"].as_array().into_iter().flatten();
+    let mut models: Vec<Value> = (models
+        .filter(|m| m.get("baseUrl").is_none() && m.get("api").is_none()))
+    .cloned()
+    .collect();
+    models.sort_by_cached_key(|model| std::cmp::Reverse(released(model)));
+    Ok(models)
 }
 
 /// A catalog's provider as a `models.json` entry, or why it cannot be offered.

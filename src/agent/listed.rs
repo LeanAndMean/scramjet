@@ -4,8 +4,10 @@
 //! state directory, beside the logins' lists, and read again as it ages (`agent_cli::login`).
 //! Each model takes what its list says of it in the fields the lists of Anthropic, OpenRouter,
 //! Mistral, Groq and vLLM use; what a list does not say stays unknown, as for a model written in a
-//! `models.json`, and the entry's `modelOverrides` may say it, as in Scramjet.
+//! `models.json`, and the entry's `modelOverrides` may say it, as in Scramjet. A list that names
+//! its models only, as OpenAI's, is described by a model catalog's provider (`Described`).
 
+use super::catalog::{self, Catalog};
 use super::client;
 use super::configured::{self, Commanded};
 use super::login;
@@ -33,8 +35,18 @@ pub struct Listing {
     messages: bool,
     /// `None` without a state directory: the list is then kept only while the process runs.
     file: Option<PathBuf>,
+    /// What describes its models, for a list that names them only.
+    pub(super) described: Option<Described>,
     /// How many models it offered when the providers were read, or what kept it from offering any.
     pub(super) offered: Result<usize, String>,
+}
+
+/// A model catalog's provider whose models describe those a list names: of those it names, the
+/// catalog's are offered, as the catalog gives them.
+#[derive(Clone, Debug)]
+pub(super) struct Described {
+    pub(super) catalog: Catalog,
+    pub(super) provider: &'static str,
 }
 
 /// Leaves the headers' values out: they hold keys.
@@ -46,6 +58,7 @@ impl std::fmt::Debug for Listing {
             .field("url", &self.url)
             .field("headers", &names)
             .field("file", &self.file)
+            .field("described", &self.described)
             .field("offered", &self.offered)
             .finish()
     }
@@ -66,6 +79,7 @@ impl Listing {
             commanded: route.commanded.clone(),
             messages,
             file,
+            described: None,
             offered: Ok(0),
         }
     }
@@ -113,23 +127,55 @@ impl Listing {
     /// The models the list saved offers, as a `models.json` gives them, each with its id.
     pub fn models(&self) -> Vec<Value> {
         let saved = self.saved().unwrap_or_default();
-        let models = saved
-            .iter()
-            .filter_map(|listed| model(listed, self.messages));
-        models.collect()
+        self.offers(&saved).unwrap_or_default()
     }
 
-    /// Reads the list now, waiting at most 5 seconds, and saves it; unsaved, it is kept in memory
+    /// The models `listed`, as the server listed them, offers, as a `models.json` gives them;
+    /// an error when what describes them cannot.
+    pub(super) fn offers(&self, listed: &[Value]) -> Result<Vec<Value>, String> {
+        let Some(described) = &self.described else {
+            let models = listed.iter().filter_map(|l| model(l, self.messages));
+            return Ok(models.collect());
+        };
+        let url = described.catalog.url();
+        let text = (described.catalog.saved()).ok_or_else(|| {
+            format!("the model catalog at {url}, which describes them, is not read")
+        })?;
+        let models = catalog::described(&text, described.provider)
+            .map_err(|problem| format!("the model catalog at {url} {problem}"))?;
+        let named = |model: &Value| listed.iter().any(|listed| listed["id"] == model["id"]);
+        Ok(models.into_iter().filter(named).collect())
+    }
+
+    /// Whether what describes its models, if anything does, has a copy saved.
+    pub(super) fn describable(&self) -> bool {
+        (self.described.as_ref()).is_none_or(|described| described.catalog.saved().is_some())
+    }
+
+    /// Reads the list now, waiting at most 5 seconds, and saves it, with what describes its
+    /// models when no copy of that is saved; unsaved, it is kept in memory
     /// (`Providers::tried`), and the background says why when it reads the list again.
     pub(super) fn read_now(&self) -> Result<Vec<Value>, String> {
         let models = self.fetch(WAIT)?;
+        if let Some(described) = &self.described
+            && described.catalog.saved().is_none()
+        {
+            described.catalog.read_now()?;
+        }
         let _ = self.save(&models);
         Ok(models)
     }
 
-    /// Reads the list again and saves it in place of the one saved, which stays when that fails.
+    /// Reads the list again, and what describes its models, and saves them in place of those
+    /// saved, which stay when that fails.
     pub fn relist(&self) -> Result<(), String> {
         let models = self.fetch(RELIST_WAIT)?;
+        if let Some(described) = &self.described
+            && let Err(problem) = described.catalog.relist()
+            && described.catalog.saved().is_none()
+        {
+            return Err(problem);
+        }
         self.save(&models)
     }
 

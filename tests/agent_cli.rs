@@ -142,7 +142,7 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
         String::from_utf8(output.stderr).unwrap(),
         format!(
             "scramjet: no provider offers any model: start scramjet and /login (a subscription, \
-an API key for Anthropic or OpenRouter, or local models), or add providers to {} (see --help)\n",
+an API key for Anthropic, OpenAI or OpenRouter, or local models), or add providers to {} (see --help)\n",
             (scratch
                 .0
                 .join("config")
@@ -5761,7 +5761,8 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     assert_eq!(
         listed["result"],
         serde_json::json!({"providers": [{"provider": "test", "key": null},
-            {"provider": "anthropic", "key": null}, {"provider": "openrouter", "key": null}]}),
+            {"provider": "anthropic", "key": null}, {"provider": "openai", "key": null},
+            {"provider": "openrouter", "key": null}]}),
         "{listed}"
     );
     let unknown = answer(&mut stdin, set(2, "nowhere", "sk-unknown"));

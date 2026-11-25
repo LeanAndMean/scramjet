@@ -231,16 +231,32 @@ pub struct Builtin {
     pub default: &'static str,
     base_url: &'static str,
     api: &'static str,
+    /// The provider of models.dev's catalog (`MODELS_DEV`) that describes the models its list
+    /// names, for a list that says nothing else of them, embedders and voices among them: those
+    /// it names that the catalog describes as taking tools are offered.
+    described: Option<&'static str>,
 }
 
+/// The model catalog that describes the models of a built-in provider whose list names them only.
+pub const MODELS_DEV: &str = "https://models.dev/api.json";
+
 /// The built-in providers, under Scramjet's names for them, in `/login`'s order.
-pub const BUILTIN: [Builtin; 2] = [
+pub const BUILTIN: [Builtin; 3] = [
     Builtin {
         name: "anthropic",
         shown: "Anthropic",
         default: "claude-sonnet-",
         base_url: "https://api.anthropic.com",
         api: "anthropic-messages",
+        described: None,
+    },
+    Builtin {
+        name: "openai",
+        shown: "OpenAI",
+        default: "gpt-",
+        base_url: "https://api.openai.com/v1",
+        api: "openai-responses",
+        described: Some("openai"),
     },
     Builtin {
         name: "openrouter",
@@ -248,6 +264,7 @@ pub const BUILTIN: [Builtin; 2] = [
         default: "anthropic/claude-sonnet-",
         base_url: "https://openrouter.ai/api/v1",
         api: "openai-completions",
+        described: None,
     },
 ];
 
@@ -460,11 +477,16 @@ impl Providers {
     }
 
     /// Forgets the list `provider` gave, so that it is asked again when the providers are next
-    /// read, as after its key changed.
+    /// read, as after its key changed; a built-in one's too, which without a key had no listing.
     pub fn forget_list(&mut self, provider: &str) {
         for listing in self.listings.iter().filter(|l| l.provider() == provider) {
             listing.forget();
             self.tried.remove(&listing.key());
+        }
+        if let Some(logins) = &self.logins
+            && self.keyed.iter().any(|(keyed, _)| keyed == provider)
+        {
+            let _ = std::fs::remove_file(logins.provided(provider));
         }
     }
 
@@ -779,7 +801,7 @@ impl Reading {
             }
             let what = format!("{} (/login)", builtin.shown);
             self.sources.insert(name.to_owned(), what.clone());
-            self.provider(name, &entry, &what);
+            self.provider(name, &entry, &what, builtin.described);
         }
     }
 
@@ -823,7 +845,7 @@ impl Reading {
             self.sources
                 .entry(name.to_owned())
                 .or_insert_with(|| what.clone());
-            self.provider(name, &entry, &what);
+            self.provider(name, &entry, &what, None);
         }
     }
 
@@ -893,17 +915,19 @@ impl Reading {
                 self.keyed.push((name.clone(), from));
                 self.origins.insert(name.clone(), origins(&entry));
             }
-            self.provider(&name, &entry, &format!("{what}: provider {name}"));
+            self.provider(&name, &entry, &format!("{what}: provider {name}"), None);
         }
     }
 
-    fn provider(&mut self, name: &str, entry: &Value, what: &str) {
+    /// Provider `name`'s `entry`, whose list, if its server gives one, models.dev's provider
+    /// `described` describes.
+    fn provider(&mut self, name: &str, entry: &Value, what: &str, described: Option<&'static str>) {
         let Some(entry) = entry.as_object() else {
             return self.problems.push(format!("{what}: not a JSON object"));
         };
         let models = match entry.get("models") {
             Some(Value::Array(models)) if !models.is_empty() => models.clone(),
-            Some(Value::Array(_)) | None => match self.listed(name, entry, what) {
+            Some(Value::Array(_)) | None => match self.listed(name, entry, what, described) {
                 Some(models) => models,
                 None => return,
             },
@@ -928,7 +952,13 @@ impl Reading {
 
     /// The models provider `name`'s `entry`, which lists none, lists itself, as its server listed
     /// them when last asked, else now; `None`, with the problem said, when it cannot.
-    fn listed(&mut self, name: &str, entry: &Map<String, Value>, what: &str) -> Option<Vec<Value>> {
+    fn listed(
+        &mut self,
+        name: &str,
+        entry: &Map<String, Value>,
+        what: &str,
+        described: Option<&'static str>,
+    ) -> Option<Vec<Value>> {
         let logs_in = self.logs_in(name);
         let api = entry.get("api").and_then(Value::as_str);
         let lists = matches!(
@@ -970,7 +1000,11 @@ impl Reading {
         let messages = protocol == Protocol::Messages;
         let file = self.logins.as_ref().map(|logins| logins.provided(name));
         let mut listing = Listing::new(&route, messages, file);
-        let read = match listing.saved() {
+        listing.described = described.map(|provider| listed::Described {
+            catalog: Catalog::new(MODELS_DEV, self.logins.as_ref()),
+            provider,
+        });
+        let read = match listing.saved().filter(|_| listing.describable()) {
             Some(models) => Ok(models),
             None => {
                 let key = listing.key();
@@ -981,14 +1015,14 @@ impl Reading {
             }
         };
         let models: Result<Vec<Value>, String> = read
-            .map(|read| {
-                let models = read
-                    .iter()
-                    .filter_map(|model| listed::model(model, messages));
-                let models = models.map(|model| listed::overridden(model, &overrides));
-                models.collect()
-            })
-            .map_err(|error| format!("asking its server for them failed: {error}"));
+            .map_err(|error| format!("asking its server for them failed: {error}"))
+            .and_then(|read| listing.offers(&read))
+            .map(|models| {
+                let models = models.into_iter();
+                models
+                    .map(|model| listed::overridden(model, &overrides))
+                    .collect()
+            });
         let models = models.and_then(|models| match models.is_empty() {
             true => Err("its server lists none that take tools".to_owned()),
             false => Ok(models),
@@ -2027,6 +2061,7 @@ mod tests {
         let providers = Providers::given_logged_in(none.clone(), logins.clone());
         let nowhere = [
             ("anthropic".to_owned(), KeyFrom::Nowhere),
+            ("openai".to_owned(), KeyFrom::Nowhere),
             ("openrouter".to_owned(), KeyFrom::Nowhere),
         ];
         assert_eq!(providers.keyed(), nowhere);
@@ -2045,7 +2080,7 @@ mod tests {
             "api": "anthropic-messages", "models": [{"id": "own"}]}}});
         let replaced = Providers::given_logged_in(file, logins.clone());
         let keyed: Vec<&str> = replaced.keyed().iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(keyed, ["anthropic", "openrouter"]);
+        assert_eq!(keyed, ["anthropic", "openai", "openrouter"]);
         assert_eq!(replaced.origins("anthropic"), ["http://127.0.0.1:9"]);
         let references: Vec<String> = replaced.models().iter().map(Model::reference).collect();
         assert_eq!(references, ["anthropic/own"]);
@@ -2090,10 +2125,72 @@ mod tests {
         // --api-key offers one for the run.
         let mut given = Providers::given_logged_in(none.clone(), logins.clone());
         given.give_key("openrouter", "sk-or");
-        assert_eq!(given.keyed()[1], ("openrouter".to_owned(), KeyFrom::Given));
+        assert_eq!(given.keyed()[2], ("openrouter".to_owned(), KeyFrom::Given));
         let routed = given.find("openrouter/x/y").unwrap();
         assert_eq!(routed.info.protocol, Protocol::Completions);
         assert!(given.find("openrouter/x/chat").is_none());
+        // OpenAI's list names its models only, embedders among them: models.dev's catalog
+        // describes them, and those it names that the catalog describes as taking tools are
+        // offered, newest first.
+        let named = json!([{"id": "gpt-old", "object": "model", "owned_by": "system"},
+            {"id": "text-embedding-9"}, {"id": "gpt-new"}, {"id": "gpt-undescribed"},
+            {"id": "gpt-retired"}]);
+        listed("openai", "https://api.openai.com/v1/models", named);
+        let catalog = json!({
+            "other": {"npm": "@ai-sdk/openai-compatible", "api": "http://127.0.0.1:9",
+                "models": {"gpt-old": {"tool_call": true}}},
+            "openai": {"npm": "@ai-sdk/openai", "env": ["OPENAI_API_KEY"], "models": {
+                "gpt-old": {"id": "gpt-old", "tool_call": true, "release_date": "2026-01-01",
+                    "limit": {"context": 400_000, "output": 128_000}},
+                "gpt-new": {"id": "gpt-new", "name": "GPT New", "tool_call": true,
+                    "reasoning": true, "release_date": "2026-11-01",
+                    "limit": {"context": 1_050_000, "input": 922_000, "output": 128_000},
+                    "reasoning_options": [{"type": "effort", "values": ["low", "high"]}],
+                    "cost": {"input": 2.5, "output": 15}},
+                "text-embedding-9": {"tool_call": false},
+                "gpt-retired": {"tool_call": true, "status": "deprecated"},
+                "gpt-unnamed": {"tool_call": true},
+                "gpt-elsewhere": {"tool_call": true,
+                    "provider": {"npm": "@ai-sdk/openai", "api": "https://example.com/v1"}}}}});
+        let models_dev = Catalog::new(MODELS_DEV, Some(&logins));
+        models_dev.save(&catalog.to_string(), None).unwrap();
+        let mut given = Providers::given_logged_in(none.clone(), logins.clone());
+        given.give_key("openai", "sk-oa");
+        assert_eq!(given.problems(), [] as [String; 0]);
+        let openai: Vec<String> = (given.models().iter())
+            .filter(|model| model.provider == "openai")
+            .map(Model::reference)
+            .collect();
+        assert_eq!(openai, ["openai/gpt-new", "openai/gpt-old"]);
+        let new = given.find("openai/gpt-new").unwrap();
+        assert_eq!(
+            (new.name.as_deref(), new.info.protocol, new.info.window),
+            (Some("GPT New"), Protocol::Responses, Some(1_050_000))
+        );
+        let to = super::tests::route(&given, "openai/gpt-new");
+        assert_eq!((to.host.as_str(), to.tls), ("api.openai.com", true));
+        assert!(to.path.ends_with("/v1"), "{}", to.path);
+        assert_eq!(
+            to.headers,
+            [("authorization".into(), "Bearer sk-oa".into())]
+        );
+        let listing = (given.listings().iter())
+            .find(|listing| listing.provider() == "openai")
+            .unwrap();
+        let kept: Vec<Value> = listing.models().iter().map(|m| m["id"].clone()).collect();
+        assert_eq!(kept, ["gpt-new", "gpt-old"]);
+        // Without the catalog's copy, nothing is offered, and why is said.
+        models_dev.forget();
+        assert!(listing.models().is_empty());
+        let problem = listing.offers(&[json!({"id": "gpt-new"})]).unwrap_err();
+        assert_eq!(
+            problem,
+            "the model catalog at https://models.dev/api.json, which describes them, is not read"
+        );
+        // A key saved reads the list again, though a built-in without one had no listing.
+        assert!(logins.provided("openai").exists());
+        Providers::given_logged_in(none.clone(), logins.clone()).forget_list("openai");
+        assert!(!logins.provided("openai").exists());
         // A key saved for another server is not sent to the provider's.
         let local = ["http://127.0.0.1:9".to_owned()];
         super::super::login::save_key(&logins.auth, "anthropic", "sk-local", &local).unwrap();
@@ -2357,6 +2454,7 @@ mod tests {
                     KeyFrom::Variable("SCRAMJET_RS_PROVIDERS_KEYED_TEST".to_owned())
                 ),
                 ("openrouter".to_owned(), KeyFrom::Nowhere),
+                ("openai".to_owned(), KeyFrom::Nowhere),
             ]
         );
         assert!(headers(&providers, "openrouter/m-openai-completions").is_empty());
@@ -2379,7 +2477,11 @@ mod tests {
             .iter()
             .map(|(_, from)| from.clone())
             .collect();
-        assert_eq!(saved, [KeyFrom::Saved, KeyFrom::Saved, KeyFrom::Saved]);
+        let nowhere = KeyFrom::Nowhere;
+        assert_eq!(
+            saved,
+            [KeyFrom::Saved, KeyFrom::Saved, KeyFrom::Saved, nowhere]
+        );
         assert_eq!(
             headers(&providers, "openrouter/m-openai-completions"),
             [pair("authorization", "Bearer sk-or")]
@@ -2415,7 +2517,11 @@ mod tests {
             );
             let from = providers.keyed().iter().map(|(_, from)| from.clone());
             let from: Vec<KeyFrom> = from.collect();
-            assert_eq!(from, [KeyFrom::Saved, KeyFrom::Given, KeyFrom::Saved]);
+            let nowhere = KeyFrom::Nowhere;
+            assert_eq!(
+                from,
+                [KeyFrom::Saved, KeyFrom::Given, KeyFrom::Saved, nowhere]
+            );
         }
         // A saved key goes only to the servers it was saved for; one saved before keys named
         // them goes nowhere until saved again.

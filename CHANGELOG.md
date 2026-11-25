@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.334.0 — OpenAI with an API key
+
+### Added
+
+- `/login` lists OpenAI under API keys, beside Anthropic and OpenRouter: enter a key and the models OpenAI offers it are offered, as models.dev's public catalog describes them (windows, effort levels, prices), newest first; embedders, voices and models that take no tools are left out. `--api-key` with `--model openai/…` uses a key for one run. A key in `OPENAI_API_KEY` alone does not set one up.
+
+### Fixed
+
+- A new API key for Anthropic, OpenAI or OpenRouter saved in `/login` reads the provider's models again with it, so a wrong key is said at once; before, a list another key had read was offered again.
+
 ## 2.333.1 — `--api-key` for Anthropic or OpenRouter
 
 ### Fixed
