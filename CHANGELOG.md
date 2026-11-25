@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.2 — A closed terminal no longer crashes Scramjet
+
+### Fixed
+
+- When the terminal under the full screen went away without sending Scramjet a hangup signal (its input ended and writes to it failed), Scramjet crashed with a core dump while leaving the screen, and could leave a command the agent was running still going. It now ends the session as when you quit: the command is stopped and the unsent prompt kept as a draft.
+
 ## 2.347.1 — Leftovers of ended runs removed
 
 ### Fixed

@@ -426,8 +426,9 @@ impl RawMode {
 
     /// The terminal as the shell left it, for an external editor or the shell itself.
     pub(super) fn suspend(&self) {
-        eprint!("\x1b[?2004l");
-        let _ = io::stderr().flush();
+        let mut stderr = io::stderr().lock();
+        let _ = stderr.write_all(b"\x1b[?2004l");
+        let _ = stderr.flush();
         let _ = self.original.set();
     }
 }

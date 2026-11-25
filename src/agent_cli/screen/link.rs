@@ -472,7 +472,7 @@ impl Handle {
             .take();
         self.link.send(ToScreen::Quit);
         let joined = thread.join();
-        eprint!("{}", super::held_panics());
+        let _ = io::stderr().write_all(super::held_panics().as_bytes());
         match joined {
             Ok(Err(error)) => Err(format!("the screen failed: {error}")),
             Err(_) => Err(format!(
@@ -500,7 +500,7 @@ impl Drop for StopsTurnOnPanic {
 impl Drop for Handle {
     fn drop(&mut self) {
         if let Err(error) = self.give_back() {
-            eprintln!("Error: {error}");
+            let _ = writeln!(io::stderr(), "Error: {error}");
         }
     }
 }

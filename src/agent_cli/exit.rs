@@ -116,6 +116,14 @@ pub(super) fn on_signal(signal: i32) {
     }
 }
 
+/// Parks the calling thread for good once a signal's exit has begun, so that it neither ends the
+/// process before the exit has stopped the commands running nor prints to a terminal that hung up.
+pub(super) fn wait_if_exiting() {
+    while SIGNAL.load(Ordering::SeqCst) != 0 {
+        std::thread::park();
+    }
+}
+
 /// The screen is left only while shown, not while an external editor has the terminal. After a
 /// hangup the terminal's calls fail at once.
 fn exit(startup: Option<&console::Mode>) -> ! {

@@ -423,8 +423,10 @@ def exited(process, read):
 
 
 def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, rows=24, forget_models=True,
-        signal=None):
-    """Runs the agent in `project` on a terminal for `script`, then sends it `signal` if given.
+        signal=None, hang_up=False):
+    """Runs the agent in `project` on a terminal for `script`, then sends it `signal` if given, or
+    with `hang_up` closes the terminal, which is then not its controlling one: its input ends and
+    its writes fail, with no SIGHUP to exit for.
     Unless `forget_models` is false, the models chosen are forgotten after it for the project (its
     `defaultModel` stays in the settings, which a journey that chooses one has of its own)."""
     master, slave = pty.openpty()
@@ -433,7 +435,8 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
 
     def own_terminal():
         os.setsid()
-        fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+        if not hang_up:
+            fcntl.ioctl(0, termios.TIOCSCTTY, 0)
 
     variables = dict(env, **variables)
     child = subprocess.Popen([*agent(endpoint, variables['XDG_CONFIG_HOME']), *arguments], cwd=project, env=variables,
@@ -462,6 +465,11 @@ def run(arguments, script, endpoint=closed, status=0, variables={}, columns=60, 
     script(read, until, send, output)
     if signal:
         child.send_signal(signal)
+    if hang_up:
+        os.close(master)
+        assert exited(child, lambda seconds: time.sleep(seconds)) == status, bytes(output[-2000:])
+        os.close(slave)
+        return output
     assert exited(child, read) == status, bytes(output[-2000:])
     if forget_models and os.path.exists(remembered_models):
         os.remove(remembered_models)
@@ -1048,6 +1056,27 @@ run([], command_on_screen('sleep 31.25'), serve_call('sleep 31.25'), status=143,
 assert not running('sleep 31.25')
 assert readable_sessions()
 run([], screen_idle, status=129, signal=signal.SIGHUP)
+
+
+def drafting_on_screen(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('Running')
+    started('sleep 31.75')
+    send(b'words not sent')
+    read(.3)
+
+
+# A terminal gone while a command runs: the session ends as at the input's end, the command
+# stopped and the draft kept, where leaving the screen once panicked on the failed writes and
+# aborted the process.
+hung_up_state = os.path.join(work, 'hung-up-state')
+run([], drafting_on_screen, serve_call('sleep 31.75'), status=0, hang_up=True,
+    variables={'XDG_STATE_HOME': hung_up_state})
+assert not running('sleep 31.75')
+(kept,) = glob.glob(os.path.join(hung_up_state, 'scramjet', 'drafts', '*', '*.json'))
+assert json.load(open(kept))['text'] == 'words not sent', kept
 visible = config_home('signals', '{"hideCredentials": "never"}')
 printed = run(['-p', 'go'], printed_running('sleep 32.5'), serve_call('sleep 32.5'), status=143,
               signal=signal.SIGTERM, variables={'XDG_CONFIG_HOME': visible})

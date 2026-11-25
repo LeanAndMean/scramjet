@@ -172,6 +172,8 @@ impl Interactive {
         notices: Vec<String>,
     ) -> Result<(), String> {
         let result = self.read_and_run(resume, messages, files, notices);
+        // A hangup ends the screen at its next write; the exit's thread ends the process.
+        super::exit::wait_if_exiting();
         // The terminal is given back first, so that an error saving the settings shows.
         let screen = self.screen.take().map_or(Ok(()), Handle::close);
         self.save_hide_thinking();

@@ -1451,10 +1451,10 @@ connection: close\r\n\r\n{body}",
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
-    // A guard against a hang: the journeys take about 180 seconds.
+    // A guard against a hang: the journeys take about 240 seconds.
     let output = Command::new("timeout")
         .args([
-            "300",
+            "480",
             "python3",
             "tests/agent_editor_pty.py",
             env!("CARGO_BIN_EXE_scramjet"),

@@ -586,7 +586,7 @@ impl App {
                 Flow::Suspend => {
                     drop(screen);
                     raw.suspend();
-                    eprintln!("Scramjet is suspended: `fg` brings it back.");
+                    let _ = to_terminal("Scramjet is suspended: `fg` brings it back.\n");
                     job::suspend();
                     job::continued();
                     raw.resume()?;
@@ -1217,18 +1217,19 @@ impl Screen {
     /// Shown, and the terminal asked for its background, which may have changed meanwhile.
     fn enter() -> Self {
         SHOWN.store(true, Ordering::SeqCst);
-        eprint!(
+        let _ = to_terminal(&format!(
             "\x1b[?1049h\x1b[?7l\x1b[?1002h\x1b[?1006h\x1b[2J{}",
             background::BACKGROUND_QUESTION
-        );
+        ));
         Self
     }
 }
 
 impl Drop for Screen {
     fn drop(&mut self) {
-        eprint!("{}{LEAVE}", progress_cleared());
-        let _ = io::stderr().flush();
+        // Not `eprint!`, which panics once the terminal has hung up, and a panic here during
+        // another's unwinding aborts the process before the exit has stopped its commands.
+        let _ = to_terminal(&format!("{}{LEAVE}", progress_cleared()));
         SHOWN.store(false, Ordering::SeqCst);
     }
 }
