@@ -2153,10 +2153,16 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
         let mut ui = Recorder::default();
         agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
         let requests = server.join().unwrap();
-        let requests = requests
+        let requests: Vec<Value> = requests
             .into_iter()
             .filter(|body| !body.is_null())
             .collect();
+        for request in &requests {
+            let text = request.to_string();
+            for saved in text.split("; all of it is in ").skip(1) {
+                let _ = std::fs::remove_file(saved.split(']').next().unwrap());
+            }
+        }
         (agent, scratch, ui, requests)
     }
 

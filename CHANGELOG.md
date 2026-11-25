@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.345.0 — A cut command's output kept whole
+
+### Changed
+
+- A command whose output is too long to show the agent whole (over 2,000 lines or 50 KB) has all of it saved to a file in the temporary directory (its first 64 MB at most), named in the note on what was cut, so the agent can `read` the start it lost, as in Scramjet 1. Before, the start was gone: `cat` of a long file showed the agent only its end.
+
 ## 2.344.9 — Summaries in the cost
 
 ### Fixed

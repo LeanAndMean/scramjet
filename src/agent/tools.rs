@@ -43,6 +43,9 @@ pub fn read_line_too_long(output: &str) -> bool {
 }
 /// Bash output kept in memory while a command runs; only the tail is shown to the model.
 const CAPTURE_BYTES: usize = 4 << 20;
+/// How much of a cut command's output is saved to a file, so that a runaway command cannot
+/// fill the disk.
+const SAVED_BYTES: u64 = 64 << 20;
 /// How often a running command's output is passed on to be shown, as in Scramjet.
 const OUTPUT_UPDATE: Duration = Duration::from_millis(100);
 /// How much of the end of a running command's output is passed on.
@@ -223,7 +226,7 @@ pub(super) fn child_definitions(names: &[&str], network: bool, writable: &[PathB
             definition["description"] = json!(format!(
                 "Run a bash command in the working directory, in a sandbox {}: files can be \
 changed only in {} (but their .git, .scramjet and .agents) and in {}. Returns combined \
-stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after \
+stdout/stderr, truncated to the last 2000 lines or 50KB, the whole output then saved to a file it names for read; a non-zero exit code is reported after \
 the output.",
                 super::sandbox::network_said(network),
                 listed.join(", "),
@@ -278,21 +281,21 @@ fn definition(name: &str, sandboxed: bool, network: bool) -> Value {
           "required":["path","edits"]}}),
         "bash" => json!({"type":"function","name":"bash","strict":false,
          "description":match sandboxed && !cfg!(windows) {
-            true => format!("Run a bash command in the working directory, in a read-only sandbox {}: no file can be changed, except in {}. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output.", super::sandbox::network_said(network), super::sandbox::TEMPORARY),
-            false => format!("Run a bash command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output."),
+            true => format!("Run a bash command in the working directory, in a read-only sandbox {}: no file can be changed, except in {}. Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB, the whole output then saved to a file it names for read; a non-zero exit code is reported after the output.", super::sandbox::network_said(network), super::sandbox::TEMPORARY),
+            false => format!("Run a bash command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB, the whole output then saved to a file it names for read; a non-zero exit code is reported after the output."),
          },
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"Bash command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
           "required":["command"]}}),
         "powershell" => json!({"type":"function","name":"powershell","strict":false,
-         "description":format!("Run a PowerShell command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output. {}", powershell_edition()),
+         "description":format!("Run a PowerShell command in the {directory} directory.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB, the whole output then saved to a file it names for read; a non-zero exit code is reported after the output. {}", powershell_edition()),
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"PowerShell command to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
           "required":["command"]}}),
         "cmd" => json!({"type":"function","name":"cmd","strict":false,
-         "description":format!("Run a command line with cmd.exe in the {directory} directory, for batch files and tools that expect cmd. One line: join commands with &, && or ||.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB; a non-zero exit code is reported after the output."),
+         "description":format!("Run a command line with cmd.exe in the {directory} directory, for batch files and tools that expect cmd. One line: join commands with &, && or ||.{confined} Returns combined stdout/stderr, truncated to the last 2000 lines or 50KB, the whole output then saved to a file it names for read; a non-zero exit code is reported after the output."),
          "parameters":{"type":"object","properties":{
             "command":{"type":"string","description":"cmd.exe command line to execute"},
             "timeout":{"type":"integer","description":"Seconds before the command is killed (1800, 30 minutes, by default)"}},
@@ -2102,17 +2105,32 @@ fn run_process(
     };
     let output = Arc::new(Mutex::new(Vec::new()));
     let total = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let saved = Arc::new(Mutex::new(None::<Saved>));
     let collector = {
-        let (output, total) = (output.clone(), total.clone());
+        let (output, total, saved) = (output.clone(), total.clone(), saved.clone());
         std::thread::spawn(move || {
             let mut buffer = [0u8; 8192];
+            let mut lines = 0;
+            let mut tried = false;
             while let Ok(n) = reader.read(&mut buffer) {
                 if n == 0 {
                     break;
                 }
-                total.fetch_add(n, Ordering::Relaxed);
+                let seen = total.fetch_add(n, Ordering::Relaxed) + n;
+                lines += buffer[..n].iter().filter(|byte| **byte == b'\n').count();
                 let mut output = output.lock().unwrap();
                 output.extend_from_slice(&buffer[..n]);
+                let mut saved = saved.lock().unwrap();
+                match saved.as_mut() {
+                    Some(saved) => saved.write(&buffer[..n]),
+                    None if !tried && (seen > MAX_BYTES || lines > MAX_LINES) => {
+                        // Until now everything read is still in `output`.
+                        *saved = Saved::create(&output);
+                        tried = true;
+                    }
+                    None => {}
+                }
+                drop(saved);
                 if output.len() > CAPTURE_BYTES {
                     let excess = output.len() - CAPTURE_BYTES / 2;
                     output.drain(..excess);
@@ -2152,13 +2170,19 @@ fn run_process(
     let left = stopped.is_none().then(|| left_running(group.0)).flatten();
     let bytes = output.lock().unwrap().clone();
     let (mut text, truncated) = tail(&String::from_utf8_lossy(&bytes));
+    let saved = saved.lock().unwrap().take();
     if truncated || total.load(Ordering::Relaxed) > bytes.len() {
+        let whole = saved.map_or_else(String::new, |saved| {
+            saved.said(total.load(Ordering::Relaxed))
+        });
         text = format!(
-            "[Output truncated to the last {} lines/{}KB of {} bytes]\n{text}",
+            "[Output truncated to the last {} lines/{}KB of {} bytes{whole}]\n{text}",
             MAX_LINES,
             MAX_BYTES / 1024,
             total.load(Ordering::Relaxed)
         );
+    } else if let Some(saved) = saved {
+        let _ = std::fs::remove_file(&saved.path);
     }
     Ok(Ran {
         output: text,
@@ -2235,6 +2259,63 @@ fn left_running(group: u32) -> Option<String> {
 
 /// A command that has ended: the end of its output, with a note when earlier output was left out,
 /// and how it ended.
+/// The file a command's output is saved to once it is too long to show whole.
+struct Saved {
+    path: PathBuf,
+    file: std::fs::File,
+    written: u64,
+    /// Whether a write failed, leaving the file short.
+    short: bool,
+}
+
+impl Saved {
+    /// A new file in the temporary directory holding `start`; none when it cannot be written.
+    fn create(start: &[u8]) -> Option<Self> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let number = NEXT.fetch_add(1, Ordering::Relaxed);
+        let name = format!("scramjet-output-{}-{number}.log", std::process::id());
+        let path = std::env::temp_dir().join(name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(&path).ok()?;
+        let mut saved = Self {
+            path,
+            file,
+            written: 0,
+            short: false,
+        };
+        saved.write(start);
+        if saved.short {
+            let _ = std::fs::remove_file(&saved.path);
+            return None;
+        }
+        Some(saved)
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let room = SAVED_BYTES.saturating_sub(self.written) as usize;
+        let bytes = &bytes[..bytes.len().min(room)];
+        if self.short || bytes.is_empty() {
+            return;
+        }
+        match std::io::Write::write_all(&mut self.file, bytes) {
+            Ok(()) => self.written += bytes.len() as u64,
+            Err(_) => self.short = true,
+        }
+    }
+
+    /// What the truncation note says of the file, of a command that wrote `total` bytes.
+    fn said(&self, total: usize) -> String {
+        let path = self.path.display();
+        match self.written < total as u64 {
+            true => format!("; its first {} bytes are in {path}", self.written),
+            false => format!("; all of it is in {path}"),
+        }
+    }
+}
+
 pub(super) struct Ran {
     output: String,
     /// Why it was stopped before it ended: `cancelled by the user` or `timed out`.
@@ -2739,6 +2820,38 @@ inline image size limit.]",
     }
 
     #[test]
+    #[cfg(unix)]
+    fn a_cut_commands_output_is_saved_whole_to_a_file_it_names() {
+        let root = std::env::temp_dir();
+        let cancel = AtomicBool::new(false);
+        let bash = |command: &str| {
+            (call("bash", json!({"command":command})).run(&root, None, &cancel, &mut |_| {}))
+                .unwrap()
+                .text
+        };
+        let output = bash("seq 1 5000");
+        let note = output.lines().next().unwrap();
+        let path = (note.split_once("; all of it is in "))
+            .and_then(|(_, path)| path.strip_suffix(']'))
+            .unwrap_or_else(|| panic!("{note}"));
+        let saved = std::fs::read_to_string(path).unwrap();
+        let mode = std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(path).unwrap().permissions(),
+        );
+        std::fs::remove_file(path).unwrap();
+        let expected: String = (1..=5000).map(|n| format!("{n}\n")).collect();
+        assert_eq!((saved, mode & 0o777), (expected, 0o600));
+        let long = bash("head -c 60000 /dev/zero | tr '\\0' x");
+        let path = (long.split_once("; all of it is in "))
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .unwrap_or_else(|| panic!("{}", &long[..200]))
+            .0;
+        assert_eq!(std::fs::metadata(path).unwrap().len(), 60000);
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(bash("seq 1 2000").lines().count(), 2000);
+    }
+
+    #[test]
     fn read_pages_long_files_and_bash_reports_exit_and_tail() {
         if crate::agent::tests::missing("bash") {
             return;
@@ -2806,6 +2919,8 @@ inline image size limit.]",
         };
         let (output, failed) = bash("seq 1 5000; echo err >&2; exit 3");
         assert!(output.contains("[Output truncated") && failed);
+        let saved = output.split_once("; all of it is in ").unwrap().1;
+        std::fs::remove_file(saved.split_once(']').unwrap().0).unwrap();
         assert!(output.ends_with("5000\nerr\n\nCommand exited with code 3"));
         assert!(!output.contains("\n1\n"));
         assert_eq!(bash("echo ok"), ("ok\n".into(), false));
