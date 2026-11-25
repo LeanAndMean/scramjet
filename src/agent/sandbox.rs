@@ -1480,6 +1480,20 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
             .max_by_key(|(mount, _)| mount.components().count())
             .is_some_and(|(_, writable)| *writable)
     };
+    // The fresh `/tmp` shows no server's sockets, so tmux starts one of its own there, ended with
+    // the command; a cover over them would only stop it.
+    let sockets = Path::new("/tmp").join(format!("tmux-{}", rustix::process::getuid().as_raw()));
+    let uncovered;
+    let hidden = match mounts.iter().any(|(path, _)| sockets.starts_with(path)) {
+        true => hidden,
+        false => {
+            process.env("TMUX_TMPDIR", "/tmp");
+            let mut fewer = hidden.clone();
+            fewer.directories.retain(|directory| *directory != sockets);
+            uncovered = fewer;
+            &uncovered
+        }
+    };
     hide(&mut process, hidden, &in_writable);
     // After what is hidden, as `hiding` mounts WSLg's distro directory.
     if Path::new(WSLG).is_dir() && !hidden.covered(Path::new(WSLG), false) {
@@ -3338,6 +3352,22 @@ TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 30
             .output()
             .unwrap();
         assert!(!reached.exists(), "{output:?}");
+
+        // A sandboxed command starts a tmux of its own in the fresh `/tmp`, apart from the user's
+        // servers there.
+        let mut in_tmp = super::Hidden::under(&home, Vec::new());
+        in_tmp.keep_tmux_apart(std::path::Path::new("/tmp"), Some(own.clone()));
+        let script = "tmux new-session -d -s sandboxed 'sleep 300' && tmux ls -F '#S'";
+        let output = super::command(&project, script, &in_tmp, false)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "sandboxed\n",
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
 
         // scramjet-rs run where TMUX_TMPDIR is already its own, as in a session a hidden command
         // started, still has tmux in its hidden commands.

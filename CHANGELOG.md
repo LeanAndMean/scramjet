@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.3 — tmux in the sandbox
+
+### Fixed
+
+- On Linux, a command in a subagent's sandbox or the main agent's `--sandbox` can start tmux: it gets its own socket directory in the sandbox's private `/tmp`, apart from your servers, where before it failed with "Read-only file system".
+
 ## 2.344.2 — A reply kept whole after Ctrl+Z
 
 ### Fixed

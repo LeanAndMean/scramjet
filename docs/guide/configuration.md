@@ -117,7 +117,7 @@ The agent is told what is writable, and asks for more with `request_permissions`
 
 Two agents are there without any command set: `scramjet:explore`, which finds where something is in the code, traces how it flows or maps what depends on what, and answers with cited evidence and what it could not establish (the breadth asked: quick, medium or very thorough); and `scramjet:general-purpose`, for multi-step investigations that need judgment. The agent's instructions list these, your own agents (`~/.config/scramjet/agents`) and the command sets', as Claude Code lists its agents; a project's `.scramjet/agents` are reached with the call's `agentScope` and your approval, and are not listed.
 
-Subagents run inside this process, read-only and off the network whatever the main agent's sandbox: their shell runs under Bubblewrap with every file read-only, a private `/tmp`, no network and credential stores hidden. On macOS it runs under Seatbelt, with `/tmp` and `TMPDIR` writable and shared, as in Codex; on Windows at the low integrity level, with a `TEMP` of its own, the network, and nothing hidden.
+Subagents run inside this process, read-only and off the network whatever the main agent's sandbox: their shell runs under Bubblewrap with every file read-only, a private `/tmp` (where a tmux it starts runs apart from yours and ends with its command), no network and credential stores hidden. On macOS it runs under Seatbelt, with `/tmp` and `TMPDIR` writable and shared, as in Codex; on Windows at the low integrity level, with a `TEMP` of its own, the network, and nothing hidden.
 
 `sandbox.subagents` sets theirs apart:
 
