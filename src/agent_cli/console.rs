@@ -254,17 +254,18 @@ mod imp {
     use std::{
         io::{self, PipeReader, Read},
         os::windows::io::{AsRawHandle, RawHandle},
+        sync::atomic::{AtomicU16, Ordering},
         time::{Duration, Instant},
     };
     use windows_sys::Win32::{
-        Foundation::{HANDLE, WAIT_OBJECT_0},
+        Foundation::{ERROR_OPERATION_ABORTED, GetLastError, HANDLE, WAIT_OBJECT_0},
         System::{
             Console::{
                 CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, DISABLE_NEWLINE_AUTO_RETURN,
                 ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
                 ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
                 FlushConsoleInputBuffer, GetConsoleMode, GetConsoleScreenBufferInfo, INPUT_RECORD,
-                KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW, SetConsoleMode,
+                KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW, ReadConsoleW, SetConsoleMode,
             },
             Pipes::{PIPE_NOWAIT, PeekNamedPipe, SetNamedPipeHandleState},
             Threading::WaitForSingleObject,
@@ -439,10 +440,61 @@ mod imp {
     /// nothing typed waits there unseen.
     pub(super) const READ: usize = 8192;
 
-    /// Through the standard library, which reads the console as UTF-16 and gives UTF-8. Its read
-    /// drops a Ctrl+Z that ends what was read, the console's end of input.
+    /// A high surrogate that ended the last read, its low half still to come.
+    static HIGH: AtomicU16 = AtomicU16::new(0);
+
+    /// The console read as UTF-16 and given as UTF-8, not through the standard library, whose
+    /// read drops a Ctrl+Z ending what was read, so a lone one read as the end of input.
     pub(super) fn read(buffer: &mut [u8]) -> io::Result<usize> {
-        io::stdin().lock().read(buffer)
+        if mode_of(stdin()).is_none() {
+            return io::stdin().lock().read(buffer);
+        }
+        // A UTF-16 unit is at most 3 bytes of UTF-8, a pair 4.
+        let mut units = vec![0u16; buffer.len() / 3];
+        loop {
+            let start = match HIGH.swap(0, Ordering::Relaxed) {
+                0 => 0,
+                high => {
+                    units[0] = high;
+                    1
+                }
+            };
+            let room = &mut units[start..];
+            let mut count = 0;
+            // SAFETY: the buffer holds the units the call is given room for.
+            let read = unsafe {
+                ReadConsoleW(
+                    stdin(),
+                    room.as_mut_ptr().cast(),
+                    room.len() as u32,
+                    &mut count,
+                    std::ptr::null(),
+                )
+            };
+            if read == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // Ctrl+C during line input ends the read with nothing.
+            if count == 0 && unsafe { GetLastError() } == ERROR_OPERATION_ABORTED {
+                continue;
+            }
+            let mut end = start + count as usize;
+            if end == 0 {
+                return Ok(0);
+            }
+            if (0xD800..0xDC00).contains(&units[end - 1]) {
+                end -= 1;
+                HIGH.store(units[end], Ordering::Relaxed);
+            }
+            let mut written = 0;
+            for c in char::decode_utf16(units[..end].iter().copied()) {
+                let c = c.unwrap_or(char::REPLACEMENT_CHARACTER);
+                written += c.encode_utf8(&mut buffer[written..]).len();
+            }
+            if written > 0 {
+                return Ok(written);
+            }
+        }
     }
 
     pub(super) fn nonblocking(pipe: RawHandle) -> io::Result<()> {

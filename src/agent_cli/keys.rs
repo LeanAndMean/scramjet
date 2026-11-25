@@ -690,6 +690,14 @@ pub(super) mod tests {
             (b"\x1b", Binding::SelectCancel),
             (b"\x03", Binding::SelectCancel),
             (b"\x16", Binding::PasteImage),
+            // Ctrl+_ as most terminals send it, then Ctrl+-, Ctrl+_ and Ctrl+Shift+- as the
+            // kitty protocol reports them.
+            (b"\x1f", Binding::Undo),
+            (b"\x1b[45;5u", Binding::Undo),
+            (b"\x1b[95;5u", Binding::Undo),
+            (b"\x1b[45;6u", Binding::Undo),
+            (b"\x1e", Binding::Redo),
+            (b"\x1b[54;5u", Binding::Redo),
         ];
         for (bytes, binding) in cases {
             let [key] = &keys(bytes)[..] else {
@@ -707,5 +715,7 @@ pub(super) mod tests {
         assert!(key("backspace").is(Binding::DeleteCharBackward));
         assert!(!key("ctrl+up").is(Binding::CursorUp));
         assert!(!Key::Idle.is(Binding::Interrupt));
+        assert_eq!(keys(b"\x1a")[0].is(Binding::Undo), cfg!(windows));
+        assert_eq!(keys(b"\x1a")[0].is(Binding::Suspend), cfg!(unix));
     }
 }

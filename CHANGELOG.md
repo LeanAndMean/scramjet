@@ -4,6 +4,18 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.329.0 — Undo and redo keys that reach
+
+### Changed
+
+- Undo is shown as Ctrl+_ (Ctrl+Shift+-), which Windows Terminal lets through where it keeps Ctrl+- for its font, and also answers Ctrl+Shift+- in terminals that tell it from Ctrl+_; redo is shown as Ctrl+6, as Windows Terminal keeps Ctrl+Shift+6 (Ctrl+^) for a new tab.
+- On native Windows, Ctrl+Z undoes in the prompt, as it does in Windows' other programs.
+- Ctrl+Z, where it suspends, says that the shell's `fg` brings Scramjet 2 back.
+
+### Fixed
+
+- On native Windows, Ctrl+Z in the full screen no longer ends Scramjet 2: the console's input was read as the standard library reads it, which takes a Ctrl+Z as the end of input.
+
 ## 2.328.0 — Redo in the prompt
 
 ### Added

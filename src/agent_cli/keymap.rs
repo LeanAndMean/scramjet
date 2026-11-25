@@ -175,6 +175,15 @@ const fn define(
 use Binding as B;
 use Section as S;
 
+/// Terminals send Ctrl+- and Ctrl+Shift+- as Ctrl+_ when they let them through; Windows
+/// Terminal keeps Ctrl+- for its font. Native Windows has no job control, so Ctrl+Z undoes there.
+const UNDO: &[&str] = if cfg!(windows) {
+    &["ctrl+z", "ctrl+_", "ctrl+-", "ctrl+shift+-"]
+} else {
+    &["ctrl+_", "ctrl+-", "ctrl+shift+-"]
+};
+const SUSPEND: &[&str] = if cfg!(windows) { &[] } else { &["ctrl+z"] };
+
 /// Every action, in `Binding`'s order. The ids and the default keys are Scramjet's
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
@@ -214,14 +223,14 @@ const DEFINITIONS: [Definition; 99] = [
     define(B::DeleteToLineEnd, "tui.editor.deleteToLineEnd", &["ctrl+k"], S::Editing, "Delete to end of line"),
     define(B::Yank, "tui.editor.yank", &["ctrl+y"], S::Editing, "Paste the most-recently-deleted text"),
     define(B::YankPop, "tui.editor.yankPop", &["alt+y"], S::Editing, "Cycle through the deleted text after pasting"),
-    define(B::Undo, "tui.editor.undo", &["ctrl+-"], S::Editing, "Undo"),
-    define(B::Redo, "tui.editor.redo", &["ctrl+^", "ctrl+6"], S::Editing, "Redo what undo took back"),
+    define(B::Undo, "tui.editor.undo", UNDO, S::Editing, "Undo"),
+    define(B::Redo, "tui.editor.redo", &["ctrl+6", "ctrl+^"], S::Editing, "Redo what undo took back"),
     define(B::Tab, "tui.input.tab", &["tab"], S::Other, "Path completion / accept autocomplete"),
     define(B::Interrupt, "app.interrupt", &["escape"], S::Other, "Cancel autocomplete / interrupt the turn"),
     define(B::Clear, "app.clear", &["ctrl+c"], S::Other, "Clear editor (first) / exit (second)"),
     define(B::Copy, "tui.input.copy", &["ctrl+c"], S::Other, "Copy the text selected"),
     define(B::Exit, "app.exit", &["ctrl+d"], S::Other, "Exit (when editor is empty)"),
-    define(B::Suspend, "app.suspend", &["ctrl+z"], S::Other, "Suspend to background"),
+    define(B::Suspend, "app.suspend", SUSPEND, S::Other, "Suspend to background"),
     define(B::ThinkingCycle, "app.thinking.cycle", &["shift+tab"], S::Other, "Cycle thinking level"),
     define(B::ModelCycleForward, "app.model.cycleForward", &["ctrl+p"], S::Other, "Cycle to the next model"),
     define(B::ModelCycleBackward, "app.model.cycleBackward", &["shift+ctrl+p"], S::Other, "Cycle to the previous model"),
@@ -785,7 +794,8 @@ mod tests {
         let keymap = Keymap::defaults();
         for (at, definition) in DEFINITIONS.iter().enumerate() {
             assert_eq!(definition.binding as usize, at, "{}", definition.id);
-            assert!(!keymap.0[at].is_empty(), "{}", definition.id);
+            let none = cfg!(windows) && definition.binding == B::Suspend;
+            assert_eq!(keymap.0[at].is_empty(), none, "{}", definition.id);
         }
         let mut ids: Vec<_> = DEFINITIONS.iter().map(|definition| definition.id).collect();
         ids.sort_unstable();
