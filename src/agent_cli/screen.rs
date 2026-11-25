@@ -586,7 +586,7 @@ impl App {
                 Flow::Suspend => {
                     drop(screen);
                     raw.suspend();
-                    eprintln!("Scramjet 2 is suspended: `fg` brings it back.");
+                    eprintln!("Scramjet is suspended: `fg` brings it back.");
                     job::suspend();
                     job::continued();
                     raw.resume()?;

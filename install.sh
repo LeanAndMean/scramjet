@@ -1,5 +1,5 @@
 #!/bin/sh
-# Installs Scramjet 2 from its newest GitHub release, prereleases included:
+# Installs Scramjet from its newest GitHub release, prereleases included:
 #   curl -fsSL https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.sh | sh
 # SCRAMJET_INSTALL_DIR names the directory (default ~/.local/bin); SCRAMJET_VERSION a release
 # (2.143.1) instead of the newest. The archive is checked against the release's SHA256SUMS, and

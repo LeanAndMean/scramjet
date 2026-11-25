@@ -1,6 +1,6 @@
 ---
 name: writing-scramjet-commands
-description: Use when creating, revising, reviewing, or diagnosing Scramjet commands and command sets for Scramjet 2.
+description: Use when creating, revising, reviewing, or diagnosing Scramjet commands and command sets.
 ---
 
 # Writing Scramjet Commands
@@ -152,7 +152,7 @@ Treat the context window as shared working memory.
 
 ## Subagents
 
-The main agent works with the user and owns orchestration, synthesis, mutation, consequential decisions, and exception presentation. Subagents in Scramjet 2 are read-only: their shell runs confined, with files read-only and no network.
+The main agent works with the user and owns orchestration, synthesis, mutation, consequential decisions, and exception presentation. Subagents in Scramjet are read-only: their shell runs confined, with files read-only and no network.
 
 Use a subagent only when isolation provides a concrete benefit:
 
@@ -180,7 +180,7 @@ A command can be internally clear and still fail as part of a set. Check:
 
 Do not add handoff fields without a named consumer.
 
-## The format Scramjet 2 reads
+## The format Scramjet reads
 
 A command set is a directory, named `<set>` by its `set.yaml`'s `name` (else the directory's name). It holds:
 

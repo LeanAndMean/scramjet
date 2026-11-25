@@ -343,12 +343,12 @@ impl Row {
             Self::Banner => {
                 let then = then(Binding::ToolsExpand, "shows every key and what was loaded.");
                 return format!(
-                    "What a session shows as it starts: header, as Scramjet 1's, or plain, card \
+                    "What a session shows as it starts: header, plain, card \
                      or logo, Scramjet 1's logo.{then}"
                 );
             }
             Self::Bottom => {
-                "How the status row, the prompt and the footer look: pi, as Scramjet 1's, \
+                "How the status row, the prompt and the footer look: pi, the original one, \
                  boxed, the prompt and dialogs in a box, composer, on the prompt's background, \
                  or bar, the footer a status bar."
             }
@@ -2719,8 +2719,8 @@ pub(super) fn scramjet_1_extension(package: &Path) -> Option<&'static str> {
     let text = std::fs::read(package.join("package.json")).ok()?;
     let manifest: serde_json::Value = serde_json::from_slice(&text).ok()?;
     manifest.get("pi")?.is_object().then_some(
-        "is a Scramjet 1 extension (its package.json has a \"pi\" manifest), which Scramjet 2 \
-         cannot run; install the package's Scramjet 2 version instead, if it has one",
+        "is a Scramjet 1 extension (its package.json has a \"pi\" manifest), which cannot run \
+         here; install the package's version for this Scramjet instead, if it has one",
     )
 }
 
@@ -4257,7 +4257,7 @@ or false; ignored"
             Settings::read(Some(path.clone())).warnings,
             [format!(
                 "{0}: {0} is a Scramjet 1 extension (its package.json has a \"pi\" manifest), \
-                 which Scramjet 2 cannot run; install the package's Scramjet 2 version instead, \
+                 which cannot run here; install the package's version for this Scramjet instead, \
                  if it has one",
                 shown(&package)
             )]

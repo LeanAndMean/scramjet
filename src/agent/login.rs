@@ -239,10 +239,10 @@ pub fn import(from: &Path, to: &Path, dry: bool) -> Result<(Vec<String>, Vec<Str
                 taken.insert(provider, credential);
             }
             Some("api_key") => left.push(format!(
-                "{shown}'s API key: Scramjet 2 keeps with each key the servers it may go to; \
+                "{shown}'s API key: a key is kept here with the servers it may go to; \
                  enter it again under /login"
             )),
-            _ => left.push(format!("{shown}: not a login Scramjet 2 makes; /login")),
+            _ => left.push(format!("{shown}: not a login made here; /login")),
         }
     }
     let names = taken

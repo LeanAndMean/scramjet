@@ -268,7 +268,7 @@ impl Interactive {
         let shown = shortened(&path.display().to_string());
         if self.screen.is_none() {
             return self.say(&format!(
-                "Keys go in {shown}, as in Scramjet 1's keybindings.json: {EXAMPLE}. \
+                "Keys go in {shown}: {EXAMPLE}. \
                  /reload reads it again."
             ));
         }
@@ -326,8 +326,8 @@ fn printed(settings: Option<&Path>) -> String {
     if let Some(settings) = settings {
         let file = shortened(&keymap::path(settings).display().to_string());
         text += &format!(
-            "\nOther keys for an action go in {file}, as in Scramjet 1's keybindings.json: \
-             {EXAMPLE}. /reload reads it again.\n"
+            "\nOther keys for an action go in {file}: {EXAMPLE}. \
+              /reload reads it again.\n"
         );
     }
     text
@@ -412,7 +412,7 @@ mod tests {
         }
         assert!(
             lines.last().unwrap().starts_with(&format!(
-                "Other keys for an action go in {}, as in",
+                "Other keys for an action go in {}: {{",
                 settings.with_file_name("keybindings.json").display()
             )),
             "{text}"

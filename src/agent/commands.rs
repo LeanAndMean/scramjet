@@ -281,7 +281,7 @@ impl Sets {
                 }
             };
             problems.push(Problem::new(format!(
-                "command set {} is not read: Scramjet 2 reads no command sets from {}; {instead}",
+                "command set {} is not read: no command sets are read from Scramjet 1's {}; {instead}",
                 directory.display(),
                 root.display()
             )));
@@ -1233,7 +1233,7 @@ or agents directory, nor a models.json",
         );
         let unread = |set: &str, instead: &str| {
             Problem::new(format!(
-                "command set {} is not read: Scramjet 2 reads no command sets from {}; {instead}",
+                "command set {} is not read: no command sets are read from Scramjet 1's {}; {instead}",
                 shown(&format!("global/{set}")),
                 global.display()
             ))

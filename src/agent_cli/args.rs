@@ -19,8 +19,8 @@ pub(super) const USAGE: &str =
        scramjet acp [OPTIONS]
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
-settings file (by default ~/.config/scramjet/models.json) and in installed command sets, in
-Scramjet 1's format: each provider has a baseUrl (http:// or https://), an api (openai-responses,
+settings file (by default ~/.config/scramjet/models.json) and in installed command sets:
+each provider has a baseUrl (http:// or https://), an api (openai-responses,
 anthropic-messages or openai-completions, with its compat), an apiKey (the value of the
 environment variable of that name, else the text; !command: what the command prints, run for
 each request, as headers' values may be) and its models, with their contextWindow, maxTokens, reasoning, input and cost; a file's
@@ -36,14 +36,14 @@ auth.json beside the settings. Requests go
 through the http:// proxy HTTPS_PROXY or HTTP_PROXY names (http://user:password@host:port),
 but to NO_PROXY's hosts and this machine.
   --project DIR          project directory (default: current directory)
-  --model PATTERN        model, as Scramjet 1 finds it: the one whose provider/id or id PATTERN
+  --model PATTERN        model: the one whose provider/id or id PATTERN
                          is (an id two providers offer: the first's), else the newest whose
                          id or name contains it (after provider/, among that provider's),
                          with an optional :LEVEL that sets the thinking level (default: the
                          one a resumed session last used; for a new session, the one last
-                         chosen in this project, else anywhere, as in Scramjet 1, else
+                         chosen in this project, else anywhere, else
                          gpt-6-luna)
-  --provider NAME        the provider whose model --model names, as in Scramjet 1: --provider
+  --provider NAME        the provider whose model --model names: --provider
                          P --model M is --model P/M; without --model it chooses nothing
   --models PATTERNS      the models Ctrl+P cycles through, comma-separated, in place of the
                          settings' enabledModels: each a model's id, part of its id or name,
@@ -59,13 +59,13 @@ but to NO_PROXY's hosts and this machine.
                          the settings' retry.maxRetries, else 10)
   --cache-retention short|long
                          how long providers keep the conversation's start cached for the next
-                         request, as in Scramjet 1: long asks for an hour where the provider
+                         request: long asks for an hour where the provider
                          takes it (24 hours on OpenAI-style servers that do), short for
                          their default, 5 minutes on Anthropic's (default: the variable
                          SCRAMJET_CACHE_RETENTION or PI_CACHE_RETENTION, which may also be
                          none, for no caching asked, else long)
   --api-key KEY          the key the requests to the model's provider carry for this run, as it
-                         is, in place of /login's and models.json's, as in Scramjet 1 (other
+                         is, in place of /login's and models.json's (other
                          programs of yours can read the command line: a variable models.json
                          names, or /login, keeps it out of sight)
   -c, --continue         resume the session for this project written to last
@@ -73,10 +73,10 @@ but to NO_PROXY's hosts and this machine.
   --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
                          newest session of this project whose id (as /status shows it) starts
                          with ID, else of another project, which is forked here once you
-                         agree, as in Scramjet 1
+                         agree
   --fork FILE|ID         continue a copy of that session, its branches and name included, in a
                          new session of this project
-  --no-session           save no session, as Scramjet 1's: those of this run (/clear, /fork,
+  --no-session           save no session: those of this run (/clear, /fork,
                          /branch and /import too) are kept in a private temporary directory
                          removed at exit, and /resume lists only them
   --bare                 look for nothing in your own directories but the settings, models.json
@@ -90,13 +90,13 @@ but to NO_PROXY's hosts and this machine.
                          output rates, the quotas and the agents approved last for the run only.
                          Logins and the lists of the providers' models are still saved
   --session-dir DIR      save and find sessions in DIR, in place of the project's directory
-                         under ~/.local/state/scramjet/sessions, as Scramjet 1's (default:
+                         under ~/.local/state/scramjet/sessions (default:
                          the settings' sessionDir); -c, -r, /resume and --session ID look
                          there, whatever project a session there was of
   --system-prompt TEXT   the instructions' opening, in place of the tools and guidelines: TEXT,
                          or the contents of the file it names (default: the project's
                          .scramjet/SYSTEM.md, else ~/.config/scramjet/SYSTEM.md, else
-                         the built-in one), as in Scramjet 1
+                         the built-in one)
   --append-system-prompt TEXT
                          text, or a file's contents, after the opening; several are joined
                          (default: an APPEND_SYSTEM.md found as SYSTEM.md is)
@@ -115,8 +115,8 @@ but to NO_PROXY's hosts and this machine.
                          directory
   --no-themes            no themes but the built-in ones and those --theme names: none from
                          the theme directories or the settings' themes
-  -t, --tools LIST       the only tools the agent has in this run, comma-separated, as in
-                         Scramjet 1: coding tools, in place of the settings' tools, and
+  -t, --tools LIST       the only tools the agent has in this run, comma-separated:
+                         coding tools, in place of the settings' tools, and
                          Scramjet's own (subagent, get_scramjet_user_input, delegate,
                          report_scramjet_command_status…), left out unless named; without
                          report_scramjet_command_status a command cannot finish, and waits
@@ -126,7 +126,7 @@ but to NO_PROXY's hosts and this machine.
                          no coding tools, unless --tools names some; Scramjet's own stay
   --ask                  ask before each bash command and each write or edit outside the
                          project (answer `a` to stop asking until exit); by default tool
-                         calls run without asking, as in Scramjet 1. Bash is not sandboxed
+                         calls run without asking. Bash is not sandboxed
                          unless --sandbox says so.
   -s, --sandbox MODE     confine the agent's tools, as Codex's modes do (default: the
                          settings' sandbox, else danger-full-access): read-only runs bash with
@@ -147,10 +147,10 @@ but to NO_PROXY's hosts and this machine.
                          yet are not cloned, and no newer release is looked for
   --verbose, --mode text, -ne, --no-extensions, -np, --no-prompt-templates
                          taken as Scramjet 1 takes them, changing nothing: the start always
-                         shows what it loaded, and Scramjet 2 has no extensions or prompt
+                         shows what it loaded, and Scramjet has no extensions or prompt
                          templates
   -p, --print            run the messages and exit; a message `-` is read from stdin
-  @FILE                  send FILE with the first message (or alone), as Scramjet 1 does: a
+  @FILE                  send FILE with the first message (or alone): a
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
                          as read scales it; a relative path is from the current directory
   MESSAGE                prompts sent one after another when the session starts
@@ -158,7 +158,7 @@ but to NO_PROXY's hosts and this machine.
                          scramjet-session-<its name>.html here), as /export does, and exit
   --list-models [SEARCH] list the providers' models (those SEARCH matches) by provider, with
                          their context window, output limit, and whether they reason and
-                         take images, as Scramjet 1 lists them, and exit
+                         take images, and exit
   --list-credential-stores
                          list the credential files and directories that subagents' tools, and
                          the agent's when the hideCredentials setting asks, do not see: the
@@ -166,7 +166,7 @@ but to NO_PROXY's hosts and this machine.
   -v, --version          print the version and exit
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt, and under it the project's directory and Git branch, the session's tokens, how full the
-context is and the model, as Scramjet 1's footer. Page Up/Down and the mouse wheel scroll the
+context is and the model. Page Up/Down and the mouse wheel scroll the
 conversation; Escape goes back to its end.
 In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
 line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G edits the
@@ -212,7 +212,7 @@ case-insensitive regular expression). With piped input they are printed numbered
 In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it with what was
 deleted before; Ctrl+_ (Ctrl+Shift+-, or Ctrl+- where the terminal lets it through; Ctrl+Z too
 on native Windows) undoes, Ctrl+6 redoes; Ctrl+] then a character jumps to it, Ctrl+Alt+]
-backward. Ctrl+Z suspends Scramjet 2 elsewhere, and the shell's fg brings it back.
+backward. Ctrl+Z suspends Scramjet elsewhere, and the shell's fg brings it back.
 Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 /rename NAME names the session, which /resume then lists by its name; /rename alone shows it.
 /status shows the session's file, the messages in its context, the tokens they used, the cost and
@@ -255,7 +255,7 @@ and the other commands stop the turn and run once it has.
 Scramjet 1's names of the commands named otherwise here are accepted too (/new, /quit, /name,
 /session, /clone), and so are Claude Code's /reset, /config, /continue and /help, and
 Codex's /keymap.
-As in Scramjet 1, /SET:COMMAND ARGS runs a command of a command set: its file
+/SET:COMMAND ARGS runs a command of a command set: its file
 commands/COMMAND.md (or SET:COMMAND.md) is sent with the arguments substituted, inside
 <scramjet-command>. Agent files may name tools as Claude Code does (Read, Grep, Glob, Bash). The
 sets are those installed, then those in the project's .scramjet, then the built-in scramjet
@@ -272,10 +272,10 @@ directory when that is a set, else the sets at its top and those with a set.yaml
 its skills and themes directories come too. `update` pulls the packages not pinned to a REF,
 and `remove REPO` deletes the clone. `update self` replaces the program with the newest
 release of LeanAndMean/scramjet (--force: even when it is not newer); the full screen's start
-says when one newer than this is out, looking at most once a day (not with --offline). As in
-Scramjet 1, a plain `update` does both, `update --extensions` only the packages, `--extension
+says when one newer than this is out, looking at most once a day (not with --offline). A plain
+`update` does both, `update --extensions` only the packages, `--extension
 NAME|REPO` one of them, and `--self` only the program. `lint DIR...` checks the sets in DIR as the harness loads
-them and as Scramjet 1's scramjet-command-lint does (`lint --help`). `import` copies Scramjet
+them (`lint --help`). `import` copies Scramjet
 1's setup from ~/.scramjet/agent, converted, never over a file here, and lists what it leaves
 and why (`import --help`); the first interactive start that finds one offers it.
 `acp` runs as an Agent Client Protocol agent for editors and other clients, speaking JSON-RPC
@@ -284,7 +284,7 @@ on stdin and stdout (`acp --help`).
 this also happens by itself when the context nears the model's window, unless the settings'
 compaction.enabled is false (Auto-compact in /settings).
 Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramjet/),
-with Scramjet 1's keys: hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
+with the keys hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
 defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, write (the
@@ -449,7 +449,7 @@ impl Options {
                     "text" => {}
                     mode @ ("json" | "rpc") => {
                         return Err(format!(
-                            "--mode {mode} is not in Scramjet 2 yet; -p prints the replies as text"
+                            "--mode {mode} is not in Scramjet yet; -p prints the replies as text"
                         ));
                     }
                     mode => {
@@ -460,14 +460,14 @@ impl Options {
                 },
                 Some(name @ ("-e" | "--extension" | "--prompt-template")) => {
                     return Err(format!(
-                        "{name}: Scramjet 2 runs no TypeScript extensions or prompt templates; \
+                        "{name}: Scramjet runs no TypeScript extensions or prompt templates; \
 command sets and skills take their place (`scramjet import --dry-run` says what of Scramjet 1's \
 setup it leaves)"
                     ));
                 }
                 Some(name @ ("--model-definition" | "--model-definition-env")) => {
                     return Err(format!(
-                        "{name} is not in Scramjet 2: add the provider and its models to \
+                        "{name} is not in Scramjet: add the provider and its models to \
 models.json (see --help)"
                     ));
                 }

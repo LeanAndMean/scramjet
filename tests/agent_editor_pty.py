@@ -2886,7 +2886,7 @@ def banner_choice(read, until, send, output):
     on_screen('Settings  \u2191\u2193 move')
     rows = select_row(read, shown, send, 'Banner', b'\x1b[B')
     assert '\u203a ' + setting('Banner', 'card') in rows, rows
-    assert "  What a session shows as it starts: header, as Scramjet 1's, or plain, card or" in rows, rows
+    assert any(row.startswith('  What a session shows as it starts: header, plain, card') for row in rows), rows
     send(b'\r')
     on_screen('\u203a ' + setting('Banner', 'logo'))
     send(b'\x1b')
@@ -3689,7 +3689,7 @@ def installed_view(read, until, send, output):
     assert selected.split() == ['\u203a', project_file, 'next', 'steps,', 'this', 'project'], rows
     assert '  Settings files' in rows, rows
     note = ' '.join(row.strip() for row in rows[rows.index('  ' + project_file) + 1:])
-    assert note == "Scramjet 1's, read here too: what follows each command in this project. Not there " \
+    assert note == "What follows each command in this project; Scramjet 1 reads it too. Not there " \
         "yet: changing a next step for this project writes it.", rows
     # Enter on a row without a file leaves the list as it was.
     send(b'\r')

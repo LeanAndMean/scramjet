@@ -107,17 +107,14 @@ const AS_THEY_ARE: [&str; 5] = [
 const LEFT: [(&str, &str); 4] = [
     (
         "extensions",
-        "TypeScript extensions: Scramjet 2 has no extension API",
+        "TypeScript extensions: there is no extension API here",
     ),
     (
         "prompts",
         "prompt templates: make them a command set's commands/",
     ),
-    (
-        "sessions",
-        "Scramjet 1's session files cannot be read by Scramjet 2",
-    ),
-    ("git", "Scramjet 2 clones the settings' git packages again"),
+    ("sessions", "Scramjet 1's session files cannot be read here"),
+    ("git", "the settings' git packages are cloned again here"),
 ];
 
 fn import(from: &Path, to: &Path, dry: bool) -> Result<Report, String> {
@@ -215,15 +212,15 @@ fn converted_settings(
     };
     for (key, value) in theirs {
         match key.as_str() {
-            "transport" => left.push("transport: not read by Scramjet 2".into()),
+            "transport" => left.push("transport: not read here".into()),
             "lastChangelogVersion" => {}
             "sessionDir" => left.push(
-                "sessionDir: Scramjet 1's sessions are not Scramjet 2's; set it again if you want \
+                "sessionDir: Scramjet 1's sessions cannot be read here; set it again if you want \
                  another directory"
                     .into(),
             ),
             "extensions" | "prompts" => left.push(format!(
-                "{key}: Scramjet 2 has no TypeScript extensions or prompt templates"
+                "{key}: there are no TypeScript extensions or prompt templates here"
             )),
             "packages" => {
                 let Value::Array(entries) = value else {
@@ -292,7 +289,7 @@ fn models(from: &Path, to: &Path, dry: bool, report: &mut Report) -> Result<(), 
     if target.exists() {
         report
             .left
-            .push("models.json: Scramjet 2 has its own already".into());
+            .push("models.json: there is one here already".into());
         return Ok(());
     }
     let mut theirs = read_object(&source)?;
@@ -318,8 +315,7 @@ fn models(from: &Path, to: &Path, dry: bool, report: &mut Report) -> Result<(), 
     for name in &built_in {
         providers.remove(name);
         report.left.push(format!(
-            "models.json: {name}, which changes Scramjet 1's built-in provider; Scramjet 2 has \
-             none: copy it with a baseUrl and an api (anthropic-messages, openai-responses or \
+            "models.json: {name}, which changes Scramjet 1's built-in provider: copy it with a baseUrl and an api (anthropic-messages, openai-responses or \
              openai-completions)"
         ));
     }
@@ -590,7 +586,7 @@ mod tests {
         let left = report.left.join("\n");
         for said in [
             "settings.json: theme: set here already",
-            "settings.json: transport: not read by Scramjet 2",
+            "settings.json: transport: not read here",
             "settings.json: sessionDir:",
             "settings.json: packages: npm:pi-thing: an npm package",
             "settings.json: packages: ~/sets's filters",
@@ -598,7 +594,7 @@ mod tests {
             "models.json: openai, which changes",
             "AGENTS.md: there already",
             "auth.json: openrouter's API key:",
-            "auth.json: anthropic: not a login Scramjet 2 makes",
+            "auth.json: anthropic: not a login made here",
             match cfg!(unix) {
                 true => "agents/: 2 agents of command sets (mach12)",
                 false => "extensions/:",

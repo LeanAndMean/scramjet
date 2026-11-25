@@ -1,4 +1,4 @@
-# Developing Scramjet 2
+# Developing Scramjet
 
 ```sh
 cargo fmt --check

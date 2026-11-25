@@ -1,4 +1,4 @@
-# Installs Scramjet 2 on Windows from its newest GitHub release, prereleases included:
+# Installs Scramjet on Windows from its newest GitHub release, prereleases included:
 #   irm https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.ps1 | iex
 # SCRAMJET_INSTALL_DIR names the directory (default %LOCALAPPDATA%\Programs\scramjet);
 # SCRAMJET_VERSION a release (2.143.1) instead of the newest. The archive is checked against the

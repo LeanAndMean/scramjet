@@ -1,8 +1,18 @@
 # Changelog
 
-What changed in each version of Scramjet 2, for the people using it. The newest comes first; the versions before 2.140.0, when it was scramjet-rs, are under their own heading after them.
+What changed in each version of Scramjet, for the people using it. The newest comes first; the versions before 2.140.0, when it was scramjet-rs, are under their own heading after them.
 
 ## Unreleased
+
+## 2.335.2 — Named Scramjet
+
+### Changed
+
+- The guides, `--help`, the program's messages and the bundled `scramjet` set's skills name the product Scramjet rather than Scramjet 2. Scramjet 1 is named only where upgrading or running both needs it (its files and names that still work, `scramjet import`, the files both read); the many "as in Scramjet 1" notes in `--help`, `/settings` and the guides are gone.
+
+### Fixed
+
+- The providers guide no longer says there are no built-in providers, and `scramjet import` no longer says so of a `models.json` entry that only changes one of Scramjet 1's: Anthropic, Google Gemini, OpenAI and OpenRouter are built in for an API key.
 
 ## 2.335.1 — A README for new users
 
@@ -1824,7 +1834,7 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 # scramjet-rs
 
-Scramjet 2 was scramjet-rs, "Scramjet in Rust", until 2.140.0. Its versions then were 0.x, and until 0.139.0 its program was `scramjet-rs`.
+This Scramjet was scramjet-rs, "Scramjet in Rust", until 2.140.0. Its versions then were 0.x, and until 0.139.0 its program was `scramjet-rs`.
 
 ## 0.139.0 — The command is `scramjet`
 

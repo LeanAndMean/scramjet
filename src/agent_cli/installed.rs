@@ -236,12 +236,12 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 true => (
                     "replaces the opening",
                     "In the instructions in place of their opening (the tools and guidelines), as \
-                     Scramjet 1's SYSTEM.md or --system-prompt; /reload reads it again.",
+                     --system-prompt does; /reload reads it again.",
                 ),
                 false => (
                     "after the opening",
-                    "In the instructions after their opening, as Scramjet 1's APPEND_SYSTEM.md or \
-                     --append-system-prompt; /reload reads it again.",
+                    "In the instructions after their opening, as \
+                     --append-system-prompt does; /reload reads it again.",
                 ),
             };
             let columns = vec![shown(path), what.to_owned()];
@@ -269,12 +269,12 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
         files.push((path, "settings", what, "a setting"));
     }
     if let Some(path) = &keybindings {
-        let what = "Scramjet's keys, in Scramjet 1's format: those /hotkeys changes.";
+        let what = "Scramjet's keys: those /hotkeys changes.";
         files.push((path, "keys", what, "a key in /hotkeys"));
     }
     if let Some(path) = global {
-        let what = "Scramjet 1's, read here too: what follows each command, and whether its \
-                    publications ask first, in all projects.";
+        let what = "What follows each command, and whether its publications ask first, in all \
+                    projects; Scramjet 1 reads it too.";
         let label = "next steps and publishing, all projects";
         files.push((
             path,
@@ -283,7 +283,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
             "a next step or publishing for all projects",
         ));
     }
-    let what = "Scramjet 1's, read here too: what follows each command in this project.";
+    let what = "What follows each command in this project; Scramjet 1 reads it too.";
     files.push((
         project,
         "next steps, this project",
@@ -559,7 +559,7 @@ mod tests {
         );
         assert!(list.notes[15].ends_with(
             "\nIn the instructions after their opening, as \
-            Scramjet 1's APPEND_SYSTEM.md or --append-system-prompt; /reload reads it again."
+            --append-system-prompt does; /reload reads it again."
         ));
         // After an edit, the list comes back on the row Enter was pressed on, not the
         // problem's row of the same file.

@@ -1,4 +1,4 @@
-# Installing Scramjet 2
+# Installing Scramjet
 
 [Back to the README](../../README.md)
 
@@ -24,9 +24,9 @@ Each [release](https://github.com/LeanAndMean/scramjet/releases) has an archive 
 
 ## Beside Scramjet 1
 
-Scramjet 1's npm package installs a `scramjet` command too, and whichever directory comes first on your `PATH` runs: `which -a scramjet` (on Windows `where.exe scramjet`) lists both. To keep both, put Scramjet 2's directory ahead of npm's and run Scramjet 1 by its full path (`"$(npm prefix -g)/bin/scramjet"`, on Windows `%APPDATA%\npm\scramjet.cmd`), or give one of them another name. The two keep their files apart ([coming from Scramjet 1](migration.md)).
+Scramjet 1's npm package installs a `scramjet` command too, and whichever directory comes first on your `PATH` runs: `which -a scramjet` (on Windows `where.exe scramjet`) lists both. To keep both, put Scramjet's directory ahead of npm's and run Scramjet 1 by its full path (`"$(npm prefix -g)/bin/scramjet"`, on Windows `%APPDATA%\npm\scramjet.cmd`), or give one of them another name. The two keep their files apart ([coming from Scramjet 1](migration.md)).
 
-If Scramjet 2 fails you, Scramjet 1 is still there: neither installer nor `scramjet update self` changes npm's package or `~/.scramjet/agent`, and each installer names the other `scramjet` it finds. Run Scramjet 1 by its full path, or take Scramjet 2's directory off your `PATH` again (the line you added, or on Windows its entry in your user `Path`). To go back to an earlier Scramjet 2, run the installer with that release's version, as the installer shows when it replaces one: `curl -fsSL https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.sh | SCRAMJET_VERSION=2.143.1 sh`, on Windows `$env:SCRAMJET_VERSION='2.143.1'; irm https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.ps1 | iex`. Then [report it](https://github.com/LeanAndMean/scramjet/issues).
+If Scramjet fails you, Scramjet 1 is still there: neither installer nor `scramjet update self` changes npm's package or `~/.scramjet/agent`, and each installer names the other `scramjet` it finds. Run Scramjet 1 by its full path, or take Scramjet's directory off your `PATH` again (the line you added, or on Windows its entry in your user `Path`). To go back to an earlier version, run the installer with that release's version, as the installer shows when it replaces one: `curl -fsSL https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.sh | SCRAMJET_VERSION=2.143.1 sh`, on Windows `$env:SCRAMJET_VERSION='2.143.1'; irm https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.ps1 | iex`. Then [report it](https://github.com/LeanAndMean/scramjet/issues).
 
 ## Updating
 

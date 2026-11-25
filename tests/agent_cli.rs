@@ -354,7 +354,7 @@ fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
         ),
         (
             &["--mode", "rpc"],
-            "--mode rpc is not in Scramjet 2 yet; -p prints the replies as text",
+            "--mode rpc is not in Scramjet yet; -p prints the replies as text",
         ),
         (
             &["--mode", "xml"],
@@ -376,7 +376,7 @@ fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
             said.starts_with(&format!("scramjet: {}", given[0])),
             "{said}"
         );
-        assert!(said.contains("Scramjet 2"), "{said}");
+        assert!(said.contains(" Scramjet"), "{said}");
         assert!(!said.contains("Usage"), "{said}");
     }
 }
@@ -1738,7 +1738,7 @@ other command sets\n"
     assert!(
         err.ends_with(&format!(
             "scramjet: {old_source} is a Scramjet 1 extension (its package.json has a \"pi\" \
-manifest), which Scramjet 2 cannot run; install the package's Scramjet 2 version instead, if it \
+manifest), which cannot run here; install the package's version for this Scramjet instead, if it \
 has one\n"
         )),
         "{err}"
@@ -1802,7 +1802,7 @@ and no skills or themes directory\n",
     assert!(
         err.ends_with(&native(
             "scramjet: ~/notes is a Scramjet 1 extension (its package.json has a \"pi\" \
-manifest), which Scramjet 2 cannot run; install the package's Scramjet 2 version instead, if it \
+manifest), which cannot run here; install the package's version for this Scramjet instead, if it \
 has one\n"
         )),
         "{err}"

@@ -26,7 +26,7 @@ Ask the author each of these; do not choose for them. Give what each option mean
 
 ### Versioning
 
-Scramjet 2 reads no set version: a git install follows the branch, and `@REF` (`git:github.com/OWNER/REPO@v1.2.0`) pins a tag or commit. Claude Code keeps a marketplace install at `plugin.json`'s `version` until that changes, and with no `version` takes each commit. So:
+Scramjet reads no set version: a git install follows the branch, and `@REF` (`git:github.com/OWNER/REPO@v1.2.0`) pins a tag or commit. Claude Code keeps a marketplace install at `plugin.json`'s `version` until that changes, and with no `version` takes each commit. So:
 
 - **SemVer releases:** `vX.Y.Z` tags, a `CHANGELOG.md`, and `plugin.json`'s `version` bumped with each release. Users can pin a release while a regression is fixed. Costs a release step and a judgment of what breaks.
 - **Plain commits:** no tags, no changelog, no `version` in `plugin.json`. Every commit reaches users; there is nothing to pin but a commit hash.
