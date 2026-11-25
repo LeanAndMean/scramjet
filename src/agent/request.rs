@@ -612,10 +612,22 @@ pub(super) fn send(
             super::cooldown::hold(route, model, wait, !gives_up && delay == wait);
         }
         if gives_up {
-            let message = match attempt {
+            let mut message = match attempt {
                 0 => failure.message,
                 n => format!("{} (after {n} retries)", failure.message),
             };
+            if too_long && failure.transient && !failure.overflow && attempt < retries.attempts {
+                message.push_str(&match failure.wait {
+                    Some(Duration::MAX) | None => {
+                        " (the provider asked for a wait too long to keep)".to_owned()
+                    }
+                    Some(wait) => format!(
+                        " (the provider asked to wait {}s; retry.provider.maxRetryDelayMs allows {}s)",
+                        wait.as_secs_f64().ceil(),
+                        max_wait.as_secs_f64().ceil(),
+                    ),
+                });
+            }
             return Err(match (failure.overflow, failure.refusal) {
                 (true, _) => AgentError::ContextOverflow(message),
                 (false, true) => AgentError::Refusal(message),
@@ -1016,7 +1028,8 @@ response is incomplete; retry the request."});
             errors,
             [
                 "HTTP 400 Bad Request: invalid request",
-                "HTTP 429 Too Many Requests: slow",
+                "HTTP 429 Too Many Requests: slow (the provider asked to wait 120s; \
+                 retry.provider.maxRetryDelayMs allows 60s)",
             ]
         );
         assert!(ui.retries.is_empty());
@@ -1127,8 +1140,12 @@ response is incomplete; retry the request."});
             error(),
             "HTTP 503 Service Unavailable: busy (after 1 retries)"
         );
-        // A provider asking for a longer wait than `max_wait` fails it at once.
-        assert_eq!(error(), "HTTP 503 Service Unavailable: busy");
+        // A provider asking for a longer wait than `max_wait` fails it at once, saying why.
+        assert_eq!(
+            error(),
+            "HTTP 503 Service Unavailable: busy (the provider asked to wait 2s; \
+             retry.provider.maxRetryDelayMs allows 1s)"
+        );
         assert_eq!(ui.retries.len(), 1);
         assert_eq!((ui.retries[0].1, ui.retries[0].2), (1, Duration::ZERO));
         assert_eq!(server.join().unwrap().len(), 3);

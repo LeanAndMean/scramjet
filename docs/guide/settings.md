@@ -127,4 +127,4 @@ What each of these confines, and what it does not, is in [the sandbox](configura
 | `retry.enabled` | `true`, `false` | `true` | `false`: a request that fails is not sent again, and a provider's Retry-After is not shared with other requests. |
 | `retry.maxRetries` | a whole number | 10 | How many more times a request that failed transiently is sent; `--retries` replaces it for a run. |
 | `retry.baseDelayMs` | milliseconds | 2000 | The first wait, doubled at each further one. |
-| `retry.provider.maxRetryDelayMs` | milliseconds | 60000 | A longer wait, the backoff's or the provider's Retry-After, fails the request instead; 0 for no limit. The older `retry.maxDelayMs` is still read. |
+| `retry.provider.maxRetryDelayMs` | milliseconds | 60000 | A longer wait, the backoff's or the provider's Retry-After, fails the request instead, the error saying how long the provider asked for; 0 for no limit. The older `retry.maxDelayMs` is still read. |

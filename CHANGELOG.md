@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.342.2 — A refused long wait said
+
+### Fixed
+
+- A request that fails because the provider's Retry-After is longer than `retry.provider.maxRetryDelayMs` allows says so, with both waits, rather than showing only the provider's error.
+
 ## 2.342.1 — allowWrite on /reload
 
 ### Fixed
