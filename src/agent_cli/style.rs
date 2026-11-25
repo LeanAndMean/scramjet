@@ -149,10 +149,12 @@ styles! {
     /// The record of a next step chosen or offered after a command completed.
     NEXT_STEP: [] Muted;
     /// A command the user ran, in the bash-mode color: the rules around its block when run with
-    /// `!`, then with `!!` (kept out of the conversation), and its `$ command` line.
+    /// `!`, then with `!!` (kept out of the conversation, dim as in Scramjet 1), and its
+    /// `$ command` line, likewise.
     COMMAND_RULE: [] BashMode;
     COMMAND_EXCLUDED_RULE: [] Dim;
     COMMAND_LINE: [BOLD] BashMode;
+    COMMAND_EXCLUDED_LINE: [BOLD] Dim;
     /// How a command the user ran ended, if not with exit code 0: failed, or cancelled.
     COMMAND_FAILED: [] Error;
     COMMAND_CANCELLED: [] Warning;

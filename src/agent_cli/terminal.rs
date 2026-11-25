@@ -1589,7 +1589,11 @@ impl Terminal {
         for line in visible(command).split('\n') {
             let mut wrap = self.wrapper(if self.color { inner } else { 0 });
             let wrapped = wrap.push(&format!("$ {line}")) + &wrap.finish();
-            let header = |row| self.styled(style::COMMAND_LINE, row);
+            let header_style = match include {
+                true => style::COMMAND_LINE,
+                false => style::COMMAND_EXCLUDED_LINE,
+            };
+            let header = |row| self.styled(header_style, row);
             rows.extend(wrapped.split('\n').map(header));
         }
         let lines: Vec<&str> = output.lines().collect();
@@ -2156,7 +2160,8 @@ mod tests {
 to expand\n(exit 2)"
             )
         );
-        // Expanded, every line; a `!!` command's rules are dim, and a running one has no ending.
+        // Expanded, every line; a `!!` command's rules and line are dim, and a running one has no
+        // ending.
         let mut ui = Terminal::capture_shown(40, hide.clone(), true);
         ui.command_started("seq 25", false);
         ui.running_output(&output_text(25));
@@ -2165,6 +2170,10 @@ to expand\n(exit 2)"
         assert_eq!(
             rows[0],
             format!("{}{}", style::COMMAND_EXCLUDED_RULE, "─".repeat(39))
+        );
+        assert_eq!(
+            rows[1],
+            format!(" {}$ seq 25", style::COMMAND_EXCLUDED_LINE)
         );
         assert_eq!(rows[3], format!(" {}1", style::TOOL_OUTPUT));
         let mut ui = Terminal::capture_shown(40, hide, false);

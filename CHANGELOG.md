@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.4 — A `!!` command's block is dim
+
+### Fixed
+
+- A command run with `!!`, whose output the agent does not see, now shows its `$ command` line dim as well as its rules, as in Scramjet 1, so it no longer looks like a `!` command's.
+
 ## 2.340.3 — A subagent's title without the default scope
 
 ### Fixed
