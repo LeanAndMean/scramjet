@@ -95,7 +95,7 @@ impl Agent {
 
     /// The conversation as sent to the current model: the items a model is sent (`sent`). As in
     /// Scramjet, items another model produced lose what only that model accepts: encrypted
-    /// reasoning, and `fc_` ids paired with it. The same id from another provider is another
+    /// reasoning, `fc_` ids paired with it and a call's `extra_content` (Gemini's signature). The same id from another provider is another
     /// model. A next-step record goes as a note on the user's side: sent as a call, it read as
     /// the model's own after each suggestion, and models made it themselves.
     ///
@@ -130,10 +130,14 @@ impl Agent {
                 if item["type"] == "reasoning" {
                     return Value::Null;
                 }
-                if item["type"] == "function_call"
-                    && item["id"].as_str().is_some_and(|id| id.starts_with("fc_"))
-                {
-                    item.as_object_mut().unwrap().remove("id");
+                if item["type"] == "function_call" {
+                    let object = item.as_object_mut().unwrap();
+                    if (object.get("id").and_then(Value::as_str))
+                        .is_some_and(|id| id.starts_with("fc_"))
+                    {
+                        object.remove("id");
+                    }
+                    object.remove("extra_content");
                 }
             }
             item
@@ -1444,7 +1448,7 @@ by {after} (ID: {after}) until a later change."
                 "{\"type\":\"session\",\"version\":1}\n",
                 "{\"type\":\"reasoning\",\"encrypted_content\":\"opaque\",\"_scramjet_model\":\"old\"}\n",
                 "{\"type\":\"function_call\",\"id\":\"fc_item\",\"call_id\":\"call_1\",\"_scramjet_model\":\"old\"}\n",
-                "{\"type\":\"function_call\",\"id\":\"item_other\",\"call_id\":\"call_2\",\"_scramjet_model\":\"old\"}\n",
+                "{\"type\":\"function_call\",\"id\":\"item_other\",\"call_id\":\"call_2\",\"extra_content\":{\"google\":{}},\"_scramjet_model\":\"old\"}\n",
                 "{\"type\":\"function_call_output\",\"call_id\":\"call_1\",\"output\":\"ok\"}\n",
                 "{\"type\":\"function_call_output\",\"call_id\":\"call_2\",\"output\":\"ok\"}\n"
             ),
@@ -1478,6 +1482,7 @@ by {after} (ID: {after}) until a later change."
         assert!(replay[0].get("id").is_none());
         assert_eq!(replay[0]["call_id"], "call_1");
         assert_eq!(replay[1]["id"], "item_other");
+        assert!(replay[1].get("extra_content").is_none());
         assert_eq!(replay[2]["type"], "function_call_output");
         assert!(
             replay
@@ -1491,6 +1496,7 @@ by {after} (ID: {after}) until a later change."
         assert_eq!(same_model.len(), 5);
         assert_eq!(same_model[0]["type"], "reasoning");
         assert_eq!(same_model[1]["id"], "fc_item");
+        assert_eq!(same_model[2]["extra_content"], json!({"google":{}}));
     }
 
     #[test]

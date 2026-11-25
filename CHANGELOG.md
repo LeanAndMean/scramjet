@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.335.0 — Google Gemini with an API key
+
+### Added
+
+- `/login` lists Google Gemini under API keys: enter a Gemini API key and the models Google offers it are offered, as models.dev's public catalog describes them (windows, effort levels, prices), newest first, through Gemini's OpenAI-compatible Chat Completions; a new session takes the newest Gemini. Tool calls keep Gemini's thought signatures, which Gemini 3 and newer need to go on after a call. Gemini's thinking is not shown. `--api-key` with `--model google/…` uses a key for one run; a key in `GEMINI_API_KEY` alone does not set one up.
+
+### Fixed
+
+- `--list-models` with `--api-key` and `--model anthropic/…` (or `google/`, `openai/`, `openrouter/`) lists that provider's models for the key; before, it listed none.
+
 ## 2.334.0 — OpenAI with an API key
 
 ### Added

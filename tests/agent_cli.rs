@@ -142,7 +142,7 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
         String::from_utf8(output.stderr).unwrap(),
         format!(
             "scramjet: no provider offers any model: start scramjet and /login (a subscription, \
-an API key for Anthropic, OpenAI or OpenRouter, or local models), or add providers to {} (see --help)\n",
+an API key for Anthropic, Google Gemini, OpenAI or OpenRouter, or local models), or add providers to {} (see --help)\n",
             (scratch
                 .0
                 .join("config")
@@ -474,6 +474,59 @@ test/anthropic/claude-x is test's; it is not sent there\n"
         said,
         "scramjet: --api-key: a key is letters, digits and punctuation, without spaces\n"
     );
+}
+
+#[test]
+fn list_models_lists_a_built_in_providers_models_for_the_api_key_given() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-list-key-{}", std::process::id())));
+    let state = scratch.0.join("state/scramjet");
+    std::fs::create_dir_all(state.join("models")).unwrap();
+    std::fs::create_dir_all(state.join("catalogs")).unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    // Gemini's list, as its OpenAI-compatible route names its models, and models.dev's copy.
+    let named = [
+        "models/gemini-new",
+        "models/gemini-embedding-2",
+        "models/imagen-9",
+    ];
+    let named: Vec<_> = (named.iter())
+        .map(|id| serde_json::json!({"id": id}))
+        .collect();
+    let list = serde_json::json!({"fetched": now, "data": named,
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/models"});
+    std::fs::write(state.join("models/google.json"), list.to_string()).unwrap();
+    let catalog = serde_json::json!({"google": {"npm": "@ai-sdk/google", "models": {
+        "gemini-new": {"id": "gemini-new", "tool_call": true, "reasoning": true,
+            "limit": {"context": 1_048_576, "output": 65_536}},
+        "gemini-embedding-2": {"id": "gemini-embedding-2", "tool_call": false}}}});
+    let copy = serde_json::json!({"url": "https://models.dev/api.json", "fetched": now,
+        "body": catalog.to_string()});
+    let name = "https%3A%2F%2Fmodels%2Edev%2Fapi%2Ejson.json";
+    std::fs::write(state.join("catalogs").join(name), copy.to_string()).unwrap();
+    let list = |arguments: &[&str]| {
+        let output = program(&binary())
+            .arg("--list-models")
+            .args(arguments)
+            .env("XDG_CONFIG_HOME", scratch.0.join("config"))
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("HTTPS_PROXY", "http://127.0.0.1:9")
+            .env("https_proxy", "http://127.0.0.1:9")
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let listed = list(&["--api-key", "AIza-t", "--model", "google/gemini-new"]);
+    let rows: Vec<&str> = listed.lines().skip(1).collect();
+    assert_eq!(rows.len(), 1, "{listed}");
+    assert!(rows[0].starts_with("google    gemini-new "), "{listed}");
+    assert_eq!(list(&[]), "No provider offers any model\n");
 }
 
 /// A server answering each request with an error that is not retried, sending on each body.
@@ -5761,7 +5814,8 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     assert_eq!(
         listed["result"],
         serde_json::json!({"providers": [{"provider": "test", "key": null},
-            {"provider": "anthropic", "key": null}, {"provider": "openai", "key": null},
+            {"provider": "anthropic", "key": null}, {"provider": "google", "key": null},
+            {"provider": "openai", "key": null},
             {"provider": "openrouter", "key": null}]}),
         "{listed}"
     );

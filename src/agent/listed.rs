@@ -47,6 +47,8 @@ pub struct Listing {
 pub(super) struct Described {
     pub(super) catalog: Catalog,
     pub(super) provider: &'static str,
+    /// The protocol the list's provider is reached by.
+    pub(super) protocol: String,
 }
 
 /// Leaves the headers' values out: they hold keys.
@@ -141,9 +143,14 @@ impl Listing {
         let text = (described.catalog.saved()).ok_or_else(|| {
             format!("the model catalog at {url}, which describes them, is not read")
         })?;
-        let models = catalog::described(&text, described.provider)
+        let models = catalog::described(&text, described.provider, &described.protocol)
             .map_err(|problem| format!("the model catalog at {url} {problem}"))?;
-        let named = |model: &Value| listed.iter().any(|listed| listed["id"] == model["id"]);
+        // Google's list names each model as a resource, `models/{id}`.
+        let id = |listed: &Value| {
+            let id = listed["id"].as_str().unwrap_or_default();
+            id.strip_prefix("models/").unwrap_or(id).to_owned()
+        };
+        let named = |model: &Value| listed.iter().any(|listed| model["id"] == id(listed));
         Ok(models.into_iter().filter(named).collect())
     }
 

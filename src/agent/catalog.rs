@@ -298,36 +298,26 @@ pub(super) fn offered(text: &str) -> Result<Offered, String> {
     Ok(offered)
 }
 
-/// The models the catalog `text` lists of its provider `id`, as `models.json` models, newest
-/// first by release date, but those its own server or protocol routes elsewhere: what describes
-/// a provider's own list, which names its models only.
-pub(super) fn described(text: &str, id: &str) -> Result<Vec<Value>, String> {
+/// The models the catalog `text` lists of its provider `id`, as `models.json` models of a
+/// provider whose protocol is `protocol`, newest first by release date, but those its own server
+/// or protocol routes elsewhere: what describes a provider's own list, which names its models
+/// only. The catalog's protocol for the provider is not needed: Google's is one not spoken here.
+pub(super) fn described(text: &str, id: &str, protocol: &str) -> Result<Vec<Value>, String> {
     let mut providers: Map<String, Value> = serde_json::from_str(text)
         .map_err(|error| format!("is not a model catalog (models.dev's shape): {error}"))?;
     let listed = (providers.remove(id)).ok_or_else(|| format!("lists no provider {id}"))?;
-    let released: Vec<(String, String)> = (listed["models"].as_object().into_iter().flatten())
-        .map(|(key, model)| {
-            let id = model["id"].as_str().unwrap_or(key).to_owned();
-            let date = model["release_date"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned();
-            (id, date)
+    let listed =
+        (listed["models"].as_object()).ok_or_else(|| format!("lists {id} without models"))?;
+    let mut models: Vec<(&str, Value)> = (listed.iter())
+        .filter_map(|(key, listed)| {
+            let model = model(key, listed, protocol)?;
+            let routed = model.get("baseUrl").is_some() || model.get("api").is_some();
+            let date = listed["release_date"].as_str().unwrap_or_default();
+            (!routed).then_some((date, model))
         })
         .collect();
-    let released = |model: &Value| {
-        let found = released.iter().find(|(id, _)| model["id"] == id.as_str());
-        found.map_or("", |(_, date)| date.as_str()).to_owned()
-    };
-    let listed = Listed::deserialize(listed).map_err(|error| format!("lists {id} as {error}"))?;
-    let entry = provider(id, listed).map_err(|why| format!("lists {id}, but {why}"))?;
-    let models = entry["models"].as_array().into_iter().flatten();
-    let mut models: Vec<Value> = (models
-        .filter(|m| m.get("baseUrl").is_none() && m.get("api").is_none()))
-    .cloned()
-    .collect();
-    models.sort_by_cached_key(|model| std::cmp::Reverse(released(model)));
-    Ok(models)
+    models.sort_by(|(a, _), (b, _)| b.cmp(a));
+    Ok(models.into_iter().map(|(_, model)| model).collect())
 }
 
 /// A catalog's provider as a `models.json` entry, or why it cannot be offered.

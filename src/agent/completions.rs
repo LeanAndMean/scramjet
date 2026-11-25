@@ -58,6 +58,8 @@ pub(super) struct Compat {
     pub(super) long_cache_retention: bool,
     /// OpenAI's own servers, which take `prompt_cache_key` whatever the retention.
     at_openai: bool,
+    /// Gemini's, which refuse a turn's tool calls sent back without their thought signatures.
+    thought_signatures: bool,
     /// The model's `thinkingLevelMap` names a level for `off`, which is then sent.
     off_named: bool,
 }
@@ -81,7 +83,10 @@ impl Compat {
         let grok = name == "xai" || at("api.x.ai");
         let deepseek = name == "deepseek" || at("deepseek.com");
         let open_router = name == "openrouter" || at("openrouter.ai");
+        // Gemini refuses the fields it does not know: `store` and the cache's.
+        let gemini = at("generativelanguage.googleapis.com");
         let non_standard = name == "cerebras"
+            || gemini
             || at("cerebras.ai")
             || grok
             || together
@@ -101,7 +106,7 @@ impl Compat {
             _ if open_router => Thinking::OpenRouter,
             _ => Thinking::OpenAi,
         };
-        let long_cache_retention = !(together || workers_ai || gateway);
+        let long_cache_retention = !(together || workers_ai || gateway || gemini);
         Self {
             store: !non_standard,
             developer_role: !non_standard,
@@ -124,6 +129,7 @@ impl Compat {
             session_affinity: false,
             long_cache_retention,
             at_openai: at("api.openai.com"),
+            thought_signatures: gemini,
             off_named,
         }
     }
@@ -480,8 +486,11 @@ impl<'a> Conversation<'a> {
                 let arguments = (item["arguments"].as_str())
                     .filter(|text| serde_json::from_str::<Value>(text).is_ok_and(|v| v.is_object()))
                     .unwrap_or("{}");
-                let call = json!({"id":id,"type":"function",
+                let mut call = json!({"id":id,"type":"function",
                     "function":{"name":name,"arguments":arguments}});
+                if let Some(extra) = item.get("extra_content").filter(|extra| extra.is_object()) {
+                    call["extra_content"] = extra.clone();
+                }
                 self.names.insert(id, name);
                 self.draft().calls.push(call);
             }
@@ -611,7 +620,13 @@ impl<'a> Conversation<'a> {
         if !draft.calls.is_empty() {
             let ids = draft.calls.iter().filter_map(|call| call["id"].as_str());
             self.unanswered = ids.map(str::to_owned).collect();
-            message["tool_calls"] = json!(draft.calls);
+            let mut calls = draft.calls;
+            // Gemini's documented stand-in for calls another model made, or that lost theirs.
+            if compat.thought_signatures && calls.iter().all(|c| c.get("extra_content").is_none()) {
+                calls[0]["extra_content"] =
+                    json!({"google":{"thought_signature":"skip_thought_signature_validator"}});
+            }
+            message["tool_calls"] = json!(calls);
         }
         self.after_results = false;
         self.messages.push(message);
@@ -646,6 +661,8 @@ struct Call {
     id: String,
     name: String,
     arguments: String,
+    /// What the server added to the call for its return, as Gemini's thought signature.
+    extra: Option<Value>,
 }
 
 /// Decodes a streamed Chat Completions reply as it arrives.
@@ -807,6 +824,9 @@ impl Stream {
             known
                 .arguments
                 .push_str(function["arguments"].as_str().unwrap_or_default());
+            if known.extra.is_none() && call["extra_content"].is_object() {
+                known.extra = Some(call["extra_content"].clone());
+            }
         }
         Ok(())
     }
@@ -859,8 +879,12 @@ impl Stream {
                 true => "{}".to_owned(),
                 false => call.arguments,
             };
-            items.push(json!({"type":"function_call","call_id":id,"name":call.name,
-                "arguments":arguments,"status":"completed"}));
+            let mut item = json!({"type":"function_call","call_id":id,"name":call.name,
+                "arguments":arguments,"status":"completed"});
+            if let Some(extra) = call.extra {
+                item["extra_content"] = extra;
+            }
+            items.push(item);
         }
         let incomplete = (reason == "length").then(|| client::cut_at_limit(&mut items, self.limit));
         let usage = self.usage.map(|usage| {
@@ -1295,6 +1319,59 @@ mod tests {
             assistant["tool_calls"][0]["function"]["arguments"],
             "{\"path\":\"a\"}"
         );
+    }
+
+    #[test]
+    fn gemini_gets_its_thought_signatures_back_and_none_of_the_fields_it_refuses() {
+        let signed = json!({"google":{"thought_signature":"c2ln"}});
+        let wire = sse(&[
+            delta(json!({"role":"assistant","tool_calls":[
+                {"id":"function-call-1","type":"function","extra_content":signed,
+                    "function":{"name":"read","arguments":"{\"path\":\"a\"}"}},
+                {"id":"function-call-2","type":"function",
+                    "function":{"name":"read","arguments":"{\"path\":\"b\"}"}}]})),
+            finish("tool_calls"),
+        ]);
+        let items = decode(&wire).0.ok().unwrap().items;
+        assert_eq!(items[0]["extra_content"], signed);
+        assert!(items[1].get("extra_content").is_none());
+        let url = "https://generativelanguage.googleapis.com/v1beta/openai";
+        let info = model(url, json!({"id":"gemini-new","reasoning":true}));
+        let mut input = vec![json!({"role":"user","content":"Read a and b."})];
+        input.extend(items);
+        let outputs = ["function-call-1", "function-call-2"]
+            .map(|id| json!({"type":"function_call_output","call_id":id,"output":"text"}));
+        input.extend(outputs);
+        let request = json!({"model":"gemini-new","instructions":"Be brief.","input":input,
+            "tools":[tool()],"prompt_cache_key":"session-1"});
+        let body = super::request(&request, &info);
+        let calls = &body["messages"][2]["tool_calls"];
+        assert_eq!(
+            (&calls[0]["extra_content"], calls[1].get("extra_content")),
+            (&signed, None)
+        );
+        assert_eq!(body["messages"][0]["role"], "system");
+        for refused in ["store", "prompt_cache_key", "prompt_cache_retention"] {
+            assert!(body.get(refused).is_none(), "{refused}: {body}");
+        }
+        // Calls that lost their signature, or another model made, take Gemini's stand-in.
+        let unsigned: Vec<Value> = (request["input"].as_array().unwrap().iter())
+            .map(|item| {
+                let mut item = item.clone();
+                item.as_object_mut().unwrap().remove("extra_content");
+                item
+            })
+            .collect();
+        let request = json!({"model":"gemini-new","input":unsigned,"tools":[tool()]});
+        let calls = &super::request(&request, &info)["messages"][1]["tool_calls"];
+        let stand_in = json!({"google":{"thought_signature":"skip_thought_signature_validator"}});
+        assert_eq!(
+            (&calls[0]["extra_content"], calls[1].get("extra_content")),
+            (&stand_in, None)
+        );
+        let elsewhere = model("http://127.0.0.1:8000/v1", json!({"id":"m"}));
+        let calls = &super::request(&request, &elsewhere)["messages"][1]["tool_calls"];
+        assert!(calls[0].get("extra_content").is_none());
     }
 
     #[test]

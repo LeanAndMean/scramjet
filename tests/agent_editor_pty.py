@@ -1723,7 +1723,7 @@ def local_models(read, until, send, output):
     send(b'/login\r')
     rows = on_screen('Log in to  ')
     dialog = rows[[i for i, row in enumerate(rows) if row.startswith('Log in to  ')][-1]:]
-    assert dialog[5:12] == ['  API keys', '    test', '    Anthropic', '    OpenAI', '    OpenRouter', '', '  Local models'], dialog
+    assert dialog[5:13] == ['  API keys', '    test', '    Anthropic', '    Google Gemini', '    OpenAI', '    OpenRouter', '', '  Local models'], dialog
     send(b'\x1b')
     on_screen('Log in to  ', gone=True)
     send(b'/model\r')

@@ -144,7 +144,13 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         writable::check()?;
     }
     if let Some(search) = options.list_models.take() {
-        let providers = Providers::read(Settings::load().sources(), agent::login::Logins::user());
+        let mut providers =
+            Providers::read(Settings::load().sources(), agent::login::Logins::user());
+        if let Some(key) = &options.api_key
+            && let Some(provider) = key_provider(&options, &providers)
+        {
+            providers.give_key(&provider, key);
+        }
         for problem in providers.problems() {
             eprintln!("Warning: {problem}");
         }

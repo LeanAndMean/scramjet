@@ -241,7 +241,7 @@ pub struct Builtin {
 pub const MODELS_DEV: &str = "https://models.dev/api.json";
 
 /// The built-in providers, under Scramjet's names for them, in `/login`'s order.
-pub const BUILTIN: [Builtin; 3] = [
+pub const BUILTIN: [Builtin; 4] = [
     Builtin {
         name: "anthropic",
         shown: "Anthropic",
@@ -249,6 +249,14 @@ pub const BUILTIN: [Builtin; 3] = [
         base_url: "https://api.anthropic.com",
         api: "anthropic-messages",
         described: None,
+    },
+    Builtin {
+        name: "google",
+        shown: "Google Gemini",
+        default: "gemini-",
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        api: "openai-completions",
+        described: Some("google"),
     },
     Builtin {
         name: "openai",
@@ -1003,6 +1011,7 @@ impl Reading {
         listing.described = described.map(|provider| listed::Described {
             catalog: Catalog::new(MODELS_DEV, self.logins.as_ref()),
             provider,
+            protocol: api.unwrap_or_default().to_owned(),
         });
         let read = match listing.saved().filter(|_| listing.describable()) {
             Some(models) => Ok(models),
@@ -2061,6 +2070,7 @@ mod tests {
         let providers = Providers::given_logged_in(none.clone(), logins.clone());
         let nowhere = [
             ("anthropic".to_owned(), KeyFrom::Nowhere),
+            ("google".to_owned(), KeyFrom::Nowhere),
             ("openai".to_owned(), KeyFrom::Nowhere),
             ("openrouter".to_owned(), KeyFrom::Nowhere),
         ];
@@ -2080,7 +2090,7 @@ mod tests {
             "api": "anthropic-messages", "models": [{"id": "own"}]}}});
         let replaced = Providers::given_logged_in(file, logins.clone());
         let keyed: Vec<&str> = replaced.keyed().iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(keyed, ["anthropic", "openai", "openrouter"]);
+        assert_eq!(keyed, ["anthropic", "google", "openai", "openrouter"]);
         assert_eq!(replaced.origins("anthropic"), ["http://127.0.0.1:9"]);
         let references: Vec<String> = replaced.models().iter().map(Model::reference).collect();
         assert_eq!(references, ["anthropic/own"]);
@@ -2125,7 +2135,7 @@ mod tests {
         // --api-key offers one for the run.
         let mut given = Providers::given_logged_in(none.clone(), logins.clone());
         given.give_key("openrouter", "sk-or");
-        assert_eq!(given.keyed()[2], ("openrouter".to_owned(), KeyFrom::Given));
+        assert_eq!(given.keyed()[3], ("openrouter".to_owned(), KeyFrom::Given));
         let routed = given.find("openrouter/x/y").unwrap();
         assert_eq!(routed.info.protocol, Protocol::Completions);
         assert!(given.find("openrouter/x/chat").is_none());
@@ -2151,7 +2161,16 @@ mod tests {
                 "gpt-retired": {"tool_call": true, "status": "deprecated"},
                 "gpt-unnamed": {"tool_call": true},
                 "gpt-elsewhere": {"tool_call": true,
-                    "provider": {"npm": "@ai-sdk/openai", "api": "https://example.com/v1"}}}}});
+                    "provider": {"npm": "@ai-sdk/openai", "api": "https://example.com/v1"}}}},
+            "google": {"npm": "@ai-sdk/google", "env": ["GEMINI_API_KEY"], "models": {
+                "gemini-new": {"id": "gemini-new", "name": "Gemini New", "tool_call": true,
+                    "reasoning": true, "release_date": "2026-11-18",
+                    "limit": {"context": 1_048_576, "output": 65_536},
+                    "reasoning_options": [{"type": "effort",
+                        "values": ["minimal", "low", "medium", "high"]}]},
+                "gemini-old": {"id": "gemini-old", "tool_call": true,
+                    "release_date": "2026-02-19"},
+                "gemini-embedding-2": {"id": "gemini-embedding-2", "tool_call": false}}}});
         let models_dev = Catalog::new(MODELS_DEV, Some(&logins));
         models_dev.save(&catalog.to_string(), None).unwrap();
         let mut given = Providers::given_logged_in(none.clone(), logins.clone());
@@ -2179,6 +2198,33 @@ mod tests {
             .unwrap();
         let kept: Vec<Value> = listing.models().iter().map(|m| m["id"].clone()).collect();
         assert_eq!(kept, ["gpt-new", "gpt-old"]);
+        // Gemini's list, at its OpenAI-compatible route, names its models as `models/{id}`;
+        // models.dev describes them under a protocol not spoken here, so the route's is taken.
+        let named = json!([{"id": "models/gemini-old", "object": "model", "owned_by": "google"},
+            {"id": "models/gemini-embedding-2"}, {"id": "models/gemini-new"},
+            {"id": "models/imagen-9"}]);
+        let url = "https://generativelanguage.googleapis.com/v1beta/openai/models";
+        listed("google", url, named);
+        let mut gemini = Providers::given_logged_in(none.clone(), logins.clone());
+        gemini.give_key("google", "AIza-g");
+        assert_eq!(gemini.problems(), [] as [String; 0]);
+        let google: Vec<String> = (gemini.models().iter())
+            .filter(|model| model.provider == "google")
+            .map(Model::reference)
+            .collect();
+        assert_eq!(google, ["google/gemini-new", "google/gemini-old"]);
+        let new = gemini.find("google/gemini-new").unwrap();
+        assert_eq!(
+            (new.name.as_deref(), new.info.protocol, new.info.window),
+            (Some("Gemini New"), Protocol::Completions, Some(1_048_576))
+        );
+        let to = super::tests::route(&gemini, "google/gemini-new");
+        assert_eq!(to.host, "generativelanguage.googleapis.com");
+        assert!(to.path.ends_with("/v1beta/openai"), "{}", to.path);
+        assert_eq!(
+            to.headers,
+            [("authorization".into(), "Bearer AIza-g".into())]
+        );
         // Without the catalog's copy, nothing is offered, and why is said.
         models_dev.forget();
         assert!(listing.models().is_empty());
@@ -2454,6 +2500,7 @@ mod tests {
                     KeyFrom::Variable("SCRAMJET_RS_PROVIDERS_KEYED_TEST".to_owned())
                 ),
                 ("openrouter".to_owned(), KeyFrom::Nowhere),
+                ("google".to_owned(), KeyFrom::Nowhere),
                 ("openai".to_owned(), KeyFrom::Nowhere),
             ]
         );
@@ -2480,7 +2527,13 @@ mod tests {
         let nowhere = KeyFrom::Nowhere;
         assert_eq!(
             saved,
-            [KeyFrom::Saved, KeyFrom::Saved, KeyFrom::Saved, nowhere]
+            [
+                KeyFrom::Saved,
+                KeyFrom::Saved,
+                KeyFrom::Saved,
+                nowhere.clone(),
+                nowhere
+            ]
         );
         assert_eq!(
             headers(&providers, "openrouter/m-openai-completions"),
@@ -2520,7 +2573,13 @@ mod tests {
             let nowhere = KeyFrom::Nowhere;
             assert_eq!(
                 from,
-                [KeyFrom::Saved, KeyFrom::Given, KeyFrom::Saved, nowhere]
+                [
+                    KeyFrom::Saved,
+                    KeyFrom::Given,
+                    KeyFrom::Saved,
+                    nowhere.clone(),
+                    nowhere
+                ]
             );
         }
         // A saved key goes only to the servers it was saved for; one saved before keys named
