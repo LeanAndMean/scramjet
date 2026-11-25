@@ -47,6 +47,23 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Tests
         run: cargo test --locked --no-fail-fast
+      - name: The troubleshooting guide's AppArmor profile lets bubblewrap run
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
+          if bwrap --ro-bind / / true; then
+            echo "bwrap ran with namespaces restricted, so this proves nothing"; exit 1
+          fi
+          python3 - > "$RUNNER_TEMP/bwrap" <<'EOF'
+          import pathlib, re
+          text = pathlib.Path("docs/guide/troubleshooting.md").read_text()
+          block = re.search(r"/etc/apparmor\.d/bwrap`.*?```text\n(.*?)\n *```", text, re.S)
+          print("\n".join(line.removeprefix("  ") for line in block.group(1).splitlines()))
+          EOF
+          sudo install -m 644 "$RUNNER_TEMP/bwrap" /etc/apparmor.d/bwrap
+          sudo apparmor_parser -r /etc/apparmor.d/bwrap
+          bwrap --ro-bind / / true
+          cargo test --locked --no-fail-fast sandbox
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Release build for glibc 2.31
         run: |
           cargo fetch --locked
