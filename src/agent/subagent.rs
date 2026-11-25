@@ -628,10 +628,14 @@ fn arguments(arguments: &Value) -> Result<Arguments, Vec<String>> {
     Ok(Arguments { mode, scope })
 }
 
-/// The call line's text, as Scramjet's `renderCall` while the call runs: the agents, the scope
-/// and an effort given, then each task's first line.
+/// The call line's text, as Scramjet's `renderCall` while the call runs: the agents, a scope and
+/// an effort given, then each task's first line. The default scope is left out: it says nothing
+/// of a command set's agents, which every scope finds.
 pub(super) fn summary(arguments: &Value) -> String {
-    let scope = arguments["agentScope"].as_str().unwrap_or("user");
+    let scope = match arguments["agentScope"].as_str() {
+        Some(scope) => format!(" [{scope}]"),
+        None => String::new(),
+    };
     let effort = |value: &Value| match value["effort"].as_str() {
         Some(effort) => format!(" [Effort:{effort}]"),
         None => String::new(),
@@ -651,7 +655,7 @@ pub(super) fn summary(arguments: &Value) -> String {
             .as_array()
             .filter(|items| !items.is_empty())?;
         let mut text = format!(
-            "{title} ({} {}) [{scope}]",
+            "{title} ({} {}){scope}",
             items.len(),
             match key {
                 "chain" => "steps",
@@ -676,7 +680,7 @@ pub(super) fn summary(arguments: &Value) -> String {
                 task if task.is_empty() => task,
                 task => format!("\n{task}"),
             };
-            format!("{agent}{} [{scope}]{task}", effort(arguments))
+            format!("{agent}{}{scope}{task}", effort(arguments))
         })
 }
 
@@ -1990,7 +1994,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
     fn the_call_line_names_the_agents_and_their_tasks() {
         assert_eq!(
             summary(&json!({"agent":"r","task":"Review\nall of it","effort":"low"})),
-            "r [Effort:low] [user]\nReview …"
+            "r [Effort:low]\nReview …"
         );
         assert_eq!(
             summary(
@@ -2002,8 +2006,12 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             summary(
                 &json!({"chain":[{"agent":"a","task":"one"},{"agent":"b","task":"use {previous}"}]})
             ),
-            "chain (2 steps) [user]\n1. a one\n2. b use"
+            "chain (2 steps)\n1. a one\n2. b use"
         );
-        assert_eq!(summary(&json!({})), "... [user]\n...");
+        assert_eq!(summary(&json!({})), "...\n...");
+        assert_eq!(
+            summary(&json!({"agent":"r","task":"go","agentScope":"user"})),
+            "r [user]\ngo"
+        );
     }
 }

@@ -5346,7 +5346,8 @@ def fullscreen_subagent(read, until, send, output):
     # Once the call's result is in, the session's cost counts the child's once.
     footer_spent(read, output, '$0.100')
     text = '\n'.join(rows)
-    for expected in [' subagent  scout [user]', '\u2713 scout (user) gpt-6-luna', ' \u2192 ls .\n Found a.txt.',
+    assert ' subagent  scout' in text and '[user]' not in text, text
+    for expected in ['\u2713 scout (user) gpt-6-luna', ' \u2192 ls .\n Found a.txt.',
                      ' Line 3\n \u2026 (2 more lines, Ctrl+O to expand)\n 2 turns']:
         assert expected in text, (expected, text)
     assert 'Line 4' not in text, text

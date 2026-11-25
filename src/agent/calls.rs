@@ -999,7 +999,7 @@ here (sandbox.subagents.mode)\n\nkept.txt says original";
         assert_eq!(ui.replies, ["done"]);
         assert!(
             ui.shown
-                .contains(&"call subagent reviewer [user]\nCheck kept.txt …".to_owned())
+                .contains(&"call subagent reviewer\nCheck kept.txt …".to_owned())
         );
         assert!(
             ui.shown

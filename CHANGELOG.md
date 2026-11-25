@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.3 — A subagent's title without the default scope
+
+### Fixed
+
+- A subagent's box no longer titles an agent `[user]` when the call gave no scope: the default said nothing of a command set's agents, such as a project set's, whose row says where each came from. A scope the call gives still shows.
+
 ## 2.340.2 — The AppArmor profile for Bubblewrap, checked
 
 ### Changed
