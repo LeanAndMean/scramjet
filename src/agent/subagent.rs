@@ -1494,6 +1494,7 @@ uncommitted.",
             request["reasoning"]["effort"] = json!(info.fit(effort));
         }
         if let Some(tokens) = parent.max_output_tokens {
+            let tokens = info.output.map_or(tokens, |own| tokens.min(own));
             request["max_output_tokens"] = json!(tokens);
         }
         let requests = &mut run.usage.requests;

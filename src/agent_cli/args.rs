@@ -52,7 +52,7 @@ but to NO_PROXY's hosts and this machine.
                          xhigh or max, the nearest the model takes (default: the
                          one --model's :LEVEL sets, else the one a resumed session last used,
                          else the settings' defaultThinkingLevel, else medium)
-  --max-output-tokens N  the most tokens a reply may have (default: the model's limit)
+  --max-output-tokens N  the most tokens a reply may have, at most the model's limit (default)
   --retries N            resend a request that failed transiently up to N times (default:
                          the settings' retry.maxRetries, else 10)
   --cache-retention short|long

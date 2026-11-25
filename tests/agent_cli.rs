@@ -4024,6 +4024,139 @@ touch made 2>/dev/null && echo wrote || echo read-only; \
 
 #[test]
 #[cfg(unix)]
+fn acp_session_profiles_give_each_session_its_model_level_and_output_limit_saving_none() {
+    let scratch = Scratch(std::env::temp_dir().join(format!(
+        "scramjet-cli-acp-profile-model-{}",
+        std::process::id()
+    )));
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let reply = [
+        r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":3,"output_tokens":1}}}"#.to_owned(),
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#.to_owned(),
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done"}}"#.to_owned(),
+        r#"{"type":"content_block_stop","index":0}"#.to_owned(),
+        r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}"#.to_owned(),
+        r#"{"type":"message_stop"}"#.to_owned(),
+    ]
+    .to_vec();
+    let (port, bodies) = serve_events(vec![reply]);
+    let models = serde_json::json!([
+        {"id": "claude-test", "contextWindow": 100000, "maxTokens": 16000},
+        {"id": "claude-other", "contextWindow": 100000, "reasoning": true, "maxTokens": 12000},
+    ]);
+    let settings = serde_json::json!({"hideCredentials": "never"});
+    let (mut child, mut stdin, messages) =
+        acp_models(&scratch.0, port, models, settings, &["--no-session"]);
+    let mut id = 0;
+    let mut ask = |method: &str, params: serde_json::Value| {
+        id += 1;
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        );
+        until(&messages, |message| message["id"] == id).0
+    };
+    ask("initialize", serde_json::json!({"protocolVersion": 1}));
+    let open = |ask: &mut dyn FnMut(&str, serde_json::Value) -> serde_json::Value,
+                profile: Option<serde_json::Value>| {
+        let meta = match profile {
+            Some(profile) => {
+                serde_json::json!({"io.github.leanandmean.scramjet": {"profile": profile}})
+            }
+            None => serde_json::json!({}),
+        };
+        ask(
+            "session/new",
+            serde_json::json!({"cwd": project, "mcpServers": [], "_meta": meta}),
+        )
+    };
+    let current = |opened: &serde_json::Value, option: &str| {
+        let options = opened["result"]["configOptions"].as_array().unwrap();
+        let found = options.iter().find(|found| found["id"] == option).unwrap();
+        found["currentValue"].clone()
+    };
+    let refused = open(
+        &mut ask,
+        Some(serde_json::json!({"model": "test/claude-none"})),
+    );
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    assert_eq!(
+        refused["error"]["message"], "profile.model: no model test/claude-none is offered",
+        "{refused}"
+    );
+    let profile = serde_json::json!({
+        "model": "test/claude-other", "thinkingLevel": "high", "maxTokens": 64000,
+    });
+    let opened = open(&mut ask, Some(profile));
+    assert_eq!(current(&opened, "model"), "test/claude-other", "{opened}");
+    assert_eq!(current(&opened, "thought_level"), "high", "{opened}");
+    let profiled = opened["result"]["sessionId"].clone();
+    let opened = open(&mut ask, Some(serde_json::json!({"maxTokens": 4096})));
+    assert_eq!(current(&opened, "model"), "test/claude-test", "{opened}");
+    let limited = opened["result"]["sessionId"].clone();
+    let plain = open(&mut ask, None)["result"]["sessionId"].clone();
+
+    let sent = |ask: &mut dyn FnMut(&str, serde_json::Value) -> serde_json::Value,
+                session: &serde_json::Value| {
+        let answer = ask(
+            "session/prompt",
+            serde_json::json!({"sessionId": session,
+                "prompt": [{"type": "text", "text": "go"}]}),
+        );
+        assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
+        let body = bodies.recv_timeout(Duration::from_secs(20)).unwrap();
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()
+    };
+    // The model's own limit caps the profile's.
+    let body = sent(&mut ask, &profiled);
+    assert_eq!(body["model"], "claude-other", "{body}");
+    assert_eq!(body["max_tokens"], 12000, "{body}");
+    assert_eq!(body["thinking"]["type"], "enabled", "{body}");
+    let budget = body["thinking"]["budget_tokens"].clone();
+    let body = sent(&mut ask, &limited);
+    assert_eq!(body["model"], "claude-test", "{body}");
+    assert_eq!(body["max_tokens"], 4096, "{body}");
+    let body = sent(&mut ask, &plain);
+    assert_eq!(body["max_tokens"], 16000, "{body}");
+
+    // Choices in a profiled session last for it alone.
+    let config = scratch.0.join("config/scramjet/settings.json");
+    let recall = scratch.0.join("state/scramjet/last-used-models.json");
+    let set = |ask: &mut dyn FnMut(&str, serde_json::Value) -> serde_json::Value,
+               session: &serde_json::Value,
+               option: &str,
+               value: &str| {
+        let changed = ask(
+            "session/set_config_option",
+            serde_json::json!({"sessionId": session, "configId": option, "value": value}),
+        );
+        assert!(changed["result"].is_object(), "{changed}");
+    };
+    set(&mut ask, &profiled, "thought_level", "low");
+    let body = sent(&mut ask, &profiled);
+    assert_ne!(body["thinking"]["budget_tokens"], budget, "{body}");
+    set(&mut ask, &profiled, "model", "test/claude-test");
+    set(&mut ask, &limited, "model", "test/claude-other");
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        r#"{"hideCredentials":"never"}"#
+    );
+    assert!(!recall.exists());
+    // A session without a profile still saves them, as the full screen does.
+    set(&mut ask, &plain, "model", "test/claude-other");
+    set(&mut ask, &plain, "thought_level", "minimal");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(saved["defaultModel"], "claude-other", "{saved}");
+    assert_eq!(saved["defaultThinkingLevel"], "minimal", "{saved}");
+    assert!(recall.exists());
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_bare_and_ephemeral_sessions_read_none_of_the_users_directories_and_leave_nothing() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-bare-{}", std::process::id())));

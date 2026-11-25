@@ -2268,7 +2268,13 @@ fn start_session(
         &settings,
         (&patterns, source),
     )
-    .map_err(failed)?;
+    .map_err(|error| match profile.and_then(Profile::model) {
+        Some(model) if error.starts_with("--model ") => (
+            INVALID_PARAMS,
+            format!("profile.model: no model {model} is offered"),
+        ),
+        _ => failed(error),
+    })?;
     for warning in warnings {
         eprintln!("scramjet: {warning}");
     }
@@ -2280,6 +2286,7 @@ fn start_session(
         settings,
         scope: patterns,
         chosen: None,
+        remembers: profile.is_none(),
     })
 }
 
@@ -2967,7 +2974,9 @@ impl Acp {
                     return Err(format!("{} takes no thinking level {level}", agent.model()));
                 }
                 agent.set_effort(level).map_err(|error| error.to_string())?;
-                if let Err(error) = self.session.settings.set_default_thinking_level(level) {
+                if self.session.remembers
+                    && let Err(error) = self.session.settings.set_default_thinking_level(level)
+                {
                     self.ui
                         .say("warning", &format!("Settings not saved: {error}"));
                 }

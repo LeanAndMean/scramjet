@@ -20,6 +20,9 @@ pub(super) struct Session {
     pub(super) scope: Vec<String>,
     /// A next step chosen between turns (`reopen`, `ask_again`), to run next as if typed.
     pub(super) chosen: Option<(String, Start)>,
+    /// Whether a model or level chosen is saved for later sessions; not for a session an ACP
+    /// profile sets up, many of which may run at once.
+    pub(super) remembers: bool,
 }
 
 impl Session {
@@ -750,7 +753,9 @@ fn take_route(front: &mut dyn Front, routed: Routed) {
         let session = front.session();
         if let Err(error) = session.agent.set_effort(level) {
             front.say(&format!("Error: {error}"));
-        } else if let Err(error) = session.settings.set_default_thinking_level(level) {
+        } else if session.remembers
+            && let Err(error) = session.settings.set_default_thinking_level(level)
+        {
             front.say(&format!("Error: settings not saved: {error}"));
         }
     }
@@ -920,8 +925,14 @@ pub(super) fn folder(session: &SessionInfo) -> String {
 /// started later begin with (`Settings::remember_model`).
 pub(super) fn remember_model(front: &mut dyn Front) {
     let Session {
-        agent, settings, ..
+        agent,
+        settings,
+        remembers,
+        ..
     } = front.session();
+    if !*remembers {
+        return;
+    }
     let (provider, id) = (agent.model_provider(), agent.model_id());
     if let Err(error) = settings.remember_model(agent.root(), provider, id) {
         front.say(&format!("Error: settings not saved: {error}"));

@@ -80,6 +80,7 @@ impl Agent {
             request["reasoning"]["effort"] = json!(effort);
         }
         if let Some(tokens) = self.config.max_output_tokens {
+            let tokens = self.info.output.map_or(tokens, |own| tokens.min(own));
             request["max_output_tokens"] = json!(tokens);
         }
         // As Pi's, a request with no tools (`--no-tools`) says nothing of them.

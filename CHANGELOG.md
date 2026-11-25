@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.331.0 — A session profile's model and output limit
+
+### Added
+
+- `scramjet acp`: a session `profile` may also set the session's `model`, `thinkingLevel` and `maxTokens`; a model no provider offers refuses the session. A session with a profile never saves the model or level chosen for it in your settings or as the project's last-used model, so many sessions at once leave them alone.
+
+### Changed
+
+- `--max-output-tokens`, and a profile's `maxTokens`, are capped at the model's own output limit where it is known, rather than sent above it.
+
 ## 2.330.0 — Session profiles over ACP
 
 ### Added

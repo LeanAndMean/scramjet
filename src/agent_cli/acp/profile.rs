@@ -1,16 +1,16 @@
 //! A session profile: launch options for one ACP session, from `session/new`'s, `resume`'s or
 //! `load`'s `_meta` (RPC.md section 3), saved in the session file and applied again.
 
-use super::super::{args::Options, settings::Settings};
+use super::super::{
+    args::Options,
+    settings::{LEVELS, Settings, card_level},
+};
 use scramjet::agent::{
     Agent, CODING_TOOLS, HARNESS_TOOLS, Reach, Reads, Sandbox, SandboxMode, Subagents,
     missing_shells,
 };
 use serde_json::{Map, Value};
 use std::path::PathBuf;
-
-/// The keys of the second step (RPC.md section 3), refused until it is built.
-const LATER: &[&str] = &["model", "thinkingLevel", "maxTokens"];
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Profile {
@@ -21,6 +21,9 @@ pub(super) struct Profile {
     context_files: Option<bool>,
     directives: Option<bool>,
     tools: Option<Vec<String>>,
+    model: Option<String>,
+    level: Option<String>,
+    max_tokens: Option<u64>,
     reach: Option<Confined>,
 }
 
@@ -38,11 +41,6 @@ impl Profile {
     /// wrong type, so that a misspelt key never runs a task with more than meant.
     pub(super) fn parse(given: &Value) -> Result<Self, String> {
         let object = given.as_object().ok_or("profile must be an object")?;
-        for key in object.keys() {
-            if LATER.contains(&key.as_str()) {
-                return Err(format!("profile.{key} is not supported yet"));
-            }
-        }
         let mut profile = Profile {
             given: given.clone(),
             system: text(object, "systemPrompt")?,
@@ -54,6 +52,23 @@ impl Profile {
             context_files: boolean(object, "contextFiles")?,
             directives: boolean(object, "directives")?,
             tools: strings(object, "tools")?,
+            model: text(object, "model")?,
+            level: match text(object, "thinkingLevel")? {
+                Some(level) => Some(card_level(&level).map(str::to_owned).ok_or_else(|| {
+                    format!(
+                        "profile.thinkingLevel: {level} is none of {}",
+                        LEVELS.join(", ")
+                    )
+                })?),
+                None => None,
+            },
+            max_tokens: match object.get("maxTokens") {
+                None => None,
+                Some(tokens) => Some(
+                    (tokens.as_u64().filter(|tokens| *tokens > 0))
+                        .ok_or_else(|| wrong("maxTokens", "a positive whole number"))?,
+                ),
+            },
             reach: None,
         };
         let read = paths(object, "read")?;
@@ -78,6 +93,9 @@ impl Profile {
             "writable",
             "allowWrite",
             "network",
+            "model",
+            "thinkingLevel",
+            "maxTokens",
         ];
         if let Some(key) = object.keys().find(|key| !KNOWN.contains(&key.as_str())) {
             return Err(format!("profile.{key} is not a profile key"));
@@ -116,6 +134,20 @@ impl Profile {
         if let Some(tools) = &self.tools {
             options.only_tools = Some(tools.clone());
         }
+        if let Some(model) = &self.model {
+            (options.model, options.provider) = (Some(model.clone()), None);
+        }
+        if let Some(level) = &self.level {
+            options.effort = Some(level.clone());
+        }
+        if let Some(tokens) = self.max_tokens {
+            options.max_output_tokens = Some(tokens);
+        }
+    }
+
+    /// The model this profile names, which the session's providers must offer.
+    pub(super) fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 
     /// Whether this profile sets the session's reach, which `/sandbox` then cannot change.
@@ -247,9 +279,19 @@ mod tests {
             "profile.read: refs is not an absolute path"
         );
         assert_eq!(
-            refused(json!({"model": "local/qwen"})),
-            "profile.model is not supported yet"
+            refused(json!({"model": 4})),
+            "profile.model must be a string"
         );
+        assert!(
+            refused(json!({"thinkingLevel": "lots"}))
+                .starts_with("profile.thinkingLevel: lots is none of off, minimal, low"),
+        );
+        for tokens in [json!(0), json!(-5), json!(1.5), json!("4096")] {
+            assert_eq!(
+                refused(json!({"maxTokens": tokens})),
+                "profile.maxTokens must be a positive whole number"
+            );
+        }
     }
 
     #[test]
@@ -260,10 +302,24 @@ mod tests {
             "contextFiles": false,
             "directives": false,
             "tools": ["read", "bash"],
+            "model": "local/qwen3.8:27b",
+            "thinkingLevel": "low",
+            "maxTokens": 4096,
         });
         let profile = Profile::parse(&given).unwrap();
         assert!(!profile.confines());
-        let arguments = ["--system-prompt", "launch", "--append-system-prompt", "x"];
+        let arguments = [
+            "--system-prompt",
+            "launch",
+            "--append-system-prompt",
+            "x",
+            "--model",
+            "test/launch",
+            "--provider",
+            "test",
+            "--thinking",
+            "high",
+        ];
         let mut options = Options::parse(arguments.iter().map(Into::into))
             .unwrap()
             .unwrap();
@@ -274,6 +330,10 @@ mod tests {
         assert_eq!(prompt.append, ["one", "two"]);
         assert!(prompt.no_context_files && prompt.no_directives);
         assert_eq!(options.only_tools, Some(vec!["read".into(), "bash".into()]));
+        assert_eq!(options.model.as_deref(), Some("local/qwen3.8:27b"));
+        assert_eq!(options.provider, None);
+        assert_eq!(options.effort.as_deref(), Some("low"));
+        assert_eq!(options.max_output_tokens, Some(4096));
         assert_eq!(profile.given, given);
 
         // What it leaves unset stays the launch's.
@@ -287,6 +347,8 @@ mod tests {
         assert!(!options.prompt.system_text);
         assert_eq!(options.prompt.append, ["only"]);
         assert_eq!(options.only_tools, None);
+        assert_eq!(options.model.as_deref(), Some("test/launch"));
+        assert_eq!(options.effort.as_deref(), Some("high"));
     }
 
     #[cfg(unix)]

@@ -123,6 +123,7 @@ impl Interactive {
                 settings,
                 scope: Vec::new(),
                 chosen: None,
+                remembers: true,
             },
             ui,
             screen,
