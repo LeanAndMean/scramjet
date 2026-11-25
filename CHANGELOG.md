@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.7 — The install guide followed
+
+### Fixed
+
+- The installers, given a `SCRAMJET_VERSION` that was never released (not every version in this changelog is), say so and where the releases are listed, rather than failing with a bare HTTP 404.
+
 ## 2.340.6 — The command sets guide followed
 
 ### Fixed

@@ -44,6 +44,10 @@
             Invoke-WebRequest -UseBasicParsing "$base/$name" -OutFile (Join-Path $work $name)
             Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile (Join-Path $work 'SHA256SUMS')
         } catch {
+            $response = $_.Exception.Response
+            if ($response -and [int]$response.StatusCode -eq 404) {
+                Fail "v$version has no release with $name`: not every version in the changelog is released, and the releases and their archives are listed at https://github.com/$repo/releases"
+            }
             Fail "could not download from ${base}: $($_.Exception.Message)"
         }
 

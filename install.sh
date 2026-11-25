@@ -65,7 +65,11 @@ base=https://github.com/$repo/releases/download/v$version
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 echo "Downloading $name"
-curl -fsSL -o "$work/$name" "$base/$name" || fail "could not download $base/$name"
+status=$(curl -sSL -o "$work/$name" -w '%{http_code}' "$base/$name") || fail "could not download $base/$name"
+if [ "$status" = 404 ]; then
+  fail "v$version has no release with $name: not every version in the changelog is released, and the releases and their archives are listed at https://github.com/$repo/releases"
+fi
+[ "$status" = 200 ] || fail "could not download $base/$name (HTTP $status)"
 curl -fsSL -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "could not download $base/SHA256SUMS"
 
 expected=$(awk -v name="$name" '$2 == name || $2 == "*" name { print $1 }' "$work/SHA256SUMS")

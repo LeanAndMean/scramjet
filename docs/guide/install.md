@@ -16,7 +16,7 @@ On Windows, in PowerShell:
 irm https://raw.githubusercontent.com/LeanAndMean/scramjet/main/install.ps1 | iex
 ```
 
-Each takes the newest release, prereleases included (`SCRAMJET_VERSION=2.143.1` for another), checks it against the release's `SHA256SUMS`, runs it, and puts it in `~/.local/bin` (on Windows `%LOCALAPPDATA%\Programs\scramjet`; `SCRAMJET_INSTALL_DIR` for another). On Windows it also puts that directory first on your user `Path`, unless `SCRAMJET_NO_MODIFY_PATH` is set; on Linux and macOS it changes no startup file, but shows the line to add when the directory is not on your `PATH` or another `scramjet` comes first.
+Each takes the newest release, prereleases included (`SCRAMJET_VERSION=2.143.1` for another: one of the [releases](https://github.com/LeanAndMean/scramjet/releases), as not every version in the [changelog](../../CHANGELOG.md) is released), checks it against the release's `SHA256SUMS`, runs it, and puts it in `~/.local/bin` (on Windows `%LOCALAPPDATA%\Programs\scramjet`; `SCRAMJET_INSTALL_DIR` for another). On Windows it also puts that directory first on your user `Path`, unless `SCRAMJET_NO_MODIFY_PATH` is set; on Linux and macOS it changes no startup file, but shows the line to add when the directory is not on your `PATH` or another `scramjet` comes first.
 
 ## By hand
 
