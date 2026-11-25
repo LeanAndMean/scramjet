@@ -14,6 +14,9 @@
         "arguments": {
           "command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"
         }
+      },
+      {
+        "total": 16000
       }
     ],
     [
@@ -22,11 +25,17 @@
         "arguments": {
           "command": "yes 'a filler line, so that the context is large enough to compact' | head -n 1500"
         }
+      },
+      {
+        "total": 16000
       }
     ],
     [
       {
         "text": "First answer, not compacted."
+      },
+      {
+        "total": 16000
       }
     ],
     [
@@ -37,6 +46,9 @@
     [
       {
         "text": "Second answer, after compacting."
+      },
+      {
+        "total": 3000
       }
     ]
   ],
@@ -96,5 +108,5 @@
       "type": "\u0004"
     }
   ],
-  "total": 5510
+  "total": 3000
 }

@@ -42,7 +42,8 @@ A scenario (scripts/screens/*.json) holds:
     "prompt":   the first message;
     "replies":  each response's items, in turn: {"reasoning": TEXT}, {"text": TEXT} or
                 {"call": NAME, "arguments": {...}}; the tools run for real; a text with
-                "pace": SECONDS streams word by word, SECONDS apart; or a refusal,
+                "pace": SECONDS streams word by word, SECONDS apart; {"total": TOKENS} in place
+                of "total" for that response; or a refusal,
                 {"status": CODE, "body": JSON, "headers": {NAME: TEXT}}, its headers replacing
                 "headers";
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
@@ -104,7 +105,7 @@ def item_events(index, item, pace=None):
 def items(reply, number):
     """A scenario's reply as Responses output items."""
     made, paces = [], []
-    for index, entry in enumerate(reply):
+    for index, entry in enumerate(entry for entry in reply if 'total' not in entry):
         paces.append(entry.get('pace'))
         name = '%d_%d' % (number, index)
         if 'reasoning' in entry:
@@ -160,7 +161,10 @@ def serve(replies, headers=None, total=None, log=None):
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
-    streams = [reply if isinstance(reply, dict) else stream(*items(reply, number), total)
+    def own_total(reply):
+        return next((entry['total'] for entry in reply if 'total' in entry), total)
+
+    streams = [reply if isinstance(reply, dict) else stream(*items(reply, number), own_total(reply))
                for number, reply in enumerate(replies)]
 
     def answer():
