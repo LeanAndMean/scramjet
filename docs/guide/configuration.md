@@ -133,7 +133,7 @@ Subagents running at once share the directory: give parallel writers separate `c
 - It is on a new branch `worktree-agent-…` from the repository's `HEAD` (uncommitted changes are not in it), made under the state directory's `worktrees/` (`~/.local/state/scramjet/worktrees/<project>/agent-…`).
 - It is writable to the subagent even when the main agent's sandbox is not, its git files read-only, so the subagent leaves its changes uncommitted.
 - A worktree left unchanged is removed with its branch; files git ignores in it, such as build output, an ignored notes directory or a `.env`, go with it, as in Claude Code, and the result names them.
-- Otherwise the result names its path and branch, and you or the main agent remove it once its changes are taken or dropped.
+- Otherwise the result names its path and branch, and so does the subagent's box on the screen; you or the main agent remove it once its changes are taken or dropped.
 
 ## MCP servers
 

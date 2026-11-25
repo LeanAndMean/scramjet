@@ -1224,17 +1224,36 @@ worktree\n---\n\nWrite.\n",
             ..Default::default()
         });
         let cancel = AtomicBool::new(false);
-        agent
-            .turn("write", &mut Recorder::default(), &cancel)
-            .unwrap();
+        let mut wrote = Recorder::default();
+        agent.turn("write", &mut wrote, &cancel).unwrap();
         agent
             .turn("look", &mut Recorder::default(), &cancel)
             .unwrap();
-        agent
-            .turn("chain", &mut Recorder::default(), &cancel)
-            .unwrap();
+        let mut chained = Recorder::default();
+        agent.turn("chain", &mut chained, &cancel).unwrap();
         let bodies = server.join().unwrap();
         assert_eq!(bodies.len(), 15);
+        // The children saved with the call, which the screen draws, name the worktree kept: a
+        // chain's under its last step.
+        let worktrees = |recorder: &Recorder| -> Vec<Option<String>> {
+            (recorder.details.iter())
+                .filter_map(|detail| match detail {
+                    ToolDetail::Subagents(children) => Some(children),
+                    _ => None,
+                })
+                .flat_map(|children| children.runs.iter().map(|run| run.worktree.clone()))
+                .collect()
+        };
+        let kept = |note: &Option<String>| {
+            note.as_deref()
+                .is_some_and(|note| note.starts_with("Worktree kept with uncommitted changes: "))
+        };
+        let single = worktrees(&wrote);
+        assert!(single.len() == 1 && kept(&single[0]), "{single:?}");
+        let steps = worktrees(&chained);
+        assert_eq!(steps.len(), 4, "{steps:?}");
+        assert!(steps[..3].iter().all(Option::is_none), "{steps:?}");
+        assert!(kept(&steps[3]), "{steps:?}");
         // A chain's writers share one worktree, the later seeing what the earlier wrote; a chain
         // that stops still names it.
         let chain = last_output(&bodies[14]);

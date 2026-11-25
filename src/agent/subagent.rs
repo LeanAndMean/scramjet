@@ -860,6 +860,7 @@ impl<'a> Job<'a> {
             usage: ChildUsage::default(),
             responses: Vec::new(),
             warnings: self.warnings.clone(),
+            worktree: None,
         }
     }
 }
@@ -1156,6 +1157,9 @@ is added or changed.",
             }
             let main = parent.sandbox.map(|sandbox| (sandbox, parent.root));
             let kept = shared.and_then(|worktree| worktree.finish(main));
+            if let Some(last) = shown.runs.last_mut() {
+                last.worktree = kept.clone();
+            }
             match ended {
                 Some(text) => {
                     let text = std::iter::once(text).chain(kept);
@@ -1286,6 +1290,7 @@ fn run_jobs(
                     child.state = run.shown_state();
                     child.usage = run.shown_usage();
                     child.responses = run.responses.clone();
+                    child.worktree = run.kept.clone();
                     runs[index] = Some(run);
                 }
             }
@@ -1308,6 +1313,7 @@ fn run_jobs(
         .collect();
     for (child, run) in shown.runs[first..].iter_mut().zip(&runs) {
         child.state = run.shown_state();
+        child.worktree = run.kept.clone();
     }
     runs
 }

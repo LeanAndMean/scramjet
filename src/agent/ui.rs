@@ -405,6 +405,10 @@ pub struct ChildRun {
     pub responses: Vec<Value>,
     /// What was said about the agent's file and the tools it did not get.
     pub warnings: Vec<String>,
+    /// What the parent is told of its `isolation: worktree` worktree: kept, and where, or
+    /// removed with what git ignores; a chain's, which its steps share, on its last step run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

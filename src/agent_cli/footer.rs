@@ -581,6 +581,7 @@ mod tests {
             },
             responses: Vec::new(),
             warnings: Vec::new(),
+            worktree: None,
         };
         let children = |runs| Children {
             mode: Delegation::Parallel,

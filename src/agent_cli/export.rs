@@ -494,6 +494,9 @@ fn child_html(run: &ChildRun) -> String {
             ChildItem::Text(said) => format!("<div class=\"markdown\">{}</div>", markdown(said)),
         };
     }
+    if let Some(note) = &run.worktree {
+        body += &format!("<div class=\"warning\">{}</div>", text(note));
+    }
     format!("<details class=\"child\"><summary>{head}</summary>{body}</details>")
 }
 

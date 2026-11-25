@@ -4,6 +4,16 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.338.0 — A subagent's box names the worktree it kept
+
+### Added
+
+- A subagent with `isolation: worktree` that leaves changes shows in its own box on the screen, and in `/export`, where its worktree and branch were kept and how to remove them once merged (a chain's under its last step); before, only the main agent's reply could say so. An unchanged worktree removed with files git ignores is said there too.
+
+### Fixed
+
+- A long warning or error in a subagent's box kept its colour only on its first row.
+
 ## 2.337.2 — The providers and editor guides in sections
 
 ### Changed

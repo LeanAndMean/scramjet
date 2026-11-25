@@ -84,11 +84,15 @@ impl Rows<'_> {
         self.rows.extend(text.split('\n').map(str::to_owned));
     }
 
-    /// Each line of `text`, wrapped, in `style`.
+    /// Each line of `text`, wrapped, each row in `style`.
     fn text(&mut self, style: Style, text: &str) {
         for line in visible(text.trim_end()).lines() {
-            let line = self.paint(style, line);
-            self.wrapped(&line);
+            let mut wrap = Wrap::new(self.look.width).marking(self.look.marked);
+            let rows = wrap.push(line) + &wrap.finish();
+            for row in rows.split('\n') {
+                let row = self.paint(style, row);
+                self.rows.push(row);
+            }
         }
     }
 
@@ -146,6 +150,13 @@ impl Rows<'_> {
             text += &format!("\n- {warning}");
         }
         self.text(WARNING, &text);
+    }
+
+    /// What became of its worktree, which the user may have to merge or remove.
+    fn worktree(&mut self, run: &ChildRun) {
+        if let Some(note) = &run.worktree {
+            self.text(WARNING, note);
+        }
     }
 
     /// Nothing when it has no counts, rather than the model alone.
@@ -232,6 +243,7 @@ impl Rows<'_> {
                 None if run.items.is_empty() => self.status(run),
                 None => self.latest(run, ITEMS),
             }
+            self.worktree(run);
             self.usage(&run.usage, Some(&run.model), "");
             return;
         }
@@ -254,6 +266,10 @@ impl Rows<'_> {
                     self.result(output);
                 }
             }
+        }
+        if run.worktree.is_some() {
+            self.blank();
+            self.worktree(run);
         }
         if !usage_line(&run.usage, None).is_empty() {
             self.blank();
@@ -328,6 +344,7 @@ impl Rows<'_> {
                     None if run.items.is_empty() => self.status(run),
                     None => self.latest(run, EACH_ITEMS),
                 }
+                self.worktree(run);
                 self.usage(&run.usage, None, "");
                 continue;
             }
@@ -349,6 +366,7 @@ impl Rows<'_> {
                 }
                 (None, None) => {}
             }
+            self.worktree(run);
             self.usage(&run.usage, Some(&run.model), "");
         }
         if !usage_line(&total, None).is_empty() {
@@ -435,6 +453,7 @@ mod tests {
             },
             responses: Vec::new(),
             warnings: Vec::new(),
+            worktree: None,
         }
     }
 
@@ -603,6 +622,43 @@ mod tests {
     }
 
     #[test]
+    fn a_child_names_the_worktree_it_kept() {
+        let note = "Worktree kept with 1 commits: /s/wt/a, branch worktree-a from 0123abcd.";
+        let kept = ChildRun {
+            worktree: Some(note.into()),
+            usage: ChildUsage::default(),
+            ..run(
+                "writer",
+                ChildState::Done,
+                vec![ChildItem::Text("Done.".into())],
+            )
+        };
+        let single = Children {
+            mode: Delegation::Single,
+            runs: vec![kept.clone()],
+        };
+        let tail = [
+            "Worktree kept with 1 commits: /s/wt/a, branch",
+            "worktree-a from 0123abcd.",
+        ];
+        assert_eq!(shown(&single, false)[1..], ["Done.", tail[0], tail[1]]);
+        let full = shown(&single, true);
+        assert_eq!(full[full.len() - 3..], ["", tail[0], tail[1]]);
+        let chain = Children {
+            mode: Delegation::Chain,
+            runs: vec![run("scout", ChildState::Done, Vec::new()), kept],
+        };
+        // A chain's shared worktree shows once, under the step that ran last.
+        for full in [false, true] {
+            let rows = shown(&chain, full);
+            let step = rows.iter().position(|row| row.starts_with("─── Step 2"));
+            let at = rows.iter().position(|row| row == tail[0]);
+            assert!(step < at && at.is_some(), "{rows:?}");
+            assert_eq!(rows.iter().filter(|row| *row == tail[0]).count(), 1);
+        }
+    }
+
+    #[test]
     fn several_children_each_show_how_they_went() {
         let unknown = ChildRun {
             source: "unknown".into(),
@@ -722,6 +778,28 @@ mod tests {
         assert!(
             rows.iter().any(|row| row.contains("\x1b[1mTabs\x1b[0m")),
             "{rows:?}"
+        );
+        // Each row of a wrapped note keeps its style.
+        let kept = Children {
+            mode: Delegation::Single,
+            runs: vec![ChildRun {
+                worktree: Some("Worktree kept with uncommitted changes".into()),
+                ..run("scout", ChildState::Done, found())
+            }],
+        };
+        let warning = Design::default().tone(WARNING).to_string();
+        let kept = super::rows(&kept, &look);
+        let noted: Vec<&String> = (kept.iter())
+            .filter(|row| {
+                ["Worktree", "kept", "uncommitted", "changes"]
+                    .iter()
+                    .any(|w| row.contains(w))
+            })
+            .collect();
+        assert_eq!(noted.len(), 4, "{noted:?}");
+        assert!(
+            noted.iter().all(|row| row.starts_with(&warning)),
+            "{noted:?}"
         );
     }
 }
