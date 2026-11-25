@@ -405,7 +405,15 @@ fn start(
     (patterns, source): (&[String], &str),
 ) -> Result<(Agent, Vec<String>), String> {
     let api_key = options.api_key.clone();
-    let providers = Providers::read(settings.sources(), agent::login::Logins::user());
+    let mut providers = Providers::read(settings.sources(), agent::login::Logins::user());
+    // The provider --provider or --model's `provider/` names takes --api-key's key, before the
+    // model is found: a built-in one offers its models only once it has a key.
+    let key_for = api_key
+        .as_ref()
+        .and_then(|_| key_provider(&options, &providers));
+    if let (Some(key), Some(provider)) = (&api_key, &key_for) {
+        providers.give_key(provider, key);
+    }
     // Before the session starts, so that a pattern naming no model leaves none behind.
     let named = match &options.model {
         Some(pattern) => Some(named_model(
@@ -451,9 +459,12 @@ fn start(
         };
         // As Scramjet's, a run without the full screen stops here: no request could be sent.
         if options.print {
+            let problems = (providers.problems().iter())
+                .map(|problem| format!("\n{problem}"))
+                .collect::<String>();
             return Err(format!(
                 "no provider offers any model: start scramjet and /login (a subscription, an API \
-key for {keyed}, or local models), or add providers to {file} (see --help)"
+key for {keyed}, or local models), or add providers to {file} (see --help){problems}"
             ));
         }
         warnings.push(format!(
@@ -561,6 +572,16 @@ local models), or add providers to {file} (see --help)"
         .unwrap_or_else(|| "medium".to_owned());
     agent.set_effort(effort).map_err(|e| e.to_string())?;
     match &api_key {
+        Some(_)
+            if let (Some(named), Some(serving)) = (&key_for, agent.model_provider())
+                && !named.eq_ignore_ascii_case(serving) =>
+        {
+            return Err(format!(
+                "--api-key: the key is for {named}, which --model names, but {} is {serving}'s; \
+it is not sent there",
+                agent.model()
+            ));
+        }
         Some(key) => agent.give_key(key)?,
         None => {
             agent.load_model_info();
@@ -592,6 +613,20 @@ fn given_path(path: &str, cwd: &Path) -> PathBuf {
             home.join(path[1..].trim_start_matches('/'))
         }
         _ => cwd.join(path),
+    }
+}
+
+/// The provider `--api-key`'s key is for when the options name one: `--provider`, else the
+/// `provider/` before `--model`'s id when a provider of that name takes a key.
+fn key_provider(options: &Options, providers: &Providers) -> Option<String> {
+    let keyed = |name: &str| {
+        (providers.keyed().iter())
+            .find(|(keyed, _)| keyed.eq_ignore_ascii_case(name))
+            .map(|(keyed, _)| keyed.clone())
+    };
+    match &options.provider {
+        Some(provider) => Some(keyed(provider).unwrap_or_else(|| provider.clone())),
+        None => keyed(options.model.as_deref()?.trim().split_once('/')?.0),
     }
 }
 

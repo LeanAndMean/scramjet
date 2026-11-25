@@ -433,6 +433,36 @@ fn api_key_is_sent_as_given_to_the_models_provider_for_the_run() {
         assert_eq!(key.as_deref(), Some(given), "{stderr}");
         assert!(!stderr.contains(given), "{stderr}");
     }
+    // A key for the built-in provider --model names goes to no other provider's model of that
+    // id; asking Anthropic for its list goes to a closed port.
+    let mut models = models;
+    models["providers"]["test"]["models"] = serde_json::json!([{"id": "anthropic/claude-x"}]);
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let output = program(&binary())
+        .args([
+            "-p",
+            "--no-session",
+            "--retries",
+            "0",
+            "--api-key",
+            "sk-ant-given",
+        ])
+        .args(["--model", "anthropic/claude-x", "hi"])
+        .env("XDG_CONFIG_HOME", &config)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("HTTPS_PROXY", "http://127.0.0.1:9")
+        .env("https_proxy", "http://127.0.0.1:9")
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "scramjet: --api-key: the key is for anthropic, which --model names, but \
+test/anthropic/claude-x is test's; it is not sent there\n"
+    );
+    assert!(requests.try_recv().is_err());
     let output = program(&binary())
         .args(["-p", "--no-session", "--api-key", "two words", "hi"])
         .env("XDG_CONFIG_HOME", &config)

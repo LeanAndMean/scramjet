@@ -4,6 +4,13 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.333.1 — `--api-key` for Anthropic or OpenRouter
+
+### Fixed
+
+- `--api-key` with `--model anthropic/…` or `openrouter/…` works with no saved key and alongside other providers: the key reads that provider's models before `--model` is looked up. Before, the run stopped at "no provider offers any model" or found no such model.
+- A key given for the provider `--model` names is never sent to another provider whose model has that id (OpenRouter's `anthropic/…`): the run stops saying so.
+
 ## 2.333.0 — Anthropic and OpenRouter with an API key
 
 ### Added
