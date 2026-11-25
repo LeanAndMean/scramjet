@@ -3222,30 +3222,24 @@ echo made > made.txt && echo wrote; echo $(ls -A /run 2>/dev/null | wc -l)"
         }
         assert!(root.join("made.txt").exists());
         if cfg!(target_os = "macos") {
-            // A job launchd starts would run outside the profile, on the network.
-            let submit = |offline: bool| {
-                let label = format!("scramjet-offline-{}-{offline}", std::process::id());
-                let made = format!("/private/tmp/{label}");
-                let script = format!(
-                    "id -un >/dev/null && echo user; scutil --dns | grep -q resolver && echo dns \
-|| echo no dns; launchctl submit -l {label} -- /usr/bin/touch {made}; for i in 1 2 3 4 5 6 7 8 \
-9 10; do test -e {made} && break; sleep 1; done; test -e {made} && echo submitted || echo kept"
-                );
+            // The system's services would reach the network for it: configd's DNS stands for
+            // them, as GitHub's runner starts no job `launchctl submit` is given.
+            let script = "id -un >/dev/null && echo user; scutil --dns | grep -q resolver && \
+echo dns || echo no dns";
+            let ask = |offline: bool| {
                 let hidden = super::Hidden::nothing().offline(offline);
-                let output = super::hiding(&root, &script, &hidden).unwrap().output();
-                let _ = std::process::Command::new("launchctl")
-                    .args(["remove", &label])
-                    .output();
-                let _ = std::fs::remove_file(&made);
-                let output = output.unwrap();
+                let output = super::hiding(&root, script, &hidden)
+                    .unwrap()
+                    .output()
+                    .unwrap();
                 let text = String::from_utf8_lossy(&output.stdout).into_owned();
                 let errors = String::from_utf8_lossy(&output.stderr).into_owned();
                 (text.lines().map(str::to_owned).collect::<Vec<_>>(), errors)
             };
-            let (online, errors) = submit(false);
-            assert_eq!(online, ["user", "dns", "submitted"], "{errors}");
-            let (offline, errors) = submit(true);
-            assert_eq!(offline, ["user", "no dns", "kept"], "{errors}");
+            let (online, errors) = ask(false);
+            assert_eq!(online, ["user", "dns"], "{errors}");
+            let (offline, errors) = ask(true);
+            assert_eq!(offline, ["user", "no dns"], "{errors}");
         }
     }
 
