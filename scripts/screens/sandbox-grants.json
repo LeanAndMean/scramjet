@@ -47,7 +47,7 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Add a directory"
+      "until": "Add…"
     },
     {
       "sleep": 0.3
@@ -95,7 +95,7 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Add a directory"
+      "until": "Add…"
     },
     {
       "sleep": 0.3
@@ -113,13 +113,13 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "Add a directory"
+      "until": "Add…"
     },
     {
       "type": "\r"
     },
     {
-      "until": "Sandbox mode"
+      "until": "anything, no sandbox"
     },
     {
       "sleep": 0.3
@@ -134,13 +134,13 @@
       "until": "Sandbox: workspace-write"
     },
     {
-      "type": "\u001b[B\r"
+      "type": "\u001b[B\u001b[B\r"
     },
     {
       "until": "Sandbox: no network"
     },
     {
-      "type": "\u001b[B\u001b[B\r"
+      "type": "\u001b[B\r"
     },
     {
       "until": "read-only again"

@@ -3,18 +3,16 @@
 //! Each session runs on a thread of its own, driven as the full screen drives its own
 //! (`drive::run_turn`), while this thread reads the client's messages.
 use super::args::{Options, Start as Launch};
-use super::drive::{
-    self, Change, Front, Messages, Offer, Picked, Routed, SandboxChange, Session, Start,
-};
+use super::drive::{self, Change, Front, Messages, Offer, Picked, Routed, Session, Start};
 use super::live::State;
 use super::settings::Settings;
 use super::slash::Builtin;
 use profile::Profile;
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
-    Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose, Reach,
-    Remembered, Reopened, Reply, SandboxMode, SessionChoice, Shell, StreamProgress, TYPE_SOMETHING,
-    Times, Tokens, ToolDetail, TreeEntry, TreeItem, UserCommand,
+    Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose, Reopened,
+    Reply, SessionChoice, Shell, StreamProgress, TYPE_SOMETHING, Times, Tokens, ToolDetail,
+    TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -34,6 +32,7 @@ use std::{
 
 mod display;
 mod profile;
+mod sandbox;
 mod sign_in;
 mod watch;
 
@@ -511,27 +510,6 @@ fn keyed_providers(
 const AUTH_REQUIRED: i64 = -32000;
 
 /// `AUTH_REQUIRED`'s message, saying why.
-/// The `sandbox` extension's names of a reach.
-const REACH_NAMES: [(Reach, &str); 3] = [
-    (Reach::Everything, "everything"),
-    (Reach::Project, "project"),
-    (Reach::Minimal, "minimal"),
-];
-
-fn reach(name: &str) -> Option<Reach> {
-    REACH_NAMES
-        .iter()
-        .find(|(_, known)| *known == name)
-        .map(|(reach, _)| *reach)
-}
-
-fn reach_name(reach: Reach) -> &'static str {
-    REACH_NAMES
-        .iter()
-        .find(|(known, _)| *known == reach)
-        .map_or("everything", |(_, name)| name)
-}
-
 fn auth_required(why: &str) -> String {
     format!("authentication required: {why}")
 }
@@ -652,7 +630,7 @@ enum Setting {
     Label(usize, Option<String>),
     Mcp,
     /// `sandbox`'s change, if any.
-    Sandbox(Option<SandboxChange>),
+    Sandbox(Option<sandbox::Asked>),
 }
 
 impl Connection {
@@ -878,51 +856,12 @@ impl Connection {
         self.busy(&id, params, job);
     }
 
-    /// `/sandbox`: the session's sandbox, after the change `params` gives (`mode`, `network`,
-    /// `add` or `remove`, at most one), made at the turn's next pause as the full screen makes it.
+    /// `/sandbox`: the session's sandbox, after the change `params` gives, if any (at most one,
+    /// `sandbox::KEYS`), made at the turn's next pause as the full screen makes it.
     fn sandbox(&self, id: &Value, params: &Value) {
-        let given: Vec<&str> = (["mode", "network", "add", "remove", "reach"].into_iter())
-            .filter(|key| !params[key].is_null())
-            .collect();
-        let change = match given[..] {
-            [] => None,
-            ["mode"] => match params["mode"].as_str().and_then(SandboxMode::parse) {
-                Some(mode) => Some(SandboxChange::Mode(mode)),
-                None => {
-                    let message = "mode is read-only, workspace-write or danger-full-access";
-                    return self.out.error(id, INVALID_PARAMS, message);
-                }
-            },
-            ["network"] => match params["network"].as_bool() {
-                Some(network) => Some(SandboxChange::Network(network)),
-                None => {
-                    return self
-                        .out
-                        .error(id, INVALID_PARAMS, "network is true or false");
-                }
-            },
-            ["reach"] => match params["reach"].as_str().and_then(reach) {
-                Some(reach) => Some(SandboxChange::Reach(reach)),
-                None => {
-                    let message = "reach is everything, project or minimal";
-                    return self.out.error(id, INVALID_PARAMS, message);
-                }
-            },
-            [key @ ("add" | "remove")] => {
-                let directory = params[key].as_str().map(str::trim).unwrap_or_default();
-                if directory.is_empty() {
-                    let message = format!("{key} is a directory");
-                    return self.out.error(id, INVALID_PARAMS, &message);
-                }
-                Some(match key {
-                    "add" => SandboxChange::Add(directory.to_owned()),
-                    _ => SandboxChange::Remove(directory.to_owned()),
-                })
-            }
-            _ => {
-                let message = "at most one of mode, network, add, remove and reach";
-                return self.out.error(id, INVALID_PARAMS, message);
-            }
+        let change = match sandbox::asked(params) {
+            Ok(change) => change,
+            Err(message) => return self.out.error(id, INVALID_PARAMS, &message),
         };
         let Some(handle) = self.handle(params) else {
             return self.unknown(id, params);
@@ -2802,13 +2741,13 @@ impl Acp {
         }
     }
 
-    /// Answers request `id` with the MCP servers, as `/mcp` lists them.
     /// Makes `change`, if any, and answers with the sandbox as it is then.
-    fn sandbox(&mut self, id: &Value, change: Option<SandboxChange>) {
+    fn sandbox(&mut self, id: &Value, change: Option<sandbox::Asked>) {
         if change.is_some() && self.profile.as_ref().is_some_and(Profile::confines) {
             let message = "the session's profile sets its reach: resume it with another profile";
             return self.ui.out.error(id, INVALID_PARAMS, message);
         }
+        let change = change.map(|asked| asked.change(&self.session.settings));
         let (message, warnings) = match change.map(|change| self.session.change_sandbox(change)) {
             None => (None, Vec::new()),
             Some(Ok((said, warnings))) => (Some(said), warnings),
@@ -2822,27 +2761,13 @@ impl Acp {
 
     /// The session's sandbox, as `/sandbox` answers it.
     fn sandbox_state(&self) -> Value {
-        let agent = &self.session.agent;
-        let sandbox = agent.sandbox();
-        let mode = sandbox.map_or(FULL_ACCESS, |sandbox| sandbox.mode.name());
-        lock(&self.ui.log).sandbox = mode;
-        let root = agent.root();
-        let always = (Remembered::user().and_then(|kept| kept.of(root).ok())).unwrap_or_default();
-        let granted = sandbox.map_or(&[][..], |sandbox| &sandbox.writable[..]);
-        let mut listed: Vec<Value> = (granted.iter())
-            .map(|path| json!({"path": path, "granted": true, "always": always.contains(path)}))
-            .collect();
-        let others = always.iter().filter(|path| !granted.contains(path));
-        listed.extend(others.map(|path| json!({"path": path, "always": true, "granted": false})));
-        json!({
-            "mode": mode,
-            "network": sandbox.map_or(!agent.offline(), |sandbox| sandbox.network),
-            "reach": reach_name(agent.reads().reach),
-            "granted": listed,
-            "summary": super::slash::sandbox_summary(agent, &self.session.settings.allow_write()),
-        })
+        let sandbox = self.session.agent.sandbox();
+        lock(&self.ui.log).sandbox = sandbox.map_or(FULL_ACCESS, |sandbox| sandbox.mode.name());
+        let confined = self.profile.as_ref().is_some_and(Profile::confines);
+        sandbox::state(&self.session, confined)
     }
 
+    /// Answers request `id` with the MCP servers, as `/mcp` lists them.
     fn mcp_servers(&mut self, id: &Value) {
         let servers = self.mcp_list();
         self.ui.out.respond(id, json!({"servers": servers}));

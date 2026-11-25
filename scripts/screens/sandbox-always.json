@@ -69,7 +69,7 @@
       "type": "/sandbox\r"
     },
     {
-      "until": "(always here)"
+      "until": "docs (set here)"
     },
     {
       "sleep": 0.3
@@ -87,13 +87,13 @@
       "type": "/sandbox remove docs\r"
     },
     {
-      "until": "no longer granted"
+      "until": "no longer writable"
     },
     {
       "type": "/sandbox\r"
     },
     {
-      "until": "Add a directory"
+      "until": "Add…"
     },
     {
       "sleep": 0.3

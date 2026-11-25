@@ -6,8 +6,9 @@ use super::keymap::Binding;
 use super::screen::{Answer, Dialog, Optional};
 use super::select::{self, Act, Picked};
 use super::settings::PathList;
+use super::settings::Settings;
 use super::text::clip;
-use scramjet::agent::{Reach, Remembered, SandboxMode, shortened};
+use scramjet::agent::{Agent, Reach, Remembered, SandboxMode, shortened};
 use std::path::{Path, PathBuf};
 
 /// The widest label, `Also writable`.
@@ -87,7 +88,7 @@ fn reads(reach: Option<Reach>) -> &'static str {
 
 /// Where a writable directory of the main agent's comes from.
 #[derive(Clone, Copy)]
-enum Grant {
+pub(super) enum Grant {
     Session,
     /// Granted always in this project (`sandbox-grants.json`).
     Project,
@@ -138,6 +139,74 @@ fn label(list: PathList) -> &'static str {
         PathList::Hidden => "Hidden",
         PathList::Readable => "Also readable",
     }
+}
+
+/// The main agent's writable directories as the screen lists them, each with where it comes
+/// from; `None` where everything is writable (no sandbox, and a reach that hides nothing).
+pub(super) fn grants(agent: &Agent, settings: &Settings) -> Option<Vec<(PathBuf, Grant)>> {
+    let writable = match agent.sandbox() {
+        Some(sandbox) => &sandbox.writable[..],
+        None if settings.reach().kept() => agent.writable(),
+        None => return None,
+    };
+    let always =
+        (Remembered::user().and_then(|kept| kept.of(agent.root()).ok())).unwrap_or_default();
+    let real = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
+        (paths.iter())
+            .filter_map(|path| std::fs::canonicalize(path).ok())
+            .collect()
+    };
+    let from_settings = real(settings.allow_write());
+    let from_default = (settings.default_listed(false, PathList::Writable))
+        .map_or_else(|| from_settings.clone(), real);
+    let grant = |path: &PathBuf| match from_settings.contains(path) {
+        _ if always.contains(path) => Grant::Project,
+        true if from_default.contains(path) => Grant::Default,
+        true => Grant::Project,
+        false => Grant::Session,
+    };
+    let mut granted: Vec<(PathBuf, Grant)> = (writable.iter())
+        .map(|path| (path.clone(), grant(path)))
+        .collect();
+    let others = always.iter().filter(|path| !writable.contains(path));
+    granted.extend(others.map(|path| (path.clone(), Grant::Project)));
+    Some(granted)
+}
+
+/// A path of a list, as the screen shows it.
+pub(super) struct Listed {
+    pub(super) path: PathBuf,
+    /// Added in this project, or for `taken_out` taken out in it.
+    pub(super) set_here: bool,
+    /// In every project's default, taken out in this one.
+    pub(super) taken_out: bool,
+}
+
+/// `list`'s paths, then those of the default the project took out; `None` where subagents
+/// take the main agent's list.
+pub(super) fn listed(settings: &Settings, subagents: bool, list: PathList) -> Option<Vec<Listed>> {
+    let paths = settings.listed(subagents, list)?;
+    let default_own = settings.default_listed(subagents, list).is_some();
+    let own_here = subagents && settings.sandbox_default().is_some() && !default_own;
+    let mut listed: Vec<Listed> = (paths.into_iter())
+        .map(|path| Listed {
+            set_here: !own_here && settings.added_here(subagents, list, &path),
+            path,
+            taken_out: false,
+        })
+        .collect();
+    if !own_here {
+        listed.extend(taken_out(settings, subagents, list));
+    }
+    Some(listed)
+}
+
+fn taken_out(settings: &Settings, subagents: bool, list: PathList) -> impl Iterator<Item = Listed> {
+    (settings.removed_here(subagents, list).into_iter()).map(|path| Listed {
+        path,
+        set_here: true,
+        taken_out: true,
+    })
 }
 
 fn shown(path: &Path) -> String {
@@ -350,34 +419,7 @@ impl Interactive {
         let set = cfg!(unix) && now.network != default.network;
         let (network, note) = here(network, note.to_owned(), set);
         rows.push(row("Network", network, note, Entry::Network));
-        // Without a sandbox everything is writable but what the reach hides.
-        let writable = match sandbox {
-            Some(sandbox) => Some(&sandbox.writable[..]),
-            None => reach.kept().then(|| agent.writable()),
-        };
-        if let Some(writable) = writable {
-            let root = agent.root();
-            let always =
-                (Remembered::user().and_then(|kept| kept.of(root).ok())).unwrap_or_default();
-            let real = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
-                (paths.iter())
-                    .filter_map(|path| std::fs::canonicalize(path).ok())
-                    .collect()
-            };
-            let from_settings = real(settings.allow_write());
-            let from_default = (settings.default_listed(false, PathList::Writable))
-                .map_or_else(|| from_settings.clone(), real);
-            let grant = |path: &PathBuf| match from_settings.contains(path) {
-                _ if always.contains(path) => Grant::Project,
-                true if from_default.contains(path) => Grant::Default,
-                true => Grant::Project,
-                false => Grant::Session,
-            };
-            let mut granted: Vec<(PathBuf, Grant)> = (writable.iter())
-                .map(|path| (path.clone(), grant(path)))
-                .collect();
-            let others = always.iter().filter(|path| !writable.contains(path));
-            granted.extend(others.map(|path| (path.clone(), Grant::Project)));
+        if let Some(granted) = grants(agent, settings) {
             // What the reach hides is empty and unchangeable to commands, so hidden it is gone.
             let back = match sandbox {
                 Some(_) => "read-only",
@@ -468,9 +510,14 @@ impl Interactive {
             PathList::Hidden => "Hidden by default, shown in this project. Enter hides it again.",
             PathList::Readable => "In every project's default, taken out here. Enter puts it back.",
         };
-        for path in self.session.settings.removed_here(subagents, list) {
-            let value = format!("{} (taken out here)", shown(&path));
-            rows.push(row(label(list), value, note, Entry::Restore(list, path)));
+        for listed in taken_out(&self.session.settings, subagents, list) {
+            let value = format!("{} (taken out here)", shown(&listed.path));
+            rows.push(row(
+                label(list),
+                value,
+                note,
+                Entry::Restore(list, listed.path),
+            ));
         }
     }
 

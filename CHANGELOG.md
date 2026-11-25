@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.332.0 — The whole sandbox screen over ACP
+
+### Added
+
+- `scramjet acp`: the `sandbox` extension shows and changes all that `/sandbox`'s screen does: the Hidden and Also readable lists, subagents' rows and their own lists, which rows this project sets, saving the sandbox for every project and resetting the project; each writable directory says where it comes from.
+
 ## 2.331.1 — Offline commands on macOS keep off the system's services
 
 ### Fixed

@@ -6857,6 +6857,158 @@ fn the_sandbox_shown_lists_what_the_settings_hide_grant_and_re_open() {
 
 #[test]
 #[cfg(unix)]
+fn acp_shows_and_changes_the_sandbox_screens_lists_and_subagents_rows() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-lists-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    let (extra, notes, secret) = (
+        scratch.0.join("extra"),
+        scratch.0.join("notes"),
+        scratch.0.join("secret"),
+    );
+    for directory in [&project, &extra, &notes, &secret] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let extra = std::fs::canonicalize(&extra).unwrap();
+    let settings = serde_json::json!({
+        "hideCredentials": "never",
+        "sandbox": {"filesystem": {"denyRead": [notes]}},
+    });
+    let (mut child, mut stdin, messages) =
+        acp_with(&scratch.0, 1, settings, &["--sandbox", "workspace-write"]);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocolVersion": 1, "clientCapabilities": {}}}),
+    );
+    next(&messages);
+    send(
+        &mut stdin,
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
+            "params": {"cwd": project, "mcpServers": []}}),
+    );
+    let session = next(&messages)["result"]["sessionId"].clone();
+    let mut id = 2;
+    let mut ask = |params: serde_json::Value| {
+        id += 1;
+        let mut params = params;
+        params["sessionId"] = session.clone();
+        let method = "_io.github.leanandmean.scramjet/sandbox";
+        send(
+            &mut stdin,
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        );
+        until(&messages, |message| message["id"] == id).0
+    };
+    let entry = |path: &std::path::Path, set_here: bool, taken_out: bool| serde_json::json!({"path": path, "setHere": set_here, "takenOut": taken_out});
+    let shown = ask(serde_json::json!({}))["result"].clone();
+    assert_eq!(
+        shown["hidden"],
+        serde_json::json!([entry(&notes, false, false)]),
+        "{shown}"
+    );
+    assert_eq!(shown["readable"], serde_json::json!([]), "{shown}");
+    assert_eq!(shown["projectSets"], false, "{shown}");
+    let theirs = &shown["subagents"];
+    assert_eq!(theirs["mode"], "read-only", "{shown}");
+    assert_eq!(theirs["reach"], "same", "{shown}");
+    assert_eq!(theirs["hidden"], serde_json::Value::Null, "{shown}");
+    let hidden =
+        ask(serde_json::json!({"listed": {"list": "hidden", "path": secret, "add": true}}));
+    let hidden = &hidden["result"];
+    let said = format!("{} is hidden from the agent's tools", secret.display());
+    assert_eq!(hidden["message"], said, "{hidden}");
+    assert_eq!(
+        hidden["hidden"],
+        serde_json::json!([entry(&notes, false, false), entry(&secret, true, false)]),
+        "{hidden}"
+    );
+    assert_eq!(hidden["projectSets"], true, "{hidden}");
+    let shown_again =
+        ask(serde_json::json!({"listed": {"list": "hidden", "path": notes, "add": false}}));
+    assert_eq!(
+        shown_again["result"]["hidden"],
+        serde_json::json!([entry(&secret, true, false), entry(&notes, true, true)]),
+        "{shown_again}"
+    );
+    let writable =
+        ask(serde_json::json!({"listed": {"list": "writable", "path": extra, "add": true}}));
+    assert_eq!(
+        writable["result"]["granted"],
+        serde_json::json!([{"path": extra, "granted": true, "always": false, "from": "project"}]),
+        "{writable}"
+    );
+    let network = ask(serde_json::json!({"subagents": {"network": true}}))["result"].clone();
+    let theirs = &network["subagents"];
+    assert_eq!(
+        (&theirs["mode"], &theirs["network"]),
+        (&serde_json::json!("read-only"), &serde_json::json!(true)),
+        "{network}"
+    );
+    assert_eq!(theirs["setHere"]["network"], true, "{network}");
+    let reach = ask(serde_json::json!({"subagents": {"reach": "minimal"}}))["result"].clone();
+    assert_eq!(reach["subagents"]["reach"], "minimal", "{reach}");
+    assert_eq!(reach["subagents"]["network"], true, "{reach}");
+    let same = ask(serde_json::json!({"subagents": {"reach": "same"}}))["result"].clone();
+    assert_eq!(same["subagents"]["reach"], "same", "{same}");
+    let own =
+        ask(serde_json::json!({"ownList": {"list": "hidden", "own": true}}))["result"].clone();
+    assert_eq!(
+        own["message"], "Subagents have a list of their own",
+        "{own}"
+    );
+    assert!(own["subagents"]["hidden"].is_array(), "{own}");
+    let theirs = ask(serde_json::json!({"listed":
+        {"list": "writable", "path": extra, "add": true, "subagents": true}}))["result"]
+        .clone();
+    let said = format!("{} is writable to subagents", extra.display());
+    assert_eq!(theirs["message"], said, "{theirs}");
+    let listed = theirs["subagents"]["writable"].as_array().unwrap();
+    assert!(
+        listed
+            .iter()
+            .any(|entry| entry["path"] == serde_json::json!(extra)),
+        "{theirs}"
+    );
+    for wrong in [
+        serde_json::json!({"save": true, "reset": true}),
+        serde_json::json!({"listed": {"list": "hidden", "path": secret}}),
+        serde_json::json!({"listed": {"list": "nowhere", "path": secret, "add": true}}),
+        serde_json::json!({"subagents": {}}),
+        serde_json::json!({"subagents": {"mode": "danger-full-access"}}),
+        serde_json::json!({"ownList": {"list": "writable", "own": true}}),
+        serde_json::json!({"save": false}),
+    ] {
+        let refused = ask(wrong.clone());
+        assert_eq!(refused["error"]["code"], -32602, "{wrong}: {refused}");
+    }
+    let reset = ask(serde_json::json!({"reset": true}))["result"].clone();
+    assert_eq!(reset["projectSets"], false, "{reset}");
+    assert_eq!(
+        reset["hidden"],
+        serde_json::json!([entry(&notes, false, false)]),
+        "{reset}"
+    );
+    assert_eq!(reset["subagents"]["network"], false, "{reset}");
+    let saved = ask(serde_json::json!({"subagents": {"network": true}}));
+    assert_eq!(
+        saved["result"]["subagents"]["setHere"]["network"], true,
+        "{saved}"
+    );
+    let saved = ask(serde_json::json!({"save": true}))["result"].clone();
+    assert_eq!(
+        saved["message"], "Saved as the default for every project",
+        "{saved}"
+    );
+    assert_eq!(saved["subagents"]["setHere"]["network"], false, "{saved}");
+    assert_eq!(saved["projectSets"], false, "{saved}");
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
 fn acp_shows_and_changes_the_sandbox_through_the_extension_as_slash_sandbox() {
     let scratch = Scratch(
         std::env::temp_dir().join(format!("scramjet-cli-acp-sandbox-{}", std::process::id())),
@@ -6908,7 +7060,7 @@ fn acp_shows_and_changes_the_sandbox_through_the_extension_as_slash_sandbox() {
     assert_eq!(added["message"], said, "{added}");
     assert_eq!(
         added["granted"],
-        serde_json::json!([{"path": extra, "granted": true, "always": false}]),
+        serde_json::json!([{"path": extra, "granted": true, "always": false, "from": "session"}]),
         "{added}"
     );
     let again = ask(method, serde_json::json!({"add": extra}));

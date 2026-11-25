@@ -2016,6 +2016,10 @@ impl Agent {
         self.subagents = subagents;
     }
 
+    pub fn subagents(&self) -> &Subagents {
+        &self.subagents
+    }
+
     /// Whether the turns that follow run with no one to answer (`-p`, a step autopilot runs):
     /// a request for write access is then refused rather than asked.
     pub fn set_unattended(&mut self, unattended: bool) {
