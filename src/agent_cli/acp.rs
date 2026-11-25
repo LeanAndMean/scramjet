@@ -106,7 +106,7 @@ const POLL: Duration = Duration::from_millis(50);
 /// comes.
 pub(super) fn run(arguments: &[String]) -> Result<(), String> {
     let parse = || Options::parse(arguments.iter().map(OsString::from));
-    let Some(options) = parse()? else {
+    let Ok(options) = parse()? else {
         outln!("{USAGE}");
         return Ok(());
     };
@@ -2176,7 +2176,7 @@ fn start_session(
 ) -> Result<Session, (i64, String)> {
     let failed = |error: String| (INTERNAL_ERROR, error);
     let mut options = (Options::parse(arguments.iter().map(OsString::from)).map_err(failed)?)
-        .ok_or(failed("--help is not a session's option".into()))?;
+        .map_err(|_| failed("--help is not a session's option".into()))?;
     options.prompt.no_directives |= !directives;
     if let Some(profile) = profile {
         profile.apply(&mut options);

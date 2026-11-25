@@ -116,4 +116,4 @@ Your own commands are files in a set of your own: [Concepts](concepts.md) explai
 - [In an editor (ACP)](acp.md): Scramjet inside Zed, PyCharm or Toad.
 - [Coming from Claude Code, Codex or Scramjet 1](migration.md).
 - [Troubleshooting](troubleshooting.md), when something fails.
-- `scramjet --help` lists every option, key and built-in command; in a session, `/hotkeys` lists the keys and `/settings` the settings.
+- `scramjet --help` lists the options and commands, a line each, and `scramjet --help-all` every option in full, the keys and the built-in commands; in a session, `/hotkeys` lists the keys and `/settings` the settings.

@@ -258,7 +258,7 @@ implement → PR → ship methodology); other sets can sit alongside it.
     let readme = super::builtin::readme().map(|readme| readme.display().to_string());
     let help = std::env::current_exe().ok().map(|exe| {
         format!(
-            "`{} --help` (every option, key and built-in command)",
+            "`{} --help-all` (every option, key and built-in command)",
             exe.display()
         )
     });
@@ -908,7 +908,7 @@ earlier causes version conflicts between parallel PRs."
         };
         assert!(text.contains(&format!(
             "about Scramjet itself — its commands, command sets, \
-next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`{} --help` \
+next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`{} --help-all` \
 (every option, key and built-in command)\n",
             std::env::current_exe().unwrap().display()
         )));

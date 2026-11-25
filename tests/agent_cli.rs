@@ -62,14 +62,33 @@ fn a_closed_stdout_ends_the_output_quietly() {
 #[test]
 fn help_shows_the_agents_usage_and_other_words_are_refused() {
     let binary = &binary();
-    for help in ["--help", "-h"] {
-        let output = program(binary).arg(help).output().unwrap();
-        assert!(output.status.success());
-        let text = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            text.starts_with("Usage: scramjet [--project DIR]"),
-            "{text}"
-        );
+    let help = |arguments: &[&str]| {
+        let output = program(binary).args(arguments).output().unwrap();
+        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    for short in ["--help", "-h"] {
+        let text = help(&[short]);
+        assert!(text.starts_with("Usage: scramjet [OPTIONS]"), "{text}");
+        assert!(text.contains("\n  --help-all "), "{text}");
+        assert!(text.lines().count() < 100, "{text}");
+    }
+    let text = help(&["--help-all"]);
+    assert!(
+        text.starts_with("Usage: scramjet [--project DIR]"),
+        "{text}"
+    );
+    assert!(text.contains("\n/compact [focus] "), "{text}");
+    for (arguments, usage) in [
+        (
+            &["install", "--help"][..],
+            "Usage: scramjet install DIR|REPO",
+        ),
+        (&["update", "-h"], "Usage: scramjet install DIR|REPO"),
+        (&["catalog", "--help"], "Usage: scramjet catalog add URL"),
+    ] {
+        let text = help(arguments);
+        assert!(text.starts_with(usage), "{arguments:?}: {text}");
     }
     for word in ["--bogus", "-x"] {
         let output = program(binary).arg(word).output().unwrap();
@@ -79,7 +98,8 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
             text.starts_with(&format!("scramjet: unknown argument \"{word}\"")),
             "{text}"
         );
-        assert!(text.contains("Usage: scramjet"), "{text}");
+        assert!(text.contains("Usage: scramjet [OPTIONS]"), "{text}");
+        assert!(text.lines().count() < 10, "{text}");
     }
     let refused = |arguments: &[&str]| {
         let output = program(binary).args(arguments).output().unwrap();

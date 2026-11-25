@@ -15,6 +15,12 @@ REPO: git:github.com/USER/REPO[@REF], git:git@github.com:USER/REPO or a git URL"
 /// Runs `command` with its `arguments` when it is one of these; `None` when it is not.
 pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), String>> {
     let result = match (command, arguments) {
+        ("install" | "remove" | "uninstall" | "update" | "list", [help])
+            if help == "--help" || help == "-h" =>
+        {
+            outln!("{USAGE}");
+            Ok(())
+        }
         ("install", [source]) => match Source::parse(source) {
             None => install(Path::new(source)),
             Some(source) => source.and_then(install_package),

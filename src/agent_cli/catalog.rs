@@ -13,6 +13,10 @@ pub(super) fn run(command: &str, arguments: &[String]) -> Option<Result<(), Stri
         return None;
     }
     Some(match arguments {
+        [help] if help == "--help" || help == "-h" => {
+            outln!("{USAGE}");
+            Ok(())
+        }
         [action, url] if action == "add" => add(url),
         [action, url] if action == "remove" => remove(url),
         [action] if action == "list" => list(),

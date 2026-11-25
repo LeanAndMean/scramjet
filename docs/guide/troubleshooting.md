@@ -15,7 +15,7 @@ Each section starts from what you see. In a session, `/scramjet:troubleshoot` as
 ## A provider's error
 
 - **401 or 403:** the key is wrong or revoked, or the login has expired: `/login` again.
-- **429, 503 or "overloaded":** the provider is busy or your quota is spent. Scramjet retries up to 10 times, waiting longer each time or as long as the provider asks, and your other Scramjet sessions on this machine wait with it. A wait the provider asks for over a minute fails the request instead: the `retry` setting changes both (`scramjet --help` lists its fields).
+- **429, 503 or "overloaded":** the provider is busy or your quota is spent. Scramjet retries up to 10 times, waiting longer each time or as long as the provider asks, and your other Scramjet sessions on this machine wait with it. A wait the provider asks for over a minute fails the request instead: the `retry` setting changes both ([the settings reference](settings.md) lists its fields).
 - **A certificate error:** HTTPS trusts the system's certificates. A company network that re-signs TLS with its own root needs that root in the system's store (`update-ca-certificates` on Debian and Ubuntu), or in a file `SSL_CERT_FILE` names (`SSL_CERT_DIR` for a directory).
 - **Behind a proxy:** set `HTTPS_PROXY` (or `HTTP_PROXY`) to an `http://` proxy, `http://user:password@host:port` if it needs a login; `NO_PROXY`'s hosts are reached directly. `https://` and SOCKS proxies are not supported yet.
 

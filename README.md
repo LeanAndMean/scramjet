@@ -126,7 +126,7 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 - [Privacy](docs/guide/privacy.md): what leaves your machine, to whom, and what stays.
 - [Security](SECURITY.md): reporting a vulnerability, and what the sandbox guarantees and what it does not.
 - [Terminals](docs/TERMINALS.md): what each terminal does with copying, pasting and keys.
-- `scramjet --help`: every option, key and built-in command; in a session, `/hotkeys` and `/settings`.
+- `scramjet --help`: the options and commands, a line each; `scramjet --help-all` each in full, with the keys and built-in commands; in a session, `/hotkeys` and `/settings`.
 
 ## Development
 

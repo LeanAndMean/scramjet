@@ -75,7 +75,7 @@ mod update;
 mod usage;
 mod writable;
 
-use args::{Options, Start, USAGE};
+use args::{Options, Start};
 use scramjet::agent::{
     self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
     Next, Providers, Sandbox, Session, SessionChoice, SkillOptions, SystemPrompt,
@@ -131,9 +131,12 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             return result;
         }
     }
-    let Some(mut options) = Options::parse(arguments.into_iter())? else {
-        outln!("{USAGE}");
-        return Ok(());
+    let mut options = match Options::parse(arguments.into_iter())? {
+        Ok(options) => options,
+        Err(help) => {
+            outln!("{}", help.text());
+            return Ok(());
+        }
     };
     if options.version {
         outln!("{}", env!("CARGO_PKG_VERSION"));

@@ -3,7 +3,113 @@ use super::settings::{LEVELS, card_level};
 use scramjet::agent::{CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt};
 use std::{ffi::OsString, path::PathBuf};
 
-pub(super) const USAGE: &str =
+/// What an argument error shows after it.
+pub(super) const USAGE: &str = "Usage: scramjet [OPTIONS] [@FILE...] [MESSAGE...]
+       scramjet COMMAND [ARGUMENTS]
+
+scramjet --help lists the options and commands, scramjet --help-all says everything.";
+
+pub(super) const HELP: &str = "Usage: scramjet [OPTIONS] [@FILE...] [MESSAGE...]
+       scramjet COMMAND [ARGUMENTS]
+
+A coding agent for the terminal. In a project's directory, scramjet opens a session on the
+full screen, and scramjet -p MESSAGE prints one answer and exits; with no model yet, type
+/login in the session. The agent's tool calls run without asking and outside any sandbox
+unless --ask, --sandbox or the settings say otherwise.
+
+Sessions:
+  -c, --continue           resume the session of this project written to last
+  -r, --resume             choose one of this project's sessions to resume
+  --session FILE|ID        resume that session
+  --fork FILE|ID           continue a copy of that session in a new one
+  --no-session             save no session
+  --ephemeral              leave nothing behind: no session, and the settings' changes kept
+                           for the run only
+  --session-dir DIR        save and find sessions in DIR
+  --project DIR            the project's directory (default: the current one)
+  -p, --print              send the messages, print the replies and exit (a message -
+                           reads stdin)
+  @FILE                    send a file's text, or an image, with the first message
+  MESSAGE                  prompts sent one after another once the session starts
+
+Models:
+  --model PATTERN          the model: provider/id, its id, or part of its id or name,
+                           with an optional :LEVEL
+  --provider NAME          the provider of --model's model
+  --models PATTERNS        the models Ctrl+P cycles through, comma-separated
+  --thinking LEVEL         reasoning effort (also --effort): off, minimal, low, medium,
+                           high, xhigh or max
+  --max-output-tokens N    the most tokens a reply may have
+  --retries N              resend a request that failed transiently up to N times
+  --cache-retention short|long
+                           how long the provider keeps the conversation's start cached
+  --api-key KEY            the key for the model's provider, for this run only
+  --list-models [SEARCH]   list the providers' models and exit
+
+Instructions and tools:
+  --system-prompt TEXT     the instructions' opening: TEXT, or the file it names
+  --append-system-prompt TEXT
+                           text, or a file's contents, after the opening (repeatable)
+  -nc, --no-context-files  leave out the AGENTS.md, CLAUDE.md and CLAUDE.local.md files
+  --no-directives          leave out Scramjet's own orientation and directives
+  --bare                   read nothing from your own directories but the settings,
+                           models.json and auth.json
+  --skill PATH             a skill file, or a directory of skills (repeatable)
+  -ns, --no-skills         no skills but those --skill names
+  --theme PATH             a theme file, or a directory of themes (repeatable)
+  --no-themes              no themes but the built-in ones and those --theme names
+  -t, --tools LIST         the only tools the agent has, comma-separated
+  -nt, --no-tools          no tools at all
+  -nbt, --no-builtin-tools no coding tools; Scramjet's own stay
+
+What the agent may do:
+  --ask                    ask before each command, and each write or edit outside the
+                           project
+  -s, --sandbox MODE       confine the agent's commands: read-only, workspace-write, or
+                           danger-full-access (the default); on Linux and macOS
+  --add-dir DIR            let the sandbox's commands change DIR too (repeatable)
+  --list-credential-stores list the credential files and directories hidden from subagents
+                           and exit
+  --offline                no network at start: nothing cloned, no newer release looked for
+
+Other:
+  --export FILE [OUTPUT]   write a session file as a web page and exit
+  -v, --version            print the version and exit
+  -h, --help               print this help
+  --help-all               print each option in full, the keys, the built-in commands and
+                           the main settings
+
+Commands:
+  install DIR|REPO         install a command set or a package (git:github.com/USER/REPO)
+  remove NAME|DIR|REPO     remove one
+  update [REPO|NAME|self]  update the packages and the program (self: the program only)
+  list                     list the command sets loaded here
+  catalog add|remove|list  add, remove or list the model catalogs' URLs
+  lint [--strict] DIR...   check command sets as Scramjet loads them
+  import [--dry-run]       copy Scramjet 1's setup
+  acp                      run as an Agent Client Protocol agent, for editors
+Each takes --help.
+
+In a session, / lists the commands, /hotkeys the keys and /settings the settings.
+Guides: https://github.com/LeanAndMean/scramjet/tree/main/docs/guide";
+
+/// Which help the arguments ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Help {
+    Short,
+    All,
+}
+
+impl Help {
+    pub(super) fn text(self) -> &'static str {
+        match self {
+            Self::Short => HELP,
+            Self::All => HELP_ALL,
+        }
+    }
+}
+
+pub(super) const HELP_ALL: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
 [--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
@@ -164,6 +270,8 @@ but to NO_PROXY's hosts and this machine.
                          the agent's when the hideCredentials setting asks, do not see: the
                          common ones and those models.json files name, and exit
   -v, --version          print the version and exit
+  -h, --help             print the short help: each option in a line, and the commands
+  --help-all             print this
 The session fills the terminal's alternate screen: the conversation above a status line and the
 prompt, and under it the project's directory and Git branch, the session's tokens, how full the
 context is and the model. Page Up/Down and the mouse wheel scroll the
@@ -389,8 +497,10 @@ impl Options {
         Ok(())
     }
 
-    /// The options `arguments` give; `None` when they ask for `--help`.
-    pub(super) fn parse(arguments: impl Iterator<Item = OsString>) -> Result<Option<Self>, String> {
+    /// The options `arguments` give, else the help they ask for.
+    pub(super) fn parse(
+        arguments: impl Iterator<Item = OsString>,
+    ) -> Result<Result<Self, Help>, String> {
         let mut options = Self {
             project: None,
             model: None,
@@ -572,7 +682,8 @@ workspace-write and danger-full-access"
                 }
                 Some("--add-dir") => options.add_dirs.push(value()?),
                 Some("-p" | "--print") => options.print = true,
-                Some("-h" | "--help") => return Ok(None),
+                Some("-h" | "--help") => return Ok(Err(Help::Short)),
+                Some("--help-all") => return Ok(Err(Help::All)),
                 Some(file) if file.starts_with('@') => options.files.push(file[1..].to_owned()),
                 Some(message) if message == "-" || !message.starts_with('-') => {
                     options.messages.push(message.to_owned())
@@ -623,7 +734,7 @@ workspace-write and danger-full-access"
                 "the message - (read from stdin) needs -p\n\n{USAGE}"
             ));
         }
-        Ok(Some(options))
+        Ok(Ok(options))
     }
 }
 
@@ -731,5 +842,39 @@ mod tests {
         );
         let missing = Options::parse(["--theme"].into_iter().map(OsString::from));
         assert!(missing.is_err_and(|error| error.starts_with("--theme requires a value")));
+    }
+
+    #[test]
+    fn the_short_help_names_each_option_the_full_one_describes() {
+        // Scramjet 1's options that change nothing are left to the full help.
+        let quiet = "  --verbose, --mode text";
+        let named = |text: &str| -> Vec<String> {
+            (text.lines())
+                .filter(|line| line.starts_with("  -") && !line.starts_with(quiet))
+                .filter_map(|line| line[2..].split("  ").next())
+                .flat_map(|column| {
+                    column
+                        .split([' ', ','])
+                        .filter(|word| word.starts_with('-'))
+                })
+                .map(String::from)
+                .collect()
+        };
+        let (short, full) = (named(HELP), named(HELP_ALL));
+        assert!(full.len() > 40, "{full:?}");
+        for option in &full {
+            assert!(short.contains(option), "{option} is not in the short help");
+        }
+        for option in &short {
+            assert!(full.contains(option), "{option} is not in the full help");
+        }
+        for (arguments, help) in [(&["-h"], Help::Short), (&["--help"], Help::Short)] {
+            let parsed = Options::parse(arguments.iter().map(OsString::from));
+            assert_eq!(parsed.unwrap().err(), Some(help));
+        }
+        let parsed = Options::parse(["-p", "--help-all", "x"].into_iter().map(OsString::from));
+        assert_eq!(parsed.unwrap().err(), Some(Help::All));
+        let width = |text: &str| text.lines().map(|line| line.chars().count()).max();
+        assert!(width(HELP) <= Some(92), "{:?}", width(HELP));
     }
 }

@@ -4,6 +4,16 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.337.0 — A short --help
+
+### Changed
+
+- `scramjet --help` is short: each option in a line, grouped, the commands, and where to read more; `scramjet --help-all` prints the full text it printed before, with the keys, the built-in commands and the main settings. A mistyped option shows the two usage lines and those two commands, not the whole help.
+
+### Fixed
+
+- `scramjet install --help`, `remove`, `update`, `list` and `catalog` with `--help` or `-h` print their usage; `install --help` looked for a directory named `--help`.
+
 ## 2.336.1 — A settings reference
 
 ### Added
