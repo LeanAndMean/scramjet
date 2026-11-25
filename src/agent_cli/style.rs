@@ -112,6 +112,8 @@ styles! {
     BANNER_NAME: [BOLD] Accent;
     BANNER_VERSION: [] Dim;
     BANNER_LOGO: [] Accent;
+    /// The logo's red "RS".
+    BANNER_MARK: [BOLD, ITALIC] Error;
     BANNER_KEY: [] Dim;
     BANNER_ACTION: [] Muted;
     BANNER_HEADING: [] MdHeading;

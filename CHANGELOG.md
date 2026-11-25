@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.335.9 — Scramjet's own logo in the banner
+
+### Changed
+
+- The `logo` banner draws Scramjet's own logo, the one the README shows: the wordmark with its red italic "RS" past the `t`, and the version beside it without the separate "rs".
+
 ## 2.335.8 — npm's packages removed
 
 ### Changed

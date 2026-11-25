@@ -65,9 +65,9 @@ pub(super) struct Opening {
 const NAME: &str = "scramjet";
 const VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
 
-/// Scramjet's logo (`packages/scramjet/assets/scramjet-logo.png` in its repository) in quarter
-/// cells: its strokes are as tall as wide, so each takes one quarter's row and two quarters'
-/// columns, its bevels a quarter cut from a corner.
+/// Scramjet's logo (`assets/scramjet-logo.png`) in quarter cells: its strokes are as tall as wide,
+/// so each takes one quarter's row and two quarters' columns, its bevels a quarter cut from a
+/// corner. Its red "RS", in a face of its own, is `MARK`'s letters.
 const LOGO: [&str; 5] = [
     "                                        ▄",
     " ▄▄▄▄▄▄  ▄▄▄▄▄▖ ▗▄▄▄▖▗▄▄▄▄▄▖  ▄▄▄▄▄▄▄▖  ▄  ▄▄▄▄▄  █▄▄▄▄▖",
@@ -75,7 +75,9 @@ const LOGO: [&str; 5] = [
     "▄▄▄▄▄▄▛ ▝▙▄▄▄▄▖ █    ▝▙▄▄▄▄▛ ▐▌  █   █  █ ▝▙▄▄▄▄▖ ▜▄▄▄▖",
     "                                    ▄▄▄▄▛",
 ];
-const LOGO_COLUMNS: usize = 56;
+const LOGO_COLUMNS: usize = 57;
+/// The logo's "RS": its row, and its column, past the `t`'s foot.
+const MARK: (usize, usize, &str) = (4, 55, "RS");
 /// Between the logo and what is beside it.
 const LOGO_GAP: usize = 3;
 /// The columns left beside the logo below which what goes there goes under it.
@@ -412,13 +414,8 @@ fn card(opening: &Opening, width: usize, full: bool, marks: Marks) -> Vec<String
 /// Scramjet's logo, the version, the model and the project beside it, else under it, else the
 /// name alone where the logo does not fit.
 fn logo(opening: &Opening, width: usize, marks: Marks) -> Vec<String> {
-    let version = format!(
-        "{} {}",
-        paint(style::BANNER_NAME, "rs"),
-        paint(style::BANNER_VERSION, VERSION)
-    );
     let said = vec![
-        version,
+        paint(style::BANNER_VERSION, VERSION),
         opening.model.clone(),
         paint(style::MUTED, &shown(&opening.root)),
     ];
@@ -427,24 +424,37 @@ fn logo(opening: &Opening, width: usize, marks: Marks) -> Vec<String> {
         rows.extend(said.into_iter().skip(1));
         return rows;
     }
-    let art = |row: &str| paint(style::BANNER_LOGO, row);
+    let art = |index: usize| {
+        let row = LOGO[index];
+        let (at, column, letters) = MARK;
+        let painted = paint(style::BANNER_LOGO, row);
+        match index == at {
+            true => {
+                let pad = " ".repeat(column - columns(row));
+                let mark = paint(style::BANNER_MARK, letters);
+                (format!("{painted}{pad}{mark}"), column + columns(letters))
+            }
+            false => (painted, columns(row)),
+        }
+    };
     let room = width.saturating_sub(LOGO_COLUMNS + LOGO_GAP);
     if room >= BESIDE {
         // Beside the letters' rows, the first by the dot of the `j`.
         let mut said = said.into_iter();
-        return (LOGO.iter().enumerate())
-            .map(|(index, row)| {
+        return (0..LOGO.len())
+            .map(|index| {
+                let (row, wide) = art(index);
                 let text = (index > 0).then(|| said.next()).flatten();
-                let pad = " ".repeat(LOGO_COLUMNS + LOGO_GAP - columns(row));
+                let pad = " ".repeat(LOGO_COLUMNS + LOGO_GAP - wide);
                 match text {
-                    Some(text) => format!("{}{pad}{}{}", art(row), marks.from(), clip(&text, room)),
-                    None => format!("{}{}", marks.rule(), art(row)),
+                    Some(text) => format!("{row}{pad}{}{}", marks.from(), clip(&text, room)),
+                    None => format!("{}{row}", marks.rule()),
                 }
             })
             .collect();
     }
-    let mut rows: Vec<String> = (LOGO.iter())
-        .map(|row| format!("{}{}", marks.rule(), art(row)))
+    let mut rows: Vec<String> = (0..LOGO.len())
+        .map(|index| format!("{}{}", marks.rule(), art(index).0))
         .collect();
     rows.extend(said);
     rows
@@ -494,7 +504,9 @@ mod tests {
         let card = rows(Banner::Card, &sample(), 70, false, true);
         assert!(card[0].starts_with(RULE) && card[1].contains(FROM) && card[1].contains(UNTIL));
         let logo = rows(Banner::Logo, &sample(), 100, false, true);
-        assert!(logo[0].starts_with(RULE) && plain(&logo[1]).contains(&format!("   {FROM}rs ")));
+        assert!(
+            logo[0].starts_with(RULE) && plain(&logo[1]).contains(&format!("   {FROM}{VERSION}"))
+        );
     }
 
     #[test]
@@ -630,15 +642,18 @@ mod tests {
     fn the_logo_goes_beside_its_text_or_over_it_or_gives_way_to_the_name() {
         let rows = shown(Banner::Logo, &sample(), 100, false);
         assert_eq!(rows[0], LOGO[0]);
-        assert_eq!(rows[1], format!("{}   rs {VERSION}", LOGO[1]));
+        assert_eq!(rows[1], format!("{}    {VERSION}", LOGO[1]));
         assert!(
             rows[2].ends_with("   gpt-6-luna · thinking medium"),
             "{rows:#?}"
         );
-        assert_eq!(rows[4], LOGO[4]);
+        // The "RS" past the `t`'s foot, in the descender's row.
+        assert_eq!(rows[4], format!("{:<55}RS", LOGO[4]));
         let rows = shown(Banner::Logo, &sample(), 60, false);
-        assert_eq!(rows[..5], LOGO.map(|row| row.trim_end().to_owned()));
-        assert_eq!(rows[5], format!("rs {VERSION}"));
+        let mut art = LOGO.map(|row| row.trim_end().to_owned());
+        art[4] = format!("{:<55}RS", LOGO[4]);
+        assert_eq!(rows[..5], art);
+        assert_eq!(rows[5], VERSION);
         assert_eq!(
             rows[8..10],
             [
@@ -658,6 +673,8 @@ mod tests {
         for row in LOGO {
             assert!(columns(row) <= LOGO_COLUMNS);
         }
+        assert!(columns(LOGO[MARK.0]) <= MARK.1);
+        assert_eq!(MARK.1 + columns(MARK.2), LOGO_COLUMNS);
     }
 
     #[test]

@@ -344,7 +344,7 @@ impl Row {
                 let then = then(Binding::ToolsExpand, "shows every key and what was loaded.");
                 return format!(
                     "What a session shows as it starts: header, plain, card \
-                     or logo, Scramjet 1's logo.{then}"
+                     or logo, Scramjet's logo.{then}"
                 );
             }
             Self::Bottom => {

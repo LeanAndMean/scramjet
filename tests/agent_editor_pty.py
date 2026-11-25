@@ -2892,7 +2892,8 @@ def banner_choice(read, until, send, output):
     send(b'\x1b')
     rows = on_screen('Settings  \u2191\u2193 move', gone=True)
     # Too narrow for its text beside it, the logo goes over it.
-    assert '\u2584\u2584\u2584\u2584\u2584\u2584' in rows[1] and rows[5].startswith('rs v'), rows
+    assert '\u2584\u2584\u2584\u2584\u2584\u2584' in rows[1] and rows[4].endswith(' RS'), rows
+    assert rows[5].startswith('v2.'), rows
     send(b'\x04')
 
 
