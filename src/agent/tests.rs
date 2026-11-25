@@ -2902,11 +2902,19 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
             .unwrap()
     };
     let listed = || std::fs::read_dir(&copies).unwrap().count();
-    // A dropped session's copy, once no child that another test forked shares its lock: the
-    // descriptor is the child's too until its exec closes it.
+    // A copy once no child that another test forked shares its lock: the descriptor is the
+    // child's too until its exec closes it. Read from `/proc/locks`, as taking the lock to see
+    // would open the same window for the next fork.
     let released = |copy: &Path| {
+        use std::os::unix::fs::MetadataExt;
+        let inode = format!(":{}", std::fs::metadata(copy).unwrap().ino());
         for _ in 0..250 {
-            if std::fs::File::open(copy).unwrap().try_lock().is_ok() {
+            let locks = std::fs::read_to_string("/proc/locks").unwrap();
+            if !locks.lines().any(|line| {
+                line.split_whitespace()
+                    .nth(5)
+                    .is_some_and(|file| file.ends_with(&inode))
+            }) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -2983,6 +2991,7 @@ fn lines_held_for_want_of_room_outlive_the_run_and_a_later_one_writes_them() {
         written.problems
     );
     assert_eq!(listed(), 1);
+    released(&copy);
 
     // Deleting the session removes its copy.
     session::Session::delete_with(&path, "scramjet-no-such-trash").unwrap();
