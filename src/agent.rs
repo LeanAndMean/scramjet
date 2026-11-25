@@ -73,7 +73,7 @@ pub use mcp::{
     Transport as McpTransport,
 };
 pub use problem::{Problem, ProblemFile};
-pub use providers::{KeyFrom, Providers, Sources, unmet_engine};
+pub use providers::{BUILTIN, Builtin, KeyFrom, Providers, Sources, builtin, unmet_engine};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::{Choice, Reply, TYPE_SOMETHING};
 pub use request::{CacheRetention, set_cache_retention};
@@ -1760,7 +1760,11 @@ impl Agent {
 
     /// `--api-key`: `key`, as it is, for the current model's provider's requests from now on.
     pub fn give_key(&mut self, key: &str) -> Result<(), String> {
-        let Some(provider) = self.model_provider().map(str::to_owned) else {
+        // A built-in provider offers no model until it has a key.
+        let builtin = (self.config.model.split_once('/'))
+            .and_then(|(provider, _)| providers::builtin(provider))
+            .map(|builtin| builtin.name.to_owned());
+        let Some(provider) = self.model_provider().map(str::to_owned).or(builtin) else {
             return Err(format!(
                 "--api-key: no provider offers {}, the model it would be for",
                 self.config.model

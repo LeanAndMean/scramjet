@@ -141,8 +141,8 @@ fn list_models_lists_the_providers_models_and_what_is_wrong_in_their_files() {
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         format!(
-            "scramjet: no provider offers any model: start scramjet and /login, or add providers \
-to {} (see --help)\n",
+            "scramjet: no provider offers any model: start scramjet and /login (a subscription, \
+an API key for Anthropic or OpenRouter, or local models), or add providers to {} (see --help)\n",
             (scratch
                 .0
                 .join("config")
@@ -5730,7 +5730,8 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     let listed = answer(&mut stdin, list(20));
     assert_eq!(
         listed["result"],
-        serde_json::json!({"providers": [{"provider": "test", "key": null}]}),
+        serde_json::json!({"providers": [{"provider": "test", "key": null},
+            {"provider": "anthropic", "key": null}, {"provider": "openrouter", "key": null}]}),
         "{listed}"
     );
     let unknown = answer(&mut stdin, set(2, "nowhere", "sk-unknown"));
@@ -5754,8 +5755,8 @@ fn acp_saves_api_keys_through_the_extension_without_echoing_them() {
     assert_eq!(auth["test"]["key"], "sk-acp-secret", "{auth}");
     let listed = answer(&mut stdin, list(21));
     assert_eq!(
-        listed["result"]["providers"],
-        serde_json::json!([{"provider": "test", "key": "saved"}]),
+        listed["result"]["providers"][0],
+        serde_json::json!({"provider": "test", "key": "saved"}),
         "{listed}"
     );
     assert_eq!(

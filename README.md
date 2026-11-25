@@ -53,7 +53,7 @@ In your project's directory:
 scramjet
 ```
 
-With no models yet, type `/login` to sign in to ChatGPT or GitHub Copilot or to connect a local runtime; a provider of your own, with its API key, goes in `~/.config/scramjet/models.json` ([providers](docs/guide/providers.md)). Then ask for what you want done. `scramjet -p 'Explain src/main.rs'` prints one answer and exits; `scramjet -c` continues the latest session.
+With no models yet, type `/login` to sign in to ChatGPT or GitHub Copilot, enter an Anthropic or OpenRouter API key, or connect a local runtime; a provider of your own, with its API key, goes in `~/.config/scramjet/models.json` ([providers](docs/guide/providers.md)). Then ask for what you want done. `scramjet -p 'Explain src/main.rs'` prints one answer and exits; `scramjet -c` continues the latest session.
 
 ## Install a command set
 

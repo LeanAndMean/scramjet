@@ -4,6 +4,16 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.333.0 — Anthropic and OpenRouter with an API key
+
+### Added
+
+- `/login` lists Anthropic and OpenRouter under API keys: enter a key and their models are offered as their servers list them, with no `models.json` to write; a new session takes the newest Sonnet. `--api-key` with `--model anthropic/…` uses a key for one run. A key in `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` alone does not set one up.
+
+### Changed
+
+- With no models, the first start's message names the API-key path in `/login`.
+
 ## 2.332.2 — A fresh next step keeps the session's profile
 
 ### Fixed

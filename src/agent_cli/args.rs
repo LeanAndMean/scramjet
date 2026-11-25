@@ -30,7 +30,9 @@ its engines the earliest Scramjet it works with ({\"scramjet\": \">=X.Y.Z\"}),
 and its logins the programs that log in to more providers. The settings' modelCatalogs
 add the providers of model catalogs in models.dev's api.json shape, read from their URLs,
 saved, and read again as they age (scramjet catalog add URL, remove URL, list). /login adds the models of ChatGPT,
-GitHub Copilot and those logins, each saved in auth.json beside the settings. Requests go
+GitHub Copilot and those logins, and of Anthropic and OpenRouter with an API key (their models
+as their servers list them; --api-key with --model anthropic/... for a run), each saved in
+auth.json beside the settings. Requests go
 through the http:// proxy HTTPS_PROXY or HTTP_PROXY names (http://user:password@host:port),
 but to NO_PROXY's hosts and this machine.
   --project DIR          project directory (default: current directory)

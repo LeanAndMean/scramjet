@@ -1593,7 +1593,7 @@ run([], logins, keyed_server, variables={'XDG_CONFIG_HOME': login_home, 'PATH': 
 
 def first_login(read, until, send, output):
     shown, on_screen = full_screen(columns=80, rows=30)(read, output)
-    on_screen('No provider offers any model: /login, or add providers to')
+    on_screen('No provider offers any model: /login (a subscription, an API key for')
     send(b'/login\r')
     on_screen('Log in to  ')
     send(b'\x1b[B' * 2 + b'\r')
@@ -1723,7 +1723,7 @@ def local_models(read, until, send, output):
     send(b'/login\r')
     rows = on_screen('Log in to  ')
     dialog = rows[[i for i, row in enumerate(rows) if row.startswith('Log in to  ')][-1]:]
-    assert dialog[5:9] == ['  API keys', '    test', '', '  Local models'], dialog
+    assert dialog[5:11] == ['  API keys', '    test', '    Anthropic', '    OpenRouter', '', '  Local models'], dialog
     send(b'\x1b')
     on_screen('Log in to  ', gone=True)
     send(b'/model\r')

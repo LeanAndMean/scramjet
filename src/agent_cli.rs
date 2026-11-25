@@ -444,15 +444,21 @@ fn start(
     if providers.options().is_empty() {
         let file = (providers.files().first())
             .map_or("models.json".into(), |file| file.display().to_string());
+        let keyed: Vec<&str> = agent::BUILTIN.iter().map(|builtin| builtin.shown).collect();
+        let keyed = match keyed.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+            _ => keyed.concat(),
+        };
         // As Scramjet's, a run without the full screen stops here: no request could be sent.
         if options.print {
             return Err(format!(
-                "no provider offers any model: start scramjet and /login, or add providers to \
-{file} (see --help)"
+                "no provider offers any model: start scramjet and /login (a subscription, an API \
+key for {keyed}, or local models), or add providers to {file} (see --help)"
             ));
         }
         warnings.push(format!(
-            "No provider offers any model: /login, or add providers to {file} (see --help)"
+            "No provider offers any model: /login (a subscription, an API key for {keyed}, or \
+local models), or add providers to {file} (see --help)"
         ));
     }
     let model = named.map_or_else(|| default_model(&providers), |named| named.model);
@@ -670,7 +676,16 @@ fn cache_retention(
 fn default_model(providers: &Providers) -> String {
     const DEFAULT: &str = "gpt-6-luna";
     let models = providers.options();
-    let chosen = (models.iter().find(|model| model.id == DEFAULT)).or(models.first());
+    // A built-in provider's first, newest, model may be any of its own or, routed, another's.
+    let first = models.first().map(|first| {
+        let builtin = first.provider.as_deref().and_then(agent::builtin);
+        let default = builtin.and_then(|builtin| {
+            (models.iter())
+                .find(|m| m.provider == first.provider && m.id.starts_with(builtin.default))
+        });
+        default.unwrap_or(first)
+    });
+    let chosen = (models.iter().find(|model| model.id == DEFAULT)).or(first);
     chosen.map_or_else(|| DEFAULT.to_owned(), ModelOption::reference)
 }
 

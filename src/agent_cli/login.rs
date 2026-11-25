@@ -92,6 +92,10 @@ impl Interactive {
                 Row::Key(_, KeyFrom::Given) => {
                     "Its requests carry --api-key's for this run; one saved here is kept for later"
                 }
+                Row::Key(name, KeyFrom::Nowhere) if scramjet::agent::builtin(name).is_some() => {
+                    "Its models are offered once its API key is saved here, in auth.json, as \
+                     logins are"
+                }
                 Row::Key(_, KeyFrom::Nowhere) => {
                     "Its requests carry no key. One saved here is kept in auth.json, as logins are"
                 }
@@ -117,7 +121,7 @@ impl Interactive {
                         KeyFrom::Given => mark("key from --api-key"),
                         KeyFrom::Nowhere => String::new(),
                     };
-                    format!("{indent}{}{from}", visible(name))
+                    format!("{indent}{}{from}", shown_key(name))
                 }
                 Row::Local => format!("{indent}Ollama, llama.cpp, vLLM…"),
             };
@@ -226,12 +230,12 @@ impl Interactive {
         let Some(screen) = &self.screen else {
             return;
         };
-        let title = format!("API key for {}", visible(provider));
+        let shown = shown_key(provider);
+        let title = format!("API key for {shown}");
         let typed = match screen.ask(Dialog::Text(title, String::new(), Optional::No), None) {
             Some(Answer::Text(Some(typed))) => typed,
             _ => return,
         };
-        let shown = visible(provider);
         let origins = self.session.agent.providers().origins(provider).to_vec();
         match login::save_key(&logins.auth, provider, &typed, &origins) {
             Ok(()) => {
@@ -419,7 +423,7 @@ impl Interactive {
         let is_key = |provider: &str| keys.iter().any(|keyed| keyed == provider);
         let programs = self.session.agent.providers().login_programs().to_vec();
         let shown = |provider: &str| match is_key(provider) {
-            true => format!("{} API key", visible(provider)),
+            true => format!("{} API key", shown_key(provider)),
             false => match programs.iter().find(|program| program.provider == provider) {
                 Some(program) => visible(&program.name),
                 None => visible(login::shown_name(provider)),
@@ -446,7 +450,7 @@ impl Interactive {
                 self.say(&format!(
                     "✓ Removed the saved API key for {}; environment variables and models.json \
                      files are unchanged",
-                    visible(provider)
+                    shown_key(provider)
                 ));
                 self.logins_changed();
             }
@@ -781,6 +785,11 @@ fn few(ids: &[&str]) -> String {
         true => format!("{} and {} more", ids[..SHOWN].join(", "), ids.len() - SHOWN),
         false => ids.join(", "),
     }
+}
+
+/// What the user knows the provider `name`, which takes an API key, by.
+fn shown_key(name: &str) -> String {
+    scramjet::agent::builtin(name).map_or_else(|| visible(name), |builtin| builtin.shown.to_owned())
 }
 
 /// Opens `url` in the user's browser, as Scramjet's login dialog does (`open` on macOS,

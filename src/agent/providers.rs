@@ -214,8 +214,46 @@ pub enum KeyFrom {
     Entry,
     /// `--api-key`.
     Given,
-    /// Its requests carry none.
+    /// Its requests carry none; a built-in provider is then not offered.
     Nowhere,
+}
+
+/// A provider built in, which `/login` takes an API key for: offered once a key is saved for it,
+/// or `--api-key` gives one, unless a file or catalog names a provider of its name. Its models
+/// are those its server lists (`listed`). An environment variable alone does not offer it: one
+/// set for another program, with that program's own base URL, would send its key here.
+#[derive(Debug)]
+pub struct Builtin {
+    pub name: &'static str,
+    /// What the user knows it by.
+    pub shown: &'static str,
+    /// The start of the id of the model a new session takes of it, the first its list offers.
+    pub default: &'static str,
+    base_url: &'static str,
+    api: &'static str,
+}
+
+/// The built-in providers, under Scramjet's names for them, in `/login`'s order.
+pub const BUILTIN: [Builtin; 2] = [
+    Builtin {
+        name: "anthropic",
+        shown: "Anthropic",
+        default: "claude-sonnet-",
+        base_url: "https://api.anthropic.com",
+        api: "anthropic-messages",
+    },
+    Builtin {
+        name: "openrouter",
+        shown: "OpenRouter",
+        default: "anthropic/claude-sonnet-",
+        base_url: "https://openrouter.ai/api/v1",
+        api: "openai-completions",
+    },
+];
+
+/// The built-in provider called `name`.
+pub fn builtin(name: &str) -> Option<&'static Builtin> {
+    BUILTIN.iter().find(|builtin| builtin.name == name)
 }
 
 /// Where providers come from: `models.json` files, then model catalogs' URLs.
@@ -349,6 +387,7 @@ impl Providers {
         for url in &self.catalog_urls {
             reading.catalog(url);
         }
+        reading.builtins();
         reading.logins();
         self.models = reading.models;
         self.keyed = reading.keyed;
@@ -429,8 +468,8 @@ impl Providers {
         }
     }
 
-    /// The providers the files name, but those `/login` logs in to, with where their key comes
-    /// from: those `/login` may save a key for.
+    /// The providers the files name, but those `/login` logs in to, then the built-in ones no
+    /// file names, with where their key comes from: those `/login` may save a key for.
     pub fn keyed(&self) -> &[(String, KeyFrom)] {
         &self.keyed
     }
@@ -716,6 +755,32 @@ impl Reading {
             }
         }
         self.catalogs.push(catalog);
+    }
+
+    /// The built-in providers no file or catalog named, each among `keyed`, and the models of
+    /// those with a key.
+    fn builtins(&mut self) {
+        for builtin in &BUILTIN {
+            let name = builtin.name;
+            if self.named.iter().any(|named| named == name) || self.logs_in(name) {
+                continue;
+            }
+            let given = (self.given_key.as_ref()).is_some_and(|(given, _)| given == name);
+            let from = match super::login::key(&self.saved, name) {
+                _ if given => KeyFrom::Given,
+                Some(_) => KeyFrom::Saved,
+                None => KeyFrom::Nowhere,
+            };
+            let entry = serde_json::json!({"baseUrl": builtin.base_url, "api": builtin.api});
+            self.keyed.push((name.to_owned(), from.clone()));
+            self.origins.insert(name.to_owned(), origins(&entry));
+            if from == KeyFrom::Nowhere {
+                continue;
+            }
+            let what = format!("{} (/login)", builtin.shown);
+            self.sources.insert(name.to_owned(), what.clone());
+            self.provider(name, &entry, &what);
+        }
     }
 
     /// The models of the providers logged in to that no file named, as their logins listed
@@ -1950,6 +2015,98 @@ mod tests {
     }
 
     #[test]
+    fn built_in_providers_are_offered_once_a_key_is_saved_or_given() {
+        let scratch = ScratchDir::new(
+            std::env::temp_dir().join(format!("scramjet-providers-builtin-{}", std::process::id())),
+        );
+        let logins = Logins {
+            auth: scratch.0.join("auth.json"),
+            lists: scratch.0.join("logins"),
+        };
+        let none = json!({"providers": {}});
+        let providers = Providers::given_logged_in(none.clone(), logins.clone());
+        let nowhere = [
+            ("anthropic".to_owned(), KeyFrom::Nowhere),
+            ("openrouter".to_owned(), KeyFrom::Nowhere),
+        ];
+        assert_eq!(providers.keyed(), nowhere);
+        assert!(providers.models().is_empty() && providers.listings().is_empty());
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        assert_eq!(
+            providers.origins("anthropic"),
+            ["https://api.anthropic.com:443"]
+        );
+        assert_eq!(
+            providers.origins("openrouter"),
+            ["https://openrouter.ai:443"]
+        );
+        // A file naming one replaces it.
+        let file = json!({"providers": {"anthropic": {"baseUrl": "http://127.0.0.1:9",
+            "api": "anthropic-messages", "models": [{"id": "own"}]}}});
+        let replaced = Providers::given_logged_in(file, logins.clone());
+        let keyed: Vec<&str> = replaced.keyed().iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(keyed, ["anthropic", "openrouter"]);
+        assert_eq!(replaced.origins("anthropic"), ["http://127.0.0.1:9"]);
+        let references: Vec<String> = replaced.models().iter().map(Model::reference).collect();
+        assert_eq!(references, ["anthropic/own"]);
+        // Their servers' lists, as read before: nothing is asked of them here.
+        let listed = |name: &str, url: &str, data: Value| {
+            let list = json!({"url": url, "fetched": super::super::login::now_ms(), "data": data});
+            std::fs::create_dir_all(scratch.0.join("models")).unwrap();
+            let file = scratch.0.join("models").join(format!("{name}.json"));
+            std::fs::write(file, list.to_string()).unwrap();
+        };
+        let claude = json!([{"id": "claude-a", "display_name": "Claude A",
+            "max_input_tokens": 1_000_000}]);
+        listed("anthropic", "https://api.anthropic.com/v1/models", claude);
+        let routed = json!([{"id": "x/y", "supported_parameters": ["tools"]},
+            {"id": "x/chat", "supported_parameters": ["temperature"]}]);
+        listed("openrouter", "https://openrouter.ai/api/v1/models", routed);
+        let anthropic = providers.origins("anthropic").to_vec();
+        super::super::login::save_key(&logins.auth, "anthropic", "sk-ant", &anthropic).unwrap();
+        let providers = Providers::given_logged_in(none.clone(), logins.clone());
+        assert_eq!(providers.problems(), [] as [String; 0]);
+        assert_eq!(
+            providers.keyed()[0],
+            ("anthropic".to_owned(), KeyFrom::Saved)
+        );
+        let claude = providers.find("anthropic/claude-a").unwrap();
+        assert_eq!(
+            (claude.name.as_deref(), claude.info.window),
+            (Some("Claude A"), Some(1_000_000))
+        );
+        assert_eq!(claude.info.protocol, Protocol::Messages);
+        let route = route(&providers, "anthropic/claude-a");
+        assert_eq!(
+            (route.host.as_str(), route.tls),
+            ("api.anthropic.com", true)
+        );
+        assert_eq!(route.headers, [("x-api-key".into(), "sk-ant".into())]);
+        assert_eq!(
+            providers.source("anthropic/claude-a"),
+            Some("Anthropic (/login)")
+        );
+        assert!(providers.find("openrouter/x/y").is_none());
+        // --api-key offers one for the run.
+        let mut given = Providers::given_logged_in(none.clone(), logins.clone());
+        given.give_key("openrouter", "sk-or");
+        assert_eq!(given.keyed()[1], ("openrouter".to_owned(), KeyFrom::Given));
+        let routed = given.find("openrouter/x/y").unwrap();
+        assert_eq!(routed.info.protocol, Protocol::Completions);
+        assert!(given.find("openrouter/x/chat").is_none());
+        // A key saved for another server is not sent to the provider's.
+        let local = ["http://127.0.0.1:9".to_owned()];
+        super::super::login::save_key(&logins.auth, "anthropic", "sk-local", &local).unwrap();
+        let moved = Providers::given_logged_in(none, logins);
+        assert!(moved.models().is_empty());
+        let problems = moved.problems().join("\n");
+        assert!(
+            problems.contains("is for http://127.0.0.1:9, not https://api.anthropic.com:443"),
+            "{problems}"
+        );
+    }
+
+    #[test]
     fn a_provider_that_lists_no_models_offers_those_its_server_lists() {
         let scratch = ScratchDir::new(
             std::env::temp_dir().join(format!("scramjet-providers-listed-{}", std::process::id())),
@@ -2505,6 +2662,6 @@ mod tests {
         );
         assert_eq!(login.program.as_ref(), Some(&programs[0]));
         // A login, it takes no key.
-        assert!(providers.keyed().is_empty());
+        assert!(!providers.keyed().iter().any(|(name, _)| name == "acme"));
     }
 }
