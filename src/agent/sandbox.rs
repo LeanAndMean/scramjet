@@ -53,7 +53,7 @@ pub(super) const TEMPORARY: &str = match cfg!(target_os = "macos") {
     true => {
         "/tmp, /var/tmp and $TMPDIR, which are shared with other programs and kept after the command"
     }
-    false => "a private /tmp, kept from one command to the next, that the file tools do not see",
+    false => "a private /tmp, kept from one command to the next and shared with the file tools",
 };
 
 /// Why `--sandbox` is refused on Windows, where scramjet-rs has only subagents' read-only one.
@@ -351,6 +351,12 @@ impl Sandbox {
         let (real, root) = self.check_write(root, path)?;
         write_beneath(&root, &real, content).map_err(|error| format!("{}: {error}", path.display()))
     }
+}
+
+/// Writes `content` to `path` in an agent's private `/tmp`, `scratch` (`Hidden::in_scratch`),
+/// whatever the sandbox's mode, as its commands can; through no symlink its commands put there.
+pub(super) fn write_scratch(scratch: &Path, path: &Path, content: &[u8]) -> Result<(), String> {
+    write_beneath(scratch, path, content).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// `path` as the user gave it: from `~`, else relative to `root`.
@@ -805,6 +811,12 @@ impl Scratch {
         self.0.get_or_init(Scratch::make).as_deref()
     }
 
+    /// The directory if a command or a write has made it.
+    #[cfg(target_os = "linux")]
+    fn made(&self) -> Option<&Path> {
+        self.0.get().and_then(Option::as_deref)
+    }
+
     fn make() -> Option<PathBuf> {
         static AT_EXIT: std::sync::Once = std::sync::Once::new();
         // SAFETY: `remove_scratch` neither unwinds nor exits.
@@ -895,6 +907,36 @@ impl Hidden {
         Hidden {
             scratch: Some(scratch.clone()),
             ..self
+        }
+    }
+
+    /// Where sandboxed commands have `path`, given in `/tmp`, when their private `/tmp` holds it
+    /// rather than a directory bound into it (`bound`, the re-opened paths): for a write, made
+    /// there; else only where something is. With the directory, for its name to be shown as
+    /// `/tmp` again. None elsewhere, and on other systems, whose commands share `/tmp`.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    pub(super) fn in_scratch(
+        &self,
+        path: &Path,
+        bound: &[PathBuf],
+        write: bool,
+    ) -> Option<(PathBuf, PathBuf)> {
+        #[cfg(not(target_os = "linux"))]
+        return None;
+        #[cfg(target_os = "linux")]
+        {
+            let rest = path.strip_prefix("/tmp").ok()?;
+            let scratch = self.scratch.as_deref()?;
+            let scratch = match write {
+                true => scratch.path(),
+                false => scratch.made(),
+            }?;
+            let kept = |kept: &PathBuf| path.starts_with(kept);
+            if path.starts_with(scratch) || bound.iter().chain(&self.allowed).any(kept) {
+                return None;
+            }
+            let mapped = scratch.join(rest);
+            (write || mapped.symlink_metadata().is_ok()).then(|| (mapped, scratch.to_owned()))
         }
     }
 

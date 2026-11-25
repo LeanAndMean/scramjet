@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.0 — The file tools in the sandbox's /tmp
+
+### Changed
+
+- On Linux, in the sandbox, the `read`, `write`, `edit`, `ls`, `grep` and `find` tools now share the agent's private `/tmp` with its commands: a screenshot or file a command saves under `/tmp` can be read, and a script `write` puts there runs in the next command, even in a `read-only` sandbox. A path under `/tmp` the private one does not hold is still read from yours.
+
 ## 2.346.0 — A sandbox's /tmp kept between commands
 
 ### Changed

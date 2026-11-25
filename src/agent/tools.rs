@@ -543,13 +543,64 @@ impl<'a> Call<'a> {
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(&str),
     ) -> Result<Output, String> {
+        let mut bound = sandbox.writable_roots(root);
+        bound.push(root.to_owned());
+        match self.in_scratch(root, hidden, &bound) {
+            Some((call, scratch)) => from_scratch(
+                call.sandboxed(root, sandbox, Some(&scratch), hidden, cancel, progress),
+                &scratch,
+            ),
+            None => self.sandboxed(root, sandbox, None, hidden, cancel, progress),
+        }
+    }
+
+    /// This file tool's call with its path in `/tmp` where the agent's sandboxed commands have
+    /// it (`Hidden::in_scratch`), and that directory.
+    fn in_scratch(
+        &self,
+        root: &Path,
+        hidden: &Hidden,
+        bound: &[PathBuf],
+    ) -> Option<(Self, PathBuf)> {
+        if !matches!(
+            self.name,
+            "read" | "ls" | "grep" | "find" | "write" | "edit"
+        ) {
+            return None;
+        }
+        let path = resolve(root, self.arguments["path"].as_str()?);
+        let (mapped, scratch) = hidden.in_scratch(&path, bound, self.name == "write")?;
+        let mut arguments = self.arguments.clone();
+        arguments["path"] = mapped.to_string_lossy().into();
+        let call = Call {
+            name: self.name,
+            arguments,
+        };
+        Some((call, scratch))
+    }
+
+    fn sandboxed(
+        &self,
+        root: &Path,
+        sandbox: &Sandbox,
+        scratch: Option<&Path>,
+        hidden: &Hidden,
+        cancel: &AtomicBool,
+        progress: &mut dyn FnMut(&str),
+    ) -> Result<Output, String> {
         match self.name {
             "write" | "edit" => {
                 let path = resolve(root, self.arguments["path"].as_str().unwrap_or(""));
-                sandbox.check_write(root, &path)?;
+                if scratch.is_none() {
+                    sandbox.check_write(root, &path)?;
+                }
                 self.check_path(root, hidden)?;
-                let put =
-                    |path: &Path, content: &str| sandbox.write(root, path, content.as_bytes());
+                let put = |path: &Path, content: &str| match scratch {
+                    Some(scratch) => {
+                        super::sandbox::write_scratch(scratch, path, content.as_bytes())
+                    }
+                    None => sandbox.write(root, path, content.as_bytes()),
+                };
                 match self.name {
                     "write" => write(root, self, &put),
                     _ => edit(root, self, Some(hidden), &put),
@@ -570,6 +621,21 @@ impl<'a> Call<'a> {
     /// As `run` for a subagent's tools, none of which changes a file or shows the credential
     /// stores `hidden`: bash runs in the read-only sandbox, on the network if `network` says so.
     pub fn run_read_only(
+        &self,
+        root: &Path,
+        hidden: &Hidden,
+        network: bool,
+        cancel: &AtomicBool,
+    ) -> Result<Output, String> {
+        match self.in_scratch(root, hidden, &[root.to_owned()]) {
+            Some((call, scratch)) => {
+                from_scratch(call.read_only(root, hidden, network, cancel), &scratch)
+            }
+            None => self.read_only(root, hidden, network, cancel),
+        }
+    }
+
+    fn read_only(
         &self,
         root: &Path,
         hidden: &Hidden,
@@ -627,6 +693,26 @@ impl<'a> Call<'a> {
                 self.arguments["path"].as_str().unwrap_or("."),
             )),
         }
+    }
+}
+
+/// What a call `in_scratch` gave, with its private directory `scratch` named `/tmp` again, as
+/// the model knows it.
+fn from_scratch(ran: Result<Output, String>, scratch: &Path) -> Result<Output, String> {
+    let scratch = scratch.to_string_lossy();
+    let shown = |text: &str| text.replace(&*scratch, "/tmp");
+    match ran {
+        Ok(mut output) => {
+            output.text = shown(&output.text);
+            match &mut output.detail {
+                Some(ToolDetail::Read(path)) | Some(ToolDetail::Written { path, .. }) => {
+                    *path = shown(path);
+                }
+                _ => {}
+            }
+            Ok(output)
+        }
+        Err(error) => Err(shown(&error)),
     }
 }
 
@@ -3286,6 +3372,88 @@ to see full lines]",
             std::fs::read_to_string(home.join(".netrc")).unwrap(),
             "SECRET-netrc\n"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_file_tools_find_in_tmp_what_sandboxed_commands_put_there() {
+        use super::super::sandbox::{Sandbox, SandboxMode, Scratch};
+        let id = std::process::id();
+        let root = std::env::temp_dir().join(format!("scramjet-tools-tmp-{id}"));
+        let _root = crate::agent::tests::ScratchDir::new(root.clone());
+        std::fs::create_dir_all(&root).unwrap();
+        let users = std::env::temp_dir().join(format!("scramjet-tools-users-{id}"));
+        std::fs::write(&users, "yours\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let scratch = std::sync::Arc::new(Scratch::default());
+        let hidden = Hidden::current(&[], &Default::default()).scratch(&scratch);
+        let text = |sandbox: &Sandbox, name: &str, arguments: Value| {
+            let ran =
+                call(name, arguments).run_in_sandbox(&root, sandbox, &hidden, &cancel, &mut |_| {});
+            ran.map_or_else(|error| error, |output| output.text)
+        };
+        let read_only = Sandbox {
+            mode: SandboxMode::ReadOnly,
+            network: false,
+            writable: Vec::new(),
+        };
+        // Even read-only, as its commands can write there.
+        let wrote = text(
+            &read_only,
+            "write",
+            json!({"path":"/tmp/s/a.sh","content":"echo ran\n"}),
+        );
+        assert!(
+            wrote.contains("/tmp/s/a.sh") && !wrote.contains("scramjet-tmp"),
+            "{wrote}"
+        );
+        let bash = json!({"command":"sh /tmp/s/a.sh; echo kept > /tmp/s/b.txt"});
+        assert_eq!(text(&read_only, "bash", bash).trim(), "ran");
+        assert_eq!(
+            text(&read_only, "read", json!({"path":"/tmp/s/b.txt"})),
+            "kept\n"
+        );
+        let edits = json!([{"oldText":"kept","newText":"edited"}]);
+        let edited = text(
+            &read_only,
+            "edit",
+            json!({"path":"/tmp/s/b.txt","edits":edits}),
+        );
+        assert!(!edited.contains("scramjet-tmp"), "{edited}");
+        let bash = json!({"command":"cat /tmp/s/b.txt"});
+        assert_eq!(text(&read_only, "bash", bash).trim(), "edited");
+        let found = text(
+            &read_only,
+            "find",
+            json!({"pattern":"*.txt","path":"/tmp/s"}),
+        );
+        assert_eq!(found.trim(), "/tmp/s/b.txt");
+        let grepped = text(
+            &read_only,
+            "grep",
+            json!({"pattern":"edited","path":"/tmp/s"}),
+        );
+        assert!(
+            grepped.contains("b.txt") && !grepped.contains("scramjet-tmp"),
+            "{grepped}"
+        );
+        // What it does not hold is read from the user's /tmp, as before.
+        let path = users.to_string_lossy();
+        assert_eq!(text(&read_only, "read", json!({"path":path})), "yours\n");
+        // The project under /tmp is the project's, written in place.
+        let writer = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            ..read_only
+        };
+        let path = root.join("p.txt").to_string_lossy().into_owned();
+        text(&writer, "write", json!({"path":path,"content":"project\n"}));
+        assert_eq!(
+            std::fs::read_to_string(root.join("p.txt")).unwrap(),
+            "project\n"
+        );
+        let listed = text(&writer, "ls", json!({"path":"/tmp"}));
+        assert!(listed.lines().any(|line| line == "s/"), "{listed}");
+        std::fs::remove_file(&users).unwrap();
     }
 
     #[cfg(unix)]

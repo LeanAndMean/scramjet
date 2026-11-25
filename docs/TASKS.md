@@ -115,7 +115,7 @@ Order of the steers of 2026-11-25 (Current focus): 95, 77, 99's stable release w
 27. **A sandbox for the main agent** ([design](DESIGN.md#a-sandbox-for-the-main-agent-2026-11-06)). In: `--sandbox read-only|workspace-write` (`src/agent/sandbox.rs`; `scripts/screens/sandbox.json`). Left:
     - Unix sockets stay open on Linux, as Codex (user decision, 2026-11-07).
     - `.git`, `.scramjet` and `.agents` are protected only when they exist: in a project without `.git`, a made `.git/config` with `core.fsmonitor` runs at the user's next `git`. Bubblewrap needs a mount point, which would be left in the project after a SIGKILL, and would stop `git init` in the sandbox.
-    - On Linux `/tmp` is private to each agent and kept between its commands (2.346.0; on macOS shared and kept, 2.291.6), where Codex leaves the real one writable; the file tools see the user's `/tmp`, not it: map `/tmp` paths for them if a model trips on that.
+    - On Linux `/tmp` is private to each agent and kept between its commands (2.346.0; on macOS shared and kept, 2.291.6), where Codex leaves the real one writable; the file tools share it (2.347.0, `Hidden::in_scratch`), reading from the user's `/tmp` what it does not hold.
     - Item 7's children that write reuse it, with their worktree writable.
 32. **`/usage`** ([design](DESIGN.md#usage-2026-11-06)). In: `src/agent_cli/usage.rs` (`summary`, `details`), quota rows in `/status`; `scripts/screens/usage*.json`. Left:
     - Drop parts of the details the user does not miss (cache shares, hour rows, sessions by size) once they say.

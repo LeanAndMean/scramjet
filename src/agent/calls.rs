@@ -1558,7 +1558,8 @@ worktree\n---\n\nWrite.\n",
             tool_call(
                 "call_3",
                 "write",
-                json!({"path":"../outside","content":"w\n"}),
+                // Not in /tmp, which the private one takes.
+                json!({"path":"~/.scramjet-sandbox-outside","content":"w\n"}),
             ),
             tool_call(
                 "call_4",
@@ -1596,6 +1597,7 @@ worktree\n---\n\nWrite.\n",
         assert!(!home.join(".scramjet-sandbox-probe").exists());
         let outside = last_output(&bodies[3]);
         assert!(outside.contains("outside the project"), "{outside}");
+        assert!(!home.join(".scramjet-sandbox-outside").exists());
         let kept = last_output(&bodies[4]);
         assert!(kept.contains("kept read-only in the sandbox"), "{kept}");
         assert_eq!(
