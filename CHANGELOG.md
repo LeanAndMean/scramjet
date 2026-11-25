@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.335.5 — Security and privacy
+
+### Added
+
+- `SECURITY.md`: how to report a vulnerability privately, what the agent can do by default, what the sandbox guarantees on each system and what it does not, how credentials are kept, and what the release checks catch.
+- A privacy note (`docs/guide/privacy.md`): Scramjet sends no telemetry; what each request to a model carries and where each provider is reached; the other requests Scramjet makes (model lists, models.dev, the daily release check, packages, `gh`, MCP servers); and what stays on your machine and how to delete it. The README and the troubleshooting guide link both, and the agent reads them with the other guides.
+
 ## 2.335.4 — Troubleshooting and uninstalling
 
 ### Added

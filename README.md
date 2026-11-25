@@ -14,7 +14,7 @@ It works with the models you have: an API key for Anthropic, OpenAI, Google Gemi
   <img src="assets/readme-session.png" alt="A session: the agent runs the failing test, edits the file and runs the test again" width="760">
 </p>
 
-> **Before you start:** the agent's tool calls run without asking, and its commands run with your own access, outside any sandbox, unless you choose otherwise. `scramjet --ask` asks before each command and each write or edit outside the project. `scramjet -s workspace-write` (or `/sandbox` in a session, or the `sandbox` setting) lets its commands change only the project, and `-s read-only` nothing, on Linux and macOS. [The sandbox](docs/guide/configuration.md#the-sandbox) says what each confines.
+> **Before you start:** the agent's tool calls run without asking, and its commands run with your own access, outside any sandbox, unless you choose otherwise. `scramjet --ask` asks before each command and each write or edit outside the project. `scramjet -s workspace-write` (or `/sandbox` in a session, or the `sandbox` setting) lets its commands change only the project, and `-s read-only` nothing, on Linux and macOS. [The sandbox](docs/guide/configuration.md#the-sandbox) says what each confines, and [SECURITY.md](SECURITY.md) what the sandbox guarantees and what it does not.
 
 ## Install
 
@@ -120,6 +120,8 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 - [In an editor (ACP)](docs/guide/acp.md).
 - [Coming from Claude Code, Codex or Scramjet 1](docs/guide/migration.md).
 - [Troubleshooting](docs/guide/troubleshooting.md): what to do when something fails, and reporting it.
+- [Privacy](docs/guide/privacy.md): what leaves your machine, to whom, and what stays.
+- [Security](SECURITY.md): reporting a vulnerability, and what the sandbox guarantees and what it does not.
 - [Terminals](docs/TERMINALS.md): what each terminal does with copying, pasting and keys.
 - `scramjet --help`: every option, key and built-in command; in a session, `/hotkeys` and `/settings`.
 

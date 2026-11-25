@@ -43,6 +43,7 @@ macro_rules! doc_files {
 /// The README and the documents it links for users, by their paths in the checkout.
 const DOCS: &[(&str, &str)] = doc_files![
     "README.md",
+    "SECURITY.md",
     "docs/TERMINALS.md",
     "docs/guide/acp.md",
     "docs/guide/command-sets.md",
@@ -50,6 +51,7 @@ const DOCS: &[(&str, &str)] = doc_files![
     "docs/guide/getting-started.md",
     "docs/guide/install.md",
     "docs/guide/migration.md",
+    "docs/guide/privacy.md",
     "docs/guide/providers.md",
     "docs/guide/sessions.md",
     "docs/guide/troubleshooting.md",
