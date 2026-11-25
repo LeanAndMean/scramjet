@@ -118,6 +118,7 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 - [Concepts, and a first command set](docs/guide/concepts.md): commands, sets, agents, skills, next steps, autopilot and delegation, then a set of your own built step by step.
 - [Command sets](docs/guide/command-sets.md): installing, packages, running commands and their next steps.
 - [Configuration](docs/guide/configuration.md): settings, context files, credentials, the sandbox, MCP servers, themes.
+- [Settings reference](docs/guide/settings.md): every key of `settings.json`, its values and its default.
 - [In an editor (ACP)](docs/guide/acp.md).
 - [Coming from Claude Code, Codex or Scramjet 1](docs/guide/migration.md).
 - [Troubleshooting](docs/guide/troubleshooting.md): what to do when something fails, and reporting it.

@@ -56,6 +56,7 @@ const DOCS: &[(&str, &str)] = doc_files![
     "docs/guide/privacy.md",
     "docs/guide/providers.md",
     "docs/guide/sessions.md",
+    "docs/guide/settings.md",
     "docs/guide/troubleshooting.md",
 ];
 

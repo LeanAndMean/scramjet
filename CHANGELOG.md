@@ -4,6 +4,16 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.336.1 — A settings reference
+
+### Added
+
+- [The settings reference](docs/guide/settings.md) lists every key of `settings.json` with its values, its default and what it does, from the model and display to the sandbox, MCP servers and retries.
+
+### Fixed
+
+- `/settings`' Look row names all ten looks, `tinted` first; it named four, as before `tinted` became the default.
+
 ## 2.336.0 — A model's mistyped fields said
 
 ### Changed

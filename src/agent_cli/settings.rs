@@ -336,9 +336,8 @@ impl Row {
             }
             Self::Theme => "The colors of the conversation and of everything around it.",
             Self::Look => {
-                "How the conversation shows prompts, reasoning, tool calls and replies: panels, \
-                 on the theme's backgrounds (a theme with them, such as scramjet-dark), or \
-                 classic, rails or margin."
+                "How the conversation shows prompts, reasoning, tool calls and replies: tinted, \
+                 panels, classic, rails, margin, cards, ribbons, outline, timeline or mono."
             }
             Self::Banner => {
                 let then = then(Binding::ToolsExpand, "shows every key and what was loaded.");
@@ -2917,6 +2916,72 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `docs/guide/settings.md` keeps to what is read: each key its tables list, given a value of
+    /// no setting's type, is warned of by its name, and each name and value the reader takes is
+    /// in the page's code.
+    #[test]
+    fn the_settings_reference_lists_what_is_read() {
+        let reference = include_str!("../../docs/guide/settings.md");
+        let keys: Vec<&str> = (reference.lines())
+            .filter_map(|line| line.strip_prefix("| `")?.split_once('`'))
+            .map(|(key, _)| key)
+            .collect();
+        assert!(keys.len() > 60, "{keys:?}");
+        let scratch = Scratch::new("reference");
+        for key in &keys {
+            let mut value = json!([["no setting's type"]]);
+            for part in key.rsplit('.') {
+                value = json!({ part: value });
+            }
+            let settings = settings_with(&scratch, &value.to_string());
+            let named = |warning: &String| {
+                warning.contains(&format!(": {key} ")) || warning.contains(&format!(": {key}:"))
+            };
+            assert!(
+                settings.warnings.iter().any(named),
+                "{key}: {:?}",
+                settings.warnings
+            );
+        }
+        let shown: std::collections::HashSet<&str> = (reference.split('`').skip(1).step_by(2))
+            .flat_map(|code| code.split(|c: char| !(c.is_ascii_alphanumeric() || "_-".contains(c))))
+            .collect();
+        let source = include_str!("settings.rs");
+        let between = |from: &str, to: &str| {
+            let start = source.find(from).unwrap();
+            &source[start..][..source[start..].find(to).unwrap()]
+        };
+        let reader = [
+            between(
+                "    fn apply(&mut self, object",
+                "    pub(super) fn allow_write(",
+            ),
+            between("    fn apply_retry(", "\n    }\n"),
+            between("fn mcp_server(", "\n}\n"),
+            between("fn command_sets(", "\n}\n"),
+            between("const LAYOUT_KEYS", "];\n"),
+        ];
+        let literal = regex::Regex::new(r#""([A-Za-z_][A-Za-z0-9_.-]*)""#).unwrap();
+        let mut taken: Vec<&str> = (reader.iter())
+            .flat_map(|code| literal.captures_iter(code))
+            .map(|found| found.get(1).unwrap().as_str())
+            .flat_map(|name| name.split('.'))
+            .collect();
+        taken.extend(Design::ALL.map(Design::name));
+        taken.extend(Banner::ALL.map(Banner::name));
+        taken.extend(Bottom::ALL.map(Bottom::name));
+        taken.extend(Filter::CYCLE.map(Filter::setting));
+        taken.extend(Chains::CYCLE.map(Chains::setting));
+        taken.extend(LEVELS.into_iter().chain(CODING_TOOLS).chain(HARNESS_TOOLS));
+        let missing: Vec<_> = (taken.iter())
+            .filter(|name| !shown.contains(*name))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "not in the settings reference: {missing:?}"
+        );
     }
 
     #[test]
