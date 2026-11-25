@@ -23,7 +23,7 @@ Each section starts from what you see. In a session, `/scramjet:troubleshoot` as
 
 Subagents' commands, and the agent's own under `/sandbox` or `-s`, run under Bubblewrap.
 
-- **`bwrap` not found,** or a subagent's `bash` "left out, as the read-only sandbox is unavailable (no bwrap)": install it (`sudo apt install bubblewrap`, or your system's package), or name a program that runs in its place in the `sandbox.launcher` setting ([the sandbox](configuration.md#the-sandbox)).
+- **`bwrap` not found,** or a subagent's `bash` "left out, as the read-only sandbox is unavailable (no bwrap)": install it (`sudo apt install bubblewrap`, or your system's package), or name a program that runs in its place in the `sandbox.launcher` setting ([a launcher for Bubblewrap](configuration.md#what-it-leaves-out)).
 - **`bwrap: setting up uid map: Permission denied`,** or another message about creating a namespace: the system lets Bubblewrap make no user namespace. On Ubuntu 23.10 and later, AppArmor allows that only to programs with a profile saying so (`sysctl kernel.apparmor_restrict_unprivileged_userns` prints 1), and Ubuntu's `bubblewrap` package ships none ([Launchpad bug 2144531](https://bugs.launchpad.net/bugs/2144531)). The profile that bug gives, saved as `/etc/apparmor.d/bwrap` and loaded with `sudo apparmor_parser -r /etc/apparmor.d/bwrap`:
 
   ```text

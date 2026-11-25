@@ -37,7 +37,7 @@ Requests to ChatGPT, its model list's too, name the system, its kernel release a
 - **Packages.** `scramjet install` and `scramjet update` clone and pull the packages you install with `git`, your SSH configuration and credential helpers; a session's start clones a package listed but not cloned yet (not with `--offline`). A package's programs come from its releases through `gh`.
 - **GitHub, through `gh`.** When the project's `origin` is on GitHub, the footer asks `gh pr list` for the branch's open pull request. The publishing tools (`create_issue`, `create_pr` and the comment tools) post through `gh` what the agent wrote, shown whole for your approval unless the command's policy allows it ([running commands](command-sets.md#running-commands)); `/scramjet:bug` shows its anonymized issue whole before posting it.
 - **MCP servers** you configured get each call's arguments; an HTTP server is reached at its URL.
-- **The agent's commands** reach whatever a program you run can, unless `sandbox.network` is `false` ([the sandbox](configuration.md#the-sandbox)).
+- **The agent's commands** reach whatever a program you run can, unless `sandbox.network` is `false` ([the network](configuration.md#the-network)).
 
 `scramjet acp` talks to its editor over stdin and stdout and listens on no port. A page `/export` writes loads nothing from the network.
 

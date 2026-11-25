@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.337.1 — The configuration guide in sections
+
+### Changed
+
+- The configuration guide's sandbox part, one long paragraph, is in sections (the modes, the network, writable, hidden and readable paths, the reach, the sandbox screen, what it leaves out) with lists, and subagents have a section of their own; the themes, the theme editor's keys, the looks and the bottoms are lists.
+
 ## 2.337.0 — A short --help
 
 ### Changed

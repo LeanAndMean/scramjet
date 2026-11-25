@@ -68,7 +68,7 @@ The `writing-scramjet-commands` skill, built in, helps the agent write your own.
 
 ### Subagents
 
-The agent hands bounded tasks to subagents, which run in their own context and report back: `scramjet:explore` and `scramjet:general-purpose` are built in, and your own and the command sets' agents are listed beside them. They are read-only unless you let them write, then optionally each in a Git worktree of its own. [The sandbox](docs/guide/configuration.md#the-sandbox).
+The agent hands bounded tasks to subagents, which run in their own context and report back: `scramjet:explore` and `scramjet:general-purpose` are built in, and your own and the command sets' agents are listed beside them. They are read-only unless you let them write, then optionally each in a Git worktree of its own. [Subagents](docs/guide/configuration.md#subagents).
 
 ### A sandbox when you want one
 
