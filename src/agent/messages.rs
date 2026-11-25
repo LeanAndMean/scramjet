@@ -360,6 +360,8 @@ pub(super) struct Stream {
     blocks: Vec<Block>,
     /// Input, cache read, cache write and output tokens.
     usage: Option<[u64; 4]>,
+    /// The cache writes kept for an hour, from `cache_creation`.
+    written_long: Option<u64>,
     stop_reason: Option<String>,
     stopped: bool,
 }
@@ -521,6 +523,9 @@ impl Stream {
         if !usage.is_object() {
             return;
         }
+        if let Some(n) = usage["cache_creation"]["ephemeral_1h_input_tokens"].as_u64() {
+            self.written_long = Some(n);
+        }
         let counts = self.usage.get_or_insert([0; 4]);
         let fields = [
             "input_tokens",
@@ -603,6 +608,7 @@ impl Stream {
                 total_tokens: Some(input + output),
                 cached_input_tokens: Some(read),
                 cache_write_tokens: Some(write),
+                cache_write_long_tokens: self.written_long.map(|n| n.min(write)),
                 reasoning_tokens: None,
             }
         });
@@ -901,6 +907,25 @@ mod tests {
             (usage.input_tokens, usage.output_tokens, usage.total_tokens),
             (Some(3), Some(9), Some(12))
         );
+    }
+
+    #[test]
+    fn the_cache_writes_kept_for_an_hour_are_counted_apart() {
+        // As the local proxy's Bedrock route answered on 2026-11-25.
+        let usage = |hour: Value| {
+            json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":8,
+                "cache_creation_input_tokens":30_001,"cache_read_input_tokens":0,
+                "cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":hour},
+                "output_tokens":5}}})
+        };
+        let decoded = |start: Value| {
+            let events = [vec![start], end("end_turn").to_vec()].concat();
+            let usage = decode(&events).0.ok().unwrap().usage.unwrap();
+            (usage.cache_write_tokens, usage.cache_write_long_tokens)
+        };
+        assert_eq!(decoded(usage(json!(30_001))), (Some(30_001), Some(30_001)));
+        assert_eq!(decoded(usage(json!(null))), (Some(30_001), None));
+        assert_eq!(decoded(start()), (Some(0), None));
     }
 
     #[test]

@@ -903,6 +903,7 @@ impl Stream {
                 total_tokens: Some(input.saturating_add(output)),
                 cached_input_tokens: Some(read),
                 cache_write_tokens: Some(write),
+                cache_write_long_tokens: None,
                 reasoning_tokens: count(&usage["completion_tokens_details"]["reasoning_tokens"]),
             }
         });

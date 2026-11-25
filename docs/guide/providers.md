@@ -33,6 +33,8 @@ Models come from the providers in `~/.config/scramjet/models.json` and in the `m
 }
 ```
 
+`cost` is in dollars a million tokens; `cacheWrite` is five minutes' rate. Messages requests ask for an hour's caching, and the writes a reply says were kept for an hour (`cache_creation.ephemeral_1h_input_tokens`) are priced at twice `input`, as Anthropic and Bedrock charge them.
+
 ### The server's own list
 
 A provider that lists no `models` offers those its server lists (`GET {baseUrl}/models`, or `{baseUrl}/v1/models` under `anthropic-messages`), asked with the key its requests carry. Its list is saved in `~/.local/state/scramjet/models/` and, like the logins' lists ([below](#login)), read again while the full screen is open once 15 minutes old.

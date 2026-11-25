@@ -157,6 +157,7 @@ mod tests {
                 total_tokens: None,
                 cached_input_tokens: None,
                 cache_write_tokens: None,
+                cache_write_long_tokens: None,
                 reasoning_tokens: None,
             }),
             elapsed: Duration::from_millis(millis),

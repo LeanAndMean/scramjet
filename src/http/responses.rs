@@ -54,6 +54,9 @@ pub struct ProviderUsage {
     pub cached_input_tokens: Option<u64>,
     /// Input tokens written to the cache, part of `input_tokens`.
     pub cache_write_tokens: Option<u64>,
+    /// Of `cache_write_tokens`, those written for an hour rather than five minutes.
+    #[serde(default)]
+    pub cache_write_long_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
 }
 impl ProviderUsage {
@@ -271,6 +274,7 @@ fn usage(response: &Value) -> Result<Option<ProviderUsage>, Outcome> {
         total_tokens: number(value, "total_tokens")?,
         cached_input_tokens: number(&value["input_tokens_details"], "cached_tokens")?,
         cache_write_tokens: number(&value["input_tokens_details"], "cache_write_tokens")?,
+        cache_write_long_tokens: None,
         reasoning_tokens: number(&value["output_tokens_details"], "reasoning_tokens")?,
     };
     usage.validate()?;

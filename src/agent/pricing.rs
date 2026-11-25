@@ -83,6 +83,7 @@ impl Prices {
         let input = usage.input_tokens?;
         let read = usage.cached_input_tokens.unwrap_or(0);
         let written = usage.cache_write_tokens.unwrap_or(0);
+        let long = usage.cache_write_long_tokens.unwrap_or(0).min(written);
         let rates = match tiered.long {
             Some((above, rates)) if input > above => rates,
             _ => tiered.rates,
@@ -93,7 +94,10 @@ impl Prices {
         };
         Some(
             part(input.saturating_sub(read + written), rates.input)?
-                + part(written, rates.cache_write)?
+                + part(written - long, rates.cache_write)?
+                // Anthropic and Bedrock price an hour's cache writes at twice the input, where a
+                // card's `cacheWrite` is five minutes' 1.25 times.
+                + part(long, rates.input.map(|rate| rate * 2.0))?
                 + part(read, rates.cache_read)?
                 + part(usage.output_tokens?, rates.output)?,
         )
@@ -112,6 +116,7 @@ mod tests {
             total_tokens: Some(input + output),
             cached_input_tokens: Some(read),
             cache_write_tokens: Some(written),
+            cache_write_long_tokens: None,
             reasoning_tokens: None,
         }
     }
@@ -149,6 +154,33 @@ mod tests {
         // Without a header to read, its value does not matter.
         let flat = Prices::of(&json!({"input": 1, "cacheWrite": 1, "cacheRead": 1, "output": 1}));
         close(flat.cost(&used, Some("bedrock")), 1.01);
+    }
+
+    #[test]
+    fn cache_writes_kept_for_an_hour_cost_twice_the_input() {
+        let prices = Prices::of(&json!({
+            "input": 1, "cacheWrite": 1.25, "cacheRead": 0.1, "output": 5,
+            "longContext": {"above": 200_000, "input": 2, "cacheWrite": 2.5, "cacheRead": 0.2,
+                "output": 10},
+        }));
+        // 1M input, past 200k so at the long rates: 500k not cached, 100k read, 400k written,
+        // 300k of them for an hour.
+        let used = ProviderUsage {
+            cache_write_long_tokens: Some(300_000),
+            ..usage(1_000_000, 100_000, 400_000, 0)
+        };
+        close(prices.cost(&used, None), 1.0 + 0.25 + 1.2 + 0.02);
+        close(
+            prices.cost(&usage(1_000_000, 100_000, 400_000, 0), None),
+            1.0 + 1.0 + 0.02,
+        );
+        // Without a price for five minutes' writes, an hour's alone still have one.
+        let no_write = Prices::of(&json!({"input": 1, "cacheRead": 0.1, "output": 5}));
+        let all_long = ProviderUsage {
+            cache_write_long_tokens: Some(100_000),
+            ..usage(100_000, 0, 100_000, 0)
+        };
+        close(no_write.cost(&all_long, None), 0.2);
     }
 
     #[test]

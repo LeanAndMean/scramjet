@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.6 — An hour's cache writes priced
+
+### Fixed
+
+- A Claude reply's cache writes kept for an hour, which Scramjet asks for, now cost twice the input rate, as Anthropic and Bedrock charge them; a `models.json` card's `cacheWrite` (five minutes' 1.25 times) had priced them about 40% low.
+
 ## 2.344.5 — MCP tools after a model switch
 
 ### Fixed
