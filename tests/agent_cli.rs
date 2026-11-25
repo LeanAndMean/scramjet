@@ -3832,7 +3832,7 @@ fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
         .collect();
     assert_eq!(kinds.first(), Some(&"allow_once"));
     assert_eq!(kinds.last(), Some(&"reject_once"));
-    assert!(result(&seen).contains("stay read-only"), "{seen:?}");
+    assert!(result(&seen).contains("stays read-only"), "{seen:?}");
 }
 
 #[test]

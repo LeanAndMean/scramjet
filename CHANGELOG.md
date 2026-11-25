@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.342.3 — The ACP guide followed
+
+### Fixed
+
+- When the agent asks to write in one directory and is not asked or is denied, it is told the directory "stays" read-only, not "stay".
+
 ## 2.342.2 — A refused long wait said
 
 ### Fixed

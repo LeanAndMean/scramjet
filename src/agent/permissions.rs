@@ -143,11 +143,12 @@ can.";
         let listed = (asked.iter().map(|path| path.display().to_string()))
             .collect::<Vec<_>>()
             .join(", ");
+        let stay = if asked.len() == 1 { "stays" } else { "stay" };
         if self.unattended {
             return output(
                 format!(
                     "Not asked: this turn runs unattended (a step run by autopilot, or -p), so \
-no one can answer. {listed} stay read-only. Tell the user which directories you need writable \
+no one can answer. {listed} {stay} read-only. Tell the user which directories you need writable \
 and why; they can grant them with /add-dir DIR, or start with --add-dir DIR."
                 ),
                 true,
@@ -157,7 +158,7 @@ and why; they can grant them with /add-dir DIR, or start with --add-dir DIR."
             return output(
                 format!(
                     "Not asked: this session's reach is fixed by the program that started it, so \
-{listed} stay read-only. Work within the writable directories, or tell the user which directories you \
+{listed} {stay} read-only. Work within the writable directories, or tell the user which directories you \
 need writable and why."
                 ),
                 true,
@@ -205,7 +206,7 @@ need writable and why."
                 format!("The user allowed writing in {listed} for the rest of the session.")
             }
             false => format!(
-                "The user declined: {listed} stay read-only. Do not write there another way; \
+                "The user declined: {listed} {stay} read-only. Do not write there another way; \
 work within the writable directories or ask the user how to go on."
             ),
         };
