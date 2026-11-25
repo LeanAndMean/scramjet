@@ -739,6 +739,7 @@ impl Settings {
 
     fn apply(&mut self, object: &Map<String, Value>) {
         let path = shown(self.path.as_deref().unwrap_or(Path::new("")));
+        self.warnings.extend(mistyped_keys(object, &path));
         let mut wrong = |key: &str, expected: &str| {
             self.warnings
                 .push(format!("{path}: {key} must be {expected}; ignored"))
@@ -2670,6 +2671,138 @@ fn command_sets(object: &Map<String, Value>) -> Result<Vec<String>, ()> {
     paths(object, "commandSets")
 }
 
+/// The keys of each object of the settings, with those Scramjet 1 reads and this one does not,
+/// so that a key near one of them is warned of as mistyped; a key near none passes, as for
+/// Scramjet 1 and later versions.
+const KEYS: &[(&str, &[&str])] = &[
+    (
+        "",
+        &[
+            "hideThinkingBlock",
+            "doubleEscapeAction",
+            "copyOnSelect",
+            "retainTranscriptOnExit",
+            "collapseChangelog",
+            "lastChangelogVersion",
+            "spellCheck",
+            "images",
+            "terminalProgressBarEnabled",
+            "terminal",
+            "scrollWheelStep",
+            "editorMaxHeightPercent",
+            "autocompleteMaxVisible",
+            "branchSummary",
+            "compaction",
+            "treeFilterMode",
+            "resumeChains",
+            "markdown",
+            "theme",
+            "look",
+            "banner",
+            "bottom",
+            "defaultThinkingLevel",
+            "defaultProvider",
+            "defaultModel",
+            "startupModel",
+            "hideCredentials",
+            "steeringMode",
+            "followUpMode",
+            "tools",
+            "commandSets",
+            "packages",
+            "skills",
+            "themes",
+            "sessionDir",
+            "shellPath",
+            "defaultShell",
+            "shellCommandPrefix",
+            "retry",
+            "enabledModels",
+            "mcpServers",
+            "disabledMcpServers",
+            "modelCatalogs",
+            BLOCK_READS,
+            "permissions",
+            "sandboxNetwork",
+            "directives",
+            "sandbox",
+            // Scramjet 1's, not read here.
+            "anthropicExtraUsage",
+            "dockEditor",
+            "editorPaddingX",
+            "enableInstallTelemetry",
+            "enableSkillCommands",
+            "extensions",
+            "npmCommand",
+            "prompts",
+            "quietStartup",
+            "showHardwareCursor",
+            "thinkingBudgets",
+            "transport",
+            "tuiMode",
+        ],
+    ),
+    ("images", &["autoResize", "blockImages"]),
+    (
+        "terminal",
+        &["showTerminalProgress", "showImages", "imageWidthCells"],
+    ),
+    ("branchSummary", &["skipPrompt", "reserveTokens"]),
+    (
+        "compaction",
+        &["enabled", "reserveTokens", "keepRecentTokens"],
+    ),
+    ("markdown", &["toolDisplay", "codeBlockIndent"]),
+    (
+        "retry",
+        &[
+            "enabled",
+            "maxRetries",
+            "baseDelayMs",
+            "maxDelayMs",
+            "provider",
+        ],
+    ),
+    (
+        "retry.provider",
+        &["maxRetryDelayMs", "timeoutMs", "maxRetries"],
+    ),
+    (
+        "sandbox",
+        &["mode", "network", "launcher", "filesystem", "subagents"],
+    ),
+    ("sandbox.filesystem", FILESYSTEM_KEYS),
+    (
+        "sandbox.subagents",
+        &["mode", "network", BLOCK_READS, "filesystem"],
+    ),
+    ("sandbox.subagents.filesystem", FILESYSTEM_KEYS),
+];
+const FILESYSTEM_KEYS: &[&str] = &["allowWrite", "writable_roots", "denyRead", "allowRead"];
+
+/// A warning for each key of `object`'s objects in `KEYS` that mistypes one of theirs.
+fn mistyped_keys(object: &Map<String, Value>, path: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for (at, known) in KEYS {
+        let mut holder = Some(object);
+        for part in at.split('.').filter(|part| !part.is_empty()) {
+            holder = holder.and_then(|holder| holder.get(part)?.as_object());
+        }
+        let prefix = match at.is_empty() {
+            true => String::new(),
+            false => format!("{at}."),
+        };
+        for key in holder.into_iter().flat_map(Map::keys) {
+            if let Some(meant) = scramjet::agent::near_miss(key, known) {
+                found.push(format!(
+                    "{path}: {prefix}{key} is not read; did you mean {prefix}{meant}?"
+                ));
+            }
+        }
+    }
+    found
+}
+
 /// What a token count in the settings must be.
 const TOKENS: &str = "a whole number of tokens";
 
@@ -2989,6 +3122,57 @@ mod tests {
             missing.is_empty(),
             "not in the settings reference: {missing:?}"
         );
+    }
+
+    #[test]
+    fn a_mistyped_key_is_warned_of_with_the_one_meant() {
+        let scratch = Scratch::new("mistyped");
+        let settings = settings_with(
+            &scratch,
+            r#"{"defaultModle": "m", "Theme": "t", "hide_credentials": "always",
+                "compaction": {"reserveToken": 1}, "retry": {"provider": {"maxRetryDelay": 1}},
+                "sandbox": {"mod": "read-only", "filesystem": {"alowWrite": []},
+                    "subagents": {"filesystem": {"denyReads": []}}},
+                "requestLimits": {}, "$schema": "x", "model": "m"}"#,
+        );
+        let mut warnings: Vec<_> = (settings.warnings.iter())
+            .map(|warning| warning.split_once(": ").unwrap().1)
+            .collect();
+        warnings.sort();
+        assert_eq!(
+            warnings,
+            [
+                "Theme is not read; did you mean theme?",
+                "compaction.reserveToken is not read; did you mean compaction.reserveTokens?",
+                "defaultModle is not read; did you mean defaultModel?",
+                "hide_credentials is not read; did you mean hideCredentials?",
+                "retry.provider.maxRetryDelay is not read; did you mean \
+                 retry.provider.maxRetryDelayMs?",
+                "sandbox.filesystem.alowWrite is not read; did you mean \
+                 sandbox.filesystem.allowWrite?",
+                "sandbox.mod is not read; did you mean sandbox.mode?",
+                "sandbox.subagents.filesystem.denyReads is not read; did you mean \
+                 sandbox.subagents.filesystem.denyRead?",
+            ]
+        );
+        // Scramjet 1's keys, read there and not here, pass as they are.
+        let scramjet_1 = settings_with(
+            &scratch,
+            r#"{"quietStartup": true, "transport": "sse", "editorPaddingX": 1,
+                "thinkingBudgets": {}, "terminal": {"showImages": true, "imageWidthCells": 60},
+                "markdown": {"codeBlockIndent": "  "}, "extensions": [], "prompts": [],
+                "retry": {"provider": {"timeoutMs": 1, "maxRetries": 1}, "maxDelayMs": 1}}"#,
+        );
+        assert!(scramjet_1.warnings.is_empty(), "{:?}", scramjet_1.warnings);
+        let reference = include_str!("../../docs/guide/settings.md");
+        for key in (reference.lines())
+            .filter_map(|line| line.strip_prefix("| `")?.split_once('`'))
+            .map(|(key, _)| key)
+        {
+            let (at, last) = key.rsplit_once('.').unwrap_or(("", key));
+            let known = KEYS.iter().find(|(object, _)| *object == at);
+            assert!(known.is_some_and(|(_, keys)| keys.contains(&last)), "{key}");
+        }
     }
 
     #[test]

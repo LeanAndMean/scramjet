@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.342.0 — Mistyped settings named
+
+### Changed
+
+- A `settings.json` key that mistypes one Scramjet reads (`defaultModle`, `Theme`, `compaction.reserveToken`, `sandbox.filesystem.alowWrite`) is warned of at start, with the one meant; Scramjet 1's keys and others near none still pass.
+
 ## 2.341.0 — The providers guide followed
 
 ### Changed

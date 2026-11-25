@@ -73,7 +73,9 @@ pub use mcp::{
     Transport as McpTransport,
 };
 pub use problem::{Problem, ProblemFile};
-pub use providers::{BUILTIN, Builtin, KeyFrom, Providers, Sources, builtin, unmet_engine};
+pub use providers::{
+    BUILTIN, Builtin, KeyFrom, Providers, Sources, builtin, near_miss, unmet_engine,
+};
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::{Choice, Reply, TYPE_SOMETHING};
 pub use request::{CacheRetention, set_cache_retention};

@@ -1378,7 +1378,7 @@ fn unread(given: &Map<String, Value>, known: &[&str], at: &str) -> Vec<String> {
 
 /// The one of `known` that `key`, not one of them, mistypes: the same but for case, `_` and
 /// `-`, else at most one edit from it (two once it is over 5 characters).
-fn near_miss<'k>(key: &str, known: &[&'k str]) -> Option<&'k str> {
+pub fn near_miss<'k>(key: &str, known: &[&'k str]) -> Option<&'k str> {
     if known.contains(&key) {
         return None;
     }
