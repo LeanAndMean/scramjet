@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.335.6 — Concepts, and a first command set
+
+### Added
+
+- A concepts guide (`docs/guide/concepts.md`): what commands, command sets, agents, skills, next steps and their four policies, `chain` and `pause`, autopilot, delegation and publications are, then a tutorial building a first set in a project: a reviewer agent, a review command offering a commit next, and a commit command that delegates the review. The README, getting started and the command-sets guide link it, and the agent reads it with the other guides.
+
 ## 2.335.5 — Security and privacy
 
 ### Added

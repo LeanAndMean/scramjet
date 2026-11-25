@@ -47,6 +47,7 @@ const DOCS: &[(&str, &str)] = doc_files![
     "docs/TERMINALS.md",
     "docs/guide/acp.md",
     "docs/guide/command-sets.md",
+    "docs/guide/concepts.md",
     "docs/guide/configuration.md",
     "docs/guide/getting-started.md",
     "docs/guide/install.md",
