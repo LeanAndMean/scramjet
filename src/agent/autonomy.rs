@@ -1480,4 +1480,34 @@ publications:\n  rs:old:\n    create_pr: auto-approve\n",
         assert_eq!(defaults("- a", &mut warnings), Ok(Default::default()));
         assert!(defaults("a: [", &mut warnings).is_err());
     }
+
+    /// `tests/compatibility`'s `autonomy.yaml` files, as earlier versions wrote them, read as
+    /// they were (the compatibility promise).
+    #[test]
+    fn earlier_versions_files_are_read_as_they_were() {
+        let fixtures = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or(env!("CARGO_MANIFEST_DIR").into()),
+        )
+        .join("tests/compatibility");
+        let versions = std::fs::read_dir(&fixtures).unwrap();
+        for version in versions.map(|entry| entry.unwrap().path()) {
+            let root = version.join("project");
+            let set = root.join(".scramjet/ship/commands");
+            let file = |name: &str| std::fs::read_to_string(set.join(name)).unwrap();
+            let (review, commit) = (file("review.md"), file("commit.md"));
+            let commands = Commands::parsed(&[
+                ("ship:review.md", review.as_str()),
+                ("ship:commit.md", commit.as_str()),
+            ]);
+            let global = version.join("config/scramjet/autonomy.yaml");
+            let edges = Edges::load(Some(&global), &root, &commands);
+            assert!(edges.diagnostics.is_empty(), "{:?}", edges.diagnostics);
+            let resolve = |source, target| edges.resolve(source, target);
+            assert_eq!(resolve("ship:review", "ship:commit"), Some(Edge::Chain));
+            assert_eq!(resolve("ship:commit", "ship:review"), Some(Edge::Pause));
+            let setting = |tool| publication_override(Some(&global), "ship:commit", tool);
+            assert_eq!(setting("create_pr"), Ok(Some(Publication::Ask)));
+            assert_eq!(setting("add_pr_comment"), Ok(Some(Publication::Auto)));
+        }
+    }
 }

@@ -30,7 +30,7 @@ If Scramjet fails you, Scramjet 1 is still there: neither installer nor `scramje
 
 ## Updating
 
-`scramjet update self` takes the newest release over HTTPS (the start says when one is out); `scramjet update` pulls the [packages](command-sets.md) not pinned to a ref, then updates the program.
+`scramjet update self` takes the newest release over HTTPS (the start says when one is out); `scramjet update` pulls the [packages](command-sets.md) not pinned to a ref, then updates the program. An update keeps reading your settings, sessions, key bindings, themes and command sets as they are: [compatibility](compatibility.md) says what that covers.
 
 ## Where Scramjet keeps its files
 

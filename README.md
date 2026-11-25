@@ -121,6 +121,7 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 - [In an editor (ACP)](docs/guide/acp.md).
 - [Coming from Claude Code, Codex or Scramjet 1](docs/guide/migration.md).
 - [Troubleshooting](docs/guide/troubleshooting.md): what to do when something fails, and reporting it.
+- [Compatibility](docs/guide/compatibility.md): an update keeps reading your settings, sessions and command sets.
 - [Privacy](docs/guide/privacy.md): what leaves your machine, to whom, and what stays.
 - [Security](SECURITY.md): reporting a vulnerability, and what the sandbox guarantees and what it does not.
 - [Terminals](docs/TERMINALS.md): what each terminal does with copying, pasting and keys.

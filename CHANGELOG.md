@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.335.7 — The compatibility promise
+
+### Added
+
+- A compatibility guide (`docs/guide/compatibility.md`): an update keeps reading your settings, `models.json`, `auth.json`, key bindings, themes, `autonomy.yaml`, sessions and command sets, converting an old form rather than refusing it, from the first stable release on; what it does not cover (going back, what you see, Scramjet's own records, options, ACP's extensions). The README and the install guide link it, and the agent reads it with the other guides.
+- The tests read the files of this version, kept in `tests/compatibility/2.335`, at every build: a later version that stops reading one of them fails them.
+
 ## 2.335.6 — Concepts, and a first command set
 
 ### Added

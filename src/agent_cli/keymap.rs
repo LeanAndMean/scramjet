@@ -1031,4 +1031,34 @@ mod tests {
         // What it read is the keymap in use, the defaults here, as tests running meanwhile expect.
         assert_eq!(*CURRENT.read().unwrap(), Keymap::defaults());
     }
+
+    /// `tests/compatibility`'s keybindings files, as earlier versions wrote them, each action
+    /// taking the keys they give (the compatibility promise).
+    #[test]
+    fn earlier_versions_files_are_read_as_they_were() {
+        let fixtures = std::path::PathBuf::from(
+            std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or(env!("CARGO_MANIFEST_DIR").into()),
+        )
+        .join("tests/compatibility");
+        for version in std::fs::read_dir(&fixtures).unwrap() {
+            let path = version.unwrap().path().join("config/scramjet").join(FILE);
+            let text = std::fs::read_to_string(&path).unwrap();
+            let (keymap, warnings) = Keymap::read(&text);
+            assert!(warnings.is_empty(), "{}: {warnings:?}", path.display());
+            let Ok(Value::Object(file)) = serde_json::from_str(&text) else {
+                panic!("{}", path.display())
+            };
+            for (id, keys) in file {
+                let at = (DEFINITIONS.iter()).position(|definition| definition.id == id);
+                let names: Vec<&str> = match &keys {
+                    Value::String(name) => vec![name],
+                    keys => (keys.as_array().unwrap().iter())
+                        .map(|name| name.as_str().unwrap())
+                        .collect(),
+                };
+                let presses: Vec<Press> = names.iter().map(|name| parse(name).unwrap()).collect();
+                assert_eq!(keymap.0[at.unwrap()], presses, "{id}");
+            }
+        }
+    }
 }

@@ -1,0 +1,126 @@
+{
+  "size": "100x40",
+  "model": "fixture-model",
+  "window": 200000,
+  "total": 4000,
+  "files": {
+    "README.md": "A project for the compatibility fixture.\n",
+    "notes.txt": "draft\n",
+    ".scramjet/autonomy.yaml": "edges:\n  ship:review:\n    ship:commit: chain\n",
+    ".scramjet/ship/set.yaml": "name: ship\ndescription: Review the uncommitted changes, then commit them.\n",
+    ".scramjet/ship/agents/reviewer.md": "---\nname: reviewer\ndescription: Reviews a change it did not write, with fresh eyes, and reports only real defects.\ntools: Read, Grep, Glob, Bash\n---\nYou review a change someone else made. Run `git diff HEAD` and read what it touches.\nReport each defect that would make the code wrong (a bug, a missed case, a broken\ntest), with its file and line and why. Leave out style and taste. If you find none,\nsay so.\n",
+    ".scramjet/ship/commands/commit.md": "---\ndescription: Commit the changes with a message in the project's style\nargument-hint: \"[what the change is for]\"\n---\n# Commit the changes\n\n## Goals\n\n- The changes are committed, with a message in the style of the project's recent commits.\n\n## What it is for\n\n<user-context>\n$ARGUMENTS\n</user-context>\n\n## Commit\n\nIf the changes were not reviewed earlier in this conversation, delegate `ship:review`\nfirst. Show the user the message and the files it covers, and commit once they agree.\n",
+    ".scramjet/ship/commands/review.md": "---\ndescription: Review the uncommitted changes and fix what matters\nargument-hint: \"[what to look at most]\"\nnext:\n  mode: closed\n  candidates:\n    - name: ship:commit\n      hint: the changes are ready\n    - name: ship:review\n      hint: the fixes need another look\n---\n# Review the changes\n\n## Goals\n\n- The uncommitted changes hold no defect the user would want fixed before committing.\n\n## Focus\n\n<user-context>\n$ARGUMENTS\n</user-context>\n\n## Review\n\nAsk the `ship:reviewer` agent to review the changes, with any focus given above.\nCheck each finding against the code yourself: fix those that hold, and tell the\nuser which you set aside and why.\n"
+  },
+  "settings": {
+    "theme": "scramjet-dark",
+    "compaction": {
+      "keepRecentTokens": 20
+    }
+  },
+  "prompt": "/ship:review the empty case",
+  "replies": [
+    [
+      {
+        "reasoning": "Look at the changes first."
+      },
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "git status --short"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The change holds no defect."
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Reviewed the uncommitted changes: no defect.",
+          "next_steps": [
+            {
+              "message": "/ship:commit the notes",
+              "fresh_session": false,
+              "reason": "The changes are ready."
+            }
+          ],
+          "recommended_next_step": 0
+        }
+      }
+    ],
+    [
+      {
+        "text": "The message would be: Add notes."
+      },
+      {
+        "call": "report_scramjet_command_status",
+        "arguments": {
+          "status": "completed",
+          "summary": "Proposed a commit message; nothing committed."
+        }
+      }
+    ],
+    [
+      {
+        "call": "read",
+        "arguments": {
+          "path": "README.md"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The README names the fixture."
+      }
+    ],
+    [
+      {
+        "text": "## Goal\nKeep the fixture.\n\n## Progress\nReviewed and read the README."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "The message would be: Add notes."
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "/name compatibility fixture\r"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "\u001b[Z"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "What does the README say?\r"
+    },
+    {
+      "until": "The README names the fixture."
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "/compact\r"
+    },
+    {
+      "until": "Reviewed and read the README."
+    },
+    {
+      "sleep": 0.8
+    },
+    {
+      "shot": "end"
+    }
+  ]
+}

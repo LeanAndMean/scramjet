@@ -31,7 +31,7 @@ status=0
 # repository the tests name.
 rm -rf "$directory/tests" "$directory/sets" "$directory/src" "$directory/docs" &&
   mkdir -p "$directory/tests" "$directory/src/agent_cli" "$directory/docs" &&
-  cp -r tests/tls tests/support "$directory/tests/" && cp -r sets "$directory/" && cp -r src/agent_cli/themes "$directory/src/agent_cli/" &&
+  cp -r tests/tls tests/support tests/compatibility "$directory/tests/" && cp -r sets "$directory/" && cp -r src/agent_cli/themes "$directory/src/agent_cli/" &&
   cp README.md "$directory/" && cp -r docs/TERMINALS.md docs/guide "$directory/docs/"
 export SCRAMJET_RS_BINARY="$temp\\scramjet-rs-tests\\scramjet.exe"
 export CARGO_MANIFEST_DIR="$temp\\scramjet-rs-tests"

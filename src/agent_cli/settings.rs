@@ -2845,6 +2845,60 @@ mod tests {
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
     }
 
+    /// `tests/compatibility`'s settings, as earlier versions wrote them or users had them, read
+    /// with no warning, each key still one the reader takes: in its place, a value of no
+    /// setting's type is warned of, where a key no longer read would be passed over in silence
+    /// (the compatibility promise).
+    #[test]
+    fn earlier_versions_settings_are_read_as_they_were() {
+        fn leaves(value: &Value, at: Vec<String>, found: &mut Vec<Vec<String>>) {
+            match value {
+                Value::Object(object) if !at.is_empty() || !object.is_empty() => {
+                    for (key, value) in object {
+                        let mut path = at.clone();
+                        path.push(key.clone());
+                        leaves(value, path, found);
+                    }
+                }
+                _ => found.push(at),
+            }
+        }
+        let fixtures = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
+            .join("tests/compatibility");
+        let scratch = Scratch::new("compatibility");
+        for version in std::fs::read_dir(&fixtures).unwrap() {
+            let path = version
+                .unwrap()
+                .path()
+                .join("config/scramjet/settings.json");
+            let text = std::fs::read_to_string(&path).unwrap();
+            let settings = settings_with(&scratch, &text);
+            assert!(
+                settings.warnings.is_empty(),
+                "{}: {:?}",
+                path.display(),
+                settings.warnings
+            );
+            let document: Value = serde_json::from_str(&text).unwrap();
+            let mut found = Vec::new();
+            leaves(&document, Vec::new(), &mut found);
+            for leaf in found {
+                let mut changed = document.clone();
+                let mut value = &mut changed;
+                for key in &leaf {
+                    value = &mut value[key];
+                }
+                *value = serde_json::json!([["no setting's type"]]);
+                let read = settings_with(&scratch, &changed.to_string());
+                assert!(
+                    !read.warnings.is_empty(),
+                    "{}: {leaf:?} is not read",
+                    path.display()
+                );
+            }
+        }
+    }
+
     #[test]
     fn the_sandbox_settings_take_codexs_modes_and_a_network_switch() {
         let scratch = Scratch::new("sandbox");

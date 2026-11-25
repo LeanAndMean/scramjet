@@ -1200,6 +1200,176 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
     }
 }
 
+/// Each `tests/compatibility/VERSION` holds files as that version wrote them or a user had them:
+/// `config` (the settings' directory), `project` (with a command set) and `session.jsonl`. A
+/// later version reads them all as they were, with no warning: the compatibility promise
+/// (`docs/guide/compatibility.md`). `PORT` in a file is the scripted provider's.
+#[test]
+fn the_files_of_earlier_versions_are_read_as_they_were() {
+    let fixtures = repository().join("tests").join("compatibility");
+    let mut versions: Vec<_> = (std::fs::read_dir(&fixtures).unwrap())
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    versions.sort();
+    assert!(!versions.is_empty());
+    for version in versions {
+        let name = version.file_name().unwrap().to_string_lossy().into_owned();
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "scramjet-cli-compatibility-{name}-{}",
+            std::process::id()
+        )));
+        let (sent, requests) = std::sync::mpsc::channel();
+        let port = serve_raw_seeing(
+            vec![responses_text("Still here.")],
+            |_| Duration::ZERO,
+            move |head, body| {
+                let _ = sent.send((head, body));
+            },
+        );
+        copy_tree(&version, &scratch.0, &port.to_string());
+        let config = scratch.0.join("config");
+        let project = scratch.0.join("project");
+        let session = scratch.0.join("session.jsonl");
+        let output = program(&binary())
+            .args(["-p", "--session"])
+            .arg(&session)
+            .arg("Go on.")
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("SCRAMJET_OFFLINE", "1")
+            .output()
+            .unwrap();
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+        assert!(output.status.success(), "{name}: {output:?}");
+        // What the fixture's settings ask to be told, and the run's usage; no warning.
+        let said = text(&output.stderr);
+        let unexpected: Vec<&str> = (said.lines())
+            .filter(|line| !line.is_empty() && !line.starts_with("[1 requests · "))
+            .filter(|line| !line.starts_with("Commands run off the network: "))
+            .collect();
+        assert!(unexpected.is_empty(), "{name}: {said}");
+        // 20,000 uncached input tokens at $1.25 per million, 80,000 cached at $0.125, 10,000
+        // output tokens at $10.
+        assert!(said.contains(" · $0.1350 · "), "{name}: {said}");
+        assert_eq!(text(&output.stdout).trim_end(), "Still here.", "{name}");
+        let (head, body) = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+        let head = head.to_ascii_lowercase();
+        assert!(
+            head.contains("authorization: bearer sk-saved-by-login\r\n"),
+            "{name}: {head}"
+        );
+        assert!(
+            head.contains("x-fixture: compatibility\r\n"),
+            "{name}: {head}"
+        );
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["model"], "fixture-model", "{name}");
+        assert_eq!(body["reasoning"]["effort"], "high", "{name}");
+        let input = body["input"].to_string();
+        for earlier in [
+            "Keep the fixture.",
+            "The README names the fixture.",
+            "Go on.",
+        ] {
+            assert!(input.contains(earlier), "{name}: {earlier}: {input}");
+        }
+        let listed = program(&binary())
+            .arg("--list-models")
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("SCRAMJET_OFFLINE", "1")
+            .output()
+            .unwrap();
+        let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert_eq!(
+            words(&text(&listed.stdout)),
+            "provider model context max-out thinking images \
+screens fixture-model 200K 32K yes yes",
+            "{name}: {listed:?}"
+        );
+        let set = project.join(".scramjet").join("ship");
+        let lint = program(&binary())
+            .args(["lint", "--strict"])
+            .arg(&set)
+            .output()
+            .unwrap();
+        assert!(lint.status.success(), "{name}: {lint:?}");
+        assert!(
+            text(&lint.stdout).contains("0 errors, 0 warnings"),
+            "{name}: {lint:?}"
+        );
+    }
+}
+
+/// Copies the directory `from` to `to`, with `PORT` in each file replaced by `port`.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path, port: &str) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let path = entry.unwrap().path();
+        let target = to.join(path.file_name().unwrap());
+        match path.is_dir() {
+            true => copy_tree(&path, &target, port),
+            false => {
+                let text = std::fs::read_to_string(&path).unwrap();
+                std::fs::write(&target, text.replace("PORT", port)).unwrap();
+            }
+        }
+    }
+}
+
+/// An HTTP response streaming a Responses reply of `text` alone, of 100,000 input tokens (80,000
+/// of them cached) and 10,000 output tokens.
+fn responses_text(text: &str) -> String {
+    let message = |content: serde_json::Value, status: &str| {
+        serde_json::json!({"type": "message", "id": "msg_1", "role": "assistant",
+            "status": status, "content": content})
+    };
+    let part = serde_json::json!({"type": "output_text", "text": text, "annotations": []});
+    let done = message(serde_json::json!([part]), "completed");
+    let at = serde_json::json!({"output_index": 0, "item_id": "msg_1", "content_index": 0});
+    let with = |mut event: serde_json::Value, more: serde_json::Value| {
+        (event.as_object_mut().unwrap()).extend(more.as_object().unwrap().clone());
+        event
+    };
+    let usage = serde_json::json!({"input_tokens": 100_000, "output_tokens": 10_000,
+        "input_tokens_details": {"cached_tokens": 80_000}});
+    let events = [
+        serde_json::json!({"type": "response.created",
+            "response": {"id": "resp", "status": "in_progress", "output": []}}),
+        serde_json::json!({"type": "response.output_item.added", "output_index": 0,
+            "item": message(serde_json::json!([]), "in_progress")}),
+        with(
+            at.clone(),
+            serde_json::json!({"type": "response.content_part.added",
+                "part": {"type": "output_text", "text": "", "annotations": []}}),
+        ),
+        with(
+            at.clone(),
+            serde_json::json!({"type": "response.output_text.delta", "delta": text}),
+        ),
+        with(
+            at.clone(),
+            serde_json::json!({"type": "response.output_text.done", "text": text}),
+        ),
+        with(
+            at,
+            serde_json::json!({"type": "response.content_part.done", "part": part}),
+        ),
+        serde_json::json!({"type": "response.output_item.done", "output_index": 0, "item": done}),
+        serde_json::json!({"type": "response.completed", "response": {"id": "resp",
+            "status": "completed", "output": [done], "usage": usage}}),
+    ];
+    let body: String = (events.iter())
+        .map(|event| format!("data: {event}\n\n"))
+        .collect();
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\
+connection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn prompt_editor_and_running_turns_keep_input_and_restore_the_terminal() {
@@ -2758,9 +2928,21 @@ fn serve_raw_after(
     replies: Vec<String>,
     delay: impl Fn(usize) -> Duration + Send + 'static,
 ) -> (u16, std::sync::mpsc::Receiver<String>) {
+    let (sent, received) = std::sync::mpsc::channel();
+    let port = serve_raw_seeing(replies, delay, move |_, body| {
+        let _ = sent.send(body);
+    });
+    (port, received)
+}
+
+/// `serve_raw_after`, giving `seen` each request's head and body: its port.
+fn serve_raw_seeing(
+    replies: Vec<String>,
+    delay: impl Fn(usize) -> Duration + Send + 'static,
+    seen: impl Fn(String, String) + Send + 'static,
+) -> u16 {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let (sent, received) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for (n, socket) in listener.incoming().enumerate() {
             let mut stream = socket.unwrap();
@@ -2781,10 +2963,10 @@ fn serve_raw_after(
             stream
                 .write_all(replies[n % replies.len()].as_bytes())
                 .unwrap();
-            let _ = sent.send(String::from_utf8(body).unwrap());
+            seen(head, String::from_utf8(body).unwrap());
         }
     });
-    (port, received)
+    port
 }
 
 /// `scramjet acp` in `project` with the provider at `port`, its stdin, and its stdout's messages.
