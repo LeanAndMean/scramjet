@@ -1,6 +1,8 @@
 //! A git worktree of a child's own, as Claude Code's `isolation: "worktree"`: made on a new branch
 //! from the repository's `HEAD` (one for all a chain's steps that ask for it), removed after the
 //! child if it changed nothing, else left for the parent with its path and branch in the result.
+//! Beside each is its record, locked while its process lives, so that a later start finishes a
+//! worktree whose process ended before it (`sweep`), as Claude Code sweeps its own.
 
 use std::{
     path::{Path, PathBuf},
@@ -19,6 +21,13 @@ pub(super) struct Worktree {
     /// The repository's git directory (`--git-common-dir`), where removing it writes.
     git_dir: PathBuf,
     base: String,
+    /// Its record, locked while the worktree is this process's; `None` where it could not be made.
+    _record: Option<std::fs::File>,
+}
+
+/// The record beside the worktree at `path`.
+fn record_path(path: &Path) -> PathBuf {
+    path.with_extension("lock")
 }
 
 /// `STATE/worktrees/<project>`, holding a project's children's worktrees.
@@ -48,6 +57,120 @@ fn git(directory: &Path, arguments: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Makes the record of the worktree to be made at `path`, locked; `None` where it cannot be made
+/// (a full disk), which leaves that worktree to be removed by hand if its process ends first.
+fn record(
+    path: &Path,
+    top: &Path,
+    git_dir: &Path,
+    base: &str,
+    branch: &str,
+) -> Option<std::fs::File> {
+    use std::io::Write;
+    let at = record_path(path);
+    let mut options = std::fs::OpenOptions::new();
+    let mut file = (crate::os::private_file(options.create_new(true).write(true)))
+        .open(&at)
+        .ok()?;
+    let text = serde_json::json!({
+        "top": top.to_string_lossy(),
+        "gitDir": git_dir.to_string_lossy(),
+        "base": base,
+        "branch": branch,
+    });
+    match file
+        .lock()
+        .and_then(|()| file.write_all(text.to_string().as_bytes()))
+    {
+        Ok(()) => Some(file),
+        Err(_) => {
+            let _ = std::fs::remove_file(at);
+            None
+        }
+    }
+}
+
+/// Finishes, as `Worktree::finish` does, the worktrees in `state` of the project `root` whose
+/// process ended before them (closed, killed), and says what became of each. One whose process
+/// lives holds its record's lock; one whose record cannot be read is left alone.
+pub(in crate::agent) fn sweep(state: &Path, root: &Path) -> Vec<String> {
+    use std::io::Read;
+    let root = crate::os::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    let Ok(entries) = std::fs::read_dir(directory(state, &root)) else {
+        return Vec::new();
+    };
+    let mut said = Vec::new();
+    for record in entries.flatten().map(|entry| entry.path()) {
+        let path = record.with_extension("");
+        let named =
+            (path.file_name()).is_some_and(|name| name.to_string_lossy().starts_with("agent-"));
+        if record.extension() != Some("lock".as_ref()) || !named {
+            continue;
+        }
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&record)
+        else {
+            continue;
+        };
+        let mut text = String::new();
+        if file.try_lock().is_err() || file.read_to_string(&mut text).is_err() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let field = |name: &str| value[name].as_str().map(str::to_owned);
+        let (Some(top), Some(git_dir), Some(base), Some(branch)) = (
+            field("top"),
+            field("gitDir"),
+            field("base"),
+            field("branch"),
+        ) else {
+            continue;
+        };
+        let top = PathBuf::from(top);
+        if !path.exists() {
+            // Removed but for its branch and record, or never made: its branch, if any, is as made.
+            let _ = git(&top, &["worktree", "prune"]);
+            let tip = git(
+                &top,
+                &[
+                    "rev-parse",
+                    "--verify",
+                    "-q",
+                    &format!("refs/heads/{branch}"),
+                ],
+            );
+            if tip.is_ok_and(|tip| tip == base) {
+                let _ = git(&top, &["branch", "-D", &branch]);
+            }
+            let _ = std::fs::remove_file(&record);
+            continue;
+        }
+        let worktree = Worktree {
+            path,
+            branch,
+            top,
+            git_dir: PathBuf::from(git_dir),
+            base,
+            _record: None,
+        };
+        let note = worktree.finish(None);
+        let shown = worktree.path.display();
+        said.push(match note {
+            None => format!(
+                "Removed the unchanged worktree {shown}, whose subagent's run ended before it."
+            ),
+            Some(note) => {
+                format!("A subagent's run ended before its worktree was finished. {note}")
+            }
+        });
+    }
+    said
+}
+
 impl Worktree {
     /// A worktree of the repository holding `cwd`, under the project `root`'s in `state`, and
     /// where `cwd` is in it.
@@ -73,16 +196,22 @@ impl Worktree {
         let path = parent.join(&name);
         let branch = format!("worktree-{name}");
         let shown = path.to_string_lossy();
-        git(
+        // Locked before the worktree is made, so that no sweep takes one being made for gone.
+        let record = record(&path, &top, &git_dir, &base, &branch);
+        if let Err(error) = git(
             &top,
             &["worktree", "add", "-q", "-b", &branch, &shown, &base],
-        )?;
+        ) {
+            let _ = std::fs::remove_file(record_path(&path));
+            return Err(error);
+        }
         let worktree = Self {
             path,
             branch,
             top,
             git_dir,
             base,
+            _record: record,
         };
         match worktree.inside(cwd) {
             Ok(inside) => Ok((worktree, inside)),
@@ -137,6 +266,12 @@ impl Worktree {
     /// as Claude Code does, then naming those; else what the parent is told of it, with what of
     /// the removal the `main` agent's sandbox in its project keeps read-only.
     pub(super) fn finish(&self, main: Option<(&Sandbox, &Path)>) -> Option<String> {
+        let said = self.end(main);
+        let _ = std::fs::remove_file(record_path(&self.path));
+        said
+    }
+
+    fn end(&self, main: Option<(&Sandbox, &Path)>) -> Option<String> {
         let path = self.path.display();
         let status = git(
             &self.path,
@@ -237,6 +372,86 @@ mod tests {
         git(root, &["init", "-q"]).unwrap();
         git(root, &["add", "."]).unwrap();
         commit(root);
+    }
+
+    #[test]
+    fn a_later_start_finishes_the_worktrees_of_a_run_that_ended_first() {
+        let scratch =
+            std::env::temp_dir().join(format!("scramjet-worktree-sweep-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(scratch.clone());
+        let base = std::fs::canonicalize(&scratch).unwrap();
+        let (project, state) = (base.join("project"), base.join("state"));
+        repository(&project);
+        let branch = |name: &str| git(&project, &["branch", "--list", name]).unwrap();
+        // Another test's process forked before it execs holds a dropped record's lock a moment.
+        let swept = || {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let held = std::fs::read_dir(directory(&state, &project)).unwrap();
+                let held =
+                    (held.flatten()).any(|entry| entry.path().extension() == Some("lock".as_ref()));
+                let said = sweep(&state, &project);
+                if !said.is_empty() || !held || std::time::Instant::now() > end {
+                    return said;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        };
+
+        // A finished worktree leaves no record; a live one's is locked, so it is passed over.
+        let (finished, _) = Worktree::add(&project, &project, &state).unwrap();
+        assert!(record_path(&finished.path).exists());
+        assert_eq!(finished.finish(None), None);
+        assert!(!record_path(&finished.path).exists());
+        let (unchanged, _) = Worktree::add(&project, &project, &state).unwrap();
+        assert_eq!(sweep(&state, &project), Vec::<String>::new());
+        assert!(unchanged.path.exists());
+
+        // Its process gone (the lock with it), an unchanged one goes with its branch and record.
+        let (path, name) = (unchanged.path.clone(), unchanged.branch.clone());
+        drop(unchanged);
+        let said = swept();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].starts_with("Removed the unchanged worktree "),
+            "{}",
+            said[0]
+        );
+        assert!(!path.exists() && !record_path(&path).exists());
+        assert!(branch(&name).is_empty());
+
+        // A changed one stays, said once.
+        let (changed, cwd) = Worktree::add(&project, &project, &state).unwrap();
+        std::fs::write(cwd.join("new.txt"), "new\n").unwrap();
+        let (path, name) = (changed.path.clone(), changed.branch.clone());
+        drop(changed);
+        let said = swept();
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(
+            said[0].starts_with(
+                "A subagent's run ended before its worktree was finished. Worktree kept with \
+                 uncommitted changes: "
+            ),
+            "{}",
+            said[0]
+        );
+        assert!(path.join("new.txt").exists() && !branch(&name).is_empty());
+        assert_eq!(sweep(&state, &project), Vec::<String>::new());
+
+        // Removed before its process ended, its branch as made and its record go too.
+        let (removed, _) = Worktree::add(&project, &project, &state).unwrap();
+        let shown = removed.path.to_string_lossy().into_owned();
+        git(&project, &["worktree", "remove", "--force", &shown]).unwrap();
+        let (path, name) = (removed.path.clone(), removed.branch.clone());
+        drop(removed);
+        assert_eq!(swept(), Vec::<String>::new());
+        assert!(branch(&name).is_empty() && !record_path(&path).exists());
+
+        // A record that cannot be read is left alone.
+        let unreadable = directory(&state, &project).join("agent-0.lock");
+        std::fs::write(&unreadable, "").unwrap();
+        assert_eq!(sweep(&state, &project), Vec::<String>::new());
+        assert!(unreadable.exists());
     }
 
     #[test]

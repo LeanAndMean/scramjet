@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.339.0 — Worktrees left by a run that ended are finished at the next start
+
+### Added
+
+- A subagent's worktree whose run ended first, its terminal closed or its process killed, is finished at the next start in that project, as the subagent's end would have: removed with its branch if unchanged, else kept and said once, with its path, branch and how to remove it. Before, it stayed with its branch until removed by hand.
+
 ## 2.338.0 — A subagent's box names the worktree it kept
 
 ### Added

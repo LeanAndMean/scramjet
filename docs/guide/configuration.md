@@ -134,6 +134,7 @@ Subagents running at once share the directory: give parallel writers separate `c
 - It is writable to the subagent even when the main agent's sandbox is not, its git files read-only, so the subagent leaves its changes uncommitted.
 - A worktree left unchanged is removed with its branch; files git ignores in it, such as build output, an ignored notes directory or a `.env`, go with it, as in Claude Code, and the result names them.
 - Otherwise the result names its path and branch, and so does the subagent's box on the screen; you or the main agent remove it once its changes are taken or dropped.
+- If Scramjet ends before the subagent does (its terminal closed, the process killed), the next start in that project finishes the worktree as the subagent's end would have, and says what it did: removed if unchanged, else kept, with its path and branch.
 
 ## MCP servers
 

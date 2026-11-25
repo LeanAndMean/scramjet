@@ -658,7 +658,8 @@ pub struct Agent {
     /// Whether lines runs that ended kept for want of room still wait for it
     /// (`session::write_kept`).
     kept_waiting: bool,
-    /// What to say of those lines, once.
+    /// What to say of those lines, and of children's worktrees that runs that ended left
+    /// (`subagent::sweep_worktrees`), once.
     kept_notes: Vec<String>,
     /// With `SessionChoice::Unsaved`, where every session of the run is, removed with the agent.
     unsaved: Option<session::Unsaved>,
@@ -801,7 +802,8 @@ impl Agent {
             None => session::directory(&config.root),
         };
         // Before a session is opened, which may be one they belong to.
-        let (kept_notes, kept_waiting) = kept_notes(session::write_kept(), true);
+        let (mut kept_notes, kept_waiting) = kept_notes(session::write_kept(), true);
+        kept_notes.extend(subagent::sweep_worktrees(&config.root));
         let mut unsaved = None;
         let latest = match choice {
             SessionChoice::Continue => Session::latest(&directory()?)?,
