@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.1 — "1 request" after a one-request answer
+
+### Fixed
+
+- The usage line after a printed answer (`-p`) says "1 request", not "1 requests".
+
 ## 2.340.0 — /login says how it saved a key
 
 ### Changed

@@ -1265,7 +1265,7 @@ fn the_files_of_earlier_versions_are_read_as_they_were() {
         // What the fixture's settings ask to be told, and the run's usage; no warning.
         let said = text(&output.stderr);
         let unexpected: Vec<&str> = (said.lines())
-            .filter(|line| !line.is_empty() && !line.starts_with("[1 requests · "))
+            .filter(|line| !line.is_empty() && !line.starts_with("[1 request · "))
             .filter(|line| !line.starts_with("Commands run off the network: "))
             .collect();
         assert!(unexpected.is_empty(), "{name}: {said}");

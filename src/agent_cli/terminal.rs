@@ -996,8 +996,9 @@ pub(super) fn usage_line(agent: &Agent) -> String {
         n => format!(", {n} written to the cache"),
     };
     format!(
-        "[{} requests · {} input tokens ({} cached{written}) · {} output tokens{}{}{}]",
+        "[{} request{} · {} input tokens ({} cached{written}) · {} output tokens{}{}{}]",
         usage.requests,
+        if usage.requests == 1 { "" } else { "s" },
         usage.input_tokens,
         usage.cached_input_tokens,
         usage.output_tokens,
