@@ -1433,8 +1433,11 @@ impl Settings {
         let moved: Vec<PathBuf> = moved.iter().map(|entry| self.resolve(entry)).collect();
         let others = (self.command_sets.iter()).filter(|known| !moved.contains(known));
         for set in &sets {
-            let name = set.directory.file_name();
-            if let Some(known) = others.clone().find(|known| known.file_name() == name) {
+            let name = Some(&set.name);
+            if let Some(known) = others
+                .clone()
+                .find(|known| Set::name_of(known).as_ref() == name)
+            {
                 return Err(format!(
                     "a command set named {} is installed from {}; remove it first",
                     set.name,
@@ -1486,7 +1489,10 @@ impl Settings {
         let known = (entries.iter())
             .map(|entry| self.resolve(entry))
             .chain(self.command_sets.iter().cloned())
-            .find(|known| known.file_name() == set.directory.file_name());
+            .find(|known| {
+                same_directory(known, &set.directory)
+                    || Set::name_of(known).is_some_and(|name| name == set.name)
+            });
         if let Some(known) = known {
             return Err(match same_directory(&known, &set.directory) {
                 true => format!("{} is already installed", set.name),
@@ -1653,7 +1659,7 @@ impl Settings {
         }
         let root = self.clones.as_deref()?;
         let set = (self.command_sets.iter())
-            .find(|set| set.file_name().is_some_and(|name| name == source))?;
+            .find(|set| Set::name_of(set).is_some_and(|name| name == source))?;
         (self.packages.iter()).find(|known| set.starts_with(known.clone_directory(root)))
     }
 
@@ -1730,7 +1736,8 @@ impl Settings {
         };
         let position = entries.iter().position(|entry| {
             let known = self.resolve(entry);
-            known.file_name().is_some_and(|name| name == reference)
+            Set::name_of(&known).is_some_and(|name| name == reference)
+                || known.file_name().is_some_and(|name| name == reference)
                 || given
                     .as_deref()
                     .is_some_and(|given| same_directory(&known, given))
@@ -4470,6 +4477,23 @@ or false; ignored"
             Some(&package.join("models.json"))
         );
         settings.remove_set("package").unwrap();
+        // A set is known by its set.yaml's name, and also by its directory's.
+        let kit = set("kit");
+        std::fs::write(kit.join("set.yaml"), "name: tools\n").unwrap();
+        assert_eq!(install_set(&mut settings, &kit).unwrap().name, "tools");
+        assert_eq!(
+            install_set(&mut settings, &set("tools")).unwrap_err(),
+            format!(
+                "a command set named tools is installed from {}; remove it first",
+                kit.display()
+            )
+        );
+        assert_eq!(
+            settings.remove_set("tools").unwrap(),
+            std::slice::from_ref(&kit)
+        );
+        install_set(&mut settings, &kit).unwrap();
+        assert_eq!(settings.remove_set("kit").unwrap(), [kit]);
 
         assert_eq!(
             settings.remove_set("rs").unwrap(),

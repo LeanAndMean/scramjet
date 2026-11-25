@@ -1685,10 +1685,9 @@ mach12 ({kit}): 1 command, 0 agents\n  providers (providers): 0 commands, \
     let pinned = format!("{source}@{first}");
     let (ok, _, err) = run(&["install", &pinned]);
     assert!(!ok);
-    let identity = url(&scratch.0.join("upstream")).replacen("file://", "git:localhost", 1);
     assert_eq!(
         err,
-        format!("scramjet: {identity} is installed as {source}; remove it first\n")
+        format!("scramjet: {pinned} is installed as {source}; remove it first\n")
     );
     let (ok, _, err) = run(&["remove", "mach12"]);
     assert!(!ok);

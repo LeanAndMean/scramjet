@@ -89,6 +89,17 @@ impl Set {
     }
 }
 
+impl Set {
+    /// The name the set in `directory` is listed by: its `set.yaml`'s `name`, else the
+    /// directory's.
+    pub fn name_of(directory: &Path) -> Option<String> {
+        match declared_name(directory) {
+            Ok(Some(name)) => Some(name),
+            _ => Some(directory.file_name()?.to_str()?.to_owned()),
+        }
+    }
+}
+
 /// The `name` of the `set.yaml` in `directory`, `None` without one or without a `name`.
 fn declared_name(directory: &Path) -> Result<Option<String>, String> {
     let path = directory.join("set.yaml");

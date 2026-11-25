@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.6 — The command sets guide followed
+
+### Fixed
+
+- `scramjet remove NAME` takes a command set by the name `scramjet list` shows, its `set.yaml`'s, as well as by its directory's name, and says that name when it removes it; installing a second set of the same name is refused by that name too.
+- `scramjet install` and `remove` name a `file://` package as you typed it, not as `git:localhost/…`.
+
 ## 2.340.5 — The import from Scramjet 1 followed
 
 ### Fixed

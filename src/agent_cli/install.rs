@@ -169,8 +169,7 @@ fn install_package(source: Source) -> Result<(), String> {
             true => format!("{} is already installed", source.written),
             false => format!(
                 "{} is installed as {}; remove it first",
-                source.identity(),
-                known.written
+                source.written, known.written
             ),
         });
     }
@@ -225,13 +224,14 @@ fn install_package(source: Source) -> Result<(), String> {
     }
     unmet_engines(&directory, &source.written).map_err(undo)?;
     for set in &sets {
-        let name = set.file_name();
-        if let Some(known) = (settings.command_sets.iter()).find(|known| known.file_name() == name)
+        let name = Set::name_of(set);
+        if let Some(known) =
+            (settings.command_sets.iter()).find(|known| Set::name_of(known) == name)
         {
             return Err(undo(format!(
                 "{} brings a command set named {}, which is installed from {}; remove it first",
                 source.written,
-                name.unwrap_or_default().display(),
+                name.unwrap_or_default(),
                 shown(known)
             )));
         }
@@ -315,10 +315,7 @@ fn remove(reference: &str) -> Result<(), String> {
     if let Some(source) = Source::parse(reference) {
         let source = source?;
         let Some(known) = settings.package(&source.written).cloned() else {
-            return Err(format!(
-                "no package from {} is installed",
-                source.identity()
-            ));
+            return Err(format!("no package from {} is installed", source.written));
         };
         let root = settings.clones()?.to_path_buf();
         let directory = known.clone_directory(&root);
@@ -355,14 +352,14 @@ fn remove(reference: &str) -> Result<(), String> {
     match settings.remove_set(reference) {
         Ok(directories) => {
             for directory in directories {
-                let name = directory.file_name().unwrap_or_default().to_string_lossy();
+                let name = Set::name_of(&directory).unwrap_or_default();
                 outln!("Removed {name}, installed from {}", shown(&directory));
             }
             Ok(())
         }
         Err(error) => {
             let local = (settings.command_sets.iter())
-                .find(|set| set.file_name().is_some_and(|name| name == reference))
+                .find(|set| Set::name_of(set).is_some_and(|name| name == reference))
                 .and_then(|set| settings.local_package(set));
             let package = match (settings.package(reference), local) {
                 (Some(package), _) => package.written.clone(),
