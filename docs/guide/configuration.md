@@ -29,6 +29,8 @@ Tool calls run without asking; there is no permission mode, and by default the m
 
 The `write` and `edit` tools refuse what the mode does not allow.
 
+On Linux the sandbox's `/tmp` is the agent's own, apart from yours and from the sockets in it: a file a command writes there is still there for its next command, until the session's process ends (each subagent has one of its own, removed as it ends). The `read`, `write` and `edit` tools do not see it: they see your `/tmp`. On macOS the temporary directories are shared with your programs.
+
 ### The network
 
 Commands reach the network unless `sandbox.network` is `false`, which keeps them off it with no sandbox too, said at every start:
@@ -117,7 +119,7 @@ The agent is told what is writable, and asks for more with `request_permissions`
 
 Two agents are there without any command set: `scramjet:explore`, which finds where something is in the code, traces how it flows or maps what depends on what, and answers with cited evidence and what it could not establish (the breadth asked: quick, medium or very thorough); and `scramjet:general-purpose`, for multi-step investigations that need judgment. The agent's instructions list these, your own agents (`~/.config/scramjet/agents`) and the command sets', as Claude Code lists its agents; a project's `.scramjet/agents` are reached with the call's `agentScope` and your approval, and are not listed.
 
-Subagents run inside this process, read-only and off the network whatever the main agent's sandbox: their shell runs under Bubblewrap with every file read-only, a private `/tmp` (where a tmux it starts runs apart from yours and ends with its command), no network and credential stores hidden. On macOS it runs under Seatbelt, with `/tmp` and `TMPDIR` writable and shared, as in Codex; on Windows at the low integrity level, with a `TEMP` of its own, the network, and nothing hidden.
+Subagents run inside this process, read-only and off the network whatever the main agent's sandbox: their shell runs under Bubblewrap with every file read-only, a private `/tmp` of its own, kept between its commands (where a tmux it starts runs apart from yours and ends with its command), no network and credential stores hidden. On macOS it runs under Seatbelt, with `/tmp` and `TMPDIR` writable and shared, as in Codex; on Windows at the low integrity level, with a `TEMP` of its own, the network, and nothing hidden.
 
 `sandbox.subagents` sets theirs apart:
 

@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.346.0 — A sandbox's /tmp kept between commands
+
+### Changed
+
+- On Linux, the sandbox's `/tmp` is now kept from one of an agent's commands to the next, where each command had a fresh, empty one: a script an agent writes to `/tmp` and runs in its next command is still there. It stays private: your `/tmp` and its sockets remain hidden, each subagent has its own, and it is removed when the agent ends. The `read`, `write` and `edit` tools still see your `/tmp`, not it.
+
 ## 2.345.1 — A request no provider answers ends
 
 ### Fixed

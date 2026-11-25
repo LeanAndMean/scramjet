@@ -1,5 +1,5 @@
 //! The read-only sandbox that subagents' commands run in: bubblewrap with the whole
-//! filesystem mounted read-only, a private `/tmp` discarded after each command, no network, and
+//! filesystem mounted read-only, a private `/tmp` kept for the agent's commands, no network, and
 //! the user's credential stores hidden; the main agent's commands in it too under `--sandbox`,
 //! with the project writable in `workspace-write` and the network as `sandbox.network` says; and
 //! otherwise the main agent's commands with only the credential stores hidden. On macOS the
@@ -53,7 +53,7 @@ pub(super) const TEMPORARY: &str = match cfg!(target_os = "macos") {
     true => {
         "/tmp, /var/tmp and $TMPDIR, which are shared with other programs and kept after the command"
     }
-    false => "a private /tmp discarded after each command",
+    false => "a private /tmp, kept from one command to the next, that the file tools do not see",
 };
 
 /// Why `--sandbox` is refused on Windows, where scramjet-rs has only subagents' read-only one.
@@ -780,10 +780,77 @@ pub(super) fn network_said(network: bool) -> &'static str {
     }
 }
 
+/// The directory an agent's sandboxed commands have as `/tmp` on Linux, made at the first and
+/// kept for the next (`scramjet-tmp-PID-N`, the user's alone, in the temporary directory),
+/// removed with the agent or as the process exits; none made, each command has a fresh one.
+#[derive(Default)]
+pub(super) struct Scratch(std::sync::OnceLock<Option<PathBuf>>);
+
+/// The `Scratch` directories made, removed by `remove_scratch` at an exit, which runs no
+/// destructors.
+static SCRATCH: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+extern "C" fn remove_scratch() {
+    // A thread holding it as the process exits leaves its directory rather than hang the exit.
+    if let Ok(directories) = SCRATCH.try_lock() {
+        for directory in directories.iter() {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+    }
+}
+
+impl Scratch {
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    fn path(&self) -> Option<&Path> {
+        self.0.get_or_init(Scratch::make).as_deref()
+    }
+
+    fn make() -> Option<PathBuf> {
+        static AT_EXIT: std::sync::Once = std::sync::Once::new();
+        // SAFETY: `remove_scratch` neither unwinds nor exits.
+        AT_EXIT.call_once(|| unsafe {
+            libc::atexit(remove_scratch);
+        });
+        let mut builder = std::fs::DirBuilder::new();
+        crate::os::private_directory(&mut builder);
+        let mut directories = SCRATCH
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for n in 0u64.. {
+            let name = format!("scramjet-tmp-{}-{n}", std::process::id());
+            let path = std::env::temp_dir().join(name);
+            match builder.create(&path) {
+                Ok(()) => {
+                    directories.push(path.clone());
+                    return Some(path);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        if let Some(Some(path)) = self.0.get() {
+            let _ = std::fs::remove_dir_all(path);
+            let mut directories = SCRATCH
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            directories.retain(|directory| directory != path);
+        }
+    }
+}
+
 /// The credential stores that exist, by their real paths. In the sandbox a hidden file reads
 /// as empty and a hidden directory has no entries, both read-only.
 #[derive(Default, Clone)]
 pub(super) struct Hidden {
+    /// What sandboxed commands have as `/tmp`, kept between them; none, a fresh one each.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    scratch: Option<std::sync::Arc<Scratch>>,
     files: Vec<PathBuf>,
     directories: Vec<PathBuf>,
     /// Device and inode of each, which another mount of the same filesystem shares.
@@ -821,6 +888,14 @@ impl Hidden {
             ..Default::default()
         }
         .apart_from_tmux()
+    }
+
+    /// These, with sandboxed commands having `scratch` as `/tmp`.
+    pub(super) fn scratch(self, scratch: &std::sync::Arc<Scratch>) -> Hidden {
+        Hidden {
+            scratch: Some(scratch.clone()),
+            ..self
+        }
     }
 
     /// These, with commands run without a sandbox kept off the network if `offline`.
@@ -1108,6 +1183,7 @@ impl Hidden {
             identities: identities.collect(),
             files,
             directories,
+            scratch: None,
             tmux: None,
             denied: Vec::new(),
             outside: Vec::new(),
@@ -1429,10 +1505,12 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
         "--proc",
         "/proc",
         "--tmpfs",
-        "/tmp",
-        "--tmpfs",
         "/run",
     ]);
+    match hidden.scratch.as_ref().and_then(|scratch| scratch.path()) {
+        Some(scratch) => process.arg("--bind").arg(scratch).arg("/tmp"),
+        None => process.args(["--tmpfs", "/tmp"]),
+    };
     if network {
         process.arg("--share-net");
         let resolver = std::fs::canonicalize("/etc/resolv.conf").ok();
@@ -1480,7 +1558,7 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
             .max_by_key(|(mount, _)| mount.components().count())
             .is_some_and(|(_, writable)| *writable)
     };
-    // The fresh `/tmp` shows no server's sockets, so tmux starts one of its own there, ended with
+    // The private `/tmp` shows no server's sockets, so tmux starts one of its own there, ended with
     // the command; a cover over them would only stop it. Where a bound path holds them (a
     // project at `/tmp` or `/`), a fresh directory over the cover is tmux's base instead: tmux
     // refuses bubblewrap's mount point itself as its socket directory, open to others.
@@ -1911,6 +1989,34 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         assert!(!root.join("new.txt").exists());
         let home = std::env::home_dir().unwrap();
         assert!(!home.join(".scramjet-sandbox-probe").exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_agents_commands_keep_their_tmp_apart_from_the_users_and_other_agents() {
+        super::available().expect("bubblewrap works here");
+        let root = std::env::temp_dir().join(format!("scramjet-scratch-{}", std::process::id()));
+        let _root = crate::agent::tests::ScratchDir::new(root.clone());
+        let users = std::env::temp_dir().join(format!("scramjet-users-{}", std::process::id()));
+        std::fs::write(&users, "yours\n").unwrap();
+        let cancel = AtomicBool::new(false);
+        let run = |scratch: &std::sync::Arc<super::Scratch>, script: &str| {
+            let hidden = super::Hidden::current(&[], &Default::default()).scratch(scratch);
+            let ran = run_sandboxed(&root, script, &hidden, false, None, &cancel, &mut |_| {});
+            ran.unwrap().tool_output().text
+        };
+        let agent = std::sync::Arc::new(super::Scratch::default());
+        let other = std::sync::Arc::new(super::Scratch::default());
+        let shown = format!("cat {} 2>&1 || echo unseen", users.display());
+        assert!(run(&agent, &shown).contains("unseen"));
+        run(&agent, "echo kept > /tmp/x.py");
+        assert_eq!(run(&agent, "cat /tmp/x.py").trim(), "kept");
+        assert!(run(&other, "cat /tmp/x.py 2>&1 || echo unseen").contains("unseen"));
+        let directory = agent.path().unwrap().to_owned();
+        assert!(directory.join("x.py").is_file());
+        drop(agent);
+        assert!(!directory.exists());
+        std::fs::remove_file(&users).unwrap();
     }
 
     #[test]

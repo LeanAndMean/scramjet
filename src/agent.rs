@@ -707,6 +707,8 @@ pub struct Agent {
     autopilot: bool,
     /// The MCP servers, while the model is offered their tools.
     mcp: Option<Arc<mcp::Servers>>,
+    /// What the agent's sandboxed commands have as `/tmp`, kept between them.
+    scratch: Arc<sandbox::Scratch>,
     /// A reply's calls that a pause of the turn left running (`AgentError::Paused`).
     calls: Option<calls::Calls>,
     /// A step's request that a pause of the turn left streaming.
@@ -883,6 +885,7 @@ impl Agent {
             left_out: Vec::new(),
             autopilot,
             mcp: None,
+            scratch: Arc::default(),
             calls: None,
             replying: None,
             config,

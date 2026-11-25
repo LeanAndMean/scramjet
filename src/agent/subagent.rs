@@ -1440,6 +1440,8 @@ fn run_child(
     report: &mut dyn FnMut(Event),
 ) -> Run {
     let tools = &job.tools;
+    // Its own, apart from its parent's and other children's, removed as it ends.
+    let scratch = std::sync::Arc::new(sandbox::Scratch::default());
     let mut run = Run::new(job.name);
     run.warnings = job.warnings.clone();
     let executor = match tokio::runtime::Builder::new_current_thread()
@@ -1573,7 +1575,8 @@ uncommitted.",
         if calls.is_empty() {
             return run;
         }
-        let hidden = sandbox::Hidden::current(parent.providers.credential_files(), &reads);
+        let hidden =
+            sandbox::Hidden::current(parent.providers.credential_files(), &reads).scratch(&scratch);
         for item in calls {
             let output = match Call::parse(&item) {
                 Ok(call) => {

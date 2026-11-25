@@ -139,6 +139,7 @@ impl Agent {
             subagents: self.subagents.clone(),
             sandbox: self.config.sandbox.clone(),
             mcp: self.mcp.clone(),
+            scratch: self.scratch.clone(),
         }
     }
 
@@ -567,6 +568,7 @@ struct Kit {
     subagents: sandbox::Subagents,
     sandbox: Option<Sandbox>,
     mcp: Option<Arc<mcp::Servers>>,
+    scratch: Arc<sandbox::Scratch>,
 }
 
 impl Kit {
@@ -601,6 +603,7 @@ impl Kit {
             offline: self.offline,
             sandbox: self.sandbox.as_ref(),
             mcp: self.mcp.as_deref(),
+            scratch: &self.scratch,
         }
     }
 }
@@ -613,6 +616,8 @@ pub(super) struct Tools<'a> {
     offline: bool,
     sandbox: Option<&'a Sandbox>,
     mcp: Option<&'a mcp::Servers>,
+    /// What the agent's sandboxed commands have as `/tmp`.
+    scratch: &'a Arc<sandbox::Scratch>,
 }
 
 impl Tools<'_> {
@@ -686,7 +691,7 @@ impl Tools<'_> {
                     None if offline => Some(sandbox::Hidden::nothing()),
                     hidden => hidden,
                 };
-                let hidden = hidden.map(|hidden| hidden.offline(offline));
+                let hidden = hidden.map(|hidden| hidden.offline(offline).scratch(self.scratch));
                 let progress = &mut |output: &str| ui.tool_output(output);
                 let output = match (self.sandbox, &hidden) {
                     (Some(sandbox), Some(hidden)) => {

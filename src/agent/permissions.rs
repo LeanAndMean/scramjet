@@ -275,8 +275,8 @@ ask the user with `request_permissions`",
         let project = root.display();
         assert!(
             text.contains(&format!(
-                "command): {}. The project ({project}) is read-only outside \
-them.",
+                "(and in {}): {}. The project ({project}) is read-only outside them.",
+                super::super::sandbox::TEMPORARY,
                 docs.display()
             )),
             "{text}"
