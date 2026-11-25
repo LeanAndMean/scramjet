@@ -4,6 +4,16 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.335.3 — Getting started
+
+### Added
+
+- A getting-started guide (`docs/guide/getting-started.md`), linked from the README: installing, connecting a model by each way `/login` offers, choosing what the agent may do, a first task, steering and queueing, Escape, undo and going back in the session tree (which leaves the agent's file changes to Git), resuming, and running Mach 12's workflow with its next steps. The agent reads it with the other guides when asked about Scramjet.
+
+### Fixed
+
+- The providers guide's link to `/login`'s section works again.
+
 ## 2.335.2 — Named Scramjet
 
 ### Changed

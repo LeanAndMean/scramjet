@@ -40,7 +40,7 @@ In your project's directory:
 scramjet
 ```
 
-With no model yet, type `/login`: sign in to ChatGPT or GitHub Copilot, enter an API key, or connect a local runtime. Then ask for what you want done, and follow along as it works. `scramjet -c` continues the latest session here, `scramjet -r` chooses one, and `scramjet -p 'Explain src/main.rs'` prints one answer and exits.
+With no model yet, type `/login`: sign in to ChatGPT or GitHub Copilot, enter an API key, or connect a local runtime. Then ask for what you want done, and follow along as it works. `scramjet -c` continues the latest session here, `scramjet -r` chooses one, and `scramjet -p 'Explain src/main.rs'` prints one answer and exits. [Getting started](docs/guide/getting-started.md) walks through a first session, from connecting a model to running a workflow.
 
 ## What it does
 
@@ -111,6 +111,7 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 
 ## Guides
 
+- [Getting started](docs/guide/getting-started.md): a first session, step by step: a model, a task, steering, going back, a workflow.
 - [Installing](docs/guide/install.md): the installers, by hand, beside Scramjet 1, from source.
 - [Providers and logins](docs/guide/providers.md): `/login`, `models.json`, model catalogs, proxies, local models.
 - [Sessions and keys](docs/guide/sessions.md): the command line, the full screen, session trees, key bindings.
