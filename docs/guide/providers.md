@@ -59,7 +59,7 @@ What the list does not say stays unknown, without reasoning, and the provider's 
 - `credentialFiles` (`["~/.config/acme", "token.json"]`) names the files and directories holding the file's providers' credentials, which the agent's tools do not see, as the [common stores](configuration.md#credentials) are when hidden.
 - `engines` (`{"scramjet": ">=2.157.0"}`, as npm's) names the earliest Scramjet the file works with: an older one takes nothing from it but its `credentialFiles`, saying why, and `install` refuses its package.
 
-What is wrong in these files is said at start and by `--list-models`.
+What is wrong in these files is said at start and by `--list-models`, a key that mistypes one it reads (`contextWindw`) with the one meant; other keys it does not read pass, as Scramjet 1's do.
 
 ## Model catalogs
 

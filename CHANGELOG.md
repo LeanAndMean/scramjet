@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.341.0 — The providers guide followed
+
+### Changed
+
+- A `models.json` key that mistypes one Scramjet reads (`contextWindw`, `base_url`, `modelOverides`, `cost.inptu`) is warned of at start and by `--list-models`, with the one meant; other keys it does not read still pass, as in Scramjet 1.
+- An `api` Scramjet does not take names the three it does, and the one meant when it is mistyped, also for a provider that asks its server for its models, which said it had no `api`.
+
 ## 2.340.7 — The install guide followed
 
 ### Fixed

@@ -877,6 +877,14 @@ impl Reading {
                 "{what}: credentialFiles must be a list of files and directories"
             )),
         }
+        if let Ok(Value::Object(top)) = serde_json::from_slice::<Value>(text) {
+            let unread = unread(&top, TOP_KEYS, "");
+            (self.problems).extend(
+                unread
+                    .into_iter()
+                    .map(|problem| format!("{what}: {problem}")),
+            );
+        }
         // Its stores stay hidden all the same.
         if let Some(problem) = unmet_engine(text) {
             return self.problems.push(format!("{what}: {problem}"));
@@ -933,6 +941,18 @@ impl Reading {
         let Some(entry) = entry.as_object() else {
             return self.problems.push(format!("{what}: not a JSON object"));
         };
+        for problem in unread(entry, PROVIDER_KEYS, "") {
+            self.problems.push(format!("{what}: {problem}"));
+        }
+        if let Some(Value::Object(overrides)) = entry.get("modelOverrides") {
+            for (id, given) in overrides {
+                let unread = given.as_object().map(|given| unread(given, MODEL_KEYS, ""));
+                for problem in unread.into_iter().flatten() {
+                    (self.problems).push(format!("{what}: modelOverrides {id}: {problem}"));
+                }
+            }
+        }
+        let own = matches!(entry.get("models"), Some(Value::Array(models)) if !models.is_empty());
         let models = match entry.get("models") {
             Some(Value::Array(models)) if !models.is_empty() => models.clone(),
             Some(Value::Array(_)) | None => match self.listed(name, entry, what, described) {
@@ -942,7 +962,10 @@ impl Reading {
             Some(_) => return self.problems.push(format!("{what}: models must be a list")),
         };
         for model in &models {
-            let mistaken = mistyped(model);
+            let mut mistaken = mistyped(model);
+            if own && let Some(given) = model.as_object() {
+                mistaken.extend(unread(given, MODEL_KEYS, ""));
+            }
             match self.model(name, entry, model) {
                 Ok(model)
                     if (self.models.iter())
@@ -987,10 +1010,21 @@ impl Reading {
             return None;
         }
         if !lists || !entry.contains_key("baseUrl") {
-            self.problems.push(format!(
-                "{what}: lists no models, and has no baseUrl and api (openai-responses, \
-                 anthropic-messages or openai-completions) to ask its server for them"
-            ));
+            let problem = match api {
+                Some(api) if entry.contains_key("baseUrl") => {
+                    let near = near_miss(api, APIS)
+                        .map(|known| format!("; did you mean {known}?"))
+                        .unwrap_or_default();
+                    format!(
+                        "lists no models, and its api {api} is not one whose server it asks for \
+                         them (openai-responses, anthropic-messages or openai-completions){near}"
+                    )
+                }
+                _ => "lists no models, and has no baseUrl and api (openai-responses, \
+                      anthropic-messages or openai-completions) to ask its server for them"
+                    .to_owned(),
+            };
+            self.problems.push(format!("{what}: {problem}"));
             return None;
         }
         let overrides = match entry.get("modelOverrides") {
@@ -1074,7 +1108,15 @@ impl Reading {
             Some("anthropic-messages") => Protocol::Messages,
             Some("openai-completions") => Protocol::Completions,
             Some("openai-codex-responses") => Protocol::Codex,
-            Some(api) => return Err(format!("{subject}: api {api} is not supported yet")),
+            Some(api) => {
+                let near = near_miss(api, APIS)
+                    .map(|known| format!("; did you mean {known}?"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "{subject}: api {api} is not one Scramjet takes (openai-responses, \
+                     anthropic-messages or openai-completions){near}"
+                ));
+            }
             None => return Err(format!("{subject}: no api")),
         };
         let url = text("baseUrl")?.ok_or_else(|| format!("{subject}: no baseUrl"))?;
@@ -1258,6 +1300,119 @@ impl Reading {
             info,
         })
     }
+}
+
+/// The keys a `models.json` takes at its top, in a provider and in a model (or one of
+/// `modelOverrides`), Scramjet 1's it does not read among them.
+const TOP_KEYS: &[&str] = &[
+    "providers",
+    "providersCommand",
+    "credentialFiles",
+    "engines",
+    "logins",
+    "release",
+    "version",
+];
+/// The protocols a `models.json` names in `api`, but for ChatGPT's login's own.
+const APIS: &[&str] = &[
+    "openai-responses",
+    "anthropic-messages",
+    "openai-completions",
+];
+const PROVIDER_KEYS: &[&str] = &[
+    "name",
+    "baseUrl",
+    "apiKey",
+    "api",
+    "headers",
+    "compat",
+    "authHeader",
+    "models",
+    "modelOverrides",
+    "runtime",
+];
+const MODEL_KEYS: &[&str] = &[
+    "id",
+    "name",
+    "api",
+    "baseUrl",
+    "apiKey",
+    "headers",
+    "compat",
+    "authHeader",
+    "reasoning",
+    "thinkingLevelMap",
+    "input",
+    "cost",
+    "contextWindow",
+    "maxTokens",
+    "maxInputTokens",
+    "requestLimits",
+];
+const COST_KEYS: &[&str] = &[
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "header",
+    "longContext",
+    "byHeader",
+];
+
+/// The keys of `given` that are not `known` but so near one that they are taken for a mistyped
+/// one; any other key is let pass, as Scramjet 1 lets it, for what other versions read.
+fn unread(given: &Map<String, Value>, known: &[&str], at: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for key in given.keys() {
+        if let Some(meant) = near_miss(key, known) {
+            found.push(format!("{at}{key} is not read; did you mean {at}{meant}?"));
+        }
+    }
+    if known == MODEL_KEYS
+        && let Some(Value::Object(cost)) = given.get("cost")
+    {
+        found.extend(unread(cost, COST_KEYS, &format!("{at}cost.")));
+    }
+    found
+}
+
+/// The one of `known` that `key`, not one of them, mistypes: the same but for case, `_` and
+/// `-`, else at most one edit from it (two once it is over 5 characters).
+fn near_miss<'k>(key: &str, known: &[&'k str]) -> Option<&'k str> {
+    if known.contains(&key) {
+        return None;
+    }
+    let plain = |text: &str| -> Vec<char> {
+        (text.chars().filter(|c| !matches!(c, '_' | '-')))
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let key = plain(key);
+    // Edits are a character added, taken out, changed, or two swapped.
+    let distance = |known: &[char]| {
+        let mut d = vec![vec![0; known.len() + 1]; key.len() + 1];
+        for (i, row) in d.iter_mut().enumerate() {
+            row[0] = i;
+        }
+        d[0] = (0..=known.len()).collect();
+        for i in 1..=key.len() {
+            for j in 1..=known.len() {
+                let changed = usize::from(key[i - 1] != known[j - 1]);
+                d[i][j] = (d[i - 1][j - 1] + changed)
+                    .min(d[i - 1][j] + 1)
+                    .min(d[i][j - 1] + 1);
+                if i > 1 && j > 1 && key[i - 1] == known[j - 2] && key[i - 2] == known[j - 1] {
+                    d[i][j] = d[i][j].min(d[i - 2][j - 2] + 1);
+                }
+            }
+        }
+        d[key.len()][known.len()]
+    };
+    let allowed = if key.len() > 5 { 2 } else { 1 };
+    (known.iter().map(|known| (distance(&plain(known)), *known)))
+        .filter(|(distance, _)| *distance <= allowed)
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, known)| known)
 }
 
 /// What a model's `entry` gives in a type its reader cannot take, each then ignored; `null` is
@@ -2027,6 +2182,42 @@ mod tests {
     }
 
     #[test]
+    fn a_mistyped_key_is_said_with_the_one_meant_and_others_pass() {
+        let providers = Providers::given(json!({
+            "providersComand": ["./list"], "$schema": "x",
+            "providers": {
+                "a": {"base_url": "http://a/v1", "baseUrl": "http://a/v1", "api": "openai-responses",
+                    "modelOverides": {}, "somethingNew": 1, "models": [
+                    {"id": "m", "contextWindw": 5, "MaxTokens": 3, "requestLimits": {},
+                        "cost": {"inptu": 1, "output": 2}},
+                    {"id": "n", "api": "openai-respones"},
+                ]},
+                "b": {"baseUrl": "http://b/v1", "api": "anthropic-mesages"},
+            },
+        }));
+        let ids: Vec<String> = (providers.models().iter()).map(Model::reference).collect();
+        assert_eq!(ids, ["a/m"]);
+        assert_eq!(
+            providers.problems(),
+            [
+                "models: providersComand is not read; did you mean providersCommand?",
+                "models: provider a: base_url is not read; did you mean baseUrl?",
+                "models: provider a: modelOverides is not read; did you mean modelOverrides?",
+                "models: provider a: model m: MaxTokens is not read; did you mean maxTokens?",
+                "models: provider a: model m: contextWindw is not read; did you mean \
+                 contextWindow?",
+                "models: provider a: model m: cost.inptu is not read; did you mean cost.input?",
+                "models: provider a: model n: api openai-respones is not one Scramjet takes \
+                 (openai-responses, anthropic-messages or openai-completions); did you mean \
+                 openai-responses?",
+                "models: provider b: lists no models, and its api anthropic-mesages is not one \
+                 whose server it asks for them (openai-responses, anthropic-messages or \
+                 openai-completions); did you mean anthropic-messages?",
+            ]
+        );
+    }
+
+    #[test]
     fn what_is_wrong_is_said_and_the_rest_is_offered() {
         let providers = Providers::given(json!({
             "providers": {
@@ -2060,7 +2251,8 @@ mod tests {
             providers.problems(),
             [
                 "models: provider a: a model has no id",
-                "models: provider a: model chat: api google-generative-ai is not supported yet",
+                "models: provider a: model chat: api google-generative-ai is not one Scramjet takes \
+                 (openai-responses, anthropic-messages or openai-completions)",
                 "models: provider a: model odd: compat.supportsStore must be true or false",
                 "models: provider a: model shell: the header x shell is not valid in HTTP",
                 "models: provider a: model bad: the header x-bad is not valid in HTTP",
