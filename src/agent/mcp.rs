@@ -192,13 +192,15 @@ pub(super) struct Servers {
     /// How long each has to start.
     within: Duration,
     /// The instructions' list of the servers and the tools offered directly, made once none is
-    /// starting.
+    /// starting, and again for another window.
     listing: Mutex<Option<Arc<Listing>>>,
     /// The directory they run in.
     root: PathBuf,
 }
 
 struct Listing {
+    /// The context window it was made for.
+    window: Option<u64>,
     section: String,
     /// The definitions of the tools offered directly, and their servers' names.
     direct: Vec<Value>,
@@ -512,7 +514,7 @@ impl Servers {
     }
 
     /// The instructions' list of the servers, one line each, as it was once none was starting,
-    /// so that it stays the same while they run; empty while one is starting.
+    /// so that it stays the same while they run and the window does; empty while one is starting.
     pub fn section(&self, window: Option<u64>) -> String {
         (self.listing(window)).map_or_else(String::new, |listing| listing.section.clone())
     }
@@ -525,7 +527,10 @@ impl Servers {
 
     fn listing(&self, window: Option<u64>) -> Option<Arc<Listing>> {
         let mut listing = lock(&self.listing);
-        if let Some(listing) = &*listing {
+        if let Some(listing) = (*listing)
+            .as_ref()
+            .filter(|listing| listing.window == window)
+        {
             return Some(listing.clone());
         }
         if !self.starting().is_empty() {
@@ -581,6 +586,7 @@ others' with {SEARCH}, which shows how to call each, then run one with {CALL}."
         };
         let section = format!("\n\n# MCP servers\n\n{text}\n{}", lines.join("\n"));
         let made = Arc::new(Listing {
+            window,
             section,
             direct,
             servers,

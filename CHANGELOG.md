@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.5 — MCP tools after a model switch
+
+### Fixed
+
+- Switching to a model with a smaller context window now takes MCP tools out of the tool list when they no longer fit in its 2%, and switching back offers them again; before, the first model's set stayed until `/reload`.
+
 ## 2.344.4 — tmux in a sandboxed /tmp project
 
 ### Fixed

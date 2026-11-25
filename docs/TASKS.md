@@ -100,7 +100,7 @@ Order of the steers of 2026-11-25 (Current focus): 95, 77, 99's stable release w
 23. **MCP** ([design](DESIGN.md#packages-providers-and-mcp-2026-11-04)). In: stdio and streamable HTTP servers (`src/agent/mcp.rs`, `src/agent/mcp/http.rs`, `rmcp` 3.9.0), `mcp_search`/`mcp_call`, tools offered directly within 2% of the window, `/mcp` with `reconnect`, `enable`, `disable`. Left, each waiting for a need (the user's settings list one stdio server, tavily; checked 2026-11-07):
     - OAuth for HTTP servers (a 401 says to give a token in `headers`), `headersHelper`, the older HTTP+SSE transport (refused with a warning).
     - Servers from packages and command sets (a `.mcp.json` at their top, with a variable for the package's directory).
-    - Direct tools: a model with no known window gets none; names that do not read back (`.`, `__`) stay behind the search; a switch to a smaller model keeps the set until `/reload`.
+    - Direct tools: a model with no known window gets none; names that do not read back (`.`, `__`) stay behind the search.
     - An event over 16 MB fails as a broken stream, so rmcp reconnects and a resuming server can loop a call until Escape (from rmcp's `client_side_sse.rs`; not seen).
     - `disabledMcpServers` is global, where Claude Code keeps one per project (waits for project settings).
     - Servers in `/settings`' loaded list and the banners; MCP prompts, resources, sampling, elicitation and roots.

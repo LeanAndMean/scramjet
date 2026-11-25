@@ -587,6 +587,35 @@ fn a_small_servers_tools_are_offered_directly_and_called_as_mcp_call() {
 }
 
 #[test]
+fn a_switch_to_a_smaller_window_takes_the_tools_out_of_the_list_and_back() {
+    if crate::agent::tests::missing("python3") {
+        return;
+    }
+    let scratch = scratch("window");
+    let servers = started(&[test_server("test", &[])], &scratch.0);
+    let direct = |servers: &Servers| match &servers.states()[0].1 {
+        State::Ready { direct, .. } => *direct,
+        state => panic!("{state:?}"),
+    };
+    let large = servers.section(Some(200_000));
+    assert!(
+        large.contains("(7 tools, in your tool list as mcp__test__*)"),
+        "{large}"
+    );
+    assert_eq!(servers.direct(Some(200_000)).len(), 7);
+    assert_eq!(direct(&servers), Some(true));
+    let small = servers.section(Some(1_000));
+    assert!(
+        small.ends_with("\n- test: Tools for scramjet-rs's tests (7 tools)"),
+        "{small}"
+    );
+    assert!(servers.direct(Some(1_000)).is_empty());
+    assert_eq!(direct(&servers), Some(false));
+    assert_eq!(servers.section(Some(200_000)), large);
+    assert_eq!(direct(&servers), Some(true));
+}
+
+#[test]
 fn direct_names_read_back_their_server_and_tool() {
     assert_eq!(direct_name("mcp__test__echo"), Some(("test", "echo")));
     assert_eq!(direct_name("mcp__a_b__get__it"), Some(("a_b", "get__it")));
