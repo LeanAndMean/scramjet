@@ -7280,6 +7280,7 @@ fn acp_shows_and_changes_the_sandbox_screens_lists_and_subagents_rows() {
         std::fs::create_dir_all(directory).unwrap();
     }
     let extra = std::fs::canonicalize(&extra).unwrap();
+    let secret = std::fs::canonicalize(&secret).unwrap();
     let settings = serde_json::json!({
         "hideCredentials": "never",
         "sandbox": {"filesystem": {"denyRead": [notes]}},
