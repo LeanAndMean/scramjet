@@ -1348,9 +1348,13 @@ fn lines(
     let shown = list.rows.len();
     let search_rows = usize::from(search.is_some());
     let wanted = list.visible.min(shown);
-    // The keys take rows from the list while it keeps the selected row and those beside it.
-    let spare = height.saturating_sub(3 + search_rows + wanted.min(3));
-    let header = header_lines(title, hint, width, 1 + spare.min(HINT_LINES - 1));
+    // The keys' second line takes rows from the list while the selected row stays, their third
+    // while those beside it stay too.
+    let lines_for = height.saturating_sub(2 + search_rows);
+    let most = 1
+        + usize::from(lines_for >= 2 + wanted.min(1))
+        + usize::from(lines_for >= HINT_LINES + wanted.min(3));
+    let header = header_lines(title, hint, width, most);
     let room = (list.visible)
         .min(height.saturating_sub(2 + header.len() + search_rows))
         .max(1);
@@ -1815,7 +1819,13 @@ mod tests {
         ));
         assert_eq!(
             short,
-            ["Pick  ↑↓ m…", "  row 2", "› row 3", "  row 4", "  (4/25)"]
+            [
+                "Pick  ↑↓ m…",
+                "  Enter se…",
+                "  row 2",
+                "› row 3",
+                "  (4/25)"
+            ]
         );
         let few = List::new(2, 1, 10);
         assert_eq!(
@@ -2057,9 +2067,18 @@ mod tests {
         let long = plain(lines_of(&List::new(25, 0, 25), 7));
         assert_eq!(long[1], "  Ctrl+N named · Ctrl+D delete");
         assert_eq!(long[2..], ["› row 0", "  row 1", "  row 2", "  (1/25)"]);
-        let tiny = plain(lines_of(&List::new(25, 0, 25), 6));
+        // Under that, the second line of keys keeps the selected row only.
+        let short = plain(lines_of(&List::new(25, 0, 25), 6));
+        assert_eq!(short[1], "  Ctrl+N named · Ctrl+D delete");
+        assert_eq!(short[2..], ["› row 0", "  row 1", "  (1/25)"]);
+        let shorter = plain(lines_of(&List::new(25, 0, 25), 5));
+        assert_eq!(
+            shorter[1..],
+            ["  Ctrl+N named · Ctrl+D delete", "› row 0", "  (1/25)"]
+        );
+        let tiny = plain(lines_of(&List::new(25, 0, 25), 4));
         assert_eq!(tiny[0], "Resume  Tab all folders · Ctrl+S sort ·…");
-        assert_eq!(tiny.len(), 5, "{tiny:#?}");
+        assert_eq!(tiny.len(), 3, "{tiny:#?}");
         let short = header_lines("Resume", hint, 40, 1);
         assert_eq!(short, ["Tab all folders · Ctrl+S sort ·…"]);
     }

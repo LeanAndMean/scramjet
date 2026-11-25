@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.1 — A list's keys on a short screen
+
+### Fixed
+
+- On a short terminal, a list such as `/resume` or `/hotkeys` now keeps its keys on a second line while one row stays in view, so the last ones (`Ctrl+D delete`, `Esc close`) show, where before they were cut whenever fewer than three rows fit.
+
 ## 2.344.0 — Grants kept with the project's sandbox
 
 ### Changed
