@@ -104,7 +104,7 @@ Under API keys, `/login` lists Anthropic, Google Gemini, OpenAI and OpenRouter, 
 Gemini's and OpenAI's lists name their models only, embedders and voices among them, so [models.dev](https://models.dev)'s public catalog (`https://models.dev/api.json`, read without your key and saved beside the lists, asked again by its `ETag` with the provider's list) describes them: those the provider lists for your key that models.dev describes as taking tools are offered, newest first, with its limits, effort levels and prices. One too new for models.dev is offered once models.dev has it. Gemini's thinking is not shown, though its effort levels are sent.
 
 - `--api-key KEY --model anthropic/MODEL` uses a key for one run without saving it.
-- An environment variable such as `ANTHROPIC_API_KEY` does not set one up by itself, as another program's proxy may have set it. Enter the variable's name as the key to use its value, or `!command` to run a command that prints it.
+- An environment variable such as `ANTHROPIC_API_KEY` does not set one up by itself, as another program's proxy may have set it. Enter the variable's name as the key to use its value, or `!command` to run a command that prints it. `/login` says which of the three it saved, and warns when a name such as `OPENROUTER_KEY` is not set where Scramjet runs, since requests would then send the name itself; the variable is read in the environment Scramjet starts in.
 - A `models.json` provider of the same name (`anthropic`, `google`, `openai`, `openrouter`) replaces the built-in one.
 
 ### Keys for `models.json` providers

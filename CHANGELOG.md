@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.0 — /login says how it saved a key
+
+### Changed
+
+- `/login`'s API key prompt names the other two forms it takes, an environment variable's name and `!command`, and its message says which one it saved. A name in capitals with an underscore that no variable here holds is warned of: requests would send the name itself as the key.
+
 ## 2.339.1 — The worktree sweep leaves the user's own worktrees
 
 ### Fixed

@@ -231,7 +231,7 @@ impl Interactive {
             return;
         };
         let shown = shown_key(provider);
-        let title = format!("API key for {shown}");
+        let title = format!("API key for {shown} (or a variable's name, or !command)");
         let typed = match screen.ask(Dialog::Text(title, String::new(), Optional::No), None) {
             Some(Answer::Text(Some(typed))) => typed,
             _ => return,
@@ -244,18 +244,21 @@ impl Interactive {
                 let saved = logins.auth.display();
                 let listing = (self.session.agent.providers().listings().iter())
                     .find(|listing| listing.provider() == provider);
-                let said = match listing.map(Listing::offered) {
-                    None => format!("✓ Saved the API key for {shown} in {saved}"),
+                let (what, unset) = saved_as(&shown, typed.trim());
+                let mut said = match listing.map(Listing::offered) {
+                    None => format!("✓ Saved {what} in {saved}"),
                     Some(Ok(count)) => format!(
-                        "✓ Saved the API key for {shown} in {saved}; it offers {count} model{} \
-                         (/model)",
+                        "✓ Saved {what} in {saved}; it offers {count} model{} (/model)",
                         if count == 1 { "" } else { "s" }
                     ),
                     Some(Err(problem)) => format!(
-                        "✓ Saved the API key for {shown} in {saved}\nWarning: {shown} lists no \
-                         models, and {problem}"
+                        "✓ Saved {what} in {saved}\nWarning: {shown} lists no models, and \
+                         {problem}"
                     ),
                 };
+                if let Some(warning) = unset {
+                    said = format!("{said}\nWarning: {warning}");
+                }
                 self.say(&said);
                 self.take_offered_model(None);
             }
@@ -788,6 +791,30 @@ fn few(ids: &[&str]) -> String {
 }
 
 /// What the user knows the provider `name`, which takes an API key, by.
+/// What `/login` saved as `shown`'s API key, `typed`, read as requests read it
+/// (`configured::read`), and a warning for what looks like a variable's name but is not set.
+fn saved_as(shown: &str, typed: &str) -> (String, Option<String>) {
+    if typed.starts_with('!') {
+        return (
+            format!("{shown}'s API key, as a command that prints it,"),
+            None,
+        );
+    }
+    if std::env::var(typed).is_ok_and(|set| !set.is_empty()) {
+        return (format!("{shown}'s API key, as the variable {typed},"), None);
+    }
+    let named = typed.contains('_')
+        && !typed.starts_with(|ch: char| ch.is_ascii_digit())
+        && (typed.chars()).all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_');
+    let unset = named.then(|| {
+        format!(
+            "no variable {typed} is set here, so requests send its name as the key: set it \
+             where Scramjet starts, or /login again with the key itself"
+        )
+    });
+    (format!("the API key for {shown}"), unset)
+}
+
 fn shown_key(name: &str) -> String {
     scramjet::agent::builtin(name).map_or_else(|| visible(name), |builtin| builtin.shown.to_owned())
 }
@@ -839,6 +866,29 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn a_saved_key_says_whether_it_is_a_key_a_variable_or_a_command() {
+        let (what, unset) = saved_as("OpenRouter", "sk-or-v1-abc");
+        assert_eq!((what.as_str(), unset), ("the API key for OpenRouter", None));
+        let (what, unset) = saved_as("OpenRouter", "!pass show openrouter");
+        assert_eq!(what, "OpenRouter's API key, as a command that prints it,");
+        assert_eq!(unset, None);
+        let (what, unset) = saved_as("OpenRouter", "PATH");
+        assert_eq!(
+            (what.as_str(), unset),
+            ("OpenRouter's API key, as the variable PATH,", None)
+        );
+        let (what, unset) = saved_as("OpenRouter", "SCRAMJET_NEVER_SET_KEY");
+        assert_eq!(what, "the API key for OpenRouter");
+        assert!(
+            unset
+                .unwrap()
+                .starts_with("no variable SCRAMJET_NEVER_SET_KEY is set here")
+        );
+        // A key in capitals, without the underscore a variable's name has, gets no warning.
+        assert_eq!(saved_as("Gemini", "ABCDEF0123").1, None);
     }
 
     fn kept(listings: &[Listing]) -> Kept {
