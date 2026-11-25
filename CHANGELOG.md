@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.4 — A list item opening a quote
+
+### Fixed
+
+- A list item whose text starts with a quote (`- > text`) showed the `>` as typed; it now shows the quote's border after the bullet, and the quote's later lines under it, as Scramjet does.
+
 ## 2.347.3 — A long report's status row
 
 ### Fixed

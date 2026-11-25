@@ -167,6 +167,10 @@ struct Carry {
 struct Quote {
     inner: Markdown,
     lead: String,
+    /// The bullet of the item it opens, which its first line shows in place of `lead`'s indent,
+    /// the border starting at `border` in `lead`.
+    bullet: Option<String>,
+    border: usize,
     /// A line of the quote started and its lead is not shown yet.
     owed: bool,
 }
@@ -177,7 +181,10 @@ impl Quote {
         let mut out = String::new();
         for c in text.chars() {
             if std::mem::take(&mut self.owed) {
-                out += &self.lead;
+                match self.bullet.take() {
+                    Some(bullet) => out += &(bullet + &self.lead[self.border..]),
+                    None => out += &self.lead,
+                }
                 if c == '\n' {
                     out += &format!("{RESET}{}", self.inner.base);
                 }
@@ -465,9 +472,15 @@ impl Markdown {
             return String::new();
         };
         quote.inner.end_line();
+        // An item's quote that showed nothing still shows the item, as Scramjet's.
+        let ended = quote.inner.blank || quote.inner.blanks > 0;
         quote.inner.blanks = 0;
         let text = quote.inner.finish();
-        quote.show(&text)
+        let shown = quote.show(&text);
+        match quote.bullet {
+            Some(bullet) => bullet + if ended { "\n" } else { "" },
+            None => shown,
+        }
     }
 
     /// Whether a line of text, or a table's line if `held`, goes on in the paragraph or table the
@@ -914,6 +927,8 @@ impl Markdown {
                     self.quote = Some(Box::new(Quote {
                         inner,
                         lead: lead.to_owned() + &border,
+                        bullet: None,
+                        border: lead.len(),
                         owed: true,
                     }));
                 }
@@ -936,10 +951,22 @@ impl Markdown {
                 }
                 let depth = self.lists.len().saturating_sub(1);
                 let lead = " ".repeat(4 * depth);
+                let shown = lead.len() + bullet.len() + 1;
                 if let Some(list) = self.lists.last_mut() {
-                    list.shown = lead.len() + bullet.len() + 1;
+                    list.shown = shown;
                 }
-                *out += &format!("{lead}{LIST_BULLET}{bullet}{RESET}{base}{} ", self.plain);
+                let item = format!("{lead}{LIST_BULLET}{bullet}{RESET}{base}{} ", self.plain);
+                // As Scramjet's, an item opening with a quote shows its border after the bullet,
+                // and the quote's other lines under it.
+                if content.starts_with('>') {
+                    self.pending = " ".repeat(shown) + content;
+                    let line = self.start(Kind::Quote, out);
+                    if let Some(quote) = &mut self.quote {
+                        quote.bullet = Some(item);
+                    }
+                    return line;
+                }
+                *out += &item;
                 self.pending = content.to_owned();
                 Line::Text(self.plain)
             }
@@ -2031,6 +2058,37 @@ mod tests {
             rendered_alike(80, "> > r\n lazy\n>\nnew"),
             format!("{border}{border}r\x1b[0m\n{border}{border}lazy\x1b[0m\n\nnew")
         );
+    }
+
+    #[test]
+    fn an_item_opening_with_a_quote_shows_its_border_after_the_bullet_as_in_scramjet() {
+        // Each checked against Scramjet's renderer: the quote's later and lazy lines under the
+        // border, at the item's column.
+        let cases = [
+            ("- > q", "- │ q"),
+            ("- > q\n  > r", "- │ q\n  │ r"),
+            ("- > q\nlazy", "- │ q\n  │ lazy"),
+            ("- > q\n- next", "- │ q\n- next"),
+            ("> - > x\n> y", "│ - │ x\n│   │ y"),
+            ("1. > a\n   > b\n2. c", "1. │ a\n   │ b\n2. c"),
+            ("- > q\n\n  after", "- │ q\n\n  after"),
+            ("- a\n- > q\n  more", "- a\n- │ q\n  │ more"),
+            ("- > q\n> r", "- │ q\n  │ r"),
+            ("- > q\n\n- b", "- │ q\n- b"),
+            ("- >\n  > x", "- │\n  │ x"),
+            ("- >\n- b", "-\n- b"),
+            ("- [ ] > t", "- [ ] │ t"),
+            ("  - > q\n    r", "- │ q\n  │ r"),
+            ("- >\n\n- b", "-\n- b"),
+            ("- >\n\nb", "-\n\nb"),
+            ("- > q\n\nb", "- │ q\n\nb"),
+            ("x\n- > q", "x\n- │ q"),
+        ];
+        for (text, shown) in cases {
+            let lines = plain(&rendered_alike(30, text));
+            let lines: Vec<&str> = lines.lines().map(str::trim_end).collect();
+            assert_eq!(lines.join("\n"), shown, "{text:?}");
+        }
     }
 
     #[test]
