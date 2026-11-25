@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.4 — tmux in a sandboxed /tmp project
+
+### Fixed
+
+- On Linux, a sandboxed command in a project at `/tmp` itself (or `/`) can start tmux too, in a socket directory of its own apart from your servers; before, it still failed there as it did everywhere before 2.344.3.
+
 ## 2.344.3 — tmux in the sandbox
 
 ### Fixed

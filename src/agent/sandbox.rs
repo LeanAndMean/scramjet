@@ -1481,10 +1481,14 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
             .is_some_and(|(_, writable)| *writable)
     };
     // The fresh `/tmp` shows no server's sockets, so tmux starts one of its own there, ended with
-    // the command; a cover over them would only stop it.
+    // the command; a cover over them would only stop it. Where a bound path holds them (a
+    // project at `/tmp` or `/`), a fresh directory over the cover is tmux's base instead: tmux
+    // refuses bubblewrap's mount point itself as its socket directory, open to others.
     let sockets = Path::new("/tmp").join(format!("tmux-{}", rustix::process::getuid().as_raw()));
     let uncovered;
-    let hidden = match mounts.iter().any(|(path, _)| sockets.starts_with(path)) {
+    let bound = mounts.iter().any(|(path, _)| sockets.starts_with(path));
+    let over_cover = bound && hidden.mounted().1.any(|directory| *directory == sockets);
+    let hidden = match bound {
         true => hidden,
         false => {
             process.env("TMUX_TMPDIR", "/tmp");
@@ -1495,6 +1499,12 @@ fn confined(root: &Path, hidden: &Hidden, sandbox: Option<&Sandbox>) -> Result<C
         }
     };
     hide(&mut process, hidden, &in_writable);
+    if over_cover {
+        process
+            .arg("--tmpfs")
+            .arg(&sockets)
+            .env("TMUX_TMPDIR", &sockets);
+    }
     // After what is hidden, as `hiding` mounts WSLg's distro directory.
     if Path::new(WSLG).is_dir() && !hidden.covered(Path::new(WSLG), false) {
         process.args(["--tmpfs", WSLG]);
@@ -3359,6 +3369,17 @@ TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 30
         in_tmp.keep_tmux_apart(std::path::Path::new("/tmp"), Some(own.clone()));
         let script = "tmux new-session -d -s sandboxed 'sleep 300' && tmux ls -F '#S'";
         let output = super::command(&project, script, &in_tmp, false)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "sandboxed\n",
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // So too in a project at `/tmp` itself, whose real `/tmp` holds the user's sockets.
+        let output = super::command(std::path::Path::new("/tmp"), script, &in_tmp, false)
             .unwrap()
             .output()
             .unwrap();
