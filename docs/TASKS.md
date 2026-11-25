@@ -6,11 +6,9 @@ Last steer: c7811e2
 
 ## Current focus
 
-First, one more alpha (second steer of 2026-11-25, the user's ask): release the version at `HEAD` as an alpha (rehearse with `-f windows-tests=true`, then tag and publish as item 51 says), its README Status saying the API-key providers were tried with fake keys only (in); then comment on and close `#3`–`#8` with it. The user tries that alpha's new functionality; the release after it is the stable one (99's last step) once they sign it off. Meanwhile the rest of 95's Flightdeck side and 77 as each says; 98 (the scrollbar on macOS) once its reporter's details come. The user's settings have `sandbox.network: true` (changed after 2.326.0's network-off without a sandbox cut an instance off Docker). The user's pick from the gallery of the other looks (83) and bottoms (86) comes at a later steer. 62's pull request is ready for review (2026-11-18); what its reviewers ask becomes fixes on the branch. 51, 44 and 48 wait on the user.
+`v2.340.4` is out (2026-11-25), the alpha the second steer of 2026-11-25 asked for, its Status saying the API-key providers were tried with fake keys only; `#3`–`#8` are closed with it. The user tries its new functionality; the release after it is the stable one (99's last step) once they sign it off. Meanwhile the rest of 95's Flightdeck side and 77 as each says; 98 (the scrollbar on macOS) once its reporter's details come. The user's settings have `sandbox.network: true` (changed after 2.326.0's network-off without a sandbox cut an instance off Docker). The user's pick from the gallery of the other looks (83) and bottoms (86) comes at a later steer. 62's pull request is ready for review (2026-11-18); what its reviewers ask becomes fixes on the branch. 51, 44 and 48 wait on the user.
 
-Issues fixed but not yet released: `#3`–`#8` (2.303.3–2.315.0): comment on and close each with the release that has it.
-
-`v2.291.0` is the latest release (2026-11-20). Rehearse with `-f windows-tests=true` before each release, as the unit tests run on Windows nowhere else.
+`v2.340.4` is the latest release (2026-11-25). Rehearse with `-f windows-tests=true` before each release, as the unit tests run on Windows nowhere else.
 
 What needs the user (Tailscale, device codes for ChatGPT's and Copilot's live sign-ins, `/login` with the private package on Windows) waits: do not ask mid-loop (2026-11-14).
 
@@ -18,7 +16,7 @@ After that, the order of the steer of 2026-11-12: macOS (35), from testers' repo
 
 ## Next candidates
 
-Order of the steers of 2026-11-25 (Current focus): the alpha release, 95, 77, 99's stable release when the user has tried the alpha and signs it off, 98 once its details come (83 and 86 wait for the user's pick); then 62's review, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10. The loop keeps adding features throughout: no freeze.
+Order of the steers of 2026-11-25 (Current focus): 95, 77, 99's stable release when the user has tried the alpha and signs it off, 98 once its details come (83 and 86 wait for the user's pick); then 62's review, 51, 44, 48 as the user's part allows; the items after them keep the order of the steers of 2026-11-09 and 2026-11-10. The loop keeps adding features throughout: no freeze.
 
 99. **Leaving alpha** (steer of 2026-11-25; [design](DESIGN.md#leaving-alpha-steer-of-2026-11-25), which lists what each part holds). The platform gate is met and npm is dropped (its packages removed, 2.335.8). Each a commit, in about this order:
     - **Built-in API-key providers** (from item 22): Anthropic, OpenRouter (2.333.0), OpenAI (2.334.0) and Google Gemini (2.335.0) are in (`BUILTIN`, `src/agent/providers.rs`; OpenAI's and Gemini's ids-only lists described by models.dev, `listed::Described`). Tried with fake keys only (Gemini checks fields before the key). The user has no key for any of them (second steer of 2026-11-25): they ship so, the README's Status saying so, and alpha users' reports show whether they work; don't ask for keys again. Gemini's thought summaries are not asked for: their shape on that route is unseen.
