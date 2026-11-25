@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.339.1 — The worktree sweep leaves the user's own worktrees
+
+### Fixed
+
+- Finishing a subagent's worktree that had been deleted by hand no longer drops git's record of the user's own worktrees whose directories are missing (on an unmounted drive, say); only that subagent's entry goes.
+
 ## 2.339.0 — Worktrees left by a run that ended are finished at the next start
 
 ### Added

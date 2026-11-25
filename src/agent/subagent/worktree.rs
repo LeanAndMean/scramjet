@@ -133,7 +133,11 @@ pub(in crate::agent) fn sweep(state: &Path, root: &Path) -> Vec<String> {
         let top = PathBuf::from(top);
         if !path.exists() {
             // Removed but for its branch and record, or never made: its branch, if any, is as made.
-            let _ = git(&top, &["worktree", "prune"]);
+            // Its entry alone goes, not the user's own worktrees that are missing (`prune`).
+            let _ = git(
+                &top,
+                &["worktree", "remove", "--force", &path.to_string_lossy()],
+            );
             let tip = git(
                 &top,
                 &[
@@ -446,6 +450,20 @@ mod tests {
         drop(removed);
         assert_eq!(swept(), Vec::<String>::new());
         assert!(branch(&name).is_empty() && !record_path(&path).exists());
+
+        // Deleted by hand, its entry goes but not that of the user's own worktree deleted so.
+        let theirs = base.join("theirs");
+        let shown = theirs.to_string_lossy().into_owned();
+        git(&project, &["worktree", "add", "-q", "-b", "theirs", &shown]).unwrap();
+        std::fs::remove_dir_all(&theirs).unwrap();
+        let (deleted, _) = Worktree::add(&project, &project, &state).unwrap();
+        std::fs::remove_dir_all(&deleted.path).unwrap();
+        let (path, name) = (deleted.path.clone(), deleted.branch.clone());
+        drop(deleted);
+        assert_eq!(swept(), Vec::<String>::new());
+        assert!(branch(&name).is_empty() && !record_path(&path).exists());
+        let listed = git(&project, &["worktree", "list", "--porcelain"]).unwrap();
+        assert!(listed.contains(&shown), "{listed}");
 
         // A record that cannot be read is left alone.
         let unreadable = directory(&state, &project).join("agent-0.lock");
