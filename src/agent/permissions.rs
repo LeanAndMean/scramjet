@@ -153,6 +153,16 @@ and why; they can grant them with /add-dir DIR, or start with --add-dir DIR."
                 true,
             );
         }
+        if self.reach_fixed {
+            return output(
+                format!(
+                    "Not asked: this session's reach is fixed by the program that started it, so \
+{listed} stay read-only. Work within the writable directories, or tell the user which directories you \
+need writable and why."
+                ),
+                true,
+            );
+        }
         let mut message = "**The agent asks to write in:**\n\n".to_owned();
         for path in &asked {
             message += &format!("- `{}`\n", path.display());
@@ -162,7 +172,7 @@ and why; they can grant them with /add-dir DIR, or start with --add-dir DIR."
             message += &format!("\n\nNot asked: {}", notes.replace('\n', "; "));
         }
         ui.question(&message);
-        let remembered = super::sandbox::Remembered::user();
+        let remembered = (super::sandbox::Remembered::user()).filter(|_| self.keeps_grants);
         let kept_in = (remembered.as_ref())
             .map(|remembered| super::tools::shortened(&remembered.file().display().to_string()));
         let mut choices = vec![(

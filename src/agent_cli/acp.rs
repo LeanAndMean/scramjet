@@ -2218,6 +2218,7 @@ fn start_session(
         eprintln!("scramjet: {warning}");
     }
     if let Some(profile) = profile {
+        agent.set_keeps_grants(false);
         (profile.confine(&mut agent, &settings)).map_err(|error| (INVALID_PARAMS, error))?;
     }
     Ok(Session {

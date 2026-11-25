@@ -3267,6 +3267,24 @@ fn acp_asked(
     Vec<serde_json::Value>,
     Vec<String>,
 ) {
+    acp_asked_profiled(name, input, given, capabilities, None, answer)
+}
+
+/// `acp_asked` in a session opened with `profile`, if given.
+#[cfg(unix)]
+fn acp_asked_profiled(
+    name: &str,
+    input: serde_json::Value,
+    given: &[&str],
+    capabilities: serde_json::Value,
+    profile: Option<serde_json::Value>,
+    answer: impl Fn(&serde_json::Value) -> serde_json::Value,
+) -> (
+    Option<serde_json::Value>,
+    serde_json::Value,
+    Vec<serde_json::Value>,
+    Vec<String>,
+) {
     static RUNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let scratch = Scratch(std::env::temp_dir().join(format!(
@@ -3287,9 +3305,12 @@ fn acp_asked(
     send(
         &mut stdin,
         serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
-            "params": {"cwd": project, "mcpServers": []}}),
+            "params": {"cwd": project, "mcpServers": [], "_meta": profile.map(|profile|
+                serde_json::json!({"io.github.leanandmean.scramjet": {"profile": profile}}))}}),
     );
-    let session = next(&messages)["result"]["sessionId"].clone();
+    let opened = next(&messages);
+    let session = opened["result"]["sessionId"].clone();
+    assert!(!session.is_null(), "{opened}");
     send(
         &mut stdin,
         serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
@@ -3473,6 +3494,52 @@ fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
     assert_eq!(kinds.first(), Some(&"allow_once"));
     assert_eq!(kinds.last(), Some(&"reject_once"));
     assert!(result(&seen).contains("stay read-only"), "{seen:?}");
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_profiled_sessions_keep_no_grant_for_later_and_a_fixed_reach_asks_for_none() {
+    let result = |seen: &[serde_json::Value]| {
+        (seen.iter())
+            .find(|message| {
+                let status = &message["params"]["update"]["status"];
+                status == "completed" || status == "failed"
+            })
+            .map(|message| message["params"]["update"]["content"].to_string())
+            .unwrap()
+    };
+    let grant = serde_json::json!({"write": ["/var/tmp"], "reason": "to build"});
+    let allow = |asked: &serde_json::Value| {
+        let first = &asked["params"]["options"][0]["optionId"];
+        serde_json::json!({"outcome": {"outcome": "selected", "optionId": first}})
+    };
+    let (asked, _, seen, _) = acp_asked_profiled(
+        "request_permissions",
+        grant.clone(),
+        &["--sandbox", "workspace-write"],
+        serde_json::json!({}),
+        Some(serde_json::json!({"appendSystemPrompt": "A task."})),
+        allow,
+    );
+    let asked = asked.unwrap();
+    let kinds: Vec<_> = (asked["params"]["options"].as_array().unwrap().iter())
+        .map(|option| option["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["allow_once", "reject_once"], "{asked}");
+    assert!(
+        result(&seen).contains("for the rest of the session"),
+        "{seen:?}"
+    );
+    let (asked, _, seen, _) = acp_asked_profiled(
+        "request_permissions",
+        grant,
+        &[],
+        serde_json::json!({}),
+        Some(serde_json::json!({"writable": true})),
+        allow,
+    );
+    assert!(asked.is_none(), "{asked:?}");
+    assert!(result(&seen).contains("reach is fixed"), "{seen:?}");
 }
 
 #[test]

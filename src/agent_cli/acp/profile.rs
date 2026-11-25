@@ -186,6 +186,7 @@ impl Profile {
             reach: Reach::Minimal,
         };
         agent.set_writable(Vec::new());
+        agent.set_reach_fixed(true);
         agent.set_sandbox(Some(sandbox));
         agent.set_offline(!reach.network);
         agent.set_reads(reads(settings.reads().deny));

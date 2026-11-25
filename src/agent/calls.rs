@@ -1627,6 +1627,66 @@ worktree\n---\n\nWrite.\n",
 
     #[test]
     #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
+    fn a_session_that_keeps_no_grants_offers_none_for_always_and_a_fixed_reach_asks_nothing() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let other = std::env::temp_dir().join(format!(
+            "scramjet-agent-permissions-elsewhere-{}",
+            std::process::id()
+        ));
+        let _other = ScratchDir::new(other.clone());
+        std::fs::create_dir_all(&other).unwrap();
+        let other = std::fs::canonicalize(other).unwrap();
+        let ask = |id: &str| {
+            let arguments = json!({"write":[other.display().to_string()],"reason":"Both change."});
+            tool_call(id, permissions::NAME, arguments)
+        };
+        let (endpoint, server) = serve(vec![
+            ask("call_1"),
+            reply("done"),
+            ask("call_2"),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "permissions-kept");
+        let sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        agent.set_sandbox(Some(sandbox.clone()));
+        agent.set_keeps_grants(false);
+        let cancel = AtomicBool::new(false);
+        let mut ui = Recorder {
+            choices: vec![Some(0)],
+            ..Recorder::default()
+        };
+        agent.turn("write", &mut ui, &cancel).unwrap();
+        assert_eq!(
+            agent.sandbox().unwrap().writable,
+            std::slice::from_ref(&other)
+        );
+        agent.set_sandbox(Some(sandbox));
+        agent.set_reach_fixed(true);
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        let allowed = last_output(&bodies[1]);
+        assert!(allowed.contains("for the rest of the session"), "{allowed}");
+        let fixed = last_output(&bodies[3]);
+        assert!(fixed.contains("reach is fixed"), "{fixed}");
+        assert!(agent.sandbox().unwrap().writable.is_empty());
+        let asked: Vec<_> = (ui.shown.iter())
+            .filter(|shown| shown.starts_with("choose Allow writing"))
+            .collect();
+        assert_eq!(
+            asked,
+            ["choose Allow writing there? [\"Allow for this session\", \"Deny\"] None"]
+        );
+        let root = agent.root().to_owned();
+        let remembered = super::super::Remembered::user().unwrap();
+        assert!(remembered.of(&root).unwrap().is_empty());
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
     fn a_subagent_reply_at_the_output_limit_returns_its_text_as_a_failure_without_its_call() {
         let reply = |blocks: Vec<Value>, reason: &str| {
             let mut events = vec![
@@ -1771,7 +1831,7 @@ the tool call it was making did not run"
             .shown
             .iter()
             .filter(|shown| shown.starts_with("result subagent Parallel: 4/4 succeeded"));
-        assert_eq!(results.count(), 3, "{:?}", ui.shown);
+        assert_eq!(results.count(), 3);
         // Each call alone allows 4 at once; three together, 12 were in flight.
         let most = most.load(Ordering::SeqCst);
         assert!((1..=8).contains(&most), "{most} children at once");
@@ -1946,7 +2006,7 @@ for trusted repositories. Yes is remembered for this project until one of its ag
 or changed.",
             project.display()
         );
-        assert!(ui.shown.contains(&asked), "{:?}", ui.shown);
+        assert!(ui.shown.contains(&asked));
         assert!(
             ui.shown
                 .contains(&"choose Run project-local agents? [\"Yes\", \"No\"] None".to_owned())
@@ -2612,7 +2672,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
             .iter()
             .position(|shown| shown.starts_with("question"));
         let slept = (ui.shown.iter()).position(|shown| shown.starts_with("result read slept"));
-        assert!(asked < slept, "{:?}", ui.shown);
+        assert!(asked < slept);
         server.join().unwrap();
     }
 

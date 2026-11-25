@@ -689,6 +689,10 @@ pub struct Agent {
     subagents: Subagents,
     /// Whether the turn runs with no one to answer a question (`set_unattended`).
     unattended: bool,
+    /// Whether a grant can be kept always for the project (`set_keeps_grants`).
+    keeps_grants: bool,
+    /// Whether the reach is fixed for the session, so no grant widens it (`set_reach_fixed`).
+    reach_fixed: bool,
     /// Harness tools this run cannot use, not offered (`leave_out_idle_tools`).
     left_out: Vec<&'static str>,
     /// Whether a completed command's recommended next step runs without the user choosing it.
@@ -863,6 +867,8 @@ impl Agent {
             offline: false,
             subagents: Subagents::default(),
             unattended: false,
+            keeps_grants: true,
+            reach_fixed: false,
             left_out: Vec::new(),
             autopilot,
             mcp: None,
@@ -2024,6 +2030,17 @@ impl Agent {
     /// a request for write access is then refused rather than asked.
     pub fn set_unattended(&mut self, unattended: bool) {
         self.unattended = unattended;
+    }
+
+    /// Whether the user can keep a granted write always for the project (`sandbox-grants.json`);
+    /// without, a grant lasts the session only.
+    pub fn set_keeps_grants(&mut self, keeps: bool) {
+        self.keeps_grants = keeps;
+    }
+
+    /// Whether the session's reach is fixed, so a request for write access is refused.
+    pub fn set_reach_fixed(&mut self, fixed: bool) {
+        self.reach_fixed = fixed;
     }
 
     /// Confines the coding tools as `sandbox` says, the credential stores hidden too, or, with

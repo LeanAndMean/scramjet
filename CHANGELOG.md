@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.332.1 — A session profile keeps grants to itself
+
+### Fixed
+
+- `scramjet acp`: in a session with a profile, `request_permissions` no longer offers "Always for this project", which kept a runner's grant in your own `sandbox-grants.json` for every later session there; it grants for the session only. Where the profile sets the reach, it asks nothing and says the reach is fixed, as the `sandbox` extension already refused to change it.
+
 ## 2.332.0 — The whole sandbox screen over ACP
 
 ### Added

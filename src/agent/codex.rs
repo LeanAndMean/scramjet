@@ -1080,6 +1080,9 @@ mod tests {
     #[test]
     fn a_device_login_says_why_it_cannot_start_and_stops_when_cancelled() {
         let mut polled = 0;
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        // Cancelled once the token is asked for, so the third request always comes.
         let (base, server) = serve_json_status(3, move |head, _| {
             match head.split(' ').nth(1).unwrap_or_default() {
                 "/api/accounts/deviceauth/usercode" => {
@@ -1089,7 +1092,10 @@ mod tests {
                         _ => (200, json!({"device_auth_id": "da-1", "user_code": "C"})),
                     }
                 }
-                _ => (403, json!({})),
+                _ => {
+                    stop.store(true, Ordering::Relaxed);
+                    (403, json!({}))
+                }
             }
         });
         let urls = Urls {
@@ -1100,12 +1106,6 @@ mod tests {
         assert!(refused.contains("no device code sign-in"), "{refused}");
         let device = DeviceLogin::start_at(urls).unwrap();
         assert_eq!(device.interval, Duration::from_secs(5));
-        let cancel = std::sync::Arc::new(AtomicBool::new(false));
-        let stop = cancel.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(300));
-            stop.store(true, Ordering::Relaxed);
-        });
         let scratch = scratch("device-cancel");
         let logins = login::Logins {
             auth: scratch.0.join("config/auth.json"),
