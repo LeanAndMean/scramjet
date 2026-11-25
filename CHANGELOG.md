@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.345.1 — A request no provider answers ends
+
+### Fixed
+
+- A model request whose connection was made but never answered waited forever, with nothing on screen to say so, and an unattended turn stalled until someone looked. Now a connection not made within 30 seconds, or a request whose response has not begun within 10 minutes (the limit a stream that stops already had), fails as a network failure does and is retried.
+
 ## 2.345.0 — A cut command's output kept whole
 
 ### Changed

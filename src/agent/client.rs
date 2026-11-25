@@ -374,11 +374,14 @@ async fn exchange(
         .header("Content-Length", body.len())
         .body(Full::new(Bytes::from(body)))
         .map_err(|e| Failure::new(e.to_string(), false))?;
-    let response = sender.send_request(request).await.map_err(|e| {
-        let why = crate::http::described(&e);
-        let to = format!("{authority} (provider {})", route.provider);
-        Failure::new(format!("request to {to} failed: {why}"), true)
-    })?;
+    let to = format!("{authority} (provider {})", route.provider);
+    let response = match answer(&mut sender, request, &to, INACTIVITY).await {
+        Ok(response) => response,
+        Err(failure) => {
+            driver.abort();
+            return Err(failure);
+        }
+    };
     let headers_at = Some(Instant::now());
     let status = response.status();
     let wait = match crate::http::retry_after::parse(
@@ -696,12 +699,55 @@ pub(super) type Connection = (
 
 /// An HTTP/1.1 connection to `route`'s host, in TLS for an `https://` base URL, through the
 /// proxy the environment names for it if any (`proxy`), with the task that drives it.
+/// The response to `request` sent to `to`, a transient failure when its headers have not come
+/// within `limit`: a request the server holds unanswered would otherwise wait forever.
+async fn answer(
+    sender: &mut http1::SendRequest<Full<Bytes>>,
+    request: Request<Full<Bytes>>,
+    to: &str,
+    limit: Duration,
+) -> Result<hyper::Response<Incoming>, Failure> {
+    match tokio::time::timeout(limit, sender.send_request(request)).await {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(e)) => {
+            let why = crate::http::described(&e);
+            Err(Failure::new(format!("request to {to} failed: {why}"), true))
+        }
+        Err(_) => Err(Failure::new(
+            format!("request to {to} had no answer in {}s", limit.as_secs()),
+            true,
+        )),
+    }
+}
+
 async fn connect(route: &Route) -> Result<Connection, Failure> {
     connect_for(route, &format!(" (provider {})", route.provider)).await
 }
 
+/// Connecting, a proxy's tunnel and TLS included: undici, under Scramjet, allows 10 seconds.
+const CONNECTING: Duration = Duration::from_secs(30);
+
 /// As `connect`, its failures naming the host followed by `who`.
 pub(super) async fn connect_for(route: &Route, who: &str) -> Result<Connection, Failure> {
+    connect_within(route, who, CONNECTING).await
+}
+
+/// As `connect_for`, a transient failure when no connection is made within `limit`.
+async fn connect_within(route: &Route, who: &str, limit: Duration) -> Result<Connection, Failure> {
+    match tokio::time::timeout(limit, connecting(route, who)).await {
+        Ok(connected) => connected,
+        Err(_) => Err(Failure::new(
+            format!(
+                "cannot connect to {}{who}: no connection in {}s",
+                route.authority,
+                limit.as_secs()
+            ),
+            true,
+        )),
+    }
+}
+
+async fn connecting(route: &Route, who: &str) -> Result<Connection, Failure> {
     let authority = &route.authority;
     let proxy = super::proxy::for_host(route.tls, &route.host, route.port)
         .map_err(|problem| Failure::new(problem, false))?;
@@ -1048,6 +1094,56 @@ mod tests {
             get("/loop").unwrap_err(),
             "the file redirected more than 5 times"
         );
+    }
+
+    #[test]
+    fn a_server_that_never_answers_fails_the_request_in_time() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut held = Vec::new();
+            for stream in listener.incoming() {
+                held.push(stream.unwrap());
+            }
+        });
+        let route = |tls| Route {
+            provider: "silent".into(),
+            tls,
+            host: "127.0.0.1".into(),
+            port,
+            authority: format!("127.0.0.1:{port}"),
+            path: String::new(),
+            headers: Vec::new(),
+            commanded: Vec::new(),
+            login: None,
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let limit = Duration::from_millis(300);
+            let started = Instant::now();
+            let failure = connect_within(&route(true), "", limit).await.err().unwrap();
+            assert!(started.elapsed() < Duration::from_secs(5));
+            assert!(failure.transient);
+            let expected = format!("cannot connect to 127.0.0.1:{port}: no connection in 0s");
+            assert_eq!(failure.message, expected);
+
+            let (mut sender, driver) = connect(&route(false)).await.unwrap();
+            let request = Request::post("/responses")
+                .header("Host", "silent")
+                .body(Full::new(Bytes::from_static(b"{}")))
+                .unwrap();
+            let started = Instant::now();
+            let failure = answer(&mut sender, request, "silent", limit)
+                .await
+                .unwrap_err();
+            driver.abort();
+            assert!(started.elapsed() >= limit && started.elapsed() < Duration::from_secs(5));
+            assert!(failure.transient);
+            assert_eq!(failure.message, "request to silent had no answer in 0s");
+        });
     }
 
     #[test]
