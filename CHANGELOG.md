@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.335.8 — npm's packages removed
+
+### Changed
+
+- The release no longer packs `@leanandmean/scramjet` for npm, which was never published: the one-line installers and `scramjet update self` install and update Scramjet on every platform. `update self` no longer checks for an npm install.
+
 ## 2.335.7 — The compatibility promise
 
 ### Added
