@@ -690,9 +690,54 @@ fn disabled_servers_do_not_start_until_enabled_and_their_tools_follow() {
 
 /// The process ids `log` holds, in the order the servers started.
 fn pids(log: &Path) -> Vec<u32> {
+    created(log).into_iter().map(|(pid, _)| pid).collect()
+}
+
+/// The `pid N` lines of `log`, each with the time its process was created where the line goes
+/// on to say it (`pid N T`).
+fn created(log: &Path) -> Vec<(u32, Option<u64>)> {
     (std::fs::read_to_string(log).unwrap_or_default().lines())
-        .filter_map(|line| line.strip_prefix("pid ")?.parse().ok())
+        .filter_map(|line| {
+            let mut words = line.strip_prefix("pid ")?.split(' ');
+            let pid = words.next()?.parse().ok()?;
+            Some((pid, words.next().and_then(|at| at.parse().ok())))
+        })
         .collect()
+}
+
+/// Whether the process logged as `pid`, created at `created` where the log said, still runs: on
+/// Windows an ended process's ID soon goes to another.
+fn runs(pid: u32, created: Option<u64>) -> bool {
+    #[cfg(windows)]
+    if created.is_some_and(|at| created_at(pid) != Some(at)) {
+        return false;
+    }
+    #[cfg(unix)]
+    let _ = created;
+    alive(pid)
+}
+
+/// When process `pid` was created, as `GetProcessTimes` says, or `None` if it cannot be opened.
+#[cfg(windows)]
+fn created_at(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: the handle is checked and closed once; the times are the call's to fill.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return None;
+        }
+        let mut times: [FILETIME; 4] = std::mem::zeroed();
+        let [created, exited, kernel, user] = &mut times;
+        let got = GetProcessTimes(handle, created, exited, kernel, user);
+        CloseHandle(handle);
+        let at =
+            |time: &FILETIME| u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime);
+        (got != 0).then(|| at(&times[0]))
+    }
 }
 
 /// Whether `pid` runs and is not a zombie, from `ps`, which reads it on Linux and macOS alike,
@@ -967,13 +1012,22 @@ fn servers_ended_as_they_start_leave_no_process() {
     let scratch = scratch("ended-early");
     let log = scratch.0.join("log");
     // A server that never reads its input, so that only killing it ends it. On Windows Git's
-    // `sh` knows only MSYS's process IDs: Python says Windows' own.
+    // `sh` knows only MSYS's process IDs: Python says Windows' own, with its creation time.
     let server = if cfg!(windows) {
         if crate::agent::tests::missing("python3") {
             return;
         }
         let script = format!(
-            "import os, time\nopen(r'{}', 'a').write('pid %d\\n' % os.getpid())\ntime.sleep(30)",
+            "import ctypes, os, time\n\
+             from ctypes import wintypes\n\
+             k = ctypes.windll.kernel32\n\
+             k.GetCurrentProcess.restype = wintypes.HANDLE\n\
+             k.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4\n\
+             t = [wintypes.FILETIME() for _ in range(4)]\n\
+             k.GetProcessTimes(k.GetCurrentProcess(), *map(ctypes.byref, t))\n\
+             at = t[0].dwHighDateTime << 32 | t[0].dwLowDateTime\n\
+             open(r'{}', 'a').write('pid %d %d\\n' % (os.getpid(), at))\n\
+             time.sleep(30)",
             log.display()
         );
         program("sleeper", "python3", vec!["-c".to_owned(), script], &[])
@@ -981,16 +1035,31 @@ fn servers_ended_as_they_start_leave_no_process() {
         let script = format!("echo pid $$ >> '{}'; exec sleep 30", log.display());
         program("sleeper", "sh", vec!["-c".to_owned(), script], &[])
     };
+    // One that had time to start is seen running, so that the check below can see one left.
+    let servers = Servers::start(std::slice::from_ref(&server), &scratch.0);
+    until(|| !created(&log).is_empty());
+    let first = created(&log);
+    assert!(
+        matches!(first[..], [(pid, at)] if runs(pid, at)),
+        "{first:?}"
+    );
+    drop(servers);
+    std::fs::remove_file(&log).unwrap();
+    let (pid, at) = first[0];
+    until(|| !runs(pid, at));
+    assert!(!runs(pid, at), "{pid} still runs");
     for round in 0..40 {
         let servers = Servers::start(std::slice::from_ref(&server), &scratch.0);
         std::thread::sleep(Duration::from_micros(round * 50));
         drop(servers);
     }
-    let started = pids(&log);
-    until(|| started.iter().all(|pid| !alive(*pid)));
-    let left: Vec<&u32> = started.iter().filter(|pid| alive(**pid)).collect();
-    for pid in &left {
-        kill(**pid);
+    let started = created(&log);
+    until(|| started.iter().all(|&(pid, at)| !runs(pid, at)));
+    let left: Vec<_> = (started.iter())
+        .filter(|&&(pid, at)| runs(pid, at))
+        .collect();
+    for (pid, _) in &left {
+        kill(*pid);
     }
     assert!(left.is_empty(), "{} of {} left", left.len(), started.len());
 }
