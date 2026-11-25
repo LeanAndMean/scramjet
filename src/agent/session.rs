@@ -804,7 +804,8 @@ pub fn projects_directory() -> io::Result<PathBuf> {
 
 /// The directory of the sessions of a run that saves none (`--no-session`): private, in the
 /// temporary directory, and removed with them once dropped, or at exit.
-pub struct Unsaved(PathBuf);
+/// Locked while held, so that a later run removes it if this one ends without (`leftovers`).
+pub struct Unsaved(PathBuf, Option<std::fs::File>);
 
 /// The `Unsaved` directories not dropped yet, which `remove_unsaved` removes at exit: one on a
 /// signal (`std::process::exit`) runs no destructors.
@@ -814,7 +815,7 @@ extern "C" fn remove_unsaved() {
     // A thread holding it as the process exits leaves its directory rather than hang the exit.
     if let Ok(directories) = UNSAVED.try_lock() {
         for directory in directories.iter() {
-            let _ = std::fs::remove_dir_all(directory);
+            super::leftovers::remove(directory);
         }
     }
 }
@@ -833,20 +834,23 @@ impl Unsaved {
             let name = format!("scramjet-unsaved-{}-{n}", std::process::id());
             let path = std::env::temp_dir().join(name);
             match builder.create(&path) {
-                Ok(()) => return Ok(Self::named(path)),
+                Ok(()) => {
+                    let lock = super::leftovers::hold(&path);
+                    return Ok(Self::named(path, lock));
+                }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => n += 1,
                 // The session made in it keeps its lines, and makes it once there is room.
-                Err(error) if full(&error) => return Ok(Self::named(path)),
+                Err(error) if full(&error) => return Ok(Self::named(path, None)),
                 Err(error) => return Err(error),
             }
         }
     }
 
-    fn named(path: PathBuf) -> Self {
+    fn named(path: PathBuf, lock: Option<std::fs::File>) -> Self {
         let unsaved = UNSAVED.lock();
         let mut unsaved = unsaved.unwrap_or_else(std::sync::PoisonError::into_inner);
         unsaved.push(path.clone());
-        Self(path)
+        Self(path, lock)
     }
 
     pub fn path(&self) -> &Path {
@@ -866,7 +870,8 @@ impl Drop for Unsaved {
         let unsaved = UNSAVED.lock();
         let mut unsaved = unsaved.unwrap_or_else(std::sync::PoisonError::into_inner);
         unsaved.retain(|directory| *directory != self.0);
-        let _ = std::fs::remove_dir_all(&self.0);
+        drop(self.1.take());
+        super::leftovers::remove(&self.0);
     }
 }
 

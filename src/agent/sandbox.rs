@@ -788,9 +788,10 @@ pub(super) fn network_said(network: bool) -> &'static str {
 
 /// The directory an agent's sandboxed commands have as `/tmp` on Linux, made at the first and
 /// kept for the next (`scramjet-tmp-PID-N`, the user's alone, in the temporary directory),
-/// removed with the agent or as the process exits; none made, each command has a fresh one.
+/// removed with the agent or as the process exits, else by a later run (`leftovers`), as it is
+/// locked while held; none made, each command has a fresh one.
 #[derive(Default)]
-pub(super) struct Scratch(std::sync::OnceLock<Option<PathBuf>>);
+pub(super) struct Scratch(std::sync::OnceLock<Option<(PathBuf, Option<std::fs::File>)>>);
 
 /// The `Scratch` directories made, removed by `remove_scratch` at an exit, which runs no
 /// destructors.
@@ -800,7 +801,7 @@ extern "C" fn remove_scratch() {
     // A thread holding it as the process exits leaves its directory rather than hang the exit.
     if let Ok(directories) = SCRATCH.try_lock() {
         for directory in directories.iter() {
-            let _ = std::fs::remove_dir_all(directory);
+            super::leftovers::remove(directory);
         }
     }
 }
@@ -808,16 +809,18 @@ extern "C" fn remove_scratch() {
 impl Scratch {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn path(&self) -> Option<&Path> {
-        self.0.get_or_init(Scratch::make).as_deref()
+        let made = self.0.get_or_init(Scratch::make);
+        made.as_ref().map(|(path, _)| path.as_path())
     }
 
     /// The directory if a command or a write has made it.
     #[cfg(target_os = "linux")]
     fn made(&self) -> Option<&Path> {
-        self.0.get().and_then(Option::as_deref)
+        let made = self.0.get().and_then(Option::as_ref);
+        made.map(|(path, _)| path.as_path())
     }
 
-    fn make() -> Option<PathBuf> {
+    fn make() -> Option<(PathBuf, Option<std::fs::File>)> {
         static AT_EXIT: std::sync::Once = std::sync::Once::new();
         // SAFETY: `remove_scratch` neither unwinds nor exits.
         AT_EXIT.call_once(|| unsafe {
@@ -834,7 +837,8 @@ impl Scratch {
             match builder.create(&path) {
                 Ok(()) => {
                     directories.push(path.clone());
-                    return Some(path);
+                    let lock = super::leftovers::hold(&path);
+                    return Some((path, lock));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                 Err(_) => return None,
@@ -846,12 +850,13 @@ impl Scratch {
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        if let Some(Some(path)) = self.0.get() {
-            let _ = std::fs::remove_dir_all(path);
+        if let Some(Some((path, lock))) = self.0.take() {
+            drop(lock);
+            super::leftovers::remove(&path);
             let mut directories = SCRATCH
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            directories.retain(|directory| directory != path);
+            directories.retain(|directory| *directory != path);
         }
     }
 }

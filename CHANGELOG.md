@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.1 — Leftovers of ended runs removed
+
+### Fixed
+
+- A run that was killed or crashed no longer leaves its private directories in the temporary directory for good: the next start removes the sandbox's `/tmp` (`scramjet-tmp-…`, which may hold whatever the agent saved there) and the sessions of a `--no-session` run (`scramjet-unsaved-…`) of runs that have ended. A running Scramjet's, older versions' included, are left alone.
+
 ## 2.347.0 — The file tools in the sandbox's /tmp
 
 ### Changed

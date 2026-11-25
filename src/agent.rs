@@ -21,6 +21,7 @@ mod delegate;
 mod forge;
 mod image;
 mod instructions;
+mod leftovers;
 mod lint;
 mod listed;
 pub mod local;
@@ -811,6 +812,7 @@ impl Agent {
         // Before a session is opened, which may be one they belong to.
         let (mut kept_notes, kept_waiting) = kept_notes(session::write_kept(), true);
         kept_notes.extend(subagent::sweep_worktrees(&config.root));
+        leftovers::sweep();
         let mut unsaved = None;
         let latest = match choice {
             SessionChoice::Continue => Session::latest(&directory()?)?,

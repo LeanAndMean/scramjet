@@ -1193,7 +1193,8 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
                 .unwrap();
             let started = std::time::Instant::now();
             let directory = loop {
-                let found = std::fs::read_dir(&temporary).unwrap().flatten().next();
+                let found = (std::fs::read_dir(&temporary).unwrap().flatten())
+                    .find(|entry| entry.path().is_dir());
                 let files = found
                     .as_ref()
                     .and_then(|entry| std::fs::read_dir(entry.path()).ok());
@@ -1216,6 +1217,8 @@ fn no_session_saves_none_and_its_directory_goes_at_exit() {
             // As a shell reports a process the signal killed, and as Scramjet's print mode exits.
             assert_eq!(child.wait().unwrap().code(), Some(128 + signal));
             assert!(!directory.exists(), "{}", directory.display());
+            // Nor its lock beside it, which a later run would look for.
+            assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
         }
         drop(silent);
     }
