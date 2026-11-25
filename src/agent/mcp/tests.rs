@@ -1062,6 +1062,8 @@ fn servers_ended_as_they_start_leave_no_process() {
         kill(*pid);
     }
     assert!(left.is_empty(), "{} of {} left", left.len(), started.len());
+    // On Windows a directory cannot go while a killed server, which ran in it, is still ending.
+    until(|| std::fs::remove_dir_all(&scratch.0).is_ok());
 }
 
 #[test]
