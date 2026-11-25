@@ -35,7 +35,7 @@ Subagents' commands, and the agent's own under `/sandbox` or `-s`, run under Bub
   }
   ```
 
-  With it, any program of yours can make namespaces through Bubblewrap, as every program could before Ubuntu 23.10.
+  With it, any program of yours can make namespaces through Bubblewrap, as every program could before Ubuntu 23.10. Each release is checked with this profile on Ubuntu 24.04, x86_64 and arm64.
 
 ## A key does nothing, or does something else
 

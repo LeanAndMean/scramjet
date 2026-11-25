@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.2 — The AppArmor profile for Bubblewrap, checked
+
+### Changed
+
+- The troubleshooting guide's AppArmor profile, which lets Bubblewrap run on Ubuntu 23.10 and later, is now checked with each release on Ubuntu 24.04 (x86_64 and arm64), and the guide says so.
+
 ## 2.340.1 — "1 request" after a one-request answer
 
 ### Fixed
