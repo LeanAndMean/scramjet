@@ -7247,7 +7247,9 @@ fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
                 serde_json::json!({"status": "completed", "summary": "Done."}),
             ),
         ]);
-        let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+        let models = serde_json::json!([{"id": "claude-test", "contextWindow": 1000}]);
+        let settings = serde_json::json!({"hideCredentials": "never"});
+        let (mut child, mut stdin, messages) = acp_models(&scratch.0, port, models, settings, &[]);
         let capabilities = match follows {
             true => serde_json::json!({"_meta": {"io.github.leanandmean.scramjet": {}}}),
             false => serde_json::json!({}),
@@ -7258,12 +7260,18 @@ fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
                 "params": {"protocolVersion": 1, "clientCapabilities": capabilities}}),
         );
         next(&messages);
+        // A profile goes on in the fresh session's file, so resuming it keeps the profile.
+        let profile = serde_json::json!({"appendSystemPrompt": "A task."});
+        let meta = serde_json::json!({"io.github.leanandmean.scramjet": {"profile": profile}});
         send(
             &mut stdin,
             serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "session/new",
-                "params": {"cwd": project, "mcpServers": []}}),
+                "params": {"cwd": project, "mcpServers": [], "_meta": meta}}),
         );
-        let session = next(&messages)["result"]["sessionId"].clone();
+        let started = next(&messages)["result"].clone();
+        let session = started["sessionId"].clone();
+        let first = started["_meta"]["io.github.leanandmean.scramjet"]["path"].clone();
+        let first = std::path::PathBuf::from(first.as_str().unwrap_or_else(|| panic!("{started}")));
         send(
             &mut stdin,
             serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "session/prompt",
@@ -7329,6 +7337,21 @@ fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
         }
         drop(stdin);
         assert!(child.wait().unwrap().success());
+        let files: Vec<_> = (std::fs::read_dir(first.parent().unwrap()).unwrap())
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| *path != first)
+            .collect();
+        assert_eq!(files.len(), 1, "{files:?}");
+        let saved = std::fs::read_to_string(&files[0]).unwrap();
+        let line = (saved.lines())
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|line| line["type"] == "profile");
+        assert_eq!(
+            line.map(|line| line["profile"].clone()),
+            Some(profile),
+            "{saved}"
+        );
+        std::fs::remove_dir_all(first.parent().unwrap()).unwrap();
     }
 }
 

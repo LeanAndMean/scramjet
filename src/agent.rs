@@ -693,6 +693,8 @@ pub struct Agent {
     keeps_grants: bool,
     /// Whether the reach is fixed for the session, so no grant widens it (`set_reach_fixed`).
     reach_fixed: bool,
+    /// The session profile (ACP's), saved again in each new session the agent continues in.
+    profile: Option<Value>,
     /// Harness tools this run cannot use, not offered (`leave_out_idle_tools`).
     left_out: Vec<&'static str>,
     /// Whether a completed command's recommended next step runs without the user choosing it.
@@ -869,6 +871,7 @@ impl Agent {
             unattended: false,
             keeps_grants: true,
             reach_fixed: false,
+            profile: None,
             left_out: Vec::new(),
             autopilot,
             mcp: None,
@@ -1628,6 +1631,9 @@ impl Agent {
         if let Some(effort) = &self.config.effort {
             session.record_effort(effort)?;
         }
+        if let Some(profile) = &self.profile {
+            session.record_profile(profile)?;
+        }
         self.replace_session(session);
         self.conversation.clear();
         self.prompts.clear();
@@ -1916,7 +1922,15 @@ impl Agent {
 
     /// Saves the session profile the turns that follow run with (ACP's).
     pub fn record_profile(&mut self, profile: &Value) -> Result<(), AgentError> {
-        Ok(self.session.record_profile(profile)?)
+        self.session.record_profile(profile)?;
+        self.profile = Some(profile.clone());
+        Ok(())
+    }
+
+    /// The session profile the agent runs with, already saved in the session, which a new
+    /// session it continues in saves too.
+    pub fn set_profile(&mut self, profile: Value) {
+        self.profile = Some(profile);
     }
 
     /// Whether the coding tools of the turns that follow keep out of the user's credential

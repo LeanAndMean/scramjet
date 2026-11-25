@@ -2219,6 +2219,7 @@ fn start_session(
     }
     if let Some(profile) = profile {
         agent.set_keeps_grants(false);
+        agent.set_profile(profile.given.clone());
         (profile.confine(&mut agent, &settings)).map_err(|error| (INVALID_PARAMS, error))?;
     }
     Ok(Session {

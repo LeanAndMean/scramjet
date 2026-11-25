@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.332.2 — A fresh next step keeps the session's profile
+
+### Fixed
+
+- `scramjet acp`: a next step that starts a fresh session saves the session's profile in the new session too, so resuming or loading it runs with the profile (its instructions, tools, sandbox and model) rather than your own settings, and its grants stay with the session.
+
 ## 2.332.1 — A session profile keeps grants to itself
 
 ### Fixed

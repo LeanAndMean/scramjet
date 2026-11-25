@@ -1831,7 +1831,7 @@ the tool call it was making did not run"
             .shown
             .iter()
             .filter(|shown| shown.starts_with("result subagent Parallel: 4/4 succeeded"));
-        assert_eq!(results.count(), 3);
+        assert_eq!(results.count(), 3, "{:?}", ui.shown);
         // Each call alone allows 4 at once; three together, 12 were in flight.
         let most = most.load(Ordering::SeqCst);
         assert!((1..=8).contains(&most), "{most} children at once");
@@ -2006,7 +2006,7 @@ for trusted repositories. Yes is remembered for this project until one of its ag
 or changed.",
             project.display()
         );
-        assert!(ui.shown.contains(&asked));
+        assert!(ui.shown.contains(&asked), "{:?}", ui.shown);
         assert!(
             ui.shown
                 .contains(&"choose Run project-local agents? [\"Yes\", \"No\"] None".to_owned())
@@ -2672,7 +2672,7 @@ break; sleep 0.05; done; [ -e {theirs} ] && echo met || echo alone")})
             .iter()
             .position(|shown| shown.starts_with("question"));
         let slept = (ui.shown.iter()).position(|shown| shown.starts_with("result read slept"));
-        assert!(asked < slept);
+        assert!(asked < slept, "{:?}", ui.shown);
         server.join().unwrap();
     }
 
