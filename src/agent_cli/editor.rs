@@ -642,7 +642,7 @@ impl Editor {
         }
     }
 
-    /// The draft `kept` was taken from, its undo steps with it; `None` for what no draft keeps.
+    /// The draft `kept` was taken from, its undo and redo steps with it; `None` for what no draft keeps.
     pub(super) fn restored(&self, kept: Kept) -> Option<Draft> {
         if kept.version != KEPT_VERSION {
             return None;
@@ -651,6 +651,8 @@ impl Editor {
         draft.buffer = kept.text.buffer()?;
         draft.undo = kept.undo.into_iter().filter_map(Step::buffer).collect();
         cap(&mut draft.undo);
+        draft.redo = kept.redo.into_iter().filter_map(Step::buffer).collect();
+        cap(&mut draft.redo);
         Some(draft)
     }
 
@@ -677,6 +679,7 @@ impl Editor {
             completion,
             lookup,
             undo,
+            redo,
             last,
             jump,
             shown_rows,
@@ -695,6 +698,7 @@ impl Editor {
         // As Scramjet's, going through history is undone at once, to the text it started from.
         let browsing_on = browsing.is_some() && (up || down);
         let undoing = key.is(Binding::Undo);
+        let redoing = key.is(Binding::Redo);
         let tab = key.is(Binding::Tab);
         // At the prompt the follow-up key sends between turns, as Scramjet's; a dialog's text has
         // no queue, and it is a new line there.
@@ -776,9 +780,14 @@ impl Editor {
                 true
             }
             _ if escape && buffer.selection().is_some() => true,
-            _ if undoing => {
-                if let Some(snapshot) = undo.pop() {
-                    *buffer = snapshot;
+            _ if undoing || redoing => {
+                let (from, to) = match undoing {
+                    true => (&mut *undo, &mut *redo),
+                    false => (&mut *redo, &mut *undo),
+                };
+                if let Some(snapshot) = from.pop() {
+                    to.push(std::mem::replace(buffer, snapshot));
+                    cap(to);
                 }
                 *completion = None;
                 *browsing = None;
@@ -1017,13 +1026,16 @@ impl Editor {
         if buffer.text != prior.text || buffer.cursor != prior.cursor {
             *revision = revised();
         }
+        if buffer.text != prior.text && !undoing && !redoing {
+            redo.clear();
+        }
         if let Some(space) = typed.filter(|_| buffer.text != prior.text) {
             *last = Last::Typing;
             if !space && previous == Last::Typing {
                 return Action::Edited(changed);
             }
         }
-        if buffer.text != prior.text && !browsing_on && !undoing {
+        if buffer.text != prior.text && !browsing_on && !undoing && !redoing {
             undo.push(prior);
             cap(undo);
         }
@@ -1102,6 +1114,8 @@ pub(super) struct Draft {
     lookup: Option<Lookup>,
     /// The text and cursor before each edit, the latest last, which Ctrl+- restores.
     undo: Vec<Buffer>,
+    /// The texts undo took back, the latest last, which redo puts back until the next edit.
+    redo: Vec<Buffer>,
     last: Last,
     /// Ctrl+] (`true`) or Ctrl+Alt+] waits for the character to jump to.
     jump: Option<bool>,
@@ -1110,7 +1124,7 @@ pub(super) struct Draft {
     shown_rows: Cell<usize>,
     /// The last key cleared the text (Ctrl+C), which an exit next takes back.
     cleared: bool,
-    /// Changes with the text, the cursor or the undo steps, and differs between drafts.
+    /// Changes with the text, the cursor or the undo and redo steps, and differs between drafts.
     revision: u64,
 }
 
@@ -1133,14 +1147,16 @@ fn cap(undo: &mut Vec<Buffer>) {
     undo.drain(..undo.len() - kept);
 }
 
-/// What a draft keeps across a restart: its text and cursor, and its undo steps, the latest
-/// last.
+/// What a draft keeps across a restart: its text and cursor, and its undo and redo steps, the
+/// latest last.
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
 pub(super) struct Kept {
     version: u32,
     #[serde(flatten)]
     text: Step,
     undo: Vec<Step>,
+    #[serde(default)]
+    redo: Vec<Step>,
 }
 
 /// A text and the byte its cursor is at.
@@ -1208,7 +1224,7 @@ impl Draft {
 
     /// Whether there is anything to keep across a restart.
     pub(super) fn keeps(&self) -> bool {
-        !self.buffer.text.is_empty() || !self.undo.is_empty()
+        !self.buffer.text.is_empty() || !self.undo.is_empty() || !self.redo.is_empty()
     }
 
     /// What to keep across a restart; `None` when there is nothing to keep.
@@ -1217,6 +1233,7 @@ impl Draft {
             version: KEPT_VERSION,
             text: Step::of(&self.buffer),
             undo: self.undo.iter().map(Step::of).collect(),
+            redo: self.redo.iter().map(Step::of).collect(),
         })
     }
 
@@ -1626,6 +1643,29 @@ mod tests {
     }
 
     #[test]
+    fn redo_puts_back_what_undo_took_until_the_next_edit() {
+        let mut editor = prompt_editor(Vec::new());
+        let mut draft = editor.draft(String::new());
+        type_in(&mut editor, &mut draft, b"one two three\x1f\x1f");
+        assert_eq!(draft.text(), "one");
+        type_in(&mut editor, &mut draft, b"\x1e");
+        assert_eq!((draft.text(), draft.buffer.cursor), ("one two", 7));
+        // Undo and redo go back and forth over the same steps.
+        type_in(&mut editor, &mut draft, b"\x1f\x1e\x1e");
+        assert_eq!(draft.text(), "one two three");
+        type_in(&mut editor, &mut draft, b"\x1e");
+        assert_eq!(draft.text(), "one two three");
+        // An edit after an undo ends what redo can bring back.
+        type_in(&mut editor, &mut draft, b"\x1f\x1fX\x1e");
+        assert_eq!(draft.text(), "oneX");
+        type_in(&mut editor, &mut draft, b"\x1f\x1e");
+        assert_eq!(draft.text(), "oneX");
+        draft.replace("forked".into());
+        type_in(&mut editor, &mut draft, b"\x1e");
+        assert_eq!(draft.text(), "forked");
+    }
+
+    #[test]
     fn a_draft_comes_back_with_its_undo_steps_capped() {
         let mut editor = prompt_editor(Vec::new());
         let mut draft = editor.draft(String::new());
@@ -1639,6 +1679,23 @@ mod tests {
         assert_eq!((back.text(), back.buffer.cursor), ("one two", 6));
         type_in(&mut editor, &mut back, b"\x1f");
         assert_eq!(back.text(), "one");
+        // What undo took back is redone after a restart too.
+        let kept = serde_json::to_vec(&back.kept().unwrap()).unwrap();
+        let mut again = editor
+            .restored(serde_json::from_slice(&kept).unwrap())
+            .unwrap();
+        type_in(&mut editor, &mut again, b"\x1e");
+        assert_eq!(again.text(), "one two");
+        // An undone empty prompt is kept for its redo, and a draft kept without redo steps
+        // (2.327.0's) comes back.
+        let mut emptied = editor.draft(String::new());
+        type_in(&mut editor, &mut emptied, b"a\x1f");
+        assert!(emptied.keeps());
+        let older = r#"{"version":1,"text":"a","cursor":1,"undo":[]}"#;
+        let older = editor
+            .restored(serde_json::from_str(older).unwrap())
+            .unwrap();
+        assert_eq!(older.text(), "a");
         // A cursor between a character's bytes is no draft's, nor another version's.
         let wrong = r#"{"version":1,"text":"é","cursor":1,"undo":[]}"#;
         assert!(

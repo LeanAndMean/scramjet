@@ -2459,13 +2459,17 @@ def draft_back(read, until, send, output):
     # Its undo steps came with it.
     send(b'\x1f')
     ending(read, output, ['> keep this'])
-    # What is typed just before a hangup is kept too.
+    # What is typed just before a hangup is kept too, and what undo took back, for redo.
     send(b' and more')
     ending(read, output, ['> keep this and more'])
+    send(b'\x1f')
+    ending(read, output, ['> keep this and'])
 
 
 def draft_sent(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
+    ending(read, output, ['> keep this and'])
+    send(b'\x1e')
     ending(read, output, ['> keep this and more'])
     send(b'\r')
     on_screen('Error: provider: cannot connect')
@@ -4806,8 +4810,8 @@ def fullscreen_commands_during_turn(read, until, send, output):
 
 
 def prompt_keys(read, until, send, output):
-    """Scramjet's kill ring, undo and jump to a character in the prompt; Ctrl+L, as /model, keeps
-    the draft; Ctrl+Home and Ctrl+End go to the conversation's start and end."""
+    """Scramjet's kill ring, undo, redo and jump to a character in the prompt; Ctrl+L, as /model,
+    keeps the draft; Ctrl+Home and Ctrl+End go to the conversation's start and end."""
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
     send(b'alpha beta gamma')
@@ -4818,6 +4822,11 @@ def prompt_keys(read, until, send, output):
     send(b'\x01\x19')
     ending(read, output, ['> beta gammaalpha'])
     # Ctrl+- undoes that; Ctrl+] then p jumps to the p, where X goes in.
+    send(b'\x1f')
+    ending(read, output, ['> alpha'])
+    # Ctrl+^ redoes it, and Ctrl+- undoes it again.
+    send(b'\x1e')
+    ending(read, output, ['> beta gammaalpha'])
     send(b'\x1f')
     ending(read, output, ['> alpha'])
     send(b'\x01\x1dpX')

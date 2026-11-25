@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.328.0 — Redo in the prompt
+
+### Added
+
+- Ctrl+^ (Ctrl+6 in most terminals) redoes what Ctrl+- undid in the prompt, until you edit it again; what undo took back is kept with the prompt when you leave, so redo works after resuming too. `/hotkeys` lists it as `tui.editor.redo`.
+
 ## 2.327.0 — The prompt kept with its session
 
 ### Added

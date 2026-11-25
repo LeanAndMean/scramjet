@@ -52,6 +52,7 @@ pub(super) enum Binding {
     Yank,
     YankPop,
     Undo,
+    Redo,
     Tab,
     Interrupt,
     Clear,
@@ -178,7 +179,7 @@ use Section as S;
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 98] = [
+const DEFINITIONS: [Definition; 99] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -214,6 +215,7 @@ const DEFINITIONS: [Definition; 98] = [
     define(B::Yank, "tui.editor.yank", &["ctrl+y"], S::Editing, "Paste the most-recently-deleted text"),
     define(B::YankPop, "tui.editor.yankPop", &["alt+y"], S::Editing, "Cycle through the deleted text after pasting"),
     define(B::Undo, "tui.editor.undo", &["ctrl+-"], S::Editing, "Undo"),
+    define(B::Redo, "tui.editor.redo", &["ctrl+^", "ctrl+6"], S::Editing, "Redo what undo took back"),
     define(B::Tab, "tui.input.tab", &["tab"], S::Other, "Path completion / accept autocomplete"),
     define(B::Interrupt, "app.interrupt", &["escape"], S::Other, "Cancel autocomplete / interrupt the turn"),
     define(B::Clear, "app.clear", &["ctrl+c"], S::Other, "Clear editor (first) / exit (second)"),
@@ -800,6 +802,7 @@ mod tests {
             ("pageUp", "Page Up"),
             ("shift+l", "Shift+L"),
             ("ctrl+-", "Ctrl+-"),
+            ("ctrl+^", "Ctrl+^"),
             ("ctrl+alt+]", "Ctrl+Alt+]"),
             ("ctrl++", "Ctrl++"),
             ("esc", "Escape"),

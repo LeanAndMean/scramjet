@@ -163,6 +163,8 @@ fn control(byte: u8) -> Option<Press> {
         1..=26 => (Code::Char(char::from(b'a' + byte - 1)), CTRL),
         28 => (Code::Char('\\'), CTRL),
         29 => (Code::Char(']'), CTRL),
+        // Ctrl+^, which terminals send for Ctrl+6 or Ctrl+Shift+6.
+        30 => (Code::Char('^'), CTRL),
         // Ctrl+_, which terminals also send for Ctrl+-.
         31 => (Code::Char('-'), CTRL),
         _ => return None,
@@ -639,11 +641,12 @@ pub(super) mod tests {
     #[test]
     fn decodes_scramjets_kill_ring_undo_jump_and_scroll_keys() {
         assert_eq!(
-            keys(b"\x19\x1by\x1f\x1d\x1b\x1d\x0c\x1b[1;5H\x1b[1;5F\x1b[7^\x1b[8^"),
+            keys(b"\x19\x1by\x1f\x1e\x1d\x1b\x1d\x0c\x1b[1;5H\x1b[1;5F\x1b[7^\x1b[8^"),
             named(&[
                 "ctrl+y",
                 "alt+y",
                 "ctrl+-",
+                "ctrl+^",
                 "ctrl+]",
                 "ctrl+alt+]",
                 "ctrl+l",
@@ -654,11 +657,12 @@ pub(super) mod tests {
             ])
         );
         assert_eq!(
-            keys(b"\x1b[121;5u\x1b[121;3u\x1b[45;5u\x1b[93;5u\x1b[27;7;93~\x1b[108;5u\x1b[1H"),
+            keys(b"\x1b[121;5u\x1b[121;3u\x1b[45;5u\x1b[54;5u\x1b[93;5u\x1b[27;7;93~\x1b[108;5u\x1b[1H"),
             named(&[
                 "ctrl+y",
                 "alt+y",
                 "ctrl+-",
+                "ctrl+6",
                 "ctrl+]",
                 "ctrl+alt+]",
                 "ctrl+l",

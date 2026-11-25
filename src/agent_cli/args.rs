@@ -208,7 +208,8 @@ and /model lists, best match first (a \"quoted phrase\" matches as written, and 
 case-insensitive regular expression). With piped input they are printed numbered instead, for
 /resume N, /fork N, /tree N and /model ID.
 In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it with what was
-deleted before; Ctrl+- undoes; Ctrl+] then a character jumps to it, Ctrl+Alt+] backward.
+deleted before; Ctrl+- undoes, Ctrl+^ (Ctrl+6) redoes; Ctrl+] then a character jumps to it,
+Ctrl+Alt+] backward.
 Ctrl+Home and Ctrl+End scroll to the conversation's start and end.
 /rename NAME names the session, which /resume then lists by its name; /rename alone shows it.
 /status shows the session's file, the messages in its context, the tokens they used, the cost and
