@@ -2863,16 +2863,36 @@ mod tests {
                 _ => found.push(at),
             }
         }
+        fn copy(from: &Path, to: &Path) {
+            std::fs::create_dir_all(to).unwrap();
+            for entry in std::fs::read_dir(from).unwrap() {
+                let path = entry.unwrap().path();
+                let target = to.join(path.file_name().unwrap());
+                match path.is_dir() {
+                    true => copy(&path, &target),
+                    false => drop(std::fs::copy(&path, &target).unwrap()),
+                }
+            }
+        }
         let fixtures = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
             .join("tests/compatibility");
         let scratch = Scratch::new("compatibility");
         for version in std::fs::read_dir(&fixtures).unwrap() {
-            let path = version
-                .unwrap()
-                .path()
-                .join("config/scramjet/settings.json");
+            let version = version.unwrap().path();
+            let path = version.join("config/scramjet/settings.json");
             let text = std::fs::read_to_string(&path).unwrap();
-            let settings = settings_with(&scratch, &text);
+            // Laid out as the fixture is, for the paths its settings give relative to their file.
+            let laid = scratch.0.join(version.file_name().unwrap());
+            std::fs::create_dir_all(laid.join("config/scramjet")).unwrap();
+            if version.join("packages").is_dir() {
+                copy(&version.join("packages"), &laid.join("packages"));
+            }
+            let read = |text: &str| {
+                let path = laid.join("config/scramjet/settings.json");
+                std::fs::write(&path, text).unwrap();
+                Settings::read(Some(path))
+            };
+            let settings = read(&text);
             assert!(
                 settings.warnings.is_empty(),
                 "{}: {:?}",
@@ -2889,7 +2909,7 @@ mod tests {
                     value = &mut value[key];
                 }
                 *value = serde_json::json!([["no setting's type"]]);
-                let read = settings_with(&scratch, &changed.to_string());
+                let read = read(&changed.to_string());
                 assert!(
                     !read.warnings.is_empty(),
                     "{}: {leaf:?} is not read",

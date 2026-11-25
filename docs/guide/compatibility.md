@@ -16,7 +16,7 @@ This holds from the first stable release on. The alphas before it kept most old 
 - **Sessions:** every session file a version wrote, with its chain, can be resumed, forked and exported by later ones.
 - **Command sets:** `set.yaml`, commands, agents, skills and `autonomy-defaults.yaml`, and packages' layout.
 
-What a version cannot use in a file is warned of and passed over, and the rest of the file applies; the warning names the file and the key. Two files are used whole or not at all when one holds a mistake: `autonomy.yaml` (as Scramjet 1 reads it: both read the same file) and a theme lacking a color. A later version never turns a file that was right into one of those.
+A value a version cannot use in a file is warned of and passed over, and the rest of the file applies; the warning names the file and the key. A key it does not know at all is passed over without a word (a misspelt one too), which is why the tests below check that every key of the kept files is still read. Two files are used whole or not at all when one holds a mistake: `autonomy.yaml` (as Scramjet 1 reads it: both read the same file) and a theme lacking a color. A later version never turns a file that was right into one of those.
 
 ## What it does not cover
 
@@ -29,6 +29,6 @@ What a version cannot use in a file is warned of and passed over, and the rest o
 
 ## How it is kept
 
-[`tests/compatibility`](https://github.com/LeanAndMean/scramjet/tree/main/tests/compatibility) holds a version's files as that version wrote them or a user had them: settings, `models.json`, `auth.json`, key bindings, a theme, both `autonomy.yaml` files, a session with commands, tool calls, a name and a compaction, and a command set. Every build's tests read them all: with no warning, each setting still one the program takes, the session's conversation sent on, the key, prices and limits applied, the set linting clean. A version that changes one of those formats adds its own files beside the old ones, which stay. The other files listed above are kept by the same rule, without files of their own yet.
+[`tests/compatibility`](https://github.com/LeanAndMean/scramjet/tree/main/tests/compatibility) holds a version's files as that version wrote them or a user had them: settings, `models.json`, `auth.json`, key bindings, a theme, both `autonomy.yaml` files, a session with commands, tool calls, a name and a compaction, a command set, and a package holding a provider (its `models.json` with `engines`, `credentialFiles` and `logins`), skills, and a set with a skill and an `autonomy-defaults.yaml`. Every build's tests read them all: with no warning, each setting and each `models.json` key still one the program reads, the session's conversation sent on, the keys, prices and limits applied, both providers answering, the package's skills offered, the sets linting clean. A version that changes one of those formats adds its own files beside the old ones, which stay. The other files listed above are kept by the same rule, without files of their own yet.
 
 An update that stops reading a file you had is a bug: report it with `/bug`, or at [the issues](https://github.com/LeanAndMean/scramjet/issues), with the warning or what changed.

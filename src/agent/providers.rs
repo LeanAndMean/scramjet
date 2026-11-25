@@ -942,6 +942,7 @@ impl Reading {
             Some(_) => return self.problems.push(format!("{what}: models must be a list")),
         };
         for model in &models {
+            let mistaken = mistyped(model);
             match self.model(name, entry, model) {
                 Ok(model)
                     if (self.models.iter())
@@ -952,7 +953,12 @@ impl Reading {
                         model.id
                     ));
                 }
-                Ok(model) => self.models.push(model),
+                Ok(model) => {
+                    for problem in mistaken {
+                        (self.problems).push(format!("{what}: model {}: {problem}", model.id));
+                    }
+                    self.models.push(model)
+                }
                 Err(problem) => self.problems.push(format!("{what}: {problem}")),
             }
         }
@@ -1252,6 +1258,140 @@ impl Reading {
             info,
         })
     }
+}
+
+/// What a model's `entry` gives in a type its reader cannot take, each then ignored; `null` is
+/// taken as not given.
+fn mistyped(entry: &Value) -> Vec<String> {
+    fn number(value: &Value) -> bool {
+        value.is_number()
+    }
+    fn tokens(value: &Value) -> bool {
+        value.is_u64()
+    }
+    fn rates(at: &str, cost: &Value, found: &mut Vec<String>) {
+        for key in ["input", "output", "cacheRead", "cacheWrite"] {
+            given(
+                cost,
+                key,
+                at,
+                number,
+                "a number of dollars per million tokens",
+                found,
+            );
+        }
+    }
+    fn given(
+        entry: &Value,
+        key: &str,
+        at: &str,
+        fits: fn(&Value) -> bool,
+        wanted: &str,
+        found: &mut Vec<String>,
+    ) -> bool {
+        match entry.get(key) {
+            Some(value) if !value.is_null() && !fits(value) => {
+                found.push(format!("{at}{key} must be {wanted}; ignored"));
+                false
+            }
+            value => value.is_some_and(|value| !value.is_null()),
+        }
+    }
+    let mut found = Vec::new();
+    let found_in = &mut found;
+    given(entry, "name", "", Value::is_string, "a text", found_in);
+    given(
+        entry,
+        "reasoning",
+        "",
+        Value::is_boolean,
+        "true or false",
+        found_in,
+    );
+    let texts =
+        |value: &Value| (value.as_array()).is_some_and(|all| all.iter().all(Value::is_string));
+    given(
+        entry,
+        "input",
+        "",
+        texts,
+        "a list such as [\"text\", \"image\"]",
+        found_in,
+    );
+    given(
+        entry,
+        "contextWindow",
+        "",
+        number,
+        "a number of tokens",
+        found_in,
+    );
+    for key in ["maxTokens", "maxInputTokens"] {
+        given(entry, key, "", tokens, "a whole number of tokens", found_in);
+    }
+    given(
+        entry,
+        "thinkingLevelMap",
+        "",
+        Value::is_object,
+        "an object of levels",
+        found_in,
+    );
+    if given(
+        entry,
+        "cost",
+        "",
+        Value::is_object,
+        "an object of prices",
+        found_in,
+    ) {
+        let cost = &entry["cost"];
+        rates("cost.", cost, found_in);
+        given(
+            cost,
+            "header",
+            "cost.",
+            Value::is_string,
+            "a header's name",
+            found_in,
+        );
+        if given(
+            cost,
+            "longContext",
+            "cost.",
+            Value::is_object,
+            "an object",
+            found_in,
+        ) {
+            let long = &cost["longContext"];
+            given(
+                long,
+                "above",
+                "cost.longContext.",
+                tokens,
+                "a whole number of tokens",
+                found_in,
+            );
+            rates("cost.longContext.", long, found_in);
+        }
+        if given(
+            cost,
+            "byHeader",
+            "cost.",
+            Value::is_object,
+            "an object of header values",
+            found_in,
+        ) {
+            for (value, rated) in cost["byHeader"].as_object().into_iter().flatten() {
+                let at = format!("cost.byHeader.{value}");
+                match rated.is_object() {
+                    true => rates(&format!("{at}."), rated, found_in),
+                    false => found_in.push(format!("{at} must be an object of prices; ignored")),
+                }
+            }
+        }
+    }
+    found
 }
 
 /// The levels a model that reasons takes, as Scramjet reads its `thinkingLevelMap`, and those it
@@ -1727,6 +1867,77 @@ mod tests {
         assert!(!format!("{route:?}").contains("pass"));
     }
 
+    /// `tests/compatibility`'s `models.json` files, the user's and packages', read with no
+    /// problem, each key still one the reader takes: in its place, a value of no field's type is
+    /// said, where a key no longer read would be passed over in silence (the compatibility
+    /// promise).
+    #[test]
+    fn earlier_versions_models_files_are_read_as_they_were() {
+        fn leaves(value: &Value, at: Vec<String>, found: &mut Vec<Vec<String>>) {
+            match value {
+                Value::Object(object) if !object.is_empty() => {
+                    for (key, value) in object {
+                        let mut path = at.clone();
+                        path.push(key.clone());
+                        leaves(value, path, found);
+                    }
+                }
+                Value::Array(items) if items.iter().any(Value::is_object) => {
+                    for (n, item) in items.iter().enumerate() {
+                        let mut path = at.clone();
+                        path.push(n.to_string());
+                        leaves(item, path, found);
+                    }
+                }
+                _ => found.push(at),
+            }
+        }
+        fn models_files(directory: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                match path.is_dir() {
+                    true => models_files(&path, found),
+                    false if path.ends_with("models.json") => found.push(path),
+                    false => {}
+                }
+            }
+        }
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/compatibility");
+        let mut files = Vec::new();
+        models_files(&fixtures, &mut files);
+        assert!(files.len() >= 2, "{files:?}");
+        let mut unread = Vec::new();
+        for path in files {
+            let text = std::fs::read_to_string(&path).unwrap().replace("PORT", "1");
+            let document: Value = serde_json::from_str(&text).unwrap();
+            let providers = Providers::given(document.clone());
+            assert!(
+                providers.problems().is_empty(),
+                "{}: {:?}",
+                path.display(),
+                providers.problems()
+            );
+            assert!(!providers.models().is_empty(), "{}", path.display());
+            let mut found = Vec::new();
+            leaves(&document, Vec::new(), &mut found);
+            for leaf in found {
+                let mut changed = document.clone();
+                let mut value = &mut changed;
+                for key in &leaf {
+                    value = match value {
+                        Value::Array(items) => &mut items[key.parse::<usize>().unwrap()],
+                        _ => &mut value[key],
+                    };
+                }
+                *value = json!([["no field's type"]]);
+                if Providers::given(changed).problems().is_empty() {
+                    unread.push(format!("{}: {leaf:?}", path.display()));
+                }
+            }
+        }
+        assert!(unread.is_empty(), "not read: {unread:#?}");
+    }
+
     #[test]
     fn a_models_json_needing_a_later_scramjet_is_not_read_but_hides_its_stores() {
         let running = env!("CARGO_PKG_VERSION");
@@ -1778,6 +1989,41 @@ mod tests {
                 ]
             );
         }
+    }
+
+    #[test]
+    fn a_models_field_of_the_wrong_type_is_said_and_ignored() {
+        let providers = Providers::given(json!({"providers": {"a": {
+        "baseUrl": "http://a/v1", "api": "openai-responses", "models": [
+            {"id": "m", "name": 7, "reasoning": "yes", "input": "image",
+                "contextWindow": "200000", "maxTokens": 1.5, "maxInputTokens": null,
+                "cost": {"input": "1.25", "output": 10, "longContext": {"above": -1},
+                    "byHeader": {"eu": 2}}},
+            {"id": "n", "cost": [1, 2]},
+        ]}}}));
+        let ids: Vec<String> = (providers.models().iter()).map(Model::reference).collect();
+        assert_eq!(ids, ["a/m", "a/n"]);
+        let m = &providers.models()[0];
+        assert_eq!(
+            (m.name.as_deref(), m.info.window, m.info.output),
+            (None, None, None)
+        );
+        assert!(!m.info.reasoning && !m.info.images);
+        let said = |problem: &str| format!("models: provider a: model {problem}; ignored");
+        assert_eq!(
+            providers.problems(),
+            [
+                said("m: name must be a text"),
+                said("m: reasoning must be true or false"),
+                said("m: input must be a list such as [\"text\", \"image\"]"),
+                said("m: contextWindow must be a number of tokens"),
+                said("m: maxTokens must be a whole number of tokens"),
+                said("m: cost.input must be a number of dollars per million tokens"),
+                said("m: cost.longContext.above must be a whole number of tokens"),
+                said("m: cost.byHeader.eu must be an object of prices"),
+                said("n: cost must be an object of prices"),
+            ]
+        );
     }
 
     #[test]

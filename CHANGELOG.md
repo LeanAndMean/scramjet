@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.336.0 — A model's mistyped fields said
+
+### Changed
+
+- A model in a `models.json` whose `name`, `reasoning`, `input`, `contextWindow`, `maxTokens`, `maxInputTokens`, `thinkingLevelMap` or `cost` has the wrong type (`"contextWindow": "200000"`, a price written as text) is said at the start, naming the provider, the model and the field; the field is ignored and the model still offered. It was ignored in silence.
+
 ## 2.335.9 — Scramjet's own logo in the banner
 
 ### Changed

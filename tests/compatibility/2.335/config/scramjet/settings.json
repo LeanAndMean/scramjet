@@ -51,6 +51,9 @@
     "grep": true
   },
   "commandSets": [],
+  "packages": [
+    "../../packages/kit"
+  ],
   "skills": [],
   "mcpServers": {
     "fixture": {

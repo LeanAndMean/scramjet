@@ -1220,7 +1220,7 @@ fn the_files_of_earlier_versions_are_read_as_they_were() {
         )));
         let (sent, requests) = std::sync::mpsc::channel();
         let port = serve_raw_seeing(
-            vec![responses_text("Still here.")],
+            vec![responses_text("Still here."), completions_text("Packaged.")],
             |_| Duration::ZERO,
             move |head, body| {
                 let _ = sent.send((head, body));
@@ -1285,20 +1285,52 @@ fn the_files_of_earlier_versions_are_read_as_they_were() {
         assert_eq!(
             words(&text(&listed.stdout)),
             "provider model context max-out thinking images \
+packaged packaged-model 128K 16K no no \
 screens fixture-model 200K 32K yes yes",
             "{name}: {listed:?}"
         );
-        let set = project.join(".scramjet").join("ship");
-        let lint = program(&binary())
-            .args(["lint", "--strict"])
-            .arg(&set)
+        // The package's provider, with its own key, and its skills offered.
+        let output = program(&binary())
+            .args([
+                "-p",
+                "--no-session",
+                "--model",
+                "packaged/packaged-model",
+                "Hello.",
+            ])
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("SCRAMJET_OFFLINE", "1")
             .output()
             .unwrap();
-        assert!(lint.status.success(), "{name}: {lint:?}");
+        assert!(output.status.success(), "{name}: {output:?}");
+        assert_eq!(text(&output.stdout).trim_end(), "Packaged.", "{name}");
+        let (head, body) = requests.recv_timeout(Duration::from_secs(10)).unwrap();
+        let head = head.to_ascii_lowercase();
         assert!(
-            text(&lint.stdout).contains("0 errors, 0 warnings"),
-            "{name}: {lint:?}"
+            head.contains("authorization: bearer sk-from-the-package\r\n"),
+            "{name}: {head}"
         );
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["model"], "packaged-model", "{name}");
+        let system = body["messages"][0]["content"].to_string();
+        for skill in ["fixture-notes", "changelog"] {
+            assert!(system.contains(skill), "{name}: {skill}: {system}");
+        }
+        let kit = scratch.0.join("packages").join("kit");
+        for set in [project.join(".scramjet").join("ship"), kit.join("release")] {
+            let lint = program(&binary())
+                .args(["lint", "--strict"])
+                .arg(&set)
+                .output()
+                .unwrap();
+            assert!(lint.status.success(), "{name}: {lint:?}");
+            assert!(
+                text(&lint.stdout).contains("0 errors, 0 warnings"),
+                "{name}: {lint:?}"
+            );
+        }
     }
 }
 
@@ -1316,6 +1348,28 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path, port: &str) {
             }
         }
     }
+}
+
+/// An HTTP response streaming a Chat Completions reply of `text` alone.
+fn completions_text(text: &str) -> String {
+    let chunk = |delta: serde_json::Value, finish: serde_json::Value| {
+        serde_json::json!({"id": "chat", "object": "chat.completion.chunk",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]})
+    };
+    let mut done = chunk(serde_json::json!({}), "stop".into());
+    done["usage"] = serde_json::json!({"prompt_tokens": 10, "completion_tokens": 2});
+    let body = format!(
+        "data: {}\n\ndata: {done}\n\ndata: [DONE]\n\n",
+        chunk(
+            serde_json::json!({"role": "assistant", "content": text}),
+            serde_json::Value::Null
+        )
+    );
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\n\
+connection: close\r\n\r\n{body}",
+        body.len()
+    )
 }
 
 /// An HTTP response streaming a Responses reply of `text` alone, of 100,000 input tokens (80,000
