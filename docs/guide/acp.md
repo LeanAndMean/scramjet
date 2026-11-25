@@ -2,7 +2,27 @@
 
 [Back to the README](../../README.md)
 
-`scramjet acp [options]` runs Scramjet as an [Agent Client Protocol](https://agentclientprotocol.com) (v1) agent, for editors and other clients that start an agent and speak JSON-RPC on its stdin and stdout; the options are the full screen's. So far it opens new sessions (`session/new`) and runs prompts in them, with their images (`session/prompt`, `session/cancel`), with the replies, reasoning, tool calls (their arguments, files and edits' diffs) and their output, and the context's usage streamed as updates; a prompt sent while a turn runs steers it (its images as the paths of files they are saved to, as a pasted image), the client's MCP servers are started with the session's, a session opened with `_meta["io.github.leanandmean.scramjet"]: {"directives": false}` leaves out Scramjet's directives (as `--no-directives` does for all), a session `profile` there gives it its own instructions, tools, reach and model (below), and command sets' commands and skills are listed for the client. With `--ask`, the calls it would ask about, and publications, wait for the client's permission (`session/request_permission`); the agent's questions are the client's forms where it offers them (`elicitation/create`), and a finished command's next steps are offered to it. The model, thinking level and autopilot are config options (`session/set_config_option`; one set during a turn applies at its next pause, as `/model` typed then does). Saved sessions are listed (`session/list`), resumed (`session/resume`), loaded with their history replayed (`session/load`), closed and deleted; sign-in goes through `authenticate` and `logout`. Scramjet's own extensions add next steps, compaction, renaming, forks, branches and `/tree`, export, usage, `!` commands, API keys and a client's catch-up. It passes ACP's test kit, and has been tried in Toad, Zed and PyCharm (list it in `~/.jetbrains/acp.json` under `agent_servers`, `{"command": "scramjet", "args": ["acp"]}`). [RPC.md](https://github.com/LeanAndMean/scramjet/blob/main/docs/RPC.md) has the protocol's details.
+`scramjet acp [options]` runs Scramjet as an [Agent Client Protocol](https://agentclientprotocol.com) (v1) agent, for editors and other clients that start an agent and speak JSON-RPC on its stdin and stdout; the options are the full screen's. It passes ACP's test kit, and has been tried in Toad, Zed and PyCharm. [RPC.md](https://github.com/LeanAndMean/scramjet/blob/main/docs/RPC.md) has the protocol's details.
+
+## In an editor
+
+An editor that hosts ACP agents starts `scramjet acp` as its command. In PyCharm and other JetBrains IDEs, list it in `~/.jetbrains/acp.json` under `agent_servers`:
+
+```json
+{"agent_servers": {"Scramjet": {"command": "scramjet", "args": ["acp"]}}}
+```
+
+The key is the name the IDE shows. If it does not find `scramjet`, give its full path as `command` (`command -v scramjet` prints it).
+
+## What it does
+
+- **Sessions and prompts:** it opens new sessions (`session/new`) and runs prompts in them, with their images (`session/prompt`, `session/cancel`). The replies, reasoning, tool calls (their arguments, files and edits' diffs) and their output, and the context's usage stream as updates. A prompt sent while a turn runs steers it, its images given as the paths of files they are saved to, as a pasted image's are.
+- **What a session starts with:** the client's MCP servers are started with the session's, and command sets' commands and skills are listed for the client. A session opened with `_meta["io.github.leanandmean.scramjet"]: {"directives": false}` leaves out Scramjet's directives (as `--no-directives` does for all); a session `profile` there gives it its own instructions, tools, reach and model ([below](#a-session-profile)).
+- **Permission and questions:** with `--ask`, the calls it would ask about, and publications, wait for the client's permission (`session/request_permission`). The agent's questions are the client's forms where it offers them (`elicitation/create`), and a finished command's next steps are offered to it.
+- **Config options:** the model, thinking level and autopilot (`session/set_config_option`). One set during a turn applies at its next pause, as `/model` typed then does.
+- **Saved sessions** are listed (`session/list`), resumed (`session/resume`), loaded with their history replayed (`session/load`), closed and deleted.
+- **Sign-in** goes through `authenticate` and `logout`.
+- **Scramjet's own extensions** add next steps, compaction, renaming, forks, branches and `/tree`, export, usage, `!` commands, API keys and a client's catch-up.
 
 ## A session profile
 

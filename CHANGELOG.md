@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.337.2 — The providers and editor guides in sections
+
+### Changed
+
+- The providers guide's long paragraphs are in sections and lists: `models.json`'s fields, the server's own list, catalogs' commands, `/login`'s subscriptions, API keys (with a table of the built-in providers and the model a new session takes of each), keys for `models.json` providers, and local models' steps.
+- The editor (ACP) guide opens with what it does as a list, and shows a whole `~/.jetbrains/acp.json` for JetBrains IDEs.
+
 ## 2.337.1 — The configuration guide in sections
 
 ### Changed

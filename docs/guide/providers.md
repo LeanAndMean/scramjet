@@ -6,7 +6,15 @@ Scramjet's models come from the logins and API keys of `/login` (Anthropic, Goog
 
 ## `models.json`
 
-Models come from the providers in `~/.config/scramjet/models.json` and in the `models.json` of each installed command set or package, in Scramjet 1's format. Each provider has a `baseUrl` (`http://`, or `https://`, trusting the system's certificates or those `SSL_CERT_FILE` and `SSL_CERT_DIR` name, as OpenSSL does), an `api` (`openai-responses`; `anthropic-messages`, under which requests go to `/v1/messages`; or `openai-completions`, Chat Completions at `/chat/completions`, which vLLM, Ollama and llama.cpp serve), an `apiKey` (the variable of that name in the environment, else the text itself; `!command` takes what the command prints, run with `sh` and kept for 5 minutes, as Claude Code keeps its `apiKeyHelper`'s, or until the provider answers 401, when it runs again and the request is sent once more; `SCRAMJET_KEY_COMMAND_TTL_MS` sets that time, `0` running it for each request. So a key can stay in a password manager, out of files the agent's tools read, as can `headers`' values) and the `models` it offers:
+Models come from the providers in `~/.config/scramjet/models.json` and in the `models.json` of each installed command set or package, in Scramjet 1's format. Each provider has:
+
+- `baseUrl`: the server, `http://` or `https://`. HTTPS trusts the system's certificates, or those `SSL_CERT_FILE` and `SSL_CERT_DIR` name, as OpenSSL does.
+- `api`: the protocol.
+  - `openai-responses`: OpenAI's Responses.
+  - `anthropic-messages`: Anthropic's Messages; requests go to `/v1/messages`.
+  - `openai-completions`: Chat Completions at `/chat/completions`, which vLLM, Ollama and llama.cpp serve.
+- `apiKey`: the variable of that name in the environment, else the text itself. `!command` takes what the command prints, run with `sh` and kept for 5 minutes (as Claude Code keeps its `apiKeyHelper`'s), or until the provider answers 401, when it runs again and the request is sent once more. `SCRAMJET_KEY_COMMAND_TTL_MS` sets that time; `0` runs it for each request. So a key can stay in a password manager, out of files the agent's tools read, as can `headers`' values.
+- `models`: the models it offers.
 
 ```json
 {
@@ -25,26 +33,108 @@ Models come from the providers in `~/.config/scramjet/models.json` and in the `m
 }
 ```
 
-A provider that lists no `models` offers those its server lists (`GET {baseUrl}/models`, or `{baseUrl}/v1/models` under `anthropic-messages`), asked with the key its requests carry. Its list is saved in `~/.local/state/scramjet/models/` and, like the logins' lists ([below](#login-chatgpt-github-copilot-anthropic-google-gemini-openai-openrouter-and-api-keys)), read again while the full screen is open once 15 minutes old. Each model takes what the list says of it: Anthropic's give the window, output, effort levels and images; OpenRouter's also the prices and leave out the models that take no tools; Mistral's, Groq's and vLLM's give the window. What the list does not say (OpenAI's and Ollama's say only the id) stays unknown, without reasoning, and the provider's `modelOverrides` can say it: `"modelOverrides": {"gpt-6": {"reasoning": true, "contextWindow": 400000}}`. A key with `*` is a pattern of ids, each `*` standing for any text: those an id matches apply before its own, the one with fewest other characters first. As a model's `api` and `baseUrl` may be overridden too, one entry can serve a proxy that offers some models on one protocol and some on another: `{"baseUrl": "http://127.0.0.1:8080/v1", "api": "openai-responses", "modelOverrides": {"*": {"reasoning": true}, "claude-*": {"api": "anthropic-messages", "baseUrl": "http://127.0.0.1:8080"}}}`.
+### The server's own list
 
-A model may also give its own `api`, `baseUrl` and `headers`, and a `thinkingLevelMap`. What a Chat Completions server accepts is told from its provider's name and URL, and a provider's or model's `compat` (fields such as `maxTokensField`, `thinkingFormat` or `requiresToolResultName`) says otherwise. A file may name a program in `providersCommand` (`["bin/models", "arg"]`, a path from the file's directory) whose output, `{"version": 1, "providers": {...}}`, adds the providers it learns at run time; a package installed with `scramjet install DIR` can bring one, as the private package for the author's local proxy does. A file's `credentialFiles` (`["~/.config/acme", "token.json"]`) names the files and directories holding its providers' credentials, which the agent's tools do not see, as the [common stores](configuration.md#credentials) are when hidden. Its `engines` (`{"scramjet": ">=2.157.0"}`, as npm's) names the earliest Scramjet it works with: an older one takes nothing from it but its `credentialFiles`, saying why, and `install` refuses its package. What is wrong in these files is said at start and by `--list-models`.
+A provider that lists no `models` offers those its server lists (`GET {baseUrl}/models`, or `{baseUrl}/v1/models` under `anthropic-messages`), asked with the key its requests carry. Its list is saved in `~/.local/state/scramjet/models/` and, like the logins' lists ([below](#login)), read again while the full screen is open once 15 minutes old.
+
+Each model takes what the list says of it:
+
+- Anthropic's give the window, output, effort levels and images.
+- OpenRouter's also give the prices, and leave out the models that take no tools.
+- Mistral's, Groq's and vLLM's give the window.
+- OpenAI's and Ollama's say only the id.
+
+What the list does not say stays unknown, without reasoning, and the provider's `modelOverrides` can say it: `"modelOverrides": {"gpt-6": {"reasoning": true, "contextWindow": 400000}}`. A key with `*` is a pattern of ids, each `*` standing for any text: those an id matches apply before its own, the one with fewest other characters first. As a model's `api` and `baseUrl` may be overridden too, one entry can serve a proxy that offers some models on one protocol and some on another:
+
+```json
+{"baseUrl": "http://127.0.0.1:8080/v1", "api": "openai-responses",
+ "modelOverrides": {"*": {"reasoning": true}, "claude-*": {"api": "anthropic-messages", "baseUrl": "http://127.0.0.1:8080"}}}
+```
+
+### More fields
+
+- A model may give its own `api`, `baseUrl` and `headers`, and a `thinkingLevelMap`.
+- What a Chat Completions server accepts is told from its provider's name and URL; a provider's or model's `compat` (fields such as `maxTokensField`, `thinkingFormat` or `requiresToolResultName`) says otherwise.
+- `providersCommand` (`["bin/models", "arg"]`, a path from the file's directory) names a program whose output, `{"version": 1, "providers": {...}}`, adds the providers it learns at run time. A package installed with `scramjet install DIR` can bring one, as the private package for the author's local proxy does.
+- `credentialFiles` (`["~/.config/acme", "token.json"]`) names the files and directories holding the file's providers' credentials, which the agent's tools do not see, as the [common stores](configuration.md#credentials) are when hidden.
+- `engines` (`{"scramjet": ">=2.157.0"}`, as npm's) names the earliest Scramjet the file works with: an older one takes nothing from it but its `credentialFiles`, saying why, and `install` refuses its package.
+
+What is wrong in these files is said at start and by `--list-models`.
 
 ## Model catalogs
 
-A model catalog adds providers without a `models.json` entry: a URL serving [models.dev](https://models.dev)'s `api.json` shape (providers by id, each with `npm` naming its protocol — `@ai-sdk/anthropic` for Messages, `@ai-sdk/openai` for Responses, `@ai-sdk/openai-compatible` for Chat Completions — its `api` base URL and `env` key variables, and `models` with their `limit`, `cost`, `modalities`, `reasoning_options` and `tool_call`), as a local proxy may serve its models. `scramjet catalog add URL` lists it in the settings' `modelCatalogs` and reads it, saying what it offers; `scramjet catalog remove URL` takes it out and `scramjet catalog list` shows each with when it was read. Both are safe to run twice, for another program's setup. The catalog's last copy is saved under `~/.local/state/scramjet/catalogs/`, so its models stay offered while its server is down, and the full screen reads it again once 15 minutes old (asking with its `ETag`), saying what changed; `/model` reads it again as it opens once a minute old, waiting at most 2 seconds. Its providers come after the files', and one a file or login names already is left out. A provider's key is the first of its `env` variables that is set, else one `/login` saves for it; deprecated models and those that take no tools are left out.
+A model catalog adds providers without a `models.json` entry: a URL serving [models.dev](https://models.dev)'s `api.json` shape, as a local proxy may serve its models. Its providers are listed by id, each with `npm` naming its protocol (`@ai-sdk/anthropic` for Messages, `@ai-sdk/openai` for Responses, `@ai-sdk/openai-compatible` for Chat Completions), its `api` base URL and `env` key variables, and `models` with their `limit`, `cost`, `modalities`, `reasoning_options` and `tool_call`.
+
+- `scramjet catalog add URL` lists it in the settings' `modelCatalogs` and reads it, saying what it offers.
+- `scramjet catalog remove URL` takes it out.
+- `scramjet catalog list` shows each with when it was read.
+
+Adding and removing are safe to run twice, for another program's setup. The catalog's last copy is saved under `~/.local/state/scramjet/catalogs/`, so its models stay offered while its server is down. The full screen reads it again once 15 minutes old (asking with its `ETag`), saying what changed; `/model` reads it again as it opens once a minute old, waiting at most 2 seconds.
+
+Its providers come after the files', and one a file or login names already is left out. A provider's key is the first of its `env` variables that is set, else one `/login` saves for it. Deprecated models and those that take no tools are left out.
 
 ## Behind a proxy
 
 Behind a proxy, set `HTTPS_PROXY` (and `HTTP_PROXY` for `http://` servers) to its `http://host:port`, with `user:password@` before the host if it asks for them: every request, to providers, logins, MCP servers and GitHub's releases, then goes through it in a `CONNECT` tunnel, but to the hosts `NO_PROXY` lists (`example.com` also covers its subdomains; `*` covers all) and to servers on this machine, which never go through a proxy.
 
-## `/login`: ChatGPT, GitHub Copilot, Anthropic, Google Gemini, OpenAI, OpenRouter and API keys
+## `/login`
 
-`/login` logs in to a ChatGPT Plus or Pro subscription (Codex) or to GitHub Copilot (github.com or a GitHub Enterprise domain). ChatGPT's login opens your browser and comes back by itself; the page's address is shown and copied, so you can open it in another browser or a private window instead, or paste the address the browser ends on. For Copilot you enter the code it shows on GitHub's page. Each provider's models for your account are offered after those of the files, as the provider lists them, with their limits and effort levels (and Copilot's prices). While the full screen is open, the lists are read again in the background once 15 minutes old, at start too, so a model the provider adds is offered without a restart; what changed is said, and a list that cannot be read again stays as it was. The login is saved in `~/.config/scramjet/auth.json`, readable by you only and hidden from the agent's tools as the [credential stores](configuration.md#credentials) are; `/logout` removes it. Under API keys, `/login` lists Anthropic, Google Gemini, OpenAI and OpenRouter, built in: once you enter a key for one, its models are those its server lists (Anthropic's at `api.anthropic.com`, Gemini's at `generativelanguage.googleapis.com` through its OpenAI-compatible Chat Completions, OpenAI's at `api.openai.com`, OpenRouter's at `openrouter.ai`, those that take tools), with their limits, effort levels and OpenRouter's prices, read again as they age as a login's are, and a new session with no other model takes its newest Sonnet (OpenAI's: `gpt-6-luna`, else its newest GPT; Gemini's: its newest Gemini). Gemini's and OpenAI's lists name their models only, embedders and voices among them, so [models.dev](https://models.dev)'s public catalog (`https://models.dev/api.json`, read without your key and saved beside the lists, asked again by its `ETag` with the provider's list) describes them: those the provider lists for your key that models.dev describes as taking tools are offered, newest first, with its limits, effort levels and prices; one too new for models.dev is offered once models.dev has it. Gemini's thinking is not shown, though its effort levels are sent. `--api-key KEY --model anthropic/MODEL` uses one for a run without saving the key. An environment variable such as `ANTHROPIC_API_KEY` does not set one up by itself, as another program's proxy may have set it; enter the variable's name as the key to use its value, or `!command` to run a command that prints it. A `models.json` provider of the same name (`anthropic`, `google`, `openai`, `openrouter`) replaces the built-in one. `/login` also lists the providers of the `models.json` files, each with where its key comes from now, and saves a key you enter in that file, out of `models.json`; requests to that provider then carry it in place of the entry's `apiKey`, but only to the servers its entry named when the key was saved, never over plain `http://` but to this machine, and a provider whose server lists its models is asked for them again with it. A login's token likewise goes only to the servers its login names, or to one on this machine, even when a `models.json` names its provider. A model is named by provider and id (`github-copilot/gpt-6-luna`), so Copilot's are offered beside another provider's of the same id; an id alone names the first provider's.
+`/login` signs in to a subscription, takes an API key, or connects a model on your machine ([Local models](#local-models)). Logins and keys are saved in `~/.config/scramjet/auth.json`, readable by you only and hidden from the agent's tools as the [credential stores](configuration.md#credentials) are; `/logout` removes one.
+
+### ChatGPT and GitHub Copilot
+
+`/login` logs in to a ChatGPT Plus or Pro subscription (Codex) or to GitHub Copilot (github.com or a GitHub Enterprise domain).
+
+- ChatGPT's login opens your browser and comes back by itself. The page's address is shown and copied, so you can open it in another browser or a private window instead, or paste the address the browser ends on.
+- For Copilot you enter the code it shows on GitHub's page.
+
+Each provider's models for your account are offered after those of the files, as the provider lists them, with their limits and effort levels (and Copilot's prices). While the full screen is open, the lists are read again in the background once 15 minutes old, at start too, so a model the provider adds is offered without a restart; what changed is said, and a list that cannot be read again stays as it was.
+
+### API keys: Anthropic, Google Gemini, OpenAI and OpenRouter
+
+Under API keys, `/login` lists Anthropic, Google Gemini, OpenAI and OpenRouter, built in. Once you enter a key for one, its models are those its server lists, with their limits, effort levels and OpenRouter's prices, read again as they age as a login's are:
+
+| Provider | Its list | A new session with no other model takes |
+|---|---|---|
+| Anthropic | `api.anthropic.com` | its newest Sonnet |
+| Google Gemini | `generativelanguage.googleapis.com`, through its OpenAI-compatible Chat Completions | its newest Gemini |
+| OpenAI | `api.openai.com` | `gpt-6-luna`, else its newest GPT |
+| OpenRouter | `openrouter.ai`, those that take tools | its newest Sonnet |
+
+Gemini's and OpenAI's lists name their models only, embedders and voices among them, so [models.dev](https://models.dev)'s public catalog (`https://models.dev/api.json`, read without your key and saved beside the lists, asked again by its `ETag` with the provider's list) describes them: those the provider lists for your key that models.dev describes as taking tools are offered, newest first, with its limits, effort levels and prices. One too new for models.dev is offered once models.dev has it. Gemini's thinking is not shown, though its effort levels are sent.
+
+- `--api-key KEY --model anthropic/MODEL` uses a key for one run without saving it.
+- An environment variable such as `ANTHROPIC_API_KEY` does not set one up by itself, as another program's proxy may have set it. Enter the variable's name as the key to use its value, or `!command` to run a command that prints it.
+- A `models.json` provider of the same name (`anthropic`, `google`, `openai`, `openrouter`) replaces the built-in one.
+
+### Keys for `models.json` providers
+
+`/login` also lists the providers of the `models.json` files, each with where its key comes from now, and saves a key you enter in `auth.json`, out of `models.json`. Requests to that provider then carry it in place of the entry's `apiKey`, and a provider whose server lists its models is asked for them again with it.
+
+A saved key goes only to the servers its entry named when the key was saved, and never over plain `http://` but to this machine. A login's token likewise goes only to the servers its login names, or to one on this machine, even when a `models.json` names its provider.
+
+### Naming a model
+
+A model is named by provider and id (`github-copilot/gpt-6-luna`), so Copilot's are offered beside another provider's of the same id; an id alone names the first provider's.
 
 ## Local models
 
-Under Local models, `/login` connects models a runtime serves on this machine or at an address you give: it looks for Ollama (port 11434), llama.cpp's `llama-server` (8080), vLLM (8000) and LM Studio (1234) on `localhost`, tells each apart by what it answers, and lists its models with the context window the runtime itself reports (Ollama's and LM Studio's once they have loaded the model, llama.cpp's `n_ctx`, vLLM's `max_model_len`); where it reports none, you can give one or leave it unknown. A model you choose is first asked to call a tool that does nothing; only when it does is it saved, under the runtime's name in your `models.json` (`ollama/qwen3:1.7b`), free of charge and with no key unless the server asked for one. A failure names its step: not reachable, a key needed, no models, no answer (the model did not load), or no tool call, with what to change (`--jinja` for llama.cpp, `--enable-auto-tool-choice` for vLLM). Nothing falls back to a hosted model, and the runtime is never started, changed or stopped. Choosing a saved runtime adds or checks a model again, or removes one or all of them from `models.json`. A session on such a model uses the window its runtime serves it with now, read again at each prompt, and since a runtime cuts a prompt longer than that instead of refusing it, its requests are measured by estimate as well as by the usage it reports. On every model whose window is known, automatic compaction is checked before each of a turn's requests, not only between turns, and `compaction.reserveTokens` and `keepRecentTokens` are each held to a quarter of the window. Under WSL, the address of a runtime on Windows depends on the networking mode, which `/login` says.
+Under Local models, `/login` connects models a runtime serves on this machine or at an address you give. Nothing falls back to a hosted model, and the runtime is never started, changed or stopped.
+
+- **Finding it:** `/login` looks on `localhost` for Ollama (port 11434), llama.cpp's `llama-server` (8080), vLLM (8000) and LM Studio (1234), and tells each apart by what it answers. Under WSL, the address of a runtime on Windows depends on the networking mode, which `/login` says.
+- **Its models:** listed with the context window the runtime itself reports (Ollama's and LM Studio's once they have loaded the model, llama.cpp's `n_ctx`, vLLM's `max_model_len`); where it reports none, you can give one or leave it unknown.
+- **The check:** a model you choose is first asked to call a tool that does nothing. Only when it does is it saved, under the runtime's name in your `models.json` (`ollama/qwen3:1.7b`), free of charge and with no key unless the server asked for one.
+- **A failure** names its step: not reachable, a key needed, no models, no answer (the model did not load), or no tool call, with what to change (`--jinja` for llama.cpp, `--enable-auto-tool-choice` for vLLM).
+- **Later:** choosing a saved runtime adds or checks a model again, or removes one or all of them from `models.json`.
+
+A session on such a model uses the window its runtime serves it with now, read again at each prompt. Since a runtime cuts a prompt longer than that instead of refusing it, its requests are measured by estimate as well as by the usage it reports. On every model whose window is known, automatic compaction is checked before each of a turn's requests, not only between turns, and `compaction.reserveTokens` and `keepRecentTokens` are each held to a quarter of the window.
 
 ## A package's own login
 
-A package can bring a login of its own: its `models.json` names the program in `logins` (`{"acme": {"name": "Acme Cloud", "command": ["bin/login"]}}`, a path from the file's directory), and `/login` lists it after ChatGPT and Copilot. The program is given one line on its input, `{"version": 1, "action": "login", "provider": "acme"}`, and answers in lines of JSON: `{"open": URL}` opens a page in your browser (shown and copied as ChatGPT's is), `{"say": TEXT}` tells you what it waits for, and `{"credential": {"access": TOKEN, "expires": MILLISECONDS, ...}}` ends the login, saved in `auth.json`; Escape stops it. Given that `credential`, the action `refresh` answers the renewed one once it expired, and `models` answers `{"provider": {...}}`, the provider's entry in this format with its models, read after the login and kept current as the logins' lists are. Requests to those models carry the token (`Authorization: Bearer`). Any action may answer `{"error": TEXT, "transient": true}` instead; `src/agent/login/program.rs` describes the format.
+A package can bring a login of its own: its `models.json` names the program in `logins` (`{"acme": {"name": "Acme Cloud", "command": ["bin/login"]}}`, a path from the file's directory), and `/login` lists it after ChatGPT and Copilot. The program is given one line on its input, `{"version": 1, "action": "login", "provider": "acme"}`, and answers in lines of JSON:
+
+- `{"open": URL}` opens a page in your browser (shown and copied as ChatGPT's is).
+- `{"say": TEXT}` tells you what it waits for.
+- `{"credential": {"access": TOKEN, "expires": MILLISECONDS, ...}}` ends the login, saved in `auth.json`; Escape stops it.
+
+Given that `credential`, the action `refresh` answers the renewed one once it expired, and `models` answers `{"provider": {...}}`, the provider's entry in this format with its models, read after the login and kept current as the logins' lists are. Requests to those models carry the token (`Authorization: Bearer`). Any action may answer `{"error": TEXT, "transient": true}` instead; `src/agent/login/program.rs` describes the format.
