@@ -173,17 +173,14 @@ need writable and why."
             message += &format!("\n\nNot asked: {}", notes.replace('\n', "; "));
         }
         ui.question(&message);
-        let remembered = (super::sandbox::Remembered::user()).filter(|_| self.keeps_grants);
-        let kept_in = (remembered.as_ref())
-            .map(|remembered| super::tools::shortened(&remembered.file().display().to_string()));
         let mut choices = vec![(
             "Allow for this session",
             "/sandbox remove DIR takes it back".to_owned(),
         )];
-        if let Some(kept_in) = &kept_in {
+        if self.keeps_grants {
             choices.push((
                 "Always for this project",
-                format!("kept in {kept_in}; /sandbox remove DIR forgets it"),
+                "kept in its sandbox; /sandbox remove DIR forgets it".to_owned(),
             ));
         }
         choices.push(("Deny", "they stay read-only".to_owned()));
@@ -210,22 +207,12 @@ need writable and why."
 work within the writable directories or ask the user how to go on."
             ),
         };
-        if chosen == Some("Always for this project")
-            && let Some(remembered) = &remembered
-        {
-            match remembered.add(&root, &asked) {
-                Ok(()) => {
-                    text = text.replace(
-                        " for the rest of the session.",
-                        " in this project from now on.",
-                    )
-                }
-                Err(error) => {
-                    let said = format!("Not kept for later sessions: {error}");
-                    ui.notice(&said);
-                    text += &format!("\n{said}");
-                }
-            }
+        if chosen == Some("Always for this project") {
+            self.kept_grants.extend(asked);
+            text = text.replace(
+                " for the rest of the session.",
+                " in this project from now on.",
+            );
         }
         if !notes.is_empty() {
             text += &format!("\nNot asked:\n{notes}");

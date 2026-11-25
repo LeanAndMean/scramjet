@@ -489,7 +489,6 @@ local models), or add providers to {file} (see --help)"
     });
     if let Some(sandbox) = &mut sandbox {
         Sandbox::check()?;
-        warnings.extend(sandbox.grant_remembered(&root));
         warnings.extend(sandbox.grant_always(&root, &settings.allow_write()));
     }
     for directory in &options.add_dirs {

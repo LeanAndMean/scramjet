@@ -7,11 +7,8 @@
 //! level (`os::low_integrity`), which keeps them from changing the user's files on local disks
 //! but hides nothing, and the rest is refused.
 
-mod remembered;
 #[cfg(unix)]
 mod seatbelt;
-
-pub use remembered::Remembered;
 
 use std::{
     path::{Path, PathBuf},
@@ -249,28 +246,6 @@ impl Sandbox {
     pub fn resolve(root: &Path, path: &str) -> PathBuf {
         let given = given(root, path);
         std::fs::canonicalize(&given).unwrap_or(given)
-    }
-
-    /// Grants what the user granted always in the project at `root`; says what could not be.
-    pub fn grant_remembered(&mut self, root: &Path) -> Vec<String> {
-        let Some(remembered) = Remembered::user() else {
-            return Vec::new();
-        };
-        let listed = match remembered.of(root) {
-            Ok(listed) => listed,
-            Err(error) => return vec![error],
-        };
-        (listed.iter())
-            .filter_map(
-                |directory| match self.grant(root, &directory.to_string_lossy()) {
-                    Err(error) if !error.ends_with("already writable") => Some(format!(
-                        "{error}: granted always in this project; /sandbox remove {} forgets it",
-                        directory.display()
-                    )),
-                    _ => None,
-                },
-            )
-            .collect()
     }
 
     /// Grants the directories the user's settings make writable in every project

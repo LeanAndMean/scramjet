@@ -33,6 +33,9 @@ pub(super) struct Project {
 }
 
 const FILE: &str = "sandbox-projects.json";
+/// Where `request_permissions` kept the directories granted always in a project before 2.344.0,
+/// a project's real path to them: moved into the project's `allowWrite` at its next start.
+const OLD_GRANTS: &str = "sandbox-grants.json";
 
 impl Settings {
     /// Takes the sandbox's rows changed in the project at `root` over the file's.
@@ -43,6 +46,51 @@ impl Settings {
             default: self.rows(),
         });
         self.apply_project();
+        self.take_old_grants();
+    }
+
+    /// The project's directories in `OLD_GRANTS` added to its `allowWrite` and, once that is
+    /// kept, taken out of that file, removed when it holds no other project's.
+    fn take_old_grants(&mut self) {
+        let (Some(project), Some(file)) = (&self.project, self.store_of(OLD_GRANTS)) else {
+            return;
+        };
+        let key = project.key.clone();
+        let shown = shortened(&file.display().to_string());
+        let mut projects = match std::fs::read_to_string(&file) {
+            Ok(text) => match serde_json::from_str(&text) {
+                Ok(Value::Object(projects)) => projects,
+                _ => return (self.warnings).push(format!("{shown}: not a JSON object; ignored")),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => return self.warnings.push(format!("{shown}: {error}")),
+        };
+        let Some(granted) = projects.remove(&key) else {
+            return;
+        };
+        for path in granted.as_array().into_iter().flatten() {
+            if let Some(path) = path.as_str() {
+                self.add_listed(false, super::PathList::Writable, Path::new(path));
+            }
+        }
+        if scramjet::agent::ephemeral() {
+            return;
+        }
+        if let Err(error) = self.remember_project() {
+            let said = format!("{shown}: not moved into this project's sandbox: {error}");
+            return self.warnings.push(said);
+        }
+        let left = match projects.is_empty() {
+            true => std::fs::remove_file(&file),
+            false => serde_json::to_string_pretty(&Value::Object(projects))
+                .map_err(std::io::Error::other)
+                .and_then(|text| scramjet::agent::write_replacing(&file, &(text + "\n"))),
+        };
+        if let Err(error) = left {
+            (self.warnings).push(format!(
+                "{shown}: {error}; this project's grants stay in it"
+            ));
+        }
     }
 
     /// The project's rows read again over the file's, as `in_project` and `/reload` take them.
@@ -191,7 +239,11 @@ impl Settings {
     }
 
     fn store(&self) -> Option<PathBuf> {
-        Some(self.path.as_deref()?.parent()?.join(FILE))
+        self.store_of(FILE)
+    }
+
+    fn store_of(&self, name: &str) -> Option<PathBuf> {
+        Some(self.path.as_deref()?.parent()?.join(name))
     }
 
     fn projects(&self) -> Result<Map<String, Value>, String> {
@@ -567,5 +619,53 @@ mod tests {
         wrong.in_project(&one);
         assert_eq!(wrong.rows(), saved.rows());
         assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);
+    }
+
+    #[test]
+    fn grants_kept_before_move_into_the_projects_allow_write_once() {
+        let scratch =
+            std::env::temp_dir().join(format!("scramjet-old-grants-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&scratch);
+        let scratch = Scratch(scratch);
+        let (one, two, docs) = (
+            scratch.0.join("one"),
+            scratch.0.join("two"),
+            scratch.0.join("docs"),
+        );
+        for directory in [&one, &two, &docs] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let real = |path: &Path| std::fs::canonicalize(path).unwrap().display().to_string();
+        let path = scratch.0.join("settings.json");
+        std::fs::write(&path, r#"{"sandbox": {"mode": "workspace-write"}}"#).unwrap();
+        let old = scratch.0.join(OLD_GRANTS);
+        let write_old = |projects: Value| std::fs::write(&old, projects.to_string()).unwrap();
+        write_old(json!({real(&one): [real(&docs)], real(&two): [real(&docs)]}));
+        let mut settings = Settings::read(Some(path.clone()));
+        settings.in_project(&one);
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        let docs = std::fs::canonicalize(&docs).unwrap();
+        assert_eq!(settings.allow_write(), std::slice::from_ref(&docs));
+        assert!(settings.added_here(false, PathList::Writable, &docs));
+        let added = json!({"allowWrite": {"add": [shortened(&real(&docs))], "remove": []}});
+        assert_eq!(store(&scratch), json!({real(&one): added}));
+        let left: Value = serde_json::from_str(&std::fs::read_to_string(&old).unwrap()).unwrap();
+        assert_eq!(left, json!({real(&two): [real(&docs)]}));
+        // Read again, the project keeps it from its own rows.
+        let mut again = Settings::read(Some(path.clone()));
+        again.in_project(&one);
+        assert_eq!(again.allow_write(), std::slice::from_ref(&docs));
+        // The last project's move removes the file.
+        let mut other = Settings::read(Some(path.clone()));
+        other.in_project(&two);
+        assert_eq!(other.allow_write(), std::slice::from_ref(&docs));
+        assert!(!old.exists());
+        // One the program cannot read is said and left.
+        std::fs::write(&old, "[]").unwrap();
+        let mut wrong = Settings::read(Some(path));
+        wrong.in_project(&one);
+        assert_eq!(wrong.warnings.len(), 1, "{:?}", wrong.warnings);
+        assert!(wrong.warnings[0].ends_with("not a JSON object; ignored"));
+        assert_eq!(std::fs::read_to_string(&old).unwrap(), "[]");
     }
 }

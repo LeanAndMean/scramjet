@@ -4,7 +4,7 @@ use super::super::drive::{SandboxChange, Session};
 use super::super::sandbox_menu::{self, Grant, Listed};
 use super::super::settings::{PathList, Settings};
 use super::FULL_ACCESS;
-use scramjet::agent::{Reach, Remembered, SandboxMode};
+use scramjet::agent::{Reach, SandboxMode};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -210,8 +210,6 @@ pub(super) fn state(session: &Session, confined: bool) -> Value {
             "summary": summary,
         });
     }
-    let always =
-        (Remembered::user().and_then(|kept| kept.of(agent.root()).ok())).unwrap_or_default();
     let writable = sandbox.map_or(agent.writable(), |sandbox| &sandbox.writable[..]);
     let mut granted: Vec<Value> = (sandbox_menu::grants(agent, settings).unwrap_or_default())
         .into_iter()
@@ -224,7 +222,7 @@ pub(super) fn state(session: &Session, confined: bool) -> Value {
             json!({
                 "path": path,
                 "granted": writable.contains(&path),
-                "always": always.contains(&path),
+                "always": matches!(grant, Grant::Project),
                 "from": from,
             })
         })
@@ -253,7 +251,7 @@ pub(super) fn state(session: &Session, confined: bool) -> Value {
             "network": cfg!(unix) && now.network != default.network,
             "reach": now.reach != default.reach,
         },
-        "projectSets": settings.set_here() || !always.is_empty(),
+        "projectSets": settings.set_here(),
         "subagents": {
             "mode": their_mode.name(),
             "network": their_network,

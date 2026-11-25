@@ -100,12 +100,12 @@ Each list has Add…, and Enter on a path takes it out.
 
 A change applies at once, the reach too, and is remembered for this project: the next session here, a resumed one too, starts with it, and `/reload` keeps it. A project keeps only the rows changed in it, marked "(set here)", and a default's path taken out there shows as "(taken out here)", to put back; the other rows follow the default, so a default changed later reaches them. What each project changed is kept by the project's path in `sandbox-projects.json` beside your settings, never in the repository, so a cloned repository cannot loosen its own sandbox; `--sandbox` at start still wins over it for that session.
 
-- Ctrl+R resets the project to the defaults, once confirmed, forgetting its rows and the directories granted always here.
-- Ctrl+S saves the sandbox as it is then as every project's default in your settings, and the project then follows it (the directories granted only for the session, or always here through `request_permissions`, stay out of `allowWrite`).
+- Ctrl+R resets the project to the defaults, once confirmed, forgetting its rows, the directories made writable here included.
+- Ctrl+S saves the sandbox as it is then as every project's default in your settings, and the project then follows it (the directories granted only for the session stay out of `allowWrite`; those made writable here go in).
 
 Without the screen, `/sandbox MODE`, `/sandbox network on|off` and `/sandbox remove DIR` change it at once, remembered as the screen's changes are, and `/sandbox add DIR` for the session only. `/add-dir DIR` (or `--add-dir DIR` at start, as in Claude Code) makes another directory writable too, its own `.git`, `.scramjet` and `.agents` kept read-only unless granted by name; with no sandbox it only re-opens a directory Can read hides.
 
-The agent is told what is writable, and asks for more with `request_permissions`, naming the directories and why; when a command fails on a write the sandbox refused ("Read-only file system", on macOS "Operation not permitted"), it is reminded that it can ask. You allow it for the session, always for this project (kept by the project's path in `sandbox-grants.json` beside your settings, never in the repository, listed by `/sandbox` and forgotten by `/sandbox remove DIR`), or deny it. In `-p` and in the steps autopilot runs no one answers, so it is refused.
+The agent is told what is writable, and asks for more with `request_permissions`, naming the directories and why; when a command fails on a write the sandbox refused ("Read-only file system", on macOS "Operation not permitted"), it is reminded that it can ask. You allow it for the session, always for this project (added to its Also writable row, as the screen's changes are, and forgotten by `/sandbox remove DIR`), or deny it. Those kept in `sandbox-grants.json` before 2.344.0 move into each project's row at its next start there. In `-p` and in the steps autopilot runs no one answers, so it is refused.
 
 ### What it leaves out
 

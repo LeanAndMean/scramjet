@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.0 — Grants kept with the project's sandbox
+
+### Changed
+
+- A write you allow "Always for this project" when the agent asks is now kept in the project's sandbox, as `/sandbox` keeps a directory made writable there: it shows as "(set here)" under Also writable, Ctrl+R forgets it with the project's other rows, and Ctrl+S takes it into every project's default. Directories kept before in `sandbox-grants.json` move there at the project's next start, and the file goes once empty.
+
 ## 2.343.0 — A refused write points to asking
 
 ### Changed

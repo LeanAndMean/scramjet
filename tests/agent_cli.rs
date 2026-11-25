@@ -3630,11 +3630,38 @@ fn acp_asked_profiled(
         "scramjet-cli-acp-asked-{}-{run}",
         std::process::id()
     )));
-    let project = scratch.0.join("project");
+    acp_asked_in(
+        &scratch.0,
+        name,
+        input,
+        given,
+        capabilities,
+        profile,
+        answer,
+    )
+}
+
+/// `acp_asked_profiled` with its configuration and project in `scratch`.
+#[cfg(unix)]
+fn acp_asked_in(
+    scratch: &std::path::Path,
+    name: &str,
+    input: serde_json::Value,
+    given: &[&str],
+    capabilities: serde_json::Value,
+    profile: Option<serde_json::Value>,
+    answer: impl Fn(&serde_json::Value) -> serde_json::Value,
+) -> (
+    Option<serde_json::Value>,
+    serde_json::Value,
+    Vec<serde_json::Value>,
+    Vec<String>,
+) {
+    let project = scratch.join("project");
     std::fs::create_dir_all(&project).unwrap();
     let (port, bodies) = serve_call(name, input);
     let settings = serde_json::json!({"hideCredentials": "never"});
-    let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings, given);
+    let (mut child, mut stdin, messages) = acp_with(scratch, port, settings, given);
     send(
         &mut stdin,
         serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -3833,6 +3860,55 @@ fn acp_asks_questions_with_the_clients_forms_and_grants_with_permissions() {
     assert_eq!(kinds.first(), Some(&"allow_once"));
     assert_eq!(kinds.last(), Some(&"reject_once"));
     assert!(result(&seen).contains("stays read-only"), "{seen:?}");
+}
+
+#[test]
+#[cfg(unix)]
+fn acp_a_write_granted_always_is_kept_in_the_projects_sandbox() {
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-acp-always-{}", std::process::id())),
+    );
+    let elsewhere = scratch.0.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let grant = serde_json::json!({"write": [elsewhere], "reason": "to build"});
+    let always = |asked: &serde_json::Value| {
+        let options = asked["params"]["options"].as_array().unwrap();
+        let always = (options.iter())
+            .find(|option| option["kind"] == "allow_always")
+            .unwrap_or_else(|| panic!("{asked}"));
+        serde_json::json!({"outcome": {"outcome": "selected", "optionId": always["optionId"]}})
+    };
+    let (asked, _, seen, _) = acp_asked_in(
+        &scratch.0,
+        "request_permissions",
+        grant,
+        &["--sandbox", "workspace-write"],
+        serde_json::json!({}),
+        None,
+        always,
+    );
+    assert!(asked.is_some());
+    assert!(
+        seen.iter()
+            .any(|message| message.to_string().contains("in this project from now on")),
+        "{seen:?}"
+    );
+    let kept = scratch.0.join("config/scramjet/sandbox-projects.json");
+    let kept: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(kept).unwrap()).unwrap();
+    let project = std::fs::canonicalize(scratch.0.join("project")).unwrap();
+    let elsewhere = std::fs::canonicalize(elsewhere).unwrap();
+    assert_eq!(
+        kept[project.display().to_string()]["allowWrite"]["add"],
+        serde_json::json!([elsewhere]),
+        "{kept}"
+    );
+    assert!(
+        !scratch
+            .0
+            .join("config/scramjet/sandbox-grants.json")
+            .exists()
+    );
 }
 
 #[test]
@@ -7410,7 +7486,7 @@ fn acp_shows_and_changes_the_sandbox_screens_lists_and_subagents_rows() {
         ask(serde_json::json!({"listed": {"list": "writable", "path": extra, "add": true}}));
     assert_eq!(
         writable["result"]["granted"],
-        serde_json::json!([{"path": extra, "granted": true, "always": false, "from": "project"}]),
+        serde_json::json!([{"path": extra, "granted": true, "always": true, "from": "project"}]),
         "{writable}"
     );
     let network = ask(serde_json::json!({"subagents": {"network": true}}))["result"].clone();

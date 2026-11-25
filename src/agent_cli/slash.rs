@@ -8,7 +8,7 @@ use super::interactive::{Interactive, completions};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
-use scramjet::agent::{Agent, AgentError, McpState, Reach, Remembered, SandboxMode};
+use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -684,7 +684,6 @@ as the hideCredentials setting says.\n";
 /// and what is hidden from the agent's tools.
 pub(super) fn sandbox_summary(agent: &Agent, allow_write: &[PathBuf]) -> String {
     (sandbox_paths(agent, allow_write).into_iter())
-        .filter(|(label, _)| *label != "Always here:")
         .map(|(label, value)| format!("{label} {value}."))
         .chain(unconfined_note(agent))
         .collect::<Vec<_>>()
@@ -703,8 +702,7 @@ read, grep and find are."
         })
 }
 
-/// The sandbox's paths, labeled: writable, granted but gone, always granted here, and read-only
-/// in the writable ones; then what the settings hide from the agent's tools and re-open, with
+/// The sandbox's paths, labeled: writable, granted but gone, and read-only in the writable ones; then what the settings hide from the agent's tools and re-open, with
 /// or without a sandbox.
 fn sandbox_paths(agent: &Agent, allow_write: &[PathBuf]) -> Vec<(&'static str, String)> {
     let root = agent.root();
@@ -735,11 +733,6 @@ fn sandbox_paths(agent: &Agent, allow_write: &[PathBuf]) -> Vec<(&'static str, S
             .collect();
         if !missing.is_empty() {
             rows.push(("Granted, gone:", listed(&missing)));
-        }
-        if let Some(always) = Remembered::user().and_then(|kept| kept.of(root).ok())
-            && !always.is_empty()
-        {
-            rows.push(("Always here:", listed(&always)));
         }
         let mut kept = sandbox.protected_paths(root);
         if sandbox.read_only_project(root).is_some()

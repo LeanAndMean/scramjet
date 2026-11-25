@@ -4,8 +4,8 @@
 use super::sandbox_menu;
 use super::settings::{Delivery, PathList, Settings};
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Reach,
-    Remembered, Reopened, Sandbox, SandboxMode, SessionInfo, Source, Step, Suggested, shortened,
+    Agent, AgentError, AgentUi, Completed, McpServer, Navigated, Next, Providers, Reach, Reopened,
+    Sandbox, SandboxMode, SessionInfo, Source, Step, Suggested, shortened,
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -26,6 +26,20 @@ pub(super) struct Session {
 }
 
 impl Session {
+    /// Keeps the directories the user granted always for the project during the turn in its
+    /// `allowWrite`, as `/sandbox`'s add-here does; the warning if they could not be.
+    pub(super) fn keep_grants(&mut self) -> Vec<String> {
+        let granted = self.agent.take_kept_grants();
+        let mut changed = false;
+        for path in &granted {
+            changed |= (self.settings).add_listed(false, PathList::Writable, path);
+        }
+        match changed {
+            true => self.remember(),
+            false => Vec::new(),
+        }
+    }
+
     /// `/reload`'s part in the session: the settings read again, with `servers` (a client's) over
     /// their MCP servers, and the shell, tools, command sets, skills, MCP servers, retries,
     /// compaction, providers and `allowWrite`'s directories taken from them; returns what could
@@ -74,8 +88,7 @@ impl Session {
         match self.agent.sandbox().cloned() {
             Some(mut sandbox) => {
                 sandbox.writable.retain(|path| !gone.contains(path));
-                let mut warnings = sandbox.grant_remembered(&root);
-                warnings.extend(sandbox.grant_always(&root, &now));
+                let warnings = sandbox.grant_always(&root, &now);
                 self.agent.set_sandbox(Some(sandbox));
                 warnings
             }
@@ -123,8 +136,7 @@ impl Session {
                             network: self.settings.sandbox_network,
                             writable: Vec::new(),
                         };
-                        warnings = sandbox.grant_remembered(&root);
-                        warnings.extend(sandbox.grant_always(&root, &self.settings.allow_write()));
+                        warnings = sandbox.grant_always(&root, &self.settings.allow_write());
                         for path in self.agent.writable().to_vec() {
                             _ = sandbox.grant(&root, &path.to_string_lossy());
                         }
@@ -192,18 +204,13 @@ impl Session {
                     }
                 };
                 let path = (revoked.clone()).unwrap_or_else(|| Sandbox::resolve(&root, &directory));
-                let forgotten = match Remembered::user().map(|kept| kept.remove(&root, &path)) {
-                    Some(Ok(forgotten)) => forgotten,
-                    Some(Err(error)) => return Err(error),
-                    None => false,
-                };
                 let listed = (self.settings).remove_listed(false, PathList::Writable, &path);
                 let hidden_again = sandbox.is_none();
                 if revoked.is_some() && sandbox.is_some() {
                     self.agent.set_sandbox(sandbox);
                 }
                 let shown = path.display();
-                let said = match (revoked.is_some(), forgotten || listed) {
+                let said = match (revoked.is_some(), listed) {
                     (false, false) => return Err(format!("{directory} was not granted")),
                     _ if hidden_again && !self.agent.reads().reach.kept() => format!(
                         "{shown} is no longer granted; without a sandbox everything stays writable"
@@ -315,34 +322,23 @@ impl Session {
             .collect()
     }
 
-    /// The project's sandbox as every project's default has it, its own rows and its grants
-    /// forgotten; what was granted for the session only stays.
+    /// The project's sandbox as every project's default has it, its own rows forgotten; what was granted for the session only stays.
     fn reset_project(
         &mut self,
         root: &Path,
         current: Option<Sandbox>,
     ) -> Result<(String, Vec<String>), String> {
-        let kept = Remembered::user();
-        let always = match &kept {
-            Some(kept) => kept.of(root)?,
-            None => Vec::new(),
-        };
         let listed = self.settings.allow_write();
         let real = |path: &PathBuf| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
         let listed: Vec<PathBuf> = listed.iter().map(real).collect();
         self.settings.reset_project()?;
-        if let Some(kept) = &kept {
-            for path in &always {
-                kept.remove(root, path)?;
-            }
-        }
         let mut warnings = Vec::new();
         let granted = match &current {
             Some(sandbox) => &sandbox.writable[..],
             None => self.agent.writable(),
         };
         let session: Vec<PathBuf> = (granted.iter())
-            .filter(|path| !always.contains(path) && !listed.contains(path))
+            .filter(|path| !listed.contains(path))
             .cloned()
             .collect();
         let sandbox = match self.settings.sandbox.filter(|_| cfg!(unix)) {
@@ -401,7 +397,7 @@ pub(super) enum SandboxChange {
     Add(String),
     /// A directory made writable in this project.
     AddHere(String),
-    /// A directory's grant taken back, and forgotten if it was granted always in the project.
+    /// A directory's grant taken back, and forgotten if the project made it writable.
     Remove(String),
     /// What the main agent's tools can read.
     Reach(Reach),
@@ -575,6 +571,12 @@ pub(super) enum Change {
     Moved,
 }
 
+fn keep_grants(front: &mut dyn Front) {
+    for warning in front.session().keep_grants() {
+        front.say(&warning);
+    }
+}
+
 /// Runs `prompt` as a model turn, or with none goes on with the turn the conversation was left
 /// in. Returns the next step to run, when the turn's command completed with one, or the user
 /// chose one the agent suggested.
@@ -591,9 +593,11 @@ pub(super) fn run_turn(
     let model = agent.model().to_owned();
     front.turn_starts();
     let mut result = front.turn(prompt);
+    keep_grants(front);
     while let Err(AgentError::Paused) = result {
         front.paused();
         result = front.turn(None);
+        keep_grants(front);
     }
     front.turn_stops(result.is_ok());
     // The agent's `switch_scramjet_model`, remembered as the user's choices are.

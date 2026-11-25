@@ -8,7 +8,7 @@ use super::select::{self, Act, Picked};
 use super::settings::PathList;
 use super::settings::Settings;
 use super::text::clip;
-use scramjet::agent::{Agent, Reach, Remembered, SandboxMode, shortened};
+use scramjet::agent::{Agent, Reach, SandboxMode, shortened};
 use std::path::{Path, PathBuf};
 
 /// The widest label, `Also writable`.
@@ -90,7 +90,7 @@ fn reads(reach: Option<Reach>) -> &'static str {
 #[derive(Clone, Copy)]
 pub(super) enum Grant {
     Session,
-    /// Granted always in this project (`sandbox-grants.json`).
+    /// Made writable in this project (its `allowWrite`).
     Project,
     /// `allowWrite`.
     Default,
@@ -149,8 +149,6 @@ pub(super) fn grants(agent: &Agent, settings: &Settings) -> Option<Vec<(PathBuf,
         None if settings.reach().kept() => agent.writable(),
         None => return None,
     };
-    let always =
-        (Remembered::user().and_then(|kept| kept.of(agent.root()).ok())).unwrap_or_default();
     let real = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
         (paths.iter())
             .filter_map(|path| std::fs::canonicalize(path).ok())
@@ -160,17 +158,15 @@ pub(super) fn grants(agent: &Agent, settings: &Settings) -> Option<Vec<(PathBuf,
     let from_default = (settings.default_listed(false, PathList::Writable))
         .map_or_else(|| from_settings.clone(), real);
     let grant = |path: &PathBuf| match from_settings.contains(path) {
-        _ if always.contains(path) => Grant::Project,
         true if from_default.contains(path) => Grant::Default,
         true => Grant::Project,
         false => Grant::Session,
     };
-    let mut granted: Vec<(PathBuf, Grant)> = (writable.iter())
-        .map(|path| (path.clone(), grant(path)))
-        .collect();
-    let others = always.iter().filter(|path| !writable.contains(path));
-    granted.extend(others.map(|path| (path.clone(), Grant::Project)));
-    Some(granted)
+    Some(
+        (writable.iter())
+            .map(|path| (path.clone(), grant(path)))
+            .collect(),
+    )
 }
 
 /// A path of a list, as the screen shows it.
@@ -481,11 +477,9 @@ impl Interactive {
         rows
     }
 
-    /// Whether the project sets any of the sandbox's rows, or grants a directory always.
+    /// Whether the project sets any of the sandbox's rows.
     fn project_sets(&self) -> bool {
-        let root = self.session.agent.root();
-        let always = Remembered::user().and_then(|kept| kept.of(root).ok());
-        self.session.settings.set_here() || always.is_some_and(|always| !always.is_empty())
+        self.session.settings.set_here()
     }
 
     /// Ctrl+R: once confirmed, the project's sandbox every project's default again.
@@ -495,7 +489,7 @@ impl Interactive {
         }
         let names = ["Reset this project to the defaults", "Keep it"];
         let notes = vec![
-            "Forgets what was set here and the directories granted always here.".to_owned(),
+            "Forgets what was set here, the directories made writable here included.".to_owned(),
             "Changes nothing.".to_owned(),
         ];
         if self.choose("Reset this project", &names, notes, None) == Some(0) {

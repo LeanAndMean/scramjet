@@ -79,7 +79,7 @@ pub use providers::{
 pub use publish::TOOLS as PUBLICATION_TOOLS;
 pub use question::{Choice, Reply, TYPE_SOMETHING};
 pub use request::{CacheRetention, set_cache_retention};
-pub use sandbox::{Reach, Reads, Remembered, Sandbox, SandboxMode, Subagents, set_launcher};
+pub use sandbox::{Reach, Reads, Sandbox, SandboxMode, Subagents, set_launcher};
 pub use session::{
     Branch, Found, Label, ModelChange, Reading, Removal, Session, SessionInfo,
     directory as session_directory, draft, ephemeral, keep_records_apart, projects_directory,
@@ -694,6 +694,9 @@ pub struct Agent {
     unattended: bool,
     /// Whether a grant can be kept always for the project (`set_keeps_grants`).
     keeps_grants: bool,
+    /// Directories the user granted always for the project, for the front to keep
+    /// (`take_kept_grants`).
+    kept_grants: Vec<PathBuf>,
     /// Whether the reach is fixed for the session, so no grant widens it (`set_reach_fixed`).
     reach_fixed: bool,
     /// The session profile (ACP's), saved again in each new session the agent continues in.
@@ -874,6 +877,7 @@ impl Agent {
             subagents: Subagents::default(),
             unattended: false,
             keeps_grants: true,
+            kept_grants: Vec::new(),
             reach_fixed: false,
             profile: None,
             left_out: Vec::new(),
@@ -2005,28 +2009,10 @@ impl Agent {
         Ok(real)
     }
 
-    /// Grants without a sandbox what a sandbox grants at its start: the directories granted
-    /// always in this project, then `allow_write` (the settings' `allowWrite`); says what could
-    /// not be.
+    /// Grants without a sandbox what a sandbox grants at its start, `allow_write` (the settings'
+    /// `allowWrite`); says what could not be.
     pub fn grant_writable_always(&mut self, allow_write: &[PathBuf]) -> Vec<String> {
         let mut said = Vec::new();
-        let remembered = match Remembered::user().map(|kept| kept.of(&self.config.root)) {
-            Some(Ok(listed)) => listed,
-            Some(Err(error)) => {
-                said.push(error);
-                Vec::new()
-            }
-            None => Vec::new(),
-        };
-        for directory in remembered {
-            match self.grant_writable(&directory.to_string_lossy()) {
-                Err(error) if !error.ends_with("already writable") => said.push(format!(
-                    "{error}: granted always in this project; /sandbox remove {} forgets it",
-                    directory.display()
-                )),
-                _ => {}
-            }
-        }
         for directory in allow_write {
             match self.grant_writable(&directory.to_string_lossy()) {
                 Err(error) if !error.ends_with("already writable") => said.push(format!(
@@ -2054,10 +2040,16 @@ impl Agent {
         self.unattended = unattended;
     }
 
-    /// Whether the user can keep a granted write always for the project (`sandbox-grants.json`);
-    /// without, a grant lasts the session only.
+    /// Whether the user can keep a granted write always for the project; without, a grant
+    /// lasts the session only.
     pub fn set_keeps_grants(&mut self, keeps: bool) {
         self.keeps_grants = keeps;
+    }
+
+    /// The directories the user granted always for the project since the last call, granted for
+    /// the session already: the front keeps them in the project's `allowWrite`.
+    pub fn take_kept_grants(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.kept_grants)
     }
 
     /// Whether the session's reach is fixed, so a request for write access is refused.

@@ -1653,17 +1653,8 @@ worktree\n---\n\nWrite.\n",
         let allowed = last_output(&bodies[2]);
         assert!(allowed.contains("in this project from now on"), "{allowed}");
         assert_eq!(granted, std::slice::from_ref(&other));
-        let remembered = super::super::Remembered::user().unwrap();
-        let root = agent.root().to_owned();
-        assert_eq!(remembered.of(&root).unwrap(), std::slice::from_ref(&other));
-        let mut fresh = Sandbox {
-            mode: SandboxMode::ReadOnly,
-            network: false,
-            writable: Vec::new(),
-        };
-        assert!(fresh.grant_remembered(&root).is_empty());
-        assert_eq!(fresh.writable, std::slice::from_ref(&other));
-        assert!(remembered.remove(&root, &other).unwrap());
+        assert_eq!(agent.take_kept_grants(), std::slice::from_ref(&other));
+        assert!(agent.take_kept_grants().is_empty());
         assert_eq!(std::fs::read_to_string(&written).unwrap(), "w\n");
         let again = last_output(&bodies[4]);
         assert!(again.contains("already writable"), "{again}");
@@ -1764,9 +1755,7 @@ worktree\n---\n\nWrite.\n",
             asked,
             ["choose Allow writing there? [\"Allow for this session\", \"Deny\"] None"]
         );
-        let root = agent.root().to_owned();
-        let remembered = super::super::Remembered::user().unwrap();
-        assert!(remembered.of(&root).unwrap().is_empty());
+        assert!(agent.take_kept_grants().is_empty());
     }
 
     #[test]
