@@ -42,7 +42,7 @@ pub(super) struct Again {
     /// call id.
     pub kept: std::collections::HashMap<String, Value>,
     /// The summary of the branch left there, added after the calls' results.
-    pub summary: Option<(String, super::compaction::FileLists)>,
+    pub summary: Option<super::compaction::LeftSummary>,
 }
 
 impl Calls {
@@ -262,14 +262,14 @@ impl Agent {
                         for item in &items[next..] {
                             self.not_run(item, ui)?;
                         }
-                        if let Some((summary, files)) = again.summary {
-                            self.add_branch_summary(&summary, &files)?;
+                        if let Some(left) = again.summary {
+                            self.add_branch_summary(&left)?;
                         }
                         return Err(AgentError::Cancelled);
                     }
                 }
-                if let Some((summary, files)) = again.summary {
-                    self.add_branch_summary(&summary, &files)?;
+                if let Some(left) = again.summary {
+                    self.add_branch_summary(&left)?;
                 }
                 Ok(ends)
             }

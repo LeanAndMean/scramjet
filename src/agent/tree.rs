@@ -255,8 +255,8 @@ impl Agent {
             self.delegated.clear();
         }
         self.answer_interrupted_calls()?;
-        if let Some((summary, files)) = summary {
-            self.add_branch_summary(&summary, &files)?;
+        if let Some(left) = summary {
+            self.add_branch_summary(&left)?;
         }
         Ok(Navigated::Moved {
             prompt: destination.prompt,
@@ -268,14 +268,15 @@ impl Agent {
     /// Adds the summary of a branch left behind.
     pub(super) fn add_branch_summary(
         &mut self,
-        summary: &str,
-        files: &compaction::FileLists,
+        left: &compaction::LeftSummary,
     ) -> Result<(), AgentError> {
-        self.session
-            .append(&json!({"type":"branch_summary", "summary":summary,
-            "read_files":files.read, "modified_files":files.modified}))?;
+        let files = &left.files;
+        let mut entry = json!({"type":"branch_summary", "summary":left.text,
+            "read_files":files.read, "modified_files":files.modified});
+        left.spent.save(&mut entry);
+        self.session.append(&entry)?;
         self.conversation
-            .push(compaction::branch_summary_message(summary));
+            .push(compaction::branch_summary_message(&left.text));
         Ok(())
     }
 
@@ -360,7 +361,7 @@ impl Agent {
         focus: &str,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
-    ) -> Result<(String, compaction::FileLists), AgentError> {
+    ) -> Result<compaction::LeftSummary, AgentError> {
         let budget = self
             .info
             .window
@@ -368,12 +369,14 @@ impl Agent {
             .saturating_sub(self.config.compacting.branch_reserve)
             .max(1);
         let files = branch.files();
-        let summary = match branch.prompt(budget, focus) {
+        let mut spent = compaction::Spent::default();
+        let text = match branch.prompt(budget, focus) {
             Some(prompt) => {
                 let text = self.summarize(
                     prompt,
                     Purpose::BranchSummary,
                     BRANCH_SUMMARY_TOKENS,
+                    &mut spent,
                     ui,
                     cancel,
                 )?;
@@ -381,7 +384,7 @@ impl Agent {
             }
             None => "No content to summarize".to_owned(),
         };
-        Ok((summary, files))
+        Ok(compaction::LeftSummary { text, files, spent })
     }
 }
 
@@ -1203,11 +1206,22 @@ Summary of that exploration:\n\n## Goal\nlook\n\n<read-files>\nold.rs\nx.rs\n</r
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         assert_eq!(lines[11], json!({"type":"branch","parent":3}));
+        // The summary's request is counted with it, its model apart from a reply's.
+        let mut saved = lines[12].clone();
+        let started = saved
+            .as_object_mut()
+            .unwrap()
+            .remove("_scramjet_timing")
+            .unwrap();
+        assert!(started["started"].as_u64().unwrap() > 0);
         assert_eq!(
-            lines[12],
+            saved,
             json!({"type":"branch_summary","summary":summary,
-                "read_files":["old.rs","x.rs"],"modified_files":["m.rs"]})
+                "read_files":["old.rs","x.rs"],"modified_files":["m.rs"],"model":"test/m",
+                "_scramjet_usage":{"input":7,"output":5,"cache_read":3,"cache_write":0}})
         );
+        // The replies before it reported no usage.
+        assert_eq!(agent.session_tokens().output, 5);
         agent.turn("next", &mut ui, &cancel).unwrap();
 
         // Going back to before a prompt leaves its reply; moving on along a path leaves nothing.

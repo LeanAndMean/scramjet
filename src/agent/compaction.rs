@@ -3,7 +3,8 @@
 //! fills.
 use super::client::Protocol;
 use super::{
-    Agent, AgentError, AgentUi, Compacting, PRODUCER, Purpose, Saved, USAGE, message_text, tools,
+    Agent, AgentError, AgentUi, Compacting, PRODUCER, Purpose, Saved, TIMING, USAGE, client,
+    message_text, tools,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
@@ -266,6 +267,65 @@ pub(super) fn is_summary(item: &Value) -> bool {
     item["content"]
         .as_str()
         .is_some_and(|text| text.starts_with(SUMMARY_PREFIX) || text.starts_with(BRANCH_PREFIX))
+}
+
+/// What the summary requests of a compaction or a branch summary used, saved with its entry as a
+/// reply's usage is with its item, so that the session's cost and `/usage` count them: their
+/// tokens and cost added up, the model, and when the first was sent.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Spent {
+    usage: Option<Value>,
+    model: String,
+    started: Option<Value>,
+}
+
+impl Spent {
+    fn add(&mut self, model: &str, reply: &client::Reply) {
+        let Some(usage) = super::turn::saved_usage(reply) else {
+            return;
+        };
+        if self.usage.is_none() {
+            self.model = model.to_owned();
+            self.started = (reply.timing.as_ref())
+                .map(|timing| super::turn::saved_timing(timing)["started"].clone());
+        }
+        self.usage = Some(match self.usage.take() {
+            None => usage,
+            Some(mut sum) => {
+                for key in ["input", "output", "cache_read", "cache_write"] {
+                    let tokens = sum[key].as_u64().unwrap_or(0) + usage[key].as_u64().unwrap_or(0);
+                    sum[key] = json!(tokens);
+                }
+                match (sum["cost"].as_f64(), usage["cost"].as_f64()) {
+                    (Some(cost), Some(more)) => sum["cost"] = json!(cost + more),
+                    _ => {
+                        sum.as_object_mut().map(|sum| sum.remove("cost"));
+                    }
+                }
+                sum
+            }
+        });
+    }
+
+    /// Adds it to `entry`. The model goes in `model`: `PRODUCER` would make the entry a reply.
+    pub(super) fn save(&self, entry: &mut Value) {
+        let Some(usage) = &self.usage else {
+            return;
+        };
+        entry[USAGE] = usage.clone();
+        entry["model"] = json!(self.model);
+        if let Some(started) = &self.started {
+            entry[TIMING] = json!({"started": started});
+        }
+    }
+}
+
+/// A branch left behind, summarized: the summary, the files read and modified there, and what
+/// its request used.
+pub(super) struct LeftSummary {
+    pub text: String,
+    pub files: FileLists,
+    pub spent: Spent,
 }
 
 pub(super) fn branch_summary_message(summary: &str) -> Value {
@@ -741,6 +801,7 @@ impl Agent {
         let history = &self.conversation[start..turn.unwrap_or(cut)];
         let previous_files = self.session.compacted_files();
         let files = previous_files.with_calls(&self.conversation[start..cut]);
+        let mut spent = Spent::default();
         let mut summary = match previous {
             Some(previous) if history.is_empty() => previous
                 .strip_suffix(&previous_files.format())
@@ -749,13 +810,14 @@ impl Agent {
             _ if history.is_empty() => "No prior history.".into(),
             previous => {
                 let prompt = prompt(history, previous.as_deref(), focus);
-                self.summarize(prompt, purpose, summary_tokens(reserve), ui, cancel)?
+                let tokens = summary_tokens(reserve);
+                self.summarize(prompt, purpose, tokens, &mut spent, ui, cancel)?
             }
         };
         if let Some(turn) = turn {
             let prompt = turn_prefix_prompt(&self.conversation[turn..cut]);
             let tokens = turn_prefix_tokens(reserve);
-            let prefix = self.summarize(prompt, purpose, tokens, ui, cancel)?;
+            let prefix = self.summarize(prompt, purpose, tokens, &mut spent, ui, cancel)?;
             summary = split_turn_summary(&summary, &prefix);
         }
         summary.push_str(&files.format());
@@ -768,6 +830,7 @@ impl Agent {
         if let Some(automatic) = automatic {
             entry["automatic"] = json!(automatic.name());
         }
+        spent.save(&mut entry);
         self.session.append(&entry)?;
         if let Some(line) = self.session.leaf() {
             ui.saved(Saved::Compaction, line);
@@ -800,6 +863,7 @@ impl Agent {
         prompt: String,
         purpose: Purpose,
         tokens: u64,
+        spent: &mut Spent,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<String, AgentError> {
@@ -831,6 +895,7 @@ impl Agent {
             }
         }
         let reply = self.respond(&request, purpose, ui, cancel)?;
+        spent.add(&self.config.model, &reply);
         let summary = reply
             .items
             .iter()
@@ -1331,8 +1396,15 @@ mod tests {
             "first summary\n\n<read-files>\na.rs\n</read-files>\n\n<modified-files>\nb.rs\n</modified-files>"
         );
         assert_eq!(agent.usage.context_tokens, None);
-        // The footer is told the context is not known now.
-        assert_eq!(ui.usage.last(), Some(&(Tokens::default(), None)));
+        // The footer is told the context is not known now, and the summary's tokens.
+        let summary = Tokens {
+            input: 7,
+            output: 5,
+            cache_read: 3,
+            unpriced: true,
+            ..Tokens::default()
+        };
+        assert_eq!(ui.usage.last(), Some(&(summary, None)));
         // A summary's rate is not a reply's, as in Scramjet.
         assert!(!rates.exists());
         assert_eq!(agent.conversation()[1], recent);
@@ -1358,6 +1430,7 @@ mod tests {
         let (session, resumed, prompts) = Session::open(agent.session_path()).unwrap();
         assert_eq!(resumed, agent.conversation());
         assert_eq!(prompts.len(), 3);
+        assert_eq!(session.tokens().output, 2 * 5);
         agent.session = session;
         agent.conversation = resumed;
         agent.turn("continue", &mut ui, &cancel).unwrap();
@@ -1456,7 +1529,14 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut summarize = |agent: &mut Agent, purpose, tokens| {
             agent
-                .summarize("p".into(), purpose, tokens, &mut ui, &cancel)
+                .summarize(
+                    "p".into(),
+                    purpose,
+                    tokens,
+                    &mut Spent::default(),
+                    &mut ui,
+                    &cancel,
+                )
                 .unwrap()
         };
         summarize(

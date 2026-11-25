@@ -168,7 +168,10 @@ impl History {
             let Ok(item) = serde_json::from_str::<Value>(text) else {
                 continue;
             };
-            let model = item[PRODUCER].as_str().unwrap_or("");
+            // A compaction's or branch summary's requests name their model in `model`.
+            let model = (item[PRODUCER].as_str())
+                .or_else(|| item["model"].as_str())
+                .unwrap_or("");
             if let Some(response) = response(&item[USAGE], &item[TIMING], model, created) {
                 self.responses.push(Response {
                     session,
@@ -290,7 +293,9 @@ mod tests {
         let own = json!({"type": "message", "_scramjet_usage": {"input": 7, "output": 0}});
         let fork = sessions.join("home-p").join("2000-1.jsonl");
         let named = json!({"type": "session_info", "name": "Forked"});
-        write(&fork, &[header(2000), reply, named, own]);
+        let compaction = json!({"type": "compaction", "summary": "s", "model": "a/two",
+            "_scramjet_usage": {"input": 8, "output": 9}, "_scramjet_timing": {"started": 2500}});
+        write(&fork, &[header(2000), reply, named, own, compaction]);
         let other = sessions.join("home-q").join("3000-1.jsonl");
         write(&other, &[header(3000), subagents]);
         write(&sessions.join("home-q").join("notes.txt"), &[json!({})]);
@@ -328,6 +333,7 @@ mod tests {
                 ),
                 (0, 1000, "a/one", (1, 2, 0, 0), None, (None, None)),
                 (1, 2000, "", (7, 0, 0, 0), None, (None, None)),
+                (1, 2500, "a/two", (8, 9, 0, 0), None, (None, None)),
                 (
                     2,
                     6000,

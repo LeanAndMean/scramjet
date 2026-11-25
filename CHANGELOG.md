@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.9 — Summaries in the cost
+
+### Fixed
+
+- The session's cost in the footer and `/usage` count the requests that compaction and `/tree`'s branch summaries make, which they left out: each compaction or summary saves its requests' tokens and cost with it.
+
 ## 2.344.8 — Styles across a paragraph's lines
 
 ### Fixed
