@@ -29,15 +29,19 @@ const BASE: &str = r#"(version 1)
 (allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
 (allow file-read* file-write* file-ioctl
   (require-all (regex #"^/dev/ttys[0-9]+") (extension "com.apple.sandbox.pty")))
-(allow mach-lookup
+(allow user-preference-read)
+(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
+(allow ipc-posix-sem)
+"#;
+
+/// The Mach services every profile lets commands reach: user lookups, power assertions and
+/// preferences.
+const SERVICES: &str = r#"(allow mach-lookup
   (global-name "com.apple.system.opendirectoryd.libinfo")
   (global-name "com.apple.PowerManagement.control")
   (global-name "com.apple.cfprefsd.daemon")
   (global-name "com.apple.cfprefsd.agent")
   (local-name "com.apple.cfprefsd.agent"))
-(allow user-preference-read)
-(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
-(allow ipc-posix-sem)
 "#;
 
 /// The network, with the services that name resolution and TLS certificates go through.
@@ -184,6 +188,7 @@ pub(super) struct Hiding<'a> {
 pub(super) fn closed(root: &Path, closed: Closed) -> Command {
     let mut profile = Profile::default();
     profile.text.push_str(BASE);
+    profile.text.push_str(SERVICES);
     for writable in &closed.writable {
         let mut parts = vec![profile.path("subpath", writable)];
         for kept in closed
@@ -216,7 +221,10 @@ pub(super) fn open(root: &Path, hidden: Hiding, network: bool) -> Command {
     let mut profile = Profile::default();
     profile.rule("(version 1)\n(allow default)");
     if !network {
-        profile.rule("(deny network*)");
+        // As Linux hides `/run`'s sockets: the system's services (LaunchServices' `open URL`,
+        // launchd's `launchctl submit`, `nsurlsessiond`) would reach the network for them.
+        profile.rule("(deny network*)\n(deny mach-lookup)\n(deny lsopen job-creation)");
+        profile.text.push_str(SERVICES);
     }
     profile.hide(&hidden, &[]);
     profile.command(root)
@@ -467,8 +475,18 @@ mod tests {
             "(deny network-outbound (remote unix-socket (subpath \"/private/tmp/tmux-501\")))"
         ));
         assert!(!text.contains("deny default") && !text.contains("xpc"));
-        assert!(!text.contains("(deny network*)"), "{text}");
+        assert!(
+            !text.contains("(deny network*)") && !text.contains("mach"),
+            "{text}"
+        );
         let offline = spelled(&open(Path::new("/w"), Hiding::default(), false));
-        assert!(offline.starts_with("(version 1)\n(allow default)\n(deny network*)\n"));
+        assert!(
+            offline.starts_with(
+                "(version 1)\n(allow default)\n(deny network*)\n(deny mach-lookup)\n\
+(deny lsopen job-creation)\n(allow mach-lookup\n"
+            ),
+            "{offline}"
+        );
+        assert!(offline.contains("(global-name \"com.apple.cfprefsd.agent\")"));
     }
 }

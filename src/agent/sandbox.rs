@@ -1351,7 +1351,8 @@ pub(super) fn sandboxed(
 /// sandbox, it shares the process ids, so that a command's `setsid nohup … &` outlives
 /// it, as outside. Kept `offline`, it is off the network, and on Linux the sockets in `/run`
 /// are hidden as in the sandbox (D-Bus, Docker's, WSL's way to Windows' programs), through
-/// which this machine's servers would reach it for it; on macOS every socket is closed.
+/// which this machine's servers would reach it for it; on macOS every socket is closed, and
+/// every Mach service but user lookups and preferences (LaunchServices, launchd's jobs).
 #[cfg(windows)]
 pub(super) fn hiding(_: &Path, _: &str, _: &Hidden) -> Result<Command, String> {
     Err(NOT_HIDDEN.to_owned())
@@ -3220,6 +3221,31 @@ echo made > made.txt && echo wrote; echo $(ls -A /run 2>/dev/null | wc -l)"
             assert_eq!(offline[2], "0", "{errors}");
         }
         assert!(root.join("made.txt").exists());
+        if cfg!(target_os = "macos") {
+            // A job launchd starts would run outside the profile, on the network.
+            let submit = |offline: bool| {
+                let label = format!("scramjet-offline-{}-{offline}", std::process::id());
+                let made = root.join(&label);
+                let script = format!(
+                    "id -un >/dev/null && echo user; launchctl submit -l {label} -- \
+/usr/bin/touch {} 2>/dev/null; sleep 2; test -e {label} && echo submitted || echo kept",
+                    made.display()
+                );
+                let hidden = super::Hidden::nothing().offline(offline);
+                let output = super::hiding(&root, &script, &hidden).unwrap().output();
+                let _ = std::process::Command::new("launchctl")
+                    .args(["remove", &label])
+                    .output();
+                let output = output.unwrap();
+                let text = String::from_utf8_lossy(&output.stdout).into_owned();
+                let errors = String::from_utf8_lossy(&output.stderr).into_owned();
+                (text.lines().map(str::to_owned).collect::<Vec<_>>(), errors)
+            };
+            let (online, errors) = submit(false);
+            assert_eq!(online, ["user", "submitted"], "{errors}");
+            let (offline, errors) = submit(true);
+            assert_eq!(offline, ["user", "kept"], "{errors}");
+        }
     }
 
     /// Ends the tmux servers of these `TMUX_TMPDIR`s, also when a test fails.

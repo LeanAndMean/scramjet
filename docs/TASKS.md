@@ -6,9 +6,6 @@ Last steer: 8481b92
 
 ## Current focus
 
-From the review of 0d1546d, ffa60f6, 3162ff5, 3ace6d3, 110fc47, ca6ed8a and 67fe420 (2.326.1 fixed four findings):
-- Under 67fe420's offline commands on macOS, Seatbelt's open profile with `(deny network*)` still allows `mach-lookup`, so `open <url>` or `launchctl submit` may reach the network outside the profile (untried, item 35); Linux hides `/run`'s D-Bus and systemd.
-
 96 (the sandbox screen), its review and the rehearsal are done (run 45490081605 on fb075fc, 2.326.3, passed every job). The release waits until the user has tried the new functionality and asks (second steer of 2026-11-24); then comment on and close `#3`–`#8` with it. The user's settings have `sandbox.network: false`, which from 2.326.0 keeps commands off the network without a sandbox too (they were told). Order of the second steer of 2026-11-24: 97 (drafts and undo, built; its sweep waits for drafts to pile up), 94's session profile (signed off) is in (2.330.0, 2.331.0); then the rest of 95's Flightdeck side and 77 as each says; 98 (the scrollbar on macOS) once its reporter's details come. The user's pick from the gallery of the other looks (83) and bottoms (86) comes at a later steer. 62's pull request is ready for review (2026-11-18); what its reviewers ask becomes fixes on the branch. 51, 44 and 48 wait on the user.
 
 Issues fixed but not yet released: `#3` (2.304.2), `#4` (2.303.3), `#5` (2.305.0), `#6` (2.314.0), `#7` (2.313.0) and `#8` (2.312.0, its replayed compaction's details 2.315.0): comment on and close each with the release that has it.

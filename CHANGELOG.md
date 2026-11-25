@@ -4,6 +4,12 @@ What changed in each version of Scramjet 2, for the people using it. The newest 
 
 ## Unreleased
 
+## 2.331.1 — Offline commands on macOS keep off the system's services
+
+### Fixed
+
+- macOS: with the network off and no sandbox, commands can no longer reach the network through the system's services (`open` of a URL, a job given to `launchctl submit`): every Mach service but user lookups and preferences is closed to them, as Linux hides `/run`'s sockets. Not yet tried on a user's Mac.
+
 ## 2.331.0 — A session profile's model and output limit
 
 ### Added
