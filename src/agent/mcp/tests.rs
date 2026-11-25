@@ -34,17 +34,6 @@ fn test_server(name: &str, env: &[(&str, String)]) -> Server {
     program(name, "python3", vec![support("mcp_server.py")], env)
 }
 
-/// `name` on the host outside `/tmp`, which the sandbox replaces with its own: in this checkout's
-/// `target`, or in the home directory when the checkout is under `/tmp`.
-fn outside_tmp(name: &str) -> PathBuf {
-    let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
-    let base = match target.starts_with("/tmp") {
-        true => std::env::home_dir().unwrap(),
-        false => target,
-    };
-    base.join(format!("{name}-{}", std::process::id()))
-}
-
 /// `configs` started in `root` and settled, each given ten seconds.
 fn started(configs: &[Server], root: &Path) -> Servers {
     let servers = Servers::start_within(configs, root, Duration::from_secs(10));
@@ -302,8 +291,11 @@ fn under_the_sandbox_a_server_runs_outside_it_and_changing_it_keeps_the_server()
         writable: Vec::new(),
     };
     agent.set_sandbox(Some(sandbox(SandboxMode::WorkspaceWrite)));
-    // Outside the project and `/tmp`, where the sandbox would refuse the write.
-    let log = outside_tmp("sjrs-mcp-outside");
+    // A server in the sandbox could not leave its log here on the host, even with the checkout
+    // under `/tmp`: the sandbox's `/tmp` is its own. Writable when the tests run in a sandbox.
+    let log = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("sjrs-mcp-outside-{}", std::process::id()));
     let _ = std::fs::remove_file(&log);
     agent.config.mcp_servers = vec![test_server(
         "test",

@@ -2795,9 +2795,24 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
     #[test]
     fn the_minimal_reach_keeps_commands_to_it_also_with_everything_writable() {
         let home = std::env::home_dir().unwrap();
-        let root = home.join(format!(".scramjet-test-unconfined-{}", std::process::id()));
+        // In the home directory, which the reach hides but for the project: the checkout's
+        // `target` stays writable when the tests run in a sandbox.
+        let target = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        let base = if target.starts_with(&home) {
+            &target
+        } else {
+            &home
+        };
+        let root = base.join(format!(".scramjet-test-unconfined-{}", std::process::id()));
+        if let Err(error) = std::fs::create_dir_all(&root) {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::ReadOnlyFilesystem,
+                "{error}"
+            );
+            return eprintln!("passed over: {} is read-only here", base.display());
+        }
         let _scratch = crate::agent::tests::ScratchDir::new(root.clone());
-        std::fs::create_dir_all(&root).unwrap();
         let outside = std::env::temp_dir().join(format!("scramjet-open-{}", std::process::id()));
         let _outside = crate::agent::tests::ScratchDir::new(outside.clone());
         std::fs::create_dir_all(&outside).unwrap();

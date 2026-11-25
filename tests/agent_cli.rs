@@ -4334,7 +4334,16 @@ fn acp_session_profiles_give_each_session_its_instructions_tools_and_reach() {
         std::process::id()
     )));
     let refs = outside.0.join("refs");
-    for directory in [&first, &second, &refs] {
+    if let Err(error) = std::fs::create_dir_all(&refs) {
+        // As when the tests run in a sandbox.
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::ReadOnlyFilesystem,
+            "{error}"
+        );
+        return eprintln!("passed over: /var/tmp is read-only here");
+    }
+    for directory in [&first, &second] {
         std::fs::create_dir_all(directory).unwrap();
     }
     let note = refs.join("note");
