@@ -207,8 +207,18 @@ fn converted_settings(
         // Pi's pattern prefixes, which Scramjet 2 does not read, are kept as written.
         match kept || trimmed.starts_with(['!', '+', '-']) {
             true => entry.to_owned(),
-            false => shown(&scramjet::os::join(from, trimmed)),
+            // Node's `path.resolve`, which Scramjet 1 reads them with, resolves `..` by name.
+            false => shown(&lexical(&scramjet::os::join(from, trimmed))),
         }
+    };
+    // Their own skills and themes directories are copied here, where they load by default.
+    let copied = |key: &str, entry: &str| {
+        let trimmed = entry.trim();
+        let path = match scramjet::os::after_tilde(trimmed) {
+            Some(rest) => std::env::home_dir().map(|home| scramjet::os::join(&home, rest)),
+            None => Some(scramjet::os::join(from, trimmed)),
+        };
+        path.is_some_and(|path| lexical(&path).starts_with(lexical(&from.join(key))))
     };
     for (key, value) in theirs {
         match key.as_str() {
@@ -259,6 +269,9 @@ fn converted_settings(
                 let value = match value {
                     Value::Array(entries) => Value::Array(
                         (entries.into_iter())
+                            .filter(
+                                |entry| !matches!(entry, Value::String(text) if copied(&key, text)),
+                            )
                             .map(|entry| match entry {
                                 Value::String(text) => Value::String(absolute(&text)),
                                 other => other,
@@ -267,7 +280,21 @@ fn converted_settings(
                     ),
                     other => other,
                 };
-                converted.insert(key, value);
+                if value.as_array().is_none_or(|entries| !entries.is_empty()) {
+                    converted.insert(key, value);
+                }
+            }
+            "theme"
+                if matches!(value.as_str(), Some("dark" | "light" | "pi-dark"))
+                    && !(from.join("themes"))
+                        .join(format!("{}.json", value.as_str().unwrap_or_default()))
+                        .is_file() =>
+            {
+                left.push(format!(
+                    "theme: {value}, Scramjet 1's own, is not here: the theme follows the \
+                     terminal's background (scramjet-dark or scramjet-light); /settings picks \
+                     another"
+                ))
             }
             _ => {
                 converted.insert(key, value);
@@ -304,19 +331,26 @@ fn models(from: &Path, to: &Path, dry: bool, report: &mut Report) -> Result<(), 
                 !models.is_empty() && models.iter().all(|model| model.get(key).is_some())
             })
     };
-    let built_in: Vec<String> = (providers.iter())
-        .filter(|(_, entry)| {
-            entry
-                .as_object()
-                .is_none_or(|entry| !complete(entry, "baseUrl") || !complete(entry, "api"))
+    let incomplete: Vec<(String, &str)> = (providers.iter())
+        .filter_map(|(name, entry)| {
+            let missing = match entry.as_object() {
+                None => "a baseUrl and an api",
+                Some(entry) => match (complete(entry, "baseUrl"), complete(entry, "api")) {
+                    (true, true) => return None,
+                    (false, false) => "a baseUrl and an api",
+                    (false, true) => "a baseUrl",
+                    (true, false) => "an api",
+                },
+            };
+            Some((name.clone(), missing))
         })
-        .map(|(name, _)| name.clone())
         .collect();
-    for name in &built_in {
+    for (name, missing) in &incomplete {
         providers.remove(name);
         report.left.push(format!(
-            "models.json: {name}, which changes Scramjet 1's built-in provider: copy it with a baseUrl and an api (anthropic-messages, openai-responses or \
-             openai-completions)"
+            "models.json: {name}, without {missing}, which Scramjet 1 gives only its built-in \
+             providers: copy it with a baseUrl and an api (anthropic-messages, \
+             openai-responses or openai-completions)"
         ));
     }
     if providers.is_empty() {
@@ -356,9 +390,12 @@ fn agents(from: &Path, to: &Path, dry: bool, report: &mut Report) {
     }
     if !sets.is_empty() {
         report.left.push(format!(
-            "agents/: {} agents of command sets ({}), which come with their set: install it \
+            "agents/: {} of command sets ({}): they come with their set; install it \
              (scramjet install DIR|REPO)",
-            sets.len(),
+            match sets.len() {
+                1 => "1 agent".to_owned(),
+                n => format!("{n} agents"),
+            },
             set_names(&sets)
         ));
     }
@@ -428,6 +465,24 @@ fn copy_tree(from: &Path, to: &Path, depth: usize) -> std::io::Result<()> {
     Ok(())
 }
 
+/// `path` with its `.` left out and each `..` taking the name before it.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 fn shown(path: &Path) -> String {
     shortened(&path.display().to_string())
 }
@@ -473,9 +528,9 @@ mod tests {
             &json!({
                 "defaultModel": "claude", "theme": "mine", "transport": "sse",
                 "lastChangelogVersion": "0.117.0", "sessionDir": "sessions",
-                "packages": ["npm:pi-thing", "git:github.com/u/r", "local/pkg",
+                "packages": ["npm:pi-thing", "git:github.com/u/r", "local/./x/../pkg",
                     {"source": "~/sets", "skills": ["a"]}],
-                "skills": ["~/.claude/skills", "own"], "steeringMode": "all"
+                "skills": ["~/.claude/skills", "own", "./skills/s"], "steeringMode": "all"
             })
             .to_string(),
         );
@@ -590,8 +645,8 @@ mod tests {
             "settings.json: sessionDir:",
             "settings.json: packages: npm:pi-thing: an npm package",
             "settings.json: packages: ~/sets's filters",
-            "models.json: anthropic, which changes",
-            "models.json: openai, which changes",
+            "models.json: anthropic, without an api, which Scramjet 1 gives only its built-in",
+            "models.json: openai, without a baseUrl and an api,",
             "AGENTS.md: there already",
             "auth.json: openrouter's API key:",
             "auth.json: anthropic: not a login made here",
@@ -617,6 +672,37 @@ mod tests {
                 .contains("auth.json: GitHub Copilot: logged in here already")
         );
         assert_eq!(read(&to.join("settings.json")), settings);
+    }
+
+    #[test]
+    fn scramjet_1s_own_themes_are_left_and_the_users_kept() {
+        let scratch = Scratch::new("theme");
+        let from = scratch.0.join("v1");
+        for (theme, kept) in [
+            ("dark", false),
+            ("pi-dark", false),
+            ("light", false),
+            ("pi-light", true),
+        ] {
+            write(
+                &from.join("settings.json"),
+                &json!({"theme": theme}).to_string(),
+            );
+            let (converted, left) =
+                converted_settings(read_object(&from.join("settings.json")).unwrap(), &from);
+            assert_eq!(converted.contains_key("theme"), kept, "{theme}");
+            assert_eq!(
+                left.iter()
+                    .any(|why| why.starts_with(&format!("theme: \"{theme}\", Scramjet 1's own"))),
+                !kept,
+                "{left:?}"
+            );
+        }
+        write(&from.join("themes/dark.json"), "{}");
+        write(&from.join("settings.json"), r#"{"theme": "dark"}"#);
+        let (converted, _) =
+            converted_settings(read_object(&from.join("settings.json")).unwrap(), &from);
+        assert_eq!(converted["theme"], "dark");
     }
 
     #[test]

@@ -557,10 +557,18 @@ impl Options {
                 }
                 Some("--mode") => match value()?.as_str() {
                     "text" => {}
-                    mode @ ("json" | "rpc") => {
-                        return Err(format!(
-                            "--mode {mode} is not in Scramjet yet; -p prints the replies as text"
-                        ));
+                    "json" => {
+                        return Err(
+                            "--mode json is not in Scramjet yet; -p prints the replies as text"
+                                .to_owned(),
+                        );
+                    }
+                    "rpc" => {
+                        return Err(
+                            "--mode rpc: Scramjet's RPC mode is `scramjet acp`, the Agent \
+Client Protocol on stdin and stdout (`scramjet acp --help`)"
+                                .to_owned(),
+                        );
                     }
                     mode => {
                         return Err(format!(

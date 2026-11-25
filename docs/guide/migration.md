@@ -4,27 +4,55 @@
 
 ## From Scramjet 1
 
-Scramjet reads nothing of Scramjet 1's `~/.scramjet/agent`, and Scramjet 1 nothing of Scramjet's `~/.config/scramjet` but `autonomy.yaml` ([shared](configuration.md#settings-and-where-files-are)), beside which it keeps its own `preferences.yaml`, so both can stay installed. `scramjet import` carries your setup over (`--dry-run` lists what it would do; the first start that finds Scramjet 1's settings and none of yours offers it, once). It copies from `~/.scramjet/agent` into `~/.config/scramjet`, never over a file there, and lists what it leaves and why:
+Scramjet reads nothing of Scramjet 1's `~/.scramjet/agent`, and Scramjet 1 nothing of Scramjet's `~/.config/scramjet` but `autonomy.yaml` ([shared](configuration.md#settings-and-where-files-are)), beside which it keeps its own `preferences.yaml`, so both can stay installed.
 
-- `settings.json`: the names are Scramjet 1's (`defaultModel`, `enabledModels`, `theme`, `steeringMode`, …; `transport` is not read). The import adds the keys yours lacks, makes relative paths absolute, and leaves out `sessionDir` and npm packages (`npm:…`), which are Scramjet 1's only. A git package or a directory of command sets works; a directory holding only a Pi package (extensions, `prompts/`) brings nothing, and `install` and the start say it is a Scramjet 1 extension.
-- `models.json`: a provider entry needs its `baseUrl` and `api`, and its `models` unless its server lists them. An entry that only changes one of Scramjet 1's built-in providers (`anthropic` or `openai` with a `baseUrl` or `modelOverrides`) is left out: copy it with an `api` (`anthropic-messages`, `openai-responses`). `--list-models` says what is missing.
-- `auth.json`: ChatGPT's and GitHub Copilot's logins carry over. A ChatGPT login renewed by one of the two programs stops working in the other, which then needs `/login` again; to use both, `/login` in each instead of copying. Saved API keys do not carry over (Scramjet keeps with each key the servers it may go to): enter them again under `/login`. The import takes only the logins of providers not logged in to here.
-- `keybindings.json`, `themes/`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md` and `CLAUDE.md` as they are, and `skills/`.
-- `agents/`: your own agents (`*.md`). The import leaves out those named `<set>:<name>` (such as `mach12:code-reviewer.md`): they come with their command set, which you install instead (`scramjet install git:github.com/LeanAndMean/mach12`); while it is installed, loose copies are skipped with a warning.
+### Importing your setup
 
-What does not carry over: TypeScript extensions and Pi packages (the private provider package has a package of its own for this Scramjet), `prompts/` (make them a command set's `commands/`), `git/` (Scramjet clones its packages again into `~/.local/share/scramjet/git/`) and `sessions/`.
+`scramjet import` carries your setup over; `scramjet import --dry-run` lists what it would do. The first start that finds Scramjet 1's settings and none of yours offers it, once. It copies from `~/.scramjet/agent` into `~/.config/scramjet`, never over a file there, and lists what it leaves and why:
 
-Other differences:
+- `settings.json`: the names are Scramjet 1's (`defaultModel`, `enabledModels`, `theme`, `steeringMode`, …). The import adds the keys yours lacks and makes relative paths absolute. It leaves out:
+  - `sessionDir`, `transport` and npm packages (`npm:…`), which are Scramjet 1's only;
+  - a `theme` of Scramjet 1's own that Scramjet does not have (`dark`, `light`, `pi-dark`): the theme then follows the terminal's background, and `/settings` picks another;
+  - `skills` and `themes` entries inside Scramjet 1's `skills/` and `themes/`, which are copied and load from here anyway.
 
-- The built-in providers are Anthropic, Google Gemini, OpenAI and OpenRouter, offered once `/login` has their API key (not from `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` or `OPENROUTER_API_KEY` alone), with the models their servers list (Gemini's and OpenAI's as models.dev describes them); every other provider entry in a `models.json` lists its models or has its server list them, and ChatGPT's (Codex) and GitHub Copilot's come from your account once you `/login` ([providers](providers.md)). They speak HTTP or HTTPS, with the Responses, Messages or Chat Completions API, through an `http://` proxy only (not `https://` or SOCKS ones). `/login` logs in to ChatGPT and GitHub Copilot only (not to Anthropic's subscription), and takes API keys for Anthropic, Google Gemini, OpenAI, OpenRouter and the providers of those files, and there is no Pi extension API.
+  A git package or a directory of command sets works. A directory holding only a Pi package (extensions, `prompts/`) brings nothing, and `install` and the start say it is a Scramjet 1 extension.
+- `models.json`: a provider entry needs its `baseUrl` and `api`, and its `models` unless its server lists them. An entry without them, such as one that only changes Scramjet 1's built-in `anthropic` or `openai` (a `baseUrl` or `modelOverrides`), is left out: copy it with an `api` (`anthropic-messages`, `openai-responses`, `openai-completions`). `--list-models` says what is missing.
+- `auth.json`: ChatGPT's and GitHub Copilot's logins carry over, only for providers not logged in to here.
+  - A ChatGPT login renewed by one of the two programs stops working in the other, which then needs `/login` again; to use both, `/login` in each instead of copying.
+  - Saved API keys do not carry over, as Scramjet keeps with each key the servers it may go to: enter them again under `/login`.
+- `keybindings.json`, `themes/`, `skills/`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md` and `CLAUDE.md` as they are.
+- `agents/`: your own agents (`*.md`). Those named `<set>:<name>` (such as `mach12:code-reviewer.md`) are left out: they come with their command set, which you install instead (`scramjet install git:github.com/LeanAndMean/mach12`). While it is installed, loose copies are skipped with a warning.
+
+What does not carry over:
+
+- TypeScript extensions and Pi packages (the private provider package has a package of its own for this Scramjet);
+- `prompts/`: make them a command set's `commands/`;
+- `git/`: Scramjet clones its packages again into `~/.local/share/scramjet/git/`;
+- `sessions/`.
+
+### Providers
+
+- The built-in providers are Anthropic, Google Gemini, OpenAI and OpenRouter, offered once `/login` has their API key (not from `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` or `OPENROUTER_API_KEY` alone), with the models their servers list (Gemini's and OpenAI's as models.dev describes them).
+- Every other provider entry in a `models.json` lists its models or has its server list them. ChatGPT's (Codex) and GitHub Copilot's come from your account once you `/login` ([providers](providers.md)).
+- They speak HTTP or HTTPS, with the Responses, Messages or Chat Completions API, through an `http://` proxy only (not `https://` or SOCKS ones).
+- `/login` logs in to ChatGPT and GitHub Copilot (not to Anthropic's subscription), and takes API keys for the built-in providers and those of your `models.json` files. There is no Pi extension API.
+
+### Other differences
+
 - Settings, sessions and your own agents, skills and themes are under `~/.config/scramjet` and `~/.local/state/scramjet` ([where](configuration.md#settings-and-where-files-are)).
 - Built-in commands carry Claude Code's and Codex's names (`/clear`, `/exit`, `/rename`, `/status`); Scramjet 1's (`/new`, `/quit`, `/name`, `/session`) still work. One `/settings` holds everything; there is no `/scramjet settings`.
 - A command's status is `completed` or `abandoned` (only after you confirm); there is no `blocked`, `incomplete` or `continuing`. A reply that ends without a report gets a short status check, at most 3 in a row.
 - Subagents run read-only, and the main agent's commands can run in a [sandbox](configuration.md#the-sandbox) and with [credential stores hidden](configuration.md#credentials).
 - `edit` changes only the text it matched, also when it matched with trailing whitespace or typographic quotes aside (Scramjet 1 then rewrites the whole file normalized).
 - Themes, looks, banners and bottoms: Scramjet 1's themes and theme files, with a main background and a theme editor in `/settings` ([themes](configuration.md#themes-looks-banners-and-bottoms)). Keys: `keybindings.json` in Scramjet 1's format ([keys](sessions.md#keys)).
-- Command lines: Scramjet 1's options work as they did, `--provider P --model M`, `--cache-retention` (and `SCRAMJET_CACHE_RETENTION`), `--api-key` and `update --extensions`, `--extension` and `--force` included; `--verbose`, `--mode text`, `--no-extensions` and `--no-prompt-templates` change nothing. Those with nothing to do here (`--mode json` and `rpc`, `--extension`, `--prompt-template`, `--model-definition`) stop it, saying why.
-- Not yet: images shown in the terminal, GitLab publications, `--mode json` and `rpc`.
+- RPC mode is the Agent Client Protocol, `scramjet acp` ([ACP](acp.md)), rather than `--mode rpc`.
+
+### Command lines
+
+- Scramjet 1's options work as they did: `--provider P --model M`, `--cache-retention` (and `SCRAMJET_CACHE_RETENTION`), `--api-key`, and `update --extensions`, `update --extension NAME` and `update --force`.
+- `--verbose`, `--mode text`, `--no-extensions` and `--no-prompt-templates` change nothing.
+- Those with nothing to do here stop it, saying why: `--mode json` and `rpc`, `--extension`, `--prompt-template`, `--model-definition`.
+- Not yet: images shown in the terminal, GitLab publications, `--mode json`.
 
 ## From Claude Code or Codex
 

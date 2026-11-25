@@ -4,6 +4,15 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.340.5 — The import from Scramjet 1 followed
+
+### Fixed
+
+- `scramjet import` leaves out a theme Scramjet 1 had built in and Scramjet does not (`dark`, `light`, `pi-dark`), saying so, so the theme follows the terminal's background rather than falling back to `terminal-colors`.
+- It no longer keeps `skills` and `themes` entries inside Scramjet 1's own `skills/` and `themes/`, which it copies here, so a skill is not loaded twice; and it writes relative paths without `./` and `..` (`~/sets/myset`, not `~/.scramjet/agent/../../sets/myset`).
+- A provider entry it leaves for want of a `baseUrl` or an `api` is said to lack them, no longer called one of Scramjet 1's built-in providers.
+- `--mode rpc` points to `scramjet acp`, Scramjet's RPC mode, rather than saying it is not in yet. The migration guide is in sections and lists.
+
 ## 2.340.4 — A `!!` command's block is dim
 
 ### Fixed

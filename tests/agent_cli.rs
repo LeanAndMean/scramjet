@@ -374,7 +374,8 @@ fn scramjet_1s_provider_option_and_others_are_taken_or_refused_saying_why() {
         ),
         (
             &["--mode", "rpc"],
-            "--mode rpc is not in Scramjet yet; -p prints the replies as text",
+            "--mode rpc: Scramjet's RPC mode is `scramjet acp`, the Agent Client Protocol on \
+             stdin and stdout (`scramjet acp --help`)",
         ),
         (
             &["--mode", "xml"],
