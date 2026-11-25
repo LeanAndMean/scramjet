@@ -423,8 +423,7 @@ fn model(key: &str, listed: &Value, protocol: &str) -> Option<Value> {
         let efforts: Vec<&str> = efforts.iter().filter_map(Value::as_str).collect();
         entry["thinkingLevelMap"] = super::providers::level_map(&efforts);
     }
-    let messages = protocol == "anthropic-messages";
-    if let Some(cost) = cost(&listed["cost"], messages) {
+    if let Some(cost) = cost(&listed["cost"]) {
         entry["cost"] = cost;
     }
     let extension = &listed[EXTENSION];
@@ -435,7 +434,7 @@ fn model(key: &str, listed: &Value, protocol: &str) -> Option<Value> {
     {
         let values = by_header["values"].as_object().into_iter().flatten();
         let values: Map<String, Value> = values
-            .filter_map(|(value, rates)| Some((value.clone(), cost(rates, messages)?)))
+            .filter_map(|(value, rates)| Some((value.clone(), cost(rates)?)))
             .collect();
         if !values.is_empty() {
             if !entry["cost"].is_object() {
@@ -454,11 +453,9 @@ fn model(key: &str, listed: &Value, protocol: &str) -> Option<Value> {
 }
 
 /// models.dev's `cost` as Scramjet's, with the rates of its least context tier for long
-/// prompts (`tiers`, else `context_over_200k`). Messages requests ask for an hour's caching,
-/// which Anthropic prices at twice the input where five minutes' is 1.25 times it: a catalog's
-/// `cache_write` at that five minutes' rate is taken as the hour's.
-fn cost(cost: &Value, messages: bool) -> Option<Value> {
-    let mut rates = rates(cost, messages)?;
+/// prompts (`tiers`, else `context_over_200k`).
+fn cost(cost: &Value) -> Option<Value> {
+    let mut rates = rates(cost)?;
     let tiers = cost["tiers"].as_array().into_iter().flatten();
     let tiers = tiers.filter(|tier| tier["tier"]["type"] == "context");
     let tiers = tiers.filter_map(|tier| Some((tier["tier"]["size"].as_u64()?, tier)));
@@ -469,7 +466,7 @@ fn cost(cost: &Value, messages: bool) -> Option<Value> {
         }
     };
     if let Some((above, tier)) = long
-        && let Some(mut long) = self::rates(tier, messages)
+        && let Some(mut long) = self::rates(tier)
     {
         long["above"] = json!(above);
         rates["longContext"] = long;
@@ -477,7 +474,7 @@ fn cost(cost: &Value, messages: bool) -> Option<Value> {
     Some(rates)
 }
 
-fn rates(cost: &Value, messages: bool) -> Option<Value> {
+fn rates(cost: &Value) -> Option<Value> {
     let rate = |key: &str| {
         cost[key]
             .as_f64()
@@ -493,12 +490,6 @@ fn rates(cost: &Value, messages: bool) -> Option<Value> {
         if let Some(rate) = rate(key) {
             rates.insert(name.into(), json!(rate));
         }
-    }
-    if messages
-        && let (Some(input), Some(write)) = (rate("input"), rate("cache_write"))
-        && (write - input * 1.25).abs() <= input * 1e-6
-    {
-        rates.insert("cacheWrite".into(), json!(input * 2.0));
     }
     (!rates.is_empty()).then_some(Value::Object(rates))
 }
@@ -577,8 +568,8 @@ mod tests {
         );
         assert_eq!(offered.models(), 4);
         let (_, messages) = &offered.providers[0];
-        // In the catalog's order, under Messages from the root, an hour's cache writes at twice
-        // the input; Anthropic's levels as it lists them, `none` for off.
+        // In the catalog's order, under Messages from the root; Anthropic's levels as it lists
+        // them, `none` for off.
         assert_eq!(
             messages,
             &json!({"api": "anthropic-messages", "baseUrl": "http://127.0.0.1:9", "models": [
@@ -586,7 +577,7 @@ mod tests {
                     "input": ["text", "image"], "contextWindow": 1_000_000, "maxTokens": 128_000,
                     "thinkingLevelMap": {"off": "none", "minimal": null, "low": "low",
                         "medium": null, "high": "high", "xhigh": null, "max": "max"},
-                    "cost": {"input": 5.0, "output": 25.0, "cacheRead": 0.5, "cacheWrite": 10.0,
+                    "cost": {"input": 5.0, "output": 25.0, "cacheRead": 0.5, "cacheWrite": 6.25,
                         "longContext": {"input": 10.0, "output": 37.5, "above": 200_000}}},
                 {"id": "claude-a", "reasoning": false, "input": ["text"],
                     "contextWindow": 200_000}]})
@@ -631,7 +622,7 @@ mod tests {
         assert_eq!(
             models[0]["cost"],
             json!({"input": 3.0, "output": 15.0, "header": "X-LLM-Backend", "byHeader": {
-                "a": {"input": 3.0, "output": 15.0, "cacheWrite": 6.0,
+                "a": {"input": 3.0, "output": 15.0, "cacheWrite": 3.75,
                     "longContext": {"input": 6.0, "above": 200_000}},
                 "b": {"input": 4.0}}})
         );

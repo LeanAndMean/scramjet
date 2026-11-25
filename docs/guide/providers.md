@@ -33,7 +33,7 @@ Models come from the providers in `~/.config/scramjet/models.json` and in the `m
 }
 ```
 
-`cost` is in dollars a million tokens; `cacheWrite` is five minutes' rate. Messages requests ask for an hour's caching, and the writes a reply says were kept for an hour (`cache_creation.ephemeral_1h_input_tokens`) are priced at twice `input`, as Anthropic and Bedrock charge them.
+`cost` is in dollars a million tokens; `cacheWrite` is five minutes' rate, also in the costs taken from a catalog or OpenRouter's list. Messages requests ask for an hour's caching (unless `--cache-retention` says `short` or `none`), and the writes a reply says were kept for an hour (`cache_creation.ephemeral_1h_input_tokens`) are priced at twice `input`, as Anthropic and Bedrock charge them; a reply that does not say is taken to have kept them as long as asked.
 
 ### The server's own list
 

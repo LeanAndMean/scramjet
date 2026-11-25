@@ -46,7 +46,7 @@ pub fn set_cache_retention(retention: CacheRetention) {
     RETENTION.store(retention as u8, Ordering::Relaxed);
 }
 
-fn cache_retention() -> CacheRetention {
+pub(super) fn cache_retention() -> CacheRetention {
     match RETENTION.load(Ordering::Relaxed) {
         0 => CacheRetention::None,
         1 => CacheRetention::Short,

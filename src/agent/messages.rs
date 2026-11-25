@@ -362,6 +362,9 @@ pub(super) struct Stream {
     usage: Option<[u64; 4]>,
     /// The cache writes kept for an hour, from `cache_creation`.
     written_long: Option<u64>,
+    /// The request's cache markers asked for an hour: a reply that does not split its writes
+    /// had them kept that long.
+    asked_hour: bool,
     stop_reason: Option<String>,
     stopped: bool,
 }
@@ -371,6 +374,14 @@ fn malformed(what: &str) -> Failure {
 }
 
 impl Stream {
+    /// A stream for a request whose cache markers asked for an hour, or not.
+    pub(super) fn new(asked_hour: bool) -> Self {
+        Self {
+            asked_hour,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn feed(
         &mut self,
         data: &[u8],
@@ -608,7 +619,10 @@ impl Stream {
                 total_tokens: Some(input + output),
                 cached_input_tokens: Some(read),
                 cache_write_tokens: Some(write),
-                cache_write_long_tokens: self.written_long.map(|n| n.min(write)),
+                cache_write_long_tokens: match self.written_long {
+                    Some(n) => Some(n.min(write)),
+                    None => self.asked_hour.then_some(write),
+                },
                 reasoning_tokens: None,
             }
         });
@@ -830,7 +844,13 @@ mod tests {
     }
 
     fn decode(events: &[Value]) -> (Result<Reply, Failure>, Vec<StreamProgress>) {
-        let mut stream = Stream::default();
+        decode_in(Stream::default(), events)
+    }
+
+    fn decode_in(
+        mut stream: Stream,
+        events: &[Value],
+    ) -> (Result<Reply, Failure>, Vec<StreamProgress>) {
         let mut updates = Vec::new();
         for chunk in sse(events).chunks(7) {
             if let Err(failure) = stream.feed(chunk, &mut |update| updates.push(update)) {
@@ -918,14 +938,31 @@ mod tests {
                 "cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":hour},
                 "output_tokens":5}}})
         };
-        let decoded = |start: Value| {
+        let decoded = |asked_hour: bool, start: Value| {
             let events = [vec![start], end("end_turn").to_vec()].concat();
-            let usage = decode(&events).0.ok().unwrap().usage.unwrap();
+            let usage = decode_in(Stream::new(asked_hour), &events)
+                .0
+                .ok()
+                .unwrap()
+                .usage
+                .unwrap();
             (usage.cache_write_tokens, usage.cache_write_long_tokens)
         };
-        assert_eq!(decoded(usage(json!(30_001))), (Some(30_001), Some(30_001)));
-        assert_eq!(decoded(usage(json!(null))), (Some(30_001), None));
-        assert_eq!(decoded(start()), (Some(0), None));
+        for asked_hour in [false, true] {
+            let split = decoded(asked_hour, usage(json!(30_001)));
+            assert_eq!(split, (Some(30_001), Some(30_001)));
+            assert_eq!(
+                decoded(asked_hour, usage(json!(0))),
+                (Some(30_001), Some(0))
+            );
+        }
+        // A reply that does not split them had them kept as long as the request asked.
+        assert_eq!(decoded(false, usage(json!(null))), (Some(30_001), None));
+        assert_eq!(
+            decoded(true, usage(json!(null))),
+            (Some(30_001), Some(30_001))
+        );
+        assert_eq!(decoded(true, start()), (Some(0), Some(0)));
     }
 
     #[test]

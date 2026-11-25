@@ -136,7 +136,7 @@ impl Listing {
     /// an error when what describes them cannot.
     pub(super) fn offers(&self, listed: &[Value]) -> Result<Vec<Value>, String> {
         let Some(described) = &self.described else {
-            let models = listed.iter().filter_map(|l| model(l, self.messages));
+            let models = listed.iter().filter_map(model);
             return Ok(models.collect());
         };
         let url = described.catalog.url();
@@ -289,9 +289,8 @@ fn escaped(text: &str, kept: impl Fn(u8) -> bool) -> String {
 }
 
 /// A model a provider listed, as a `models.json` model; `None` for one its list says is retired,
-/// archived or inactive, or cannot chat or take tools. Requests under Messages ask for an hour's
-/// caching, which has its own price.
-pub(super) fn model(listed: &Value, messages: bool) -> Option<Value> {
+/// archived or inactive, or cannot chat or take tools.
+pub(super) fn model(listed: &Value) -> Option<Value> {
     let id = listed["id"].as_str().filter(|id| !id.trim().is_empty())?;
     let capabilities = &listed["capabilities"];
     let parameters = listed["supported_parameters"].as_array();
@@ -369,7 +368,7 @@ pub(super) fn model(listed: &Value, messages: bool) -> Option<Value> {
     if reasoning && !efforts.is_empty() {
         entry["thinkingLevelMap"] = super::providers::level_map(&efforts);
     }
-    if let Some(cost) = cost(&listed["pricing"], messages) {
+    if let Some(cost) = cost(&listed["pricing"]) {
         entry["cost"] = cost;
     }
     Some(entry)
@@ -377,14 +376,14 @@ pub(super) fn model(listed: &Value, messages: bool) -> Option<Value> {
 
 /// OpenRouter's `pricing` (dollars a token, as text) as Scramjet's `cost` (dollars a million),
 /// with the rates of its first tier for long prompts (`overrides`, from `min_prompt_tokens`).
-fn cost(pricing: &Value, messages: bool) -> Option<Value> {
-    let mut cost = rates(pricing, messages)?;
+fn cost(pricing: &Value) -> Option<Value> {
+    let mut cost = rates(pricing)?;
     let tiers = pricing["overrides"].as_array().into_iter().flatten();
     let tiers = tiers.filter_map(|tier| Some((tier["min_prompt_tokens"].as_u64()?, tier)));
     if let Some((from, tier)) = tiers
         .filter(|(from, _)| *from > 0)
         .min_by_key(|(from, _)| *from)
-        && let Some(mut long) = rates(tier, messages)
+        && let Some(mut long) = rates(tier)
     {
         long["above"] = json!(from - 1);
         cost["longContext"] = long;
@@ -392,7 +391,7 @@ fn cost(pricing: &Value, messages: bool) -> Option<Value> {
     Some(cost)
 }
 
-fn rates(pricing: &Value, messages: bool) -> Option<Value> {
+fn rates(pricing: &Value) -> Option<Value> {
     let rate = |value: &Value| {
         let rate = match value {
             Value::String(text) => text.trim().parse::<f64>().ok()?,
@@ -402,18 +401,12 @@ fn rates(pricing: &Value, messages: bool) -> Option<Value> {
         // OpenRouter's router models price at -1: it depends on the model routed to.
         (rate.is_finite() && rate >= 0.0).then(|| (rate * 1e12).round() / 1e6)
     };
-    let write = match messages {
-        true => (pricing.get("input_cache_write_1h"))
-            .filter(|rate| !rate.is_null())
-            .unwrap_or(&pricing["input_cache_write"]),
-        false => &pricing["input_cache_write"],
-    };
     let mut cost = Map::new();
     for (name, value) in [
         ("input", &pricing["prompt"]),
         ("output", &pricing["completion"]),
         ("cacheRead", &pricing["input_cache_read"]),
-        ("cacheWrite", write),
+        ("cacheWrite", &pricing["input_cache_write"]),
     ] {
         if let Some(rate) = rate(value) {
             cost.insert(name.into(), json!(rate));
@@ -494,7 +487,7 @@ mod tests {
                 "effort": {"supported": true, "low": {"supported": true},
                     "medium": {"supported": true}, "high": {"supported": true},
                     "xhigh": {"supported": true}, "max": {"supported": false}}}});
-        let model = model(&claude, true).unwrap();
+        let model = model(&claude).unwrap();
         assert_eq!(
             model,
             json!({"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "reasoning": true,
@@ -503,7 +496,7 @@ mod tests {
                     "medium": "medium", "high": "high", "xhigh": "xhigh", "max": null}})
         );
         let retired = json!({"id": "claude-2", "lifecycle": "retired"});
-        assert_eq!(super::model(&retired, true), None);
+        assert_eq!(super::model(&retired), None);
         // OpenRouter's: prices a token, those that take tools, and its levels.
         let routed = json!({"id": "openai/gpt-6-luna", "name": "OpenAI: GPT-6 Luna",
             "context_length": 400_000, "top_provider": {"max_completion_tokens": 128_000},
@@ -512,7 +505,7 @@ mod tests {
             "reasoning": {"mandatory": true, "supported_efforts": ["low", "medium", "high"]},
             "pricing": {"prompt": "0.0000025", "completion": "0.00002",
                 "input_cache_read": "0.00000025", "input_cache_write": null, "request": "0"}});
-        let model = super::model(&routed, false).unwrap();
+        let model = super::model(&routed).unwrap();
         assert_eq!(
             (
                 &model["contextWindow"],
@@ -528,58 +521,51 @@ mod tests {
         assert_eq!(model["thinkingLevelMap"]["off"], Value::Null);
         assert_eq!(model["thinkingLevelMap"]["medium"], "medium");
         let chat_only = json!({"id": "x/chat", "supported_parameters": ["temperature"]});
-        assert_eq!(super::model(&chat_only, false), None);
+        assert_eq!(super::model(&chat_only), None);
         let auto = json!({"id": "openrouter/auto", "supported_parameters": ["tools"],
             "pricing": {"prompt": "-1", "completion": "-1"}});
-        assert_eq!(super::model(&auto, false).unwrap().get("cost"), None);
-        // Messages requests ask for an hour's caching.
+        assert_eq!(super::model(&auto).unwrap().get("cost"), None);
+        // `cacheWrite` is five minutes' rate; replies say which writes were kept for an hour.
         let pricing =
             json!({"input_cache_write": "0.00000375", "input_cache_write_1h": "0.000006"});
-        assert_eq!(cost(&pricing, true).unwrap()["cacheWrite"], json!(6.0));
-        assert_eq!(cost(&pricing, false).unwrap()["cacheWrite"], json!(3.75));
+        assert_eq!(cost(&pricing).unwrap()["cacheWrite"], json!(3.75));
         // Its rates for long prompts, from their least number of tokens.
         let tiered = json!({"prompt": "0.0000001", "completion": "0.0000005", "overrides": [
             {"min_prompt_tokens": 200_000, "prompt": "0.0000004"},
             {"min_prompt_tokens": 100_000, "prompt": "0.0000002", "completion": "0.0000025"}]});
         assert_eq!(
-            cost(&tiered, false).unwrap(),
+            cost(&tiered).unwrap(),
             json!({"input": 0.1, "output": 0.5,
                 "longContext": {"input": 0.2, "output": 2.5, "above": 99_999}})
         );
         // Mistral's, Groq's and vLLM's windows; Mistral's embedders and Groq's inactive models go.
         let mistral = json!({"id": "mistral-large", "max_context_length": 131_072,
             "capabilities": {"completion_chat": true, "function_calling": true, "vision": true}});
-        let mistral = super::model(&mistral, false).unwrap();
+        let mistral = super::model(&mistral).unwrap();
         assert_eq!(
             (&mistral["contextWindow"], &mistral["input"][1]),
             (&json!(131_072), &json!("image"))
         );
         let embedder = json!({"id": "mistral-embed",
             "capabilities": {"completion_chat": false, "function_calling": false}});
-        assert_eq!(super::model(&embedder, false), None);
+        assert_eq!(super::model(&embedder), None);
         let groq =
             json!({"id": "llama", "context_window": 131_072, "max_completion_tokens": 32_768});
-        let groq = super::model(&groq, false).unwrap();
+        let groq = super::model(&groq).unwrap();
         assert_eq!(
             (&groq["contextWindow"], &groq["maxTokens"]),
             (&json!(131_072), &json!(32_768))
         );
-        assert_eq!(
-            super::model(&json!({"id": "old", "active": false}), false),
-            None
-        );
-        let vllm = super::model(&json!({"id": "qwen", "max_model_len": 32_768}), false).unwrap();
+        assert_eq!(super::model(&json!({"id": "old", "active": false})), None);
+        let vllm = super::model(&json!({"id": "qwen", "max_model_len": 32_768})).unwrap();
         assert_eq!(vllm["contextWindow"], 32_768);
         // OpenAI's and Ollama's say nothing but the id: Scramjet's defaults.
-        let plain = super::model(
-            &json!({"id": "gpt-6", "object": "model", "owned_by": "openai"}),
-            false,
-        );
+        let plain = super::model(&json!({"id": "gpt-6", "object": "model", "owned_by": "openai"}));
         assert_eq!(
             plain,
             Some(json!({"id": "gpt-6", "reasoning": false, "input": ["text"]}))
         );
-        assert_eq!(super::model(&json!({"object": "model"}), false), None);
+        assert_eq!(super::model(&json!({"object": "model"})), None);
     }
 
     #[test]

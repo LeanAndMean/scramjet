@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.7 — Five minutes' cache writes priced
+
+### Fixed
+
+- With `--cache-retention short`, a Claude model from a catalog or OpenRouter's list no longer prices its five-minute cache writes at the hour's rate: their `cacheWrite` is now five minutes' rate as in a `models.json`, and the reply's own split, or the retention asked for, decides which writes cost the hour's.
+
 ## 2.344.6 — An hour's cache writes priced
 
 ### Fixed

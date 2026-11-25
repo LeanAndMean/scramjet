@@ -542,7 +542,7 @@ fn vllm(data: &[Value]) -> Vec<LocalModel> {
 
 fn other(data: &[Value]) -> Vec<LocalModel> {
     let models = data.iter().filter_map(|listed| {
-        let model = super::listed::model(listed, false)?;
+        let model = super::listed::model(listed)?;
         let mut local = LocalModel::named(model["id"].as_str()?);
         local.window = positive(&model["contextWindow"]);
         local.images = model["input"].as_array().is_some_and(|i| i.len() > 1);

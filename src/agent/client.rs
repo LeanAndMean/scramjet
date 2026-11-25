@@ -449,7 +449,8 @@ async fn exchange(
         match protocol {
             Protocol::Responses | Protocol::Codex => responses_reply(&mut body, progress).await,
             Protocol::Messages => {
-                let mut stream = super::messages::Stream::default();
+                let hour = super::request::cache_retention() == super::CacheRetention::Long;
+                let mut stream = super::messages::Stream::new(hour);
                 match read_body(&mut body, |data| stream.feed(data, progress)).await {
                     Ok(()) => stream.finish(),
                     Err(failure) => Err(failure),
