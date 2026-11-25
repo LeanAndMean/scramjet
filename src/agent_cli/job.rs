@@ -51,6 +51,12 @@ pub(super) fn continued() -> bool {
     CONTINUED.swap(false, Ordering::Relaxed)
 }
 
+/// How many times the agent has been stopped and continued.
+#[cfg(unix)]
+pub(super) fn stops() -> usize {
+    STOPS.load(Ordering::SeqCst)
+}
+
 /// Stops with SIGTSTP's default action, so the kernel still discards it in an orphaned process
 /// group, where no shell could continue the agent. Keys the agent has not read yet are dropped
 /// as the default Ctrl-Z drops them; the turn's `NOFLSH` would otherwise give them to the shell
@@ -94,3 +100,8 @@ pub(super) fn install(_startup: Option<console::Mode>) -> io::Result<()> {
 
 #[cfg(windows)]
 pub(super) fn suspend() {}
+
+#[cfg(windows)]
+pub(super) fn stops() -> usize {
+    0
+}

@@ -282,6 +282,9 @@ pub(super) struct Terminal {
     /// Rows printed by the response's text while it is a single block, the latest output and on
     /// a terminal.
     text_rows: Option<usize>,
+    /// The stops (`job::stops`) when `text_rows` started counting: after one, the shell's lines
+    /// are below the reply.
+    text_stops: usize,
     /// Newlines ending the streamed block so far, not yet printed.
     held_newlines: usize,
     /// Newlines ending the streamed block that were printed early.
@@ -754,6 +757,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             streamed: String::new(),
             consumed: 0,
             text_rows: None,
+            text_stops: 0,
             held_newlines: 0,
             printed_newlines: 0,
             markdown: markdown::Markdown::new(false, "", 0),
@@ -876,6 +880,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             self.streaming = kind;
             self.text_rows =
                 (kind == Streaming::Text && styled && self.streamed.is_empty()).then_some(0);
+            self.text_stops = job::stops();
             let reopen = self.markdown.reopen();
             self.print_streamed(&reopen);
         }
@@ -1070,7 +1075,8 @@ impl AgentUi for Terminal {
             let captured = self.capture.is_some();
             let rows = self
                 .text_rows
-                .filter(|&rows| rows > 0 && (captured || rows < height));
+                .filter(|&rows| rows > 0 && (captured || rows < height))
+                .filter(|_| captured || job::stops() == self.text_stops);
             if let Some(rows) = rows {
                 self.rewind(rows);
                 text = self.streamed[..self.consumed].to_owned() + &text;

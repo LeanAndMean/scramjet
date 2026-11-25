@@ -236,10 +236,11 @@ def serve_thoughts(gates):
     return '127.0.0.1:%d' % listener.getsockname()[1]
 
 
-def serve_replies(replies, models=(), usage=None, backend=None, heads=None):
+def serve_replies(replies, models=(), usage=None, backend=None, heads=None, gate=None):
     """Answers the requests in turn with a message streamed as `deltas` whose final text is `text`
     (and `usage`, when given) from `backend` (`x-served-by`), offering `models` (`offering`); each
-    request's head is added to `heads` when given."""
+    request's head is added to `heads` when given. With `gate`, each stream waits after its deltas
+    until it is set."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -255,13 +256,16 @@ def serve_replies(replies, models=(), usage=None, backend=None, heads=None):
              'item': dict(item, status='in_progress', content=[])},
             dict(where, type='response.content_part.added', part=part),
             *(dict(where, type='response.output_text.delta', delta=delta) for delta in deltas),
+            None,
             dict(where, type='response.output_text.done', text=text),
             dict(where, type='response.content_part.done', part=dict(part, text=text)),
             {'type': 'response.output_item.done', 'output_index': 0, 'item': item},
             {'type': 'response.completed', 'response': {'id': 'resp_1', 'status': 'completed', 'output': [item],
                                                         **({'usage': usage} if usage else {})}},
         ]
-        streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
+        cut = events.index(None)
+        streams.append([b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in part)
+                        for part in (events[:cut], events[cut + 1:])])
 
     served_by = b'x-served-by: %s\r\n' % backend.encode() if backend else b''
 
@@ -272,9 +276,14 @@ def serve_replies(replies, models=(), usage=None, backend=None, heads=None):
             head = receive(connection).partition(b'\r\n\r\n')[0].decode()
             if heads is not None:
                 heads.append(head)
-            stream = next(pending)
-            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n%scontent-length: %d\r\n'
-                               b'connection: close\r\n\r\n%s' % (served_by, len(stream), stream))
+            parts = next(pending)
+            connection.sendall(b'HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n%stransfer-encoding: chunked\r\n'
+                               b'connection: close\r\n\r\n' % served_by)
+            for number, part in enumerate(parts):
+                if number and gate:
+                    gate.wait(10)
+                connection.sendall(b'%x\r\n%s\r\n' % (len(part), part))
+            connection.sendall(b'0\r\n\r\n')
             connection.close()
 
     threading.Thread(target=answer, daemon=True).start()
@@ -1892,6 +1901,37 @@ def printing_in_background(read, until, send, output):
     until(b'restored-42', mark)
     assert b'tty output' not in output, bytes(output[-2000:])
 
+
+def rewriting_after_a_stop(read, until, send, output):
+    mark = until(b' of the')
+    send(b'\x1a')
+    mark = until(b'Stopped', mark)
+    send(b'echo shell-$((2+4))\r')
+    mark = until(b'shell-6', mark)
+    send(b'fg\r')
+    mark = until(b'fg', mark)
+    read(.3)
+    rewrite_gate.set()
+    mark = until(b'The start of the reply.', mark)
+    # The shell's lines are below the streamed text now: rewinding over them would erase them.
+    assert not re.search(rb'\x1b\[\d+A\x1b\[J', output), bytes(output[-2000:])
+    until(b'$ ', mark)
+
+
+def rewriting_in_place(read, until, send, output):
+    mark = until(b' of the')
+    rewrite_gate.set()
+    until(b'The start of the reply.', mark)
+    assert re.search(rb'\x1b\[\d+A\x1b\[J', output), bytes(output[-2000:])
+    until(b'$ ', mark)
+
+
+rewrite_gate = threading.Event()
+run_in_shell(rewriting_in_place, serve_replies([([' of the reply.'], 'The start of the reply.')], gate=rewrite_gate),
+             '-p go')
+rewrite_gate = threading.Event()
+run_in_shell(rewriting_after_a_stop, serve_replies([([' of the reply.'], 'The start of the reply.')], gate=rewrite_gate),
+             '-p go')
 
 background_gate = threading.Event()
 run_in_shell(printing_in_background, serve_items([[message('Answered in the background.')]], gate=background_gate),

@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.344.2 — A reply kept whole after Ctrl+Z
+
+### Fixed
+
+- In `-p` on a terminal, a reply whose stream lost a part is no longer rewritten over the shell's lines when you stopped Scramjet with Ctrl+Z and continued it with `fg` while it streamed: the full reply follows what was shown, as when it has scrolled away.
+
 ## 2.344.1 — A list's keys on a short screen
 
 ### Fixed
