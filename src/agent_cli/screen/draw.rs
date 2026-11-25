@@ -264,9 +264,18 @@ impl App {
         );
         let escape =
             self.selection.is_some() || (self.dialog.is_none() && !self.draft.completing());
+        // A report's own keys are in its dock, and the view below is the report's, not the end.
+        let report = matches!(
+            self.dialog,
+            Some(Open {
+                shown: Shown::Report(_),
+                ..
+            })
+        );
         let page = page.then(|| keymap::key(Binding::PageDown)).flatten();
         let escape = escape.then(|| keymap::key(Binding::Interrupt)).flatten();
         let back = match (page, escape) {
+            _ if report => String::new(),
             (Some(page), Some(escape)) => format!(" · {page} or {escape} to go back"),
             (Some(key), None) | (None, Some(key)) => format!(" · {key} to go back"),
             (None, None) => String::new(),

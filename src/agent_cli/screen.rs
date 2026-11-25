@@ -1359,6 +1359,39 @@ mod tests {
     }
 
     #[test]
+    fn a_report_taller_than_the_screen_says_what_is_below_but_not_to_go_back() {
+        use crate::agent_cli::report::Tab;
+        let (mut app, _from) = app();
+        let status = |app: &App| crate::agent_cli::text::plain(&app.dock((100, 30)).0[0].shown);
+        // The conversation scrolled up: PgDn or Escape goes back to its end.
+        (app.top, app.last) = (Some(Place::START), 12);
+        assert!(
+            status(&app).ends_with("12 more lines below · PgDn or Esc to go back"),
+            "{}",
+            status(&app)
+        );
+        let tab = Tab {
+            name: "All".into(),
+            summary: "line\n".repeat(60),
+            details: String::new(),
+        };
+        let view = ReportView::new("What's new", "titles", vec![tab], 0, false);
+        let (reply, _answer) = mpsc::channel();
+        app.message(ToScreen::Dialog(
+            Dialog::Report(Box::new(view)),
+            reply,
+            false,
+        ));
+        app.preview();
+        app.last = 40;
+        assert!(
+            status(&app).ends_with("40 more lines below"),
+            "{}",
+            status(&app)
+        );
+    }
+
+    #[test]
     fn the_bottoms_other_than_pi_keep_all_the_footer_tells_however_narrow() {
         use super::footer::Shown;
         let (mut app, _from) = app();

@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.3 — A long report's status row
+
+### Fixed
+
+- A report taller than the screen (What's new, `/changelog`, `/usage`, `/context`, `/system-prompt`) said "N more lines below · PgDn to go back" under it from the start, as if you had scrolled away from somewhere; it now says only how many lines are below, its keys being in the row under it.
+
 ## 2.347.2 — A closed terminal no longer crashes Scramjet
 
 ### Fixed
