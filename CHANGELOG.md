@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.361.0 — /autocompact
+
+### Added
+
+- `/autocompact` sets when the conversation compacts by itself, as Claude Code's does: `on` and `off`, a number of tokens to keep free of the model's window (such as `30k`), or `auto` for the default. It saves your settings' `compaction`; alone it says where compaction starts for the current model.
+
 ## 2.360.0 — /theme
 
 ### Added

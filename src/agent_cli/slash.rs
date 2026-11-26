@@ -54,6 +54,8 @@ pub(super) enum Builtin<'a> {
     Login,
     Logout,
     Compact(&'a str),
+    /// Claude Code's `/autocompact [on|off|auto|TOKENS]`: when compaction runs by itself.
+    AutoCompact(&'a str),
     /// Claude Code's `/btw QUESTION`: a side question, answered apart from the conversation.
     Btw(&'a str),
     Autopilot(&'a str),
@@ -107,6 +109,7 @@ impl<'a> Builtin<'a> {
             "login" if argument.is_empty() => Self::Login,
             "logout" if argument.is_empty() => Self::Logout,
             "compact" => Self::Compact(argument),
+            "autocompact" => Self::AutoCompact(argument),
             "btw" => Self::Btw(argument),
             "autopilot" => Self::Autopilot(argument),
             "mcp" => Self::Mcp(argument),
@@ -145,6 +148,7 @@ impl<'a> Builtin<'a> {
                 | Self::Model(_)
                 | Self::Effort(_)
                 | Self::Theme(_)
+                | Self::AutoCompact(_)
                 | Self::ScopedModels
                 | Self::Login
                 | Self::Logout
@@ -200,6 +204,7 @@ impl Interactive {
             Some(Builtin::Login) => self.login(),
             Some(Builtin::Logout) => self.logout(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
+            Some(Builtin::AutoCompact(wanted)) => self.auto_compact(wanted),
             Some(Builtin::Btw(question)) => self.btw(question),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Mcp(argument)) => self.mcp(argument),
@@ -750,6 +755,54 @@ tools into its page",
         }
     }
 
+    /// `/autocompact [on|off|auto|TOKENS]`: turns compaction by itself on or off, or sets the
+    /// tokens kept free of the window (`auto` its default), saved in the settings; without an
+    /// argument, where it runs.
+    fn auto_compact(&mut self, wanted: &str) {
+        let settings = &mut self.session.settings;
+        let saved = match wanted.to_ascii_lowercase().as_str() {
+            "" => Ok(()),
+            "on" => settings.set_auto_compact(true),
+            "off" => settings.set_auto_compact(false),
+            "auto" => (settings.set_auto_compact(true))
+                .and_then(|()| settings.set_compaction_reserve(None)),
+            tokens => match token_count(tokens) {
+                Some(reserve) => settings.set_compaction_reserve(Some(reserve)),
+                None => {
+                    return self.say(&format!(
+                        "Error: /autocompact takes on, off, auto or a number of tokens to keep \
+                         free of the window (such as 30000 or 30k), not {wanted}"
+                    ));
+                }
+            },
+        };
+        self.session.agent.set_compacting(settings.compacting);
+        if let Err(error) = saved {
+            self.say(&format!("Error: settings not saved: {error}"));
+        }
+        let agent = &self.session.agent;
+        if !agent.compacting().automatic {
+            return self
+                .say("Auto-compact: off; /compact still compacts; /autocompact on turns it on");
+        }
+        let when = match (agent.compaction_threshold(), agent.context_window()) {
+            (Some(at), Some(window)) => format!(
+                "past {} of {}'s {} window ({} kept free)",
+                terminal::tokens(at),
+                agent.model(),
+                terminal::tokens(window),
+                terminal::tokens(window - at)
+            ),
+            _ => format!(
+                "keeping {} of the window free (its size is not known)",
+                terminal::tokens(agent.compacting().reserve)
+            ),
+        };
+        self.say(&format!(
+            "Auto-compact: on, {when}; /autocompact on|off|auto|TOKENS"
+        ));
+    }
+
     /// `/effort [LEVEL]`: sets the thinking level, saved as the settings' default, as Shift+Tab
     /// does; without one, the levels to pick from (on the full screen `/settings`' list).
     fn effort(&mut self, wanted: &str) {
@@ -1163,9 +1216,33 @@ pub(super) fn grouped(count: u64) -> String {
     grouped
 }
 
+/// A number of tokens as typed: `30000`, `30,000`, `30k` or `1.5k`.
+fn token_count(typed: &str) -> Option<u64> {
+    let typed = typed.replace(',', "");
+    let (number, scale) = match typed.strip_suffix(['k', 'K']) {
+        Some(number) => (number, 1e3),
+        None => (typed.as_str(), 1.0),
+    };
+    let parsed = number.parse::<f64>().ok()? * scale;
+    let whole = number.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    (whole && parsed.is_finite() && parsed < 1e12).then(|| parsed.round() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_counts_take_plain_grouped_and_k_forms() {
+        assert_eq!(token_count("30000"), Some(30_000));
+        assert_eq!(token_count("30,000"), Some(30_000));
+        assert_eq!(token_count("30k"), Some(30_000));
+        assert_eq!(token_count("1.5K"), Some(1_500));
+        assert_eq!(token_count("0"), Some(0));
+        for wrong in ["", "k", "-5", "1e5", "inf", "lots", "5m"] {
+            assert_eq!(token_count(wrong), None, "{wrong}");
+        }
+    }
 
     #[test]
     fn a_path_argument_is_its_first_word_or_quoted() {
@@ -1262,6 +1339,14 @@ mod tests {
             Some(Builtin::Theme("pi-light"))
         );
         assert_eq!(Builtin::parse("/theme"), Some(Builtin::Theme("")));
+        assert_eq!(
+            Builtin::parse("/autocompact 30k"),
+            Some(Builtin::AutoCompact("30k"))
+        );
+        assert_eq!(
+            Builtin::parse("/autocompact"),
+            Some(Builtin::AutoCompact(""))
+        );
     }
 
     #[test]

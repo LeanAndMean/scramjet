@@ -376,7 +376,7 @@ alone lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
 Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
-/model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
+/model, /effort, /theme, /autocompact, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,
 and the other commands stop the turn and run once it has.
@@ -410,7 +410,9 @@ and why (`import --help`); the first interactive start that finds one offers it.
 on stdin and stdout (`acp --help`).
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'
-compaction.enabled is false (Auto-compact in /settings).
+compaction.enabled is false (Auto-compact in /settings). /autocompact on|off sets it,
+/autocompact TOKENS sets compaction.reserveTokens, what is kept free of the window (auto: its
+default), and /autocompact alone says where compaction starts for the model.
 Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramjet/),
 with the keys hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
