@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.380.0 — Hooks as prompts are sent, turns end and sessions start
+
+### Added
+
+- Claude Code's `UserPromptSubmit`, `Stop` and `SessionStart` hooks in the settings' `hooks`, copied as they are: a hook can keep a prompt from being sent or add context to it, keep the agent working when its turn would end (at most 8 times in a row, as Claude Code), and tell the model something as a session starts, is resumed, cleared or compacted.
+
 ## 2.379.0 — Claude Code's env in the settings
 
 ### Added

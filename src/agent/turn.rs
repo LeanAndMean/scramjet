@@ -45,6 +45,10 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
+        let Some(told) = self.prompt_hooks(prompt, ui, cancel) else {
+            return Ok(());
+        };
+        self.stop_blocks = 0;
         self.follow_runtime(ui, true, cancel);
         self.compaction_failed = false;
         self.compact_before_prompt(ui, cancel)?;
@@ -68,6 +72,7 @@ impl Agent {
         self.tell_plan(&mut message);
         self.tell_tasks(&mut message);
         self.add_shown(message, ui)?;
+        self.add_hook_context(told)?;
         self.save_command()?;
         self.say_saving(ui);
         self.prompts.push(typed);
@@ -367,7 +372,7 @@ finish and is not checked on. Reply to continue.",
                         return Err(AgentError::Cancelled);
                     }
                     let steering = ui.steering();
-                    self.add_queued(steering, ui)?;
+                    self.add_queued(steering, ui, cancel)?;
                     self.tell_tasks_within(ui)?;
                     if let Some(level) = ui.effort() {
                         self.set_effort(level)?;
@@ -378,6 +383,7 @@ finish and is not checked on. Reply to continue.",
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui, false, cancel);
                     self.compact_within_turn(ui, cancel)?;
+                    self.session_start_hooks(ui, cancel)?;
                     let parts = self.instruction_parts();
                     let mut request = self.request_with(&parts);
                     self.fit_for_runtime(&mut request, &mut past_window_said, ui);
@@ -453,7 +459,7 @@ to a larger-context model)"
             self.follow_runtime(ui, false, cancel);
             if calls.is_empty() {
                 self.compact_when_full(ui, cancel)?;
-                if self.continue_queued(ui)? {
+                if self.continue_queued(ui, cancel)? || self.stop_hooks_go_on(ui, cancel)? {
                     continue;
                 }
                 return Ok(());
@@ -478,36 +484,45 @@ to a larger-context model)"
         self.save_command()?;
         if ends {
             self.compact_when_full(ui, cancel)?;
-            return Ok(!self.continue_queued(ui)?);
+            return Ok(!(self.continue_queued(ui, cancel)? || self.stop_hooks_go_on(ui, cancel)?));
         }
         Ok(false)
     }
 
     /// Where the turn would end: adds the steering messages queued, else the follow-ups; returns
     /// whether there were any, so the turn goes on.
-    fn continue_queued(&mut self, ui: &mut dyn AgentUi) -> Result<bool, AgentError> {
+    fn continue_queued(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<bool, AgentError> {
         let mut messages = ui.steering();
         if messages.is_empty() {
             messages = ui.follow_up();
         }
-        let any = !messages.is_empty();
-        self.add_queued(messages, ui)?;
-        Ok(any)
+        self.add_queued(messages, ui, cancel)
     }
 
     /// Adds messages the user queued during the turn as typed prompts are added: a command
-    /// starts there, replacing the one running, as in Scramjet.
+    /// starts there, replacing the one running, as in Scramjet. Returns whether any was added,
+    /// not blocked by a `UserPromptSubmit` hook.
     fn add_queued(
         &mut self,
         messages: Vec<String>,
         ui: &mut dyn AgentUi,
-    ) -> Result<(), AgentError> {
+        cancel: &AtomicBool,
+    ) -> Result<bool, AgentError> {
         if messages.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
         // The user went on, as Scramjet drops a suggestion at the user's input.
         self.suggestion = suggest::Pending::Nothing;
+        let mut added = false;
         for prompt in messages {
+            let Some(told) = self.prompt_hooks(&prompt, ui, cancel) else {
+                continue;
+            };
+            added = true;
             let message = self.user_message(&prompt, ui);
             match message.get(TYPED) {
                 Some(_) => {
@@ -516,9 +531,11 @@ to a larger-context model)"
                 None => ui.user_prompt(&prompt),
             }
             self.add_shown(message, ui)?;
+            self.add_hook_context(told)?;
             self.prompts.push(prompt);
         }
-        self.save_command()
+        self.save_command()?;
+        Ok(added)
     }
 }
 

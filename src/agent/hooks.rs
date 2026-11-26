@@ -1,16 +1,28 @@
 //! Claude Code's hooks: the user's commands that its `hooks` setting runs before and after the
 //! agent's tools, given the call as JSON on their input, and able to block it, change its input,
-//! ask the user or tell the model more.
+//! ask the user or tell the model more; and as a prompt is sent, as a turn would end and as a
+//! session starts.
 
 use super::tools::{self, Call, Output};
-use super::{AgentUi, Answer, mcp, subagent};
+use super::{Agent, AgentError, AgentUi, Answer, PROBE, mcp, message_text, subagent};
 use serde_json::{Map, Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The events run, as Claude Code names them.
-pub const EVENTS: [&str; 3] = ["PreToolUse", "PostToolUse", "PostToolUseFailure"];
+pub const EVENTS: [&str; 6] = [
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "UserPromptSubmit",
+    "Stop",
+    "SessionStart",
+];
+
+/// How many times in a row `Stop` hooks may keep a turn going, as Claude Code's
+/// `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` by default.
+const STOP_BLOCKS: usize = 8;
 
 /// Claude Code's time limit for a command hook.
 const TIMEOUT: Duration = Duration::from_secs(600);
@@ -20,9 +32,22 @@ enum Event {
     PreToolUse,
     PostToolUse,
     PostToolUseFailure,
+    UserPromptSubmit,
+    Stop,
+    /// Its matcher names the source: `startup`, `resume`, `clear` or `compact`.
+    SessionStart,
 }
 
 impl Event {
+    const ALL: [Self; 6] = [
+        Self::PreToolUse,
+        Self::PostToolUse,
+        Self::PostToolUseFailure,
+        Self::UserPromptSubmit,
+        Self::Stop,
+        Self::SessionStart,
+    ];
+
     fn name(self) -> &'static str {
         EVENTS[self as usize]
     }
@@ -106,11 +131,7 @@ impl Hooks {
                 ));
                 continue;
             };
-            let event = [
-                Event::PreToolUse,
-                Event::PostToolUse,
-                Event::PostToolUseFailure,
-            ][event];
+            let event = Event::ALL[event];
             let Some(groups) = groups.as_array() else {
                 warnings.push(format!(
                     "{path}: hooks.{name} must be a list of matchers with their hooks; ignored"
@@ -135,11 +156,13 @@ impl Hooks {
         self.groups.is_empty()
     }
 
-    /// The commands run for `event` on a tool with `names`, each once.
-    fn matching(&self, event: Event, names: &[String]) -> Vec<&Command> {
+    /// The commands run for `event` on a tool, or a session's source, with `names`, each once;
+    /// `None`: an event whose matcher is not read, as Claude Code reads none for
+    /// `UserPromptSubmit` and `Stop`.
+    fn matching(&self, event: Event, names: Option<&[String]>) -> Vec<&Command> {
         let mut found: Vec<&Command> = Vec::new();
         for group in self.groups.iter().filter(|group| group.event == event) {
-            if group.matcher.matches(names) {
+            if names.is_none_or(|names| group.matcher.matches(names)) {
                 for command in &group.commands {
                     if !found.iter().any(|seen| seen.command == command.command) {
                         found.push(command);
@@ -265,10 +288,15 @@ pub(super) enum Before {
 struct Said {
     /// For the model: exit code 2's error output, a `deny` or `block` with its reason.
     blocking: Option<String>,
+    /// That error output or reason alone, for the user.
+    why: Option<String>,
     decision: Option<&'static str>,
     reason: Option<String>,
     updated: Option<Value>,
     context: Option<String>,
+    /// What it printed, when not JSON: for the model after `UserPromptSubmit` and
+    /// `SessionStart`.
+    plain: Option<String>,
 }
 
 impl Bound {
@@ -281,14 +309,14 @@ impl Bound {
         cancel: &AtomicBool,
     ) -> Option<Before> {
         let names = names(call);
-        let commands = self.hooks.matching(Event::PreToolUse, &names);
+        let commands = self.hooks.matching(Event::PreToolUse, Some(&names));
         if commands.is_empty() {
             return None;
         }
         let input = json!({"tool_name": names[0], "tool_input": tool_input(call, root)});
         let said = self.run(
             Event::PreToolUse,
-            &names[0],
+            &format!("PreToolUse:{}", names[0]),
             &commands,
             input,
             root,
@@ -335,7 +363,7 @@ impl Bound {
             true => Event::PostToolUseFailure,
             false => Event::PostToolUse,
         };
-        let commands = self.hooks.matching(event, &names);
+        let commands = self.hooks.matching(event, Some(&names));
         if !commands.is_empty() && !cancel.load(Ordering::Relaxed) {
             let mut input = json!({"tool_name": names[0], "tool_input": tool_input(call, root)});
             match event {
@@ -345,7 +373,7 @@ impl Bound {
                 }
                 _ => input["tool_response"] = tool_response(call, output, root),
             }
-            for said in self.run(event, &names[0], &commands, input, root, ui, cancel) {
+            for said in self.run(event, &label(event), &commands, input, root, ui, cancel) {
                 told.extend(said.blocking);
                 told.extend(
                     said.context
@@ -358,12 +386,83 @@ impl Bound {
         }
     }
 
+    /// Runs the `UserPromptSubmit` hooks on `prompt`, as typed: what they tell the model, or
+    /// `Err` with why, for the user, the prompt is not to be sent.
+    pub fn prompt_submitted(
+        &self,
+        prompt: &str,
+        root: &Path,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<String>, String> {
+        let event = Event::UserPromptSubmit;
+        let commands = self.hooks.matching(event, None);
+        if commands.is_empty() {
+            return Ok(Vec::new());
+        }
+        let input = json!({"prompt": prompt});
+        let said = self.run(event, event.name(), &commands, input, root, ui, cancel);
+        let blocked: Vec<String> = said.iter().filter_map(|said| said.why.clone()).collect();
+        match blocked.is_empty() {
+            true => Ok(told(event.name(), said)),
+            false => Err(blocked.join("\n")),
+        }
+    }
+
+    /// Runs the `Stop` hooks as a turn would end after `last`, the model's last text;
+    /// `active` when a `Stop` hook kept this turn going before. If any hook blocks its end, what
+    /// has the turn go on, for the model and for the user.
+    pub fn stopping(
+        &self,
+        active: bool,
+        last: Option<String>,
+        root: &Path,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Option<(String, String)> {
+        let event = Event::Stop;
+        let commands = self.hooks.matching(event, None);
+        if commands.is_empty() {
+            return None;
+        }
+        let mut input = json!({"stop_hook_active": active});
+        if let Some(last) = last {
+            input["last_assistant_message"] = json!(last);
+        }
+        let said = self.run(event, event.name(), &commands, input, root, ui, cancel);
+        let (blocked, why): (Vec<_>, Vec<_>) = (said.into_iter())
+            .filter_map(|said| said.blocking.zip(said.why))
+            .unzip();
+        (!blocked.is_empty()).then(|| (blocked.join("\n"), why.join("\n")))
+    }
+
+    /// Runs the `SessionStart` hooks matching `source` for a session on `model`: what they
+    /// tell the model.
+    pub fn session_started(
+        &self,
+        source: &str,
+        model: &str,
+        root: &Path,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Vec<String> {
+        let event = Event::SessionStart;
+        let commands = self.hooks.matching(event, Some(&[source.to_owned()]));
+        if commands.is_empty() {
+            return Vec::new();
+        }
+        let input = json!({"source": source, "model": model});
+        let label = format!("{}:{source}", event.name());
+        let said = self.run(event, &label, &commands, input, root, ui, cancel);
+        told(&label, said)
+    }
+
     /// Runs `commands` at once, each given `input` with the session's fields; what each said.
     #[allow(clippy::too_many_arguments)]
     fn run(
         &self,
         event: Event,
-        tool: &str,
+        label: &str,
         commands: &[&Command],
         mut input: Value,
         root: &Path,
@@ -398,10 +497,105 @@ impl Bound {
                 .filter_map(|running| running.join().ok())
                 .collect()
         });
-        let label = format!("{}:{tool}", event.name());
         (ran.into_iter())
-            .map(|(command, ran)| said(event, &label, command, ran, ui))
+            .map(|(command, ran)| said(event, label, command, ran, ui))
             .collect()
+    }
+}
+
+/// What hooks that ran as a prompt was sent or a session started tell the model: what they
+/// printed, and their `additionalContext`.
+fn told(label: &str, said: Vec<Said>) -> Vec<String> {
+    let mut told = Vec::new();
+    for said in said {
+        told.extend(
+            said.plain
+                .map(|plain| format!("{label} hook success: {plain}")),
+        );
+        told.extend(said.context.map(|context| additional(label, &context)));
+    }
+    told
+}
+
+impl Agent {
+    /// What `UserPromptSubmit` hooks tell the model of `prompt`; `None`, the user told why, when
+    /// one blocks it, so it is not sent.
+    pub(super) fn prompt_hooks(
+        &self,
+        prompt: &str,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Option<Vec<String>> {
+        let Some(hooks) = self.bound_hooks() else {
+            return Some(Vec::new());
+        };
+        match hooks.prompt_submitted(prompt, &self.config.root, ui, cancel) {
+            Ok(told) => Some(told),
+            Err(why) => {
+                ui.notice(&format!(
+                    "A UserPromptSubmit hook blocked the prompt, which was not sent: {why}"
+                ));
+                None
+            }
+        }
+    }
+
+    /// Adds what hooks `told` the model, as a message the user never typed.
+    pub(super) fn add_hook_context(&mut self, told: Vec<String>) -> Result<(), AgentError> {
+        if told.is_empty() {
+            return Ok(());
+        }
+        let note = format!("<system-reminder>\n{}\n</system-reminder>", told.join("\n"));
+        self.add(json!({"role": "user", "content": note, PROBE: true}))
+    }
+
+    /// Runs the `SessionStart` hooks for the start, resume, clear or compaction since the last
+    /// request, adding what they tell the model.
+    pub(super) fn session_start_hooks(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(), AgentError> {
+        let (Some(source), Some(hooks)) = (self.session_start.take(), self.bound_hooks()) else {
+            return Ok(());
+        };
+        let told = hooks.session_started(source, self.model_id(), &self.config.root, ui, cancel);
+        self.add_hook_context(told)
+    }
+
+    /// Where the turn would end: whether `Stop` hooks have it go on, with what they said added
+    /// for the model. Past `STOP_BLOCKS` times in a turn it ends anyway, the user told so.
+    pub(super) fn stop_hooks_go_on(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<bool, AgentError> {
+        let Some(hooks) = self.bound_hooks() else {
+            return Ok(false);
+        };
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
+        let last = (self.conversation.iter().rev())
+            .find(|item| item["type"] == "message" && item["role"] == "assistant")
+            .map(message_text);
+        let active = self.stop_blocks > 0;
+        let Some((why, shown)) = hooks.stopping(active, last, &self.config.root, ui, cancel) else {
+            return Ok(false);
+        };
+        self.stop_blocks += 1;
+        if self.stop_blocks > STOP_BLOCKS {
+            ui.notice(&format!(
+                "A Stop hook blocked the turn from ending {} times in a row; it ends now. A \
+                 Stop hook can read stop_hook_active in its input and let the turn end while it \
+                 is true.",
+                self.stop_blocks
+            ));
+            return Ok(false);
+        }
+        ui.notice(&format!("Stop hook feedback: {shown}"));
+        self.add(json!({"role": "user", "content": why, PROBE: true}))?;
+        Ok(true)
     }
 }
 
@@ -441,7 +635,14 @@ fn said(
                 "" => "No stderr output",
                 stderr => stderr,
             };
-            said.blocking = Some(blocking(label, command, why));
+            // As Claude Code's, a session's start cannot be blocked: the user is told.
+            match event {
+                Event::SessionStart => ui.notice(&format!("{label} hook error: {why}")),
+                _ => {
+                    said.blocking = Some(blocking(label, command, why));
+                    said.why = Some(why.to_owned());
+                }
+            }
             return said;
         }
         code => {
@@ -460,6 +661,7 @@ fn said(
         .then(|| serde_json::from_str::<Map<String, Value>>(exited.stdout.trim()).ok())
         .flatten()
     else {
+        said.plain = Some(exited.stdout.trim().to_owned()).filter(|plain| !plain.is_empty());
         return said;
     };
     if let Some(message) = answer.get("systemMessage").and_then(Value::as_str) {
@@ -493,14 +695,17 @@ fn said(
             if said.decision == Some("deny") {
                 let why = said.reason.as_deref().unwrap_or("Blocked by hook");
                 said.blocking = Some(blocking(label, command, why));
+                said.why = Some(why.to_owned());
             }
         }
-        Event::PostToolUse | Event::PostToolUseFailure => {
+        Event::PostToolUse | Event::PostToolUseFailure | Event::UserPromptSubmit | Event::Stop => {
             if answer.get("decision").and_then(Value::as_str) == Some("block") {
                 let why = reason.unwrap_or("Blocked by hook");
                 said.blocking = Some(blocking(label, command, why));
+                said.why = Some(why.to_owned());
             }
         }
+        Event::SessionStart => {}
     }
     said
 }
@@ -631,23 +836,23 @@ mod tests {
                 {"matcher": "(", "hooks": [{"type": "command", "command": "b"}]},
                 {"hooks": [{"type": "command", "command": "c", "timeout": 0}]},
             ],
-            "Stop": [{"hooks": [{"type": "command", "command": "d"}]}],
+            "Notification": [{"hooks": [{"type": "command", "command": "d"}]}],
             "PostToolUse": {"matcher": "Write"},
         }));
         assert_eq!(
             warnings,
             [
+                "s.json: hooks.Notification is not run: Scramjet runs PreToolUse, PostToolUse, \
+                 PostToolUseFailure, UserPromptSubmit, Stop, SessionStart hooks; ignored",
                 "s.json: hooks.PostToolUse must be a list of matchers with their hooks; ignored",
                 "s.json: hooks.PreToolUse[0].hooks[1]: Scramjet runs only \"command\" hooks, \
                  not \"prompt\"; ignored",
                 "s.json: hooks.PreToolUse[1].matcher is not a regular expression; ignored",
                 "s.json: hooks.PreToolUse[2].hooks[0].timeout must be seconds, above 0; ignored",
-                "s.json: hooks.Stop is not run: Scramjet runs PreToolUse, PostToolUse, \
-                 PostToolUseFailure hooks; ignored",
             ]
         );
         let bash = names(&call("bash", json!({})));
-        let run = hooks.matching(Event::PreToolUse, &bash);
+        let run = hooks.matching(Event::PreToolUse, Some(&bash));
         assert_eq!(
             run,
             [&Command {
@@ -655,7 +860,7 @@ mod tests {
                 timeout: Duration::from_secs(5)
             }]
         );
-        assert!(hooks.matching(Event::PostToolUse, &bash).is_empty());
+        assert!(hooks.matching(Event::PostToolUse, Some(&bash)).is_empty());
         let (_, warnings) = read(json!(["no setting's type"]));
         assert_eq!(
             warnings,
@@ -663,6 +868,133 @@ mod tests {
                 "s.json: hooks must be an object of events, each a list of matchers with their \
               hooks; ignored"
             ]
+        );
+    }
+
+    #[test]
+    fn prompts_turns_ends_and_session_starts_run_claude_codes_hooks() {
+        use crate::agent::tests::{Recorder, agent, missing, serve, stream};
+        use crate::provider_fixture as fixture;
+        if missing("bash") {
+            return;
+        }
+        let (endpoint, server) = serve(
+            ["done", "tested", "fine"]
+                .map(|text| stream(&fixture::text_events(text, fixture::known_usage())))
+                .to_vec(),
+        );
+        let (mut agent, _scratch) = agent(endpoint, "hook-events");
+        let root = agent.root().to_owned();
+        let prompt = r#"input=$(cat); echo "$input" >> prompts.jsonl; case $input in *secret*) echo 'no secrets' >&2; exit 2;; esac; echo '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "the date is today"}}'"#;
+        let stop = r#"input=$(cat); echo "$input" >> stops.jsonl; case $input in *'"last_assistant_message":"done"'*) echo 'run the tests first' >&2; exit 2;; esac"#;
+        let settings = json!({
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": prompt}]}],
+            "Stop": [{"matcher": "never read", "hooks": [{"type": "command", "command": stop}]}],
+            "SessionStart": [
+                {"matcher": "startup", "hooks": [{"type": "command", "command": "cat > start.json; echo from the start"}]},
+                {"matcher": "clear|compact", "hooks": [{"type": "command", "command": "echo cleared"}]},
+            ],
+        });
+        let (hooks, warnings) = read(settings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        agent.set_hooks(std::sync::Arc::new(hooks));
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("a secret plan", &mut ui, &cancel).unwrap();
+        assert!(agent.conversation().is_empty());
+        let blocked = "notice A UserPromptSubmit hook blocked the prompt, which was not sent: no \
+                       secrets";
+        assert!(ui.shown.contains(&blocked.to_owned()), "{:?}", ui.shown);
+        agent.turn("go", &mut ui, &cancel).unwrap();
+        agent.new_session().unwrap();
+        agent.turn("again", &mut ui, &cancel).unwrap();
+        let requests = server.join().unwrap();
+        let users = |at: usize| -> Vec<String> {
+            (requests[at]["input"].as_array().unwrap().iter())
+                .filter(|item| item["role"] == "user")
+                .map(|item| item["content"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            users(0),
+            [
+                "go",
+                "<system-reminder>\nUserPromptSubmit hook additional context: the date is today\n\
+                 </system-reminder>",
+                "<system-reminder>\nSessionStart:startup hook success: from the start\n\
+                 </system-reminder>",
+            ]
+        );
+        assert_eq!(
+            users(1).last().unwrap(),
+            &format!("Stop hook blocking error from command: \"{stop}\": run the tests first")
+        );
+        let feedback = "notice Stop hook feedback: run the tests first".to_owned();
+        assert!(ui.shown.contains(&feedback), "{:?}", ui.shown);
+        let again = users(2);
+        assert_eq!(again[0], "again");
+        assert!(
+            again[2].contains("SessionStart:clear hook success: cleared"),
+            "{again:?}"
+        );
+        let lines = |file: &str| -> Vec<Value> {
+            (std::fs::read_to_string(root.join(file)).unwrap().lines())
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect()
+        };
+        let prompts = lines("prompts.jsonl");
+        assert_eq!(prompts.len(), 3);
+        assert_eq!(prompts[1]["prompt"], "go");
+        assert_eq!(prompts[1]["hook_event_name"], "UserPromptSubmit");
+        let stops = lines("stops.jsonl");
+        let stopped: Vec<_> = (stops.iter())
+            .map(|stop| {
+                (
+                    stop["stop_hook_active"].clone(),
+                    stop["last_assistant_message"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            stopped,
+            [
+                (json!(false), json!("done")),
+                (json!(true), json!("tested")),
+                (json!(false), json!("fine")),
+            ]
+        );
+        let start: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("start.json")).unwrap())
+                .unwrap();
+        assert_eq!(start["hook_event_name"], "SessionStart");
+        assert_eq!(start["source"], "startup");
+        assert_eq!(start["model"], agent.model_id());
+    }
+
+    #[test]
+    fn a_stop_hook_that_always_blocks_lets_the_turn_end_after_eight_times() {
+        use crate::agent::tests::{Recorder, agent, missing, serve, stream};
+        use crate::provider_fixture as fixture;
+        if missing("bash") {
+            return;
+        }
+        let replies = (0..=STOP_BLOCKS)
+            .map(|_| stream(&fixture::text_events("idle", fixture::known_usage())))
+            .collect();
+        let (endpoint, server) = serve(replies);
+        let (mut agent, _scratch) = agent(endpoint, "hook-stops");
+        let stop = "echo '{\"decision\": \"block\", \"reason\": \"keep going\"}'";
+        let (hooks, _) = read(json!({"Stop": [{"hooks": [{"type": "command", "command": stop}]}]}));
+        agent.set_hooks(std::sync::Arc::new(hooks));
+        let mut ui = Recorder::default();
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        assert_eq!(server.join().unwrap().len(), STOP_BLOCKS + 1);
+        assert!(
+            (ui.shown.iter()).any(|shown| shown.starts_with(
+                "notice A Stop hook blocked the turn from ending 9 times in a row; it ends now."
+            )),
+            "{:?}",
+            ui.shown
         );
     }
 

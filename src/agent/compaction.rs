@@ -840,6 +840,7 @@ impl Agent {
         self.conversation.extend(kept);
         // A delegated command's earlier result may be summarized away, so it may run again.
         self.delegated.clear();
+        self.session_start = Some("compact");
         // Unknown until the next response reports it.
         self.usage.context_tokens = None;
         ui.usage(

@@ -1,0 +1,32 @@
+{
+  "size": "100x34",
+  "settings": {
+    "hooks": {
+      "SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": "echo 'The build runs with make.'"}]}
+      ],
+      "UserPromptSubmit": [
+        {"hooks": [{"type": "command", "command": "grep -q password && { echo 'Prompts naming a password are not sent' >&2; exit 2; } || echo '{\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"additionalContext\": \"Today is a Thursday.\"}}'"}]}
+      ],
+      "Stop": [
+        {"hooks": [{"type": "command", "command": "grep -q '\"stop_hook_active\":true' && exit 0; echo '{\"decision\": \"block\", \"reason\": \"Run the tests before you stop.\"}'"}]}
+      ]
+    }
+  },
+  "replies": [
+    [{"text": "Fixed the build."}],
+    [{"text": "Ran the tests: all pass."}]
+  ],
+  "steps": [
+    {"until": "[Skills]"},
+    {"sleep": 0.5},
+    {"type": "my password is hunter2\r"},
+    {"until": "not sent"},
+    {"sleep": 0.3},
+    {"shot": "blocked"},
+    {"type": "fix the build\r"},
+    {"until": "all pass."},
+    {"sleep": 0.3},
+    {"shot": "after"}
+  ]
+}

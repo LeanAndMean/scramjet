@@ -3350,14 +3350,14 @@ mod tests {
         let settings = settings_with(
             &scratch,
             r#"{"hooks": {"PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "cargo fmt"}]}],
-                "Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#,
+                "Notification": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#,
         );
         assert!(!settings.hooks.is_empty());
         assert_eq!(settings.warnings.len(), 1, "{:?}", settings.warnings);
         assert!(
             settings.warnings[0].ends_with(
-                ": hooks.Stop is not run: Scramjet runs PreToolUse, PostToolUse, \
-                 PostToolUseFailure hooks; ignored"
+                ": hooks.Notification is not run: Scramjet runs PreToolUse, PostToolUse, \
+                 PostToolUseFailure, UserPromptSubmit, Stop, SessionStart hooks; ignored"
             ),
             "{:?}",
             settings.warnings

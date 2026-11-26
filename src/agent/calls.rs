@@ -161,17 +161,22 @@ impl Agent {
             mcp: self.mcp.clone(),
             scratch: self.scratch.clone(),
             tasks: self.tasks.clone(),
-            hooks: (!self.hooks.is_empty()).then(|| hooks::Bound {
-                hooks: self.hooks.clone(),
-                session_id: self.session.id(),
-                transcript: self.session.path().to_owned(),
-                mode: match (self.planning, self.config.ask) {
-                    (true, _) => "plan",
-                    (false, true) => "default",
-                    (false, false) => "bypassPermissions",
-                },
-            }),
+            hooks: self.bound_hooks(),
         }
+    }
+
+    /// The settings' hooks with what their input says of the session, if there are any.
+    pub(super) fn bound_hooks(&self) -> Option<hooks::Bound> {
+        (!self.hooks.is_empty()).then(|| hooks::Bound {
+            hooks: self.hooks.clone(),
+            session_id: self.session.id(),
+            transcript: self.session.path().to_owned(),
+            mode: match (self.planning, self.config.ask) {
+                (true, _) => "plan",
+                (false, true) => "default",
+                (false, false) => "bypassPermissions",
+            },
+        })
     }
 
     /// Runs a call as `Tools::run` does.

@@ -697,8 +697,14 @@ pub struct Agent {
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
-    /// The settings' hooks, run around the agent's tools (`set_hooks`).
+    /// The settings' hooks, run around the agent's tools (`set_hooks`), as prompts are sent, as
+    /// turns would end and as sessions start.
     hooks: Arc<Hooks>,
+    /// How the session began since the last request, for `SessionStart` hooks: `startup`,
+    /// `resume`, `clear` or `compact`.
+    session_start: Option<&'static str>,
+    /// How many times `Stop` hooks kept this turn going.
+    stop_blocks: usize,
     /// The paths the user's settings hide as the credential stores are, and re-open (`set_reads`).
     reads: Reads,
     /// The directories made writable without a sandbox (`set_writable`).
@@ -908,6 +914,11 @@ impl Agent {
             model_scope: Vec::new(),
             hide_credentials: false,
             hooks: Arc::default(),
+            session_start: Some(match conversation.is_empty() {
+                true => "startup",
+                false => "resume",
+            }),
+            stop_blocks: 0,
             reads: Reads::default(),
             writable: Vec::new(),
             offline: false,
@@ -1664,6 +1675,7 @@ impl Agent {
         self.replace_session(session);
         self.conversation = conversation;
         self.prompts = prompts;
+        self.session_start = Some("resume");
         self.usage = Usage {
             context_tokens,
             ..Usage::default()
@@ -1698,6 +1710,7 @@ impl Agent {
         self.replace_session(session);
         self.conversation.clear();
         self.prompts.clear();
+        self.session_start = Some("clear");
         self.usage = Usage::default();
         self.restore_command();
         Ok(())
