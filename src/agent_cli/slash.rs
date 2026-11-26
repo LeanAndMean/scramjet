@@ -66,6 +66,8 @@ pub(super) enum Builtin<'a> {
     Recap,
     /// Claude Code's `/goal [CONDITION|clear]`: a condition checked after each turn.
     Goal(&'a str),
+    /// Claude Code's `/loop [INTERVAL] PROMPT|stop`: a prompt sent again on an interval.
+    Loop(&'a str),
     /// Claude Code's and Codex's `/plan [PROMPT|off]`: plan mode.
     Plan(&'a str),
     Autopilot(&'a str),
@@ -125,6 +127,7 @@ impl<'a> Builtin<'a> {
             "btw" => Self::Btw(argument),
             "recap" if argument.is_empty() => Self::Recap,
             "goal" => Self::Goal(argument),
+            "loop" => Self::Loop(argument),
             "plan" => Self::Plan(argument),
             "autopilot" => Self::Autopilot(argument),
             "mcp" => Self::Mcp(argument),
@@ -157,6 +160,7 @@ impl<'a> Builtin<'a> {
                 | Self::Btw(_)
                 | Self::Recap
                 | Self::Goal(_)
+                | Self::Loop(_)
                 | Self::Plan(_)
                 | Self::Usage(_)
                 | Self::Context
@@ -229,6 +233,7 @@ impl Interactive {
             Some(Builtin::Btw(question)) => self.btw(question),
             Some(Builtin::Recap) => self.recap(),
             Some(Builtin::Goal(condition)) => self.goal(condition),
+            Some(Builtin::Loop(argument)) => self.looping(argument),
             Some(Builtin::Plan(argument)) => self.plan(argument),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Mcp(argument)) => self.mcp(argument),

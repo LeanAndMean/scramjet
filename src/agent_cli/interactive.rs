@@ -299,10 +299,24 @@ impl Interactive {
                         screen.stop_waiting();
                         return Ok(Read::Prompt(prompt));
                     }
+                    if let Some(due) = self.session.agent.loop_due(Instant::now()) {
+                        screen.stop_waiting();
+                        if due.last {
+                            screen.say("This is the loop's last run: it ends after 7 days");
+                        }
+                        screen.footer(footer::Shown::of(&self.session.agent));
+                        return Ok(Read::Prompt(due.prompt));
+                    }
                     let holding = self.session.agent.session_holding();
                     let within = match self.session.agent.tasks().running() {
                         0 => holding.then_some(RETRY_HELD),
                         _ => Some(TASK_POLL),
+                    };
+                    let looping = self.session.agent.looping();
+                    let due_in = looping.map(|looping| looping.due_in(Instant::now()));
+                    let within = match (within, due_in) {
+                        (Some(within), Some(due_in)) => Some(within.min(due_in)),
+                        (within, due_in) => within.or(due_in),
                     };
                     if let Some(input) = screen.input_within(within) {
                         break input;
@@ -875,6 +889,7 @@ impl Front for Interactive {
     fn session_changed(&mut self, message: &str, change: Change) {
         if change != Change::Kept {
             self.goal = None;
+            self.session.agent.stop_loop();
         }
         self.drafting();
         if change == Change::New {

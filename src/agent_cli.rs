@@ -50,6 +50,7 @@ mod lint;
 mod live;
 mod local_login;
 mod login;
+mod looping;
 mod markdown;
 mod packages;
 mod palette;

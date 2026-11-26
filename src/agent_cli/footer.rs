@@ -10,7 +10,7 @@ use super::settings::scramjet_level;
 use super::style::{FOOTER, FOOTER_FIGURE, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
 use super::terminal::{dollars, rate, tokens};
 use super::text::{clip, one_line, visible};
-use scramjet::agent::{Agent, Children, Tokens, tasks::Tasks};
+use scramjet::agent::{Agent, Children, Tokens, recurring::interval, tasks::Tasks};
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -46,6 +46,8 @@ pub(super) struct Shown {
     pub(super) autopilot: bool,
     /// Whether `/plan`'s plan mode is on.
     pub(super) plan: bool,
+    /// The `/loop`'s interval, while one runs.
+    pub(super) looping: Option<String>,
     pub(super) tasks: Running,
 }
 
@@ -100,6 +102,7 @@ impl Shown {
             sandbox: agent.sandbox().map(|sandbox| sandbox.mode.name()),
             autopilot: agent.autopilot(),
             plan: agent.planning(),
+            looping: (agent.looping()).map(|looping| interval(looping.every)),
             tasks: Running(Some(agent.tasks().clone())),
         }
     }
@@ -221,6 +224,9 @@ impl Footer {
         if self.shown.autopilot {
             place += " • autopilot";
         }
+        if let Some(every) = &self.shown.looping {
+            place += &format!(" • loop every {every}");
+        }
         if let Some(tasks) = self.shown.tasks.said() {
             place += &format!(" • {tasks}");
         }
@@ -251,6 +257,7 @@ impl Footer {
             shown.plan.then(|| "plan mode".to_owned()),
             shown.sandbox.map(|mode| format!("sandbox {mode}")),
             shown.autopilot.then(|| "autopilot".to_owned()),
+            (shown.looping.as_ref()).map(|every| format!("loop every {every}")),
             shown.tasks.said(),
         ];
         let rate =
@@ -511,6 +518,7 @@ mod tests {
             sandbox: None,
             autopilot: false,
             plan: false,
+            looping: None,
             tasks: Running::default(),
         }
     }
@@ -534,6 +542,12 @@ mod tests {
         };
         let [place, _] = footer(autopilot).lines(67).map(|line| plain(&line));
         assert_eq!(place, "~/repos/project (main) • Refactor • autopilot");
+        let looping = Shown {
+            looping: Some("5m".into()),
+            ..opus()
+        };
+        let [place, _] = footer(looping).lines(67).map(|line| plain(&line));
+        assert_eq!(place, "~/repos/project (main) • Refactor • loop every 5m");
         let planning = Shown {
             plan: true,
             sandbox: Some("workspace-write"),

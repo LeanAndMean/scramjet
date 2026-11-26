@@ -39,6 +39,7 @@ mod publish;
 mod question;
 pub mod quota;
 mod rates;
+pub mod recurring;
 mod redact;
 mod request;
 pub mod rewind;
@@ -720,6 +721,8 @@ pub struct Agent {
     /// Whether plan mode is on (`/plan`), and whether the model was last told it is.
     planning: bool,
     plan_told: bool,
+    /// The `/loop`, while one runs.
+    recurring: Option<recurring::Loop>,
     /// The MCP servers, while the model is offered their tools.
     mcp: Option<Arc<mcp::Servers>>,
     /// What the agent's sandboxed commands have as `/tmp`, kept between them.
@@ -913,6 +916,7 @@ impl Agent {
             autopilot,
             planning: false,
             plan_told: false,
+            recurring: None,
             mcp: None,
             scratch: Arc::default(),
             tasks: Arc::default(),

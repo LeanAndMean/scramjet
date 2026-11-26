@@ -1,0 +1,26 @@
+{
+  "size": "100x30",
+  "replies": [
+    [{"text": "pong one"}],
+    [{"text": "pong two"}],
+    [{"text": "pong three"}]
+  ],
+  "steps": [
+    {"until": "[Skills]"},
+    {"sleep": 0.5},
+    {"type": "/loop 3s ping\r"},
+    {"until": "pong one"},
+    {"sleep": 0.3},
+    {"shot": "first"},
+    {"until": "pong two"},
+    {"sleep": 0.3},
+    {"type": "/loop\r"},
+    {"until": "/loop stop ends it"},
+    {"sleep": 0.3},
+    {"shot": "status"},
+    {"type": "/loop stop\r"},
+    {"until": "Loop stopped"},
+    {"sleep": 4},
+    {"shot": "stopped"}
+  ]
+}

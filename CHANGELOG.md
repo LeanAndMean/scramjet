@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.371.0 — /loop
+
+### Added
+
+- `/loop [INTERVAL] PROMPT` sends a prompt now and again each interval while the full screen waits for you, as Claude Code's does: `/loop 5m check the deploy`, or `/loop run the tests every 20m`, 10 minutes when no interval is given. The footer says `loop every 5m`; `/loop` says when it runs next, `/loop stop` ends it, and it ends with the session or after 7 days.
+
 ## 2.370.0 — /recap
 
 ### Added

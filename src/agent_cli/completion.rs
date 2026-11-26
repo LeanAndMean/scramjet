@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 42] = [
+const SLASH_COMMANDS: [(&str, &str); 43] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -79,6 +79,10 @@ const SLASH_COMMANDS: [(&str, &str); 42] = [
         "Set a goal the agent works toward until a check finds it met: /goal [CONDITION|clear]",
     ),
     (
+        "loop",
+        "Send a prompt again on an interval while you are away: /loop [INTERVAL] PROMPT|stop",
+    ),
+    (
         "plan",
         "Plan without changing files, then choose to implement: /plan [PROMPT|off]",
     ),
@@ -124,7 +128,7 @@ const SLASH_COMMANDS: [(&str, &str); 42] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 20] = [
+const ALIASES: [(&str, &str); 21] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
@@ -143,6 +147,7 @@ const ALIASES: [(&str, &str); 20] = [
     ("ps", "tasks"),
     ("checkpoint", "rewind"),
     ("undo", "rewind"),
+    ("proactive", "loop"),
     // The built-in set's `scramjet:bug`, listed as `bug` (`Command::listed_name`).
     ("feedback", "bug"),
     ("report-issue", "bug"),
@@ -590,6 +595,7 @@ mod tests {
                 "/btw",
                 "/recap",
                 "/goal",
+                "/loop",
                 "/plan",
                 "/resume",
                 "/reload",
@@ -612,7 +618,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /effort         Set the thinking level, or pick it from …",
                 "  /theme          Change the theme, or pick it from a list…",
-                "  (1/42)",
+                "  (1/43)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -628,10 +634,10 @@ mod tests {
                 "→ /rename",
                 "  /status",
                 "  /diff",
-                "  (9/42)"
+                "  (9/43)"
             ]
         );
-        for _ in 0..34 {
+        for _ in 0..35 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);

@@ -1463,6 +1463,7 @@ mod tests {
             sandbox: Some("read-only"),
             autopilot: true,
             plan: false,
+            looping: None,
             tasks: Default::default(),
         });
         app.queue()

@@ -67,7 +67,7 @@ impl Interactive {
         Some((IMPLEMENT.to_owned(), Start::Typed))
     }
 
-    fn footer_changed(&self) {
+    pub(super) fn footer_changed(&self) {
         if let Some(screen) = &self.screen {
             screen.footer(footer::Shown::of(&self.session.agent));
         }

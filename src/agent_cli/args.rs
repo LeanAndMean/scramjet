@@ -389,11 +389,15 @@ goal, /goal clear clears it, and a new or resumed session has none.
 without changing files (write and edit are refused, and in a sandbox commands and subagents run
 read-only), then the full screen asks whether to implement it, which ends plan mode. /plan PROMPT
 starts it with that prompt, /plan off ends it.
+/loop [INTERVAL] PROMPT sends the prompt now, then again each INTERVAL (30s, 5m, 2h, 1d; 10m when
+none is given, and PROMPT every 20m works too) while the full screen waits for you, as Claude
+Code's; one due during a turn runs once the turn ends. It lasts while the session runs, at most
+7 days; /loop says it, /loop stop ends it.
 /effort LEVEL sets the thinking level, as Shift+Tab does, saved as defaultThinkingLevel; /effort
 alone lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /diff, /tasks, /agents, /skills, /memory, /doctor, /btw, /recap, /goal, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /diff, /tasks, /agents, /skills, /memory, /doctor, /btw, /recap, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /autocompact, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,
