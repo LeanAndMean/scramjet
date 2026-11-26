@@ -600,11 +600,16 @@ mod tests {
         agent.turn("make it", &mut ui, &cancel).unwrap();
         until(|| agent.tasks().running() == 0);
         server.join().unwrap();
-        assert!(scratch.0.join("made.txt").exists());
+        let task = &agent.tasks().list()[0];
+        let ran = std::fs::read_to_string(&task.output).unwrap_or_default();
+        let why = format!("it {:?}, its output {ran:?}", task.ended);
+        assert!(
+            scratch.0.join("made.txt").exists(),
+            "made.txt not made: {why}"
+        );
         assert!(!scratch.0.join("../outside.txt").exists());
-        let output = &agent.tasks().list()[0].output;
-        assert_eq!(std::fs::read_to_string(output).unwrap(), "ran\n");
-        let _ = std::fs::remove_file(output);
+        assert_eq!(ran, "ran\n", "{why}");
+        let _ = std::fs::remove_file(&task.output);
     }
 
     #[test]
