@@ -160,6 +160,18 @@ impl Part {
 
 impl Transcript {
     pub(super) fn push(&mut self, event: Event) {
+        if let Event::Sent(typed, sent) = event {
+            let shown =
+                |event: &Event| matches!(event, Event::UserPrompt(shown) if *shown == typed);
+            for part in self.parts.iter_mut().rev() {
+                if let Some(at) = part.events.iter().rposition(shown) {
+                    part.touch(at);
+                    part.events[at] = Event::CommandPrompt(typed.clone(), sent);
+                    break;
+                }
+            }
+            return;
+        }
         if self.parts.is_empty() {
             self.parts.push(Part::default());
         }
@@ -525,6 +537,30 @@ mod tests {
             ]
         );
         assert!(transcript.calls().is_some());
+    }
+
+    #[test]
+    fn a_prompt_shown_as_typed_becomes_what_it_sent_once_told() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let mut transcript = Transcript::default();
+        transcript.push(Event::UserPrompt("/brief".into()));
+        transcript.push(Event::Waiting(Purpose::Reply));
+        let rendered = |transcript: &mut Transcript| -> String {
+            transcript.render(look(60, false), &hide);
+            (transcript.parts[0].lines.iter())
+                .map(|line| plain(&line.shown).trim().to_owned())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(!rendered(&mut transcript).contains("sent as"));
+        transcript.push(Event::Sent("/other".into(), "Branch: main".into()));
+        transcript.push(Event::Sent("/brief".into(), "Branch: main".into()));
+        assert!(matches!(
+            &transcript.parts[0].events[0],
+            Event::CommandPrompt(typed, sent) if typed == "/brief" && sent == "Branch: main"
+        ));
+        assert_eq!(transcript.parts[0].events.len(), 2);
+        assert!(rendered(&mut transcript).contains("sent as 1 line"));
     }
 
     #[test]

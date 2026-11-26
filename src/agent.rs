@@ -1815,11 +1815,18 @@ impl Agent {
         }
     }
 
-    /// The text `prompt` sends when it runs a command or a skill, `None` when it is sent as typed.
+    /// The text `prompt` sends when it runs a command or a skill, `None` when it is sent as typed
+    /// or is one of Claude Code's commands running shell commands, whose text the turn tells
+    /// (`AgentUi::command_sent`) once they ran.
     pub fn expand(&mut self, prompt: &str) -> Option<String> {
         self.commands.refresh(prompt);
         (self.commands.expand(prompt))
-            .or_else(|| self.claude_commands.expand(prompt)?.ok())
+            .or_else(|| {
+                let sent = self.claude_commands.expand(prompt)?.ok()?;
+                claude_commands::shell_commands(&sent)
+                    .is_empty()
+                    .then_some(sent)
+            })
             .or_else(|| self.skills.expand(prompt)?.ok())
     }
 

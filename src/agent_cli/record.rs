@@ -41,6 +41,9 @@ pub(super) enum Event {
     UserPrompt(String),
     /// A command's prompt as typed, and the text it sent.
     CommandPrompt(String, String),
+    /// The prompt shown last as typed (`UserPrompt`) sent this text: it becomes a
+    /// `CommandPrompt`. Never kept.
+    Sent(String, String),
     CompactionSummary(String),
     BranchSummary(String),
     Approval(String, Answer),
@@ -105,6 +108,7 @@ pub(super) fn replay(event: &Event, ui: &mut Terminal) {
         Event::CompactionFailed(error) => ui.compaction_error(error),
         Event::UserPrompt(prompt) => ui.user_prompt(prompt),
         Event::CommandPrompt(typed, sent) => ui.command_prompt(typed, sent),
+        Event::Sent(..) => {}
         Event::CompactionSummary(summary) => ui.compaction_summary(summary),
         Event::BranchSummary(summary) => ui.branch_summary(summary),
         Event::Approval(question, answer) => ui.approval(question, *answer),

@@ -236,6 +236,45 @@ pub trait AgentUi {
     }
 }
 
+/// What a call run aside (`Agent::run_aside`) shows: only what it tells or asks the user.
+pub(super) struct Aside<'a>(pub &'a mut dyn AgentUi);
+
+impl AgentUi for Aside<'_> {
+    fn waiting(&mut self, _: Purpose) {}
+    fn progress(&mut self, _: &StreamProgress) {}
+    fn retrying(&mut self, _: &str, _: u32, _: u32, _: Duration) {}
+    fn assistant(&mut self, _: &str) {}
+    fn tool_call(&mut self, _: &str, _: &str, _: Option<&CompactRead>) {}
+    fn tool_running(&mut self, _: Instant) {}
+    fn tool_result(&mut self, _: &str, _: &str, _: Option<&ToolDetail>, _: bool) {}
+    fn command_started(&mut self, _: &str, _: bool) {}
+    fn command_result(&mut self, _: &UserCommand) {}
+    fn stopped(&mut self, _: Option<&str>) {}
+    fn compacted(&mut self, _: &Compaction, _: Option<AutoCompaction>) {}
+    fn compaction_failed(&mut self, _: &AgentError) {}
+    fn user_prompt(&mut self, _: &str) {}
+    fn compaction_summary(&mut self, _: &str) {}
+    fn branch_summary(&mut self, _: &str) {}
+    fn approve(&mut self, question: &str, cancel: &AtomicBool) -> Answer {
+        self.0.approve(question, cancel)
+    }
+    fn question(&mut self, message: &str) {
+        self.0.question(message);
+    }
+    fn notice(&mut self, text: &str) {
+        self.0.notice(text);
+    }
+    fn next_step(&mut self, _: &str) {}
+    fn choose(
+        &mut self,
+        title: &str,
+        options: &[Choice],
+        recommended: Option<usize>,
+    ) -> Option<usize> {
+        self.0.choose(title, options, recommended)
+    }
+}
+
 /// Scramjet's choices for a publication: approve it, then cancel.
 pub fn publication_choices() -> [Choice; 2] {
     ["Approve publication", "Cancel"].map(|label| Choice {

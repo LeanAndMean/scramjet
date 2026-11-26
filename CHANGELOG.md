@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.396.0 — Claude Code's commands run their shell commands
+
+### Added
+
+- A Claude Code command's `` !`command` `` lines and ```` ```! ```` blocks now run when you type its `/NAME`, as in Claude Code, and the prompt sent holds what each printed. They run one after another as the agent's commands do: in the sandbox when it is on, after asking under `--ask`. An argument you type is never run (`!` in it is escaped, as Claude Code escapes it). If a command fails or you deny it, the prompt is not sent, and a notice says which and why.
+- The full screen shows such a prompt's text once its commands have run (Ctrl+O shows it whole); a prompt that was not sent shows as typed only.
+
 ## 2.395.0 — Claude Code's subagents
 
 ### Added

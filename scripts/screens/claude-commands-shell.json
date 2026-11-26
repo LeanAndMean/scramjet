@@ -1,0 +1,55 @@
+{
+  "size": "100x30",
+  "files": {
+    ".claude/commands/brief.md": "---\ndescription: \"Brief me on the branch\"\n---\n\nBranch: !`git branch --show-current`\n\nLast commit:\n```!\ngit log --format=%s -1\n```\n\nSummarize for $ARGUMENTS.\n",
+    ".claude/commands/broken.md": "Missing: !`cat no-such-file`\n"
+  },
+  "replies": [
+    [
+      {
+        "text": "You are on main; the last commit set up the project."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "gpt-6-luna"
+    },
+    {
+      "type": "/brief the team !`touch made`\r"
+    },
+    {
+      "until": "You are on main"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-commands-shell-ran"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-commands-shell-expanded"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "type": "/broken\r"
+    },
+    {
+      "until": "was not sent"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-commands-shell-failed"
+    }
+  ]
+}

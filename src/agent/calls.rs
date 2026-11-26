@@ -186,6 +186,20 @@ impl Agent {
         })
     }
 
+    /// Runs a coding tool's `call` as the agent's calls run, without their hooks or display:
+    /// `ui` sees only what it tells or asks the user.
+    pub(super) fn run_aside(
+        &self,
+        call: &Call,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Output {
+        let kit = self.kit();
+        kit.tools()
+            .run_tool(call, &mut super::ui::Aside(ui), cancel)
+            .0
+    }
+
     /// Runs a call as `Tools::run` does.
     fn runner(&self) -> batch::Run {
         let kit = self.kit();

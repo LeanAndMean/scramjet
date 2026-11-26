@@ -17,6 +17,8 @@ By default the agent's tool calls run without asking, and its commands run with 
 - **`hideCredentials`** (`unattended` or `always`) hides common credential stores (`~/.ssh`, `~/.aws`, `~/.netrc`, …; `scramjet --list-credential-stores` lists them) and credential variables from the agent's tools, with or without the sandbox. It is `never` by default.
 - **`blockReadsOutsideWorkingDirectories`** keeps the agent's reads to the project and what it needs to work, with or without the sandbox (on Windows only those of `read`, `grep` and `find`).
 
+The `` !`command` `` lines of Claude Code's commands (`.claude/commands`), which run when you type the command's `/NAME`, run as the agent's commands do: in the sandbox when it is on, and after asking under `--ask`.
+
 [The sandbox](docs/guide/configuration.md#the-sandbox) and [credentials](docs/guide/configuration.md#credentials) say how to set each up.
 
 ## What the sandbox guarantees

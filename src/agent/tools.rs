@@ -2652,6 +2652,9 @@ impl Saved {
     }
 }
 
+/// What a command that printed nothing gives the model.
+pub(super) const NO_OUTPUT: &str = "(no output)";
+
 pub(super) struct Ran {
     output: String,
     /// Why it was stopped before it ended: `cancelled by the user` or `timed out`.
@@ -2684,7 +2687,7 @@ impl Ran {
             }
             (None, Some(0)) => {
                 let mut text = if self.output.is_empty() {
-                    "(no output)".into()
+                    NO_OUTPUT.into()
                 } else {
                     self.output.clone()
                 };
@@ -2724,7 +2727,7 @@ impl Ran {
         let mut text = format!("Ran `{command}`\n");
         let output: Vec<String> = self.output.split('\n').map(terminal_line).collect();
         match output.join("\n").trim_end_matches('\n') {
-            "" => text += "(no output)",
+            "" => text += NO_OUTPUT,
             output => text += &format!("```\n{output}\n```"),
         }
         if self.stopped.is_some() {

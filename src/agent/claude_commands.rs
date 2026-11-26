@@ -2,13 +2,15 @@
 //! prompt runs as `/NAME args` (a file in a subdirectory as `/DIR:NAME`). Unlike a command
 //! set's, one is sent as the user's prompt, with Claude Code's argument substitution, and starts
 //! no command: no next steps, no status report.
-use super::Problem;
 use super::commands::{split_args, split_frontmatter};
-use super::yaml;
+use super::tools::{self, Approval, Call};
+use super::{Agent, AgentUi, Answer, Problem, yaml};
+use serde_json::json;
 use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
 };
 use yaml_rust2::Yaml;
 
@@ -138,6 +140,58 @@ impl ClaudeCommands {
                 command.path.display()
             )),
         })
+    }
+}
+
+impl Agent {
+    /// `text`, the body `/<name>` sends, with each of its `shell_commands` replaced by what the
+    /// command printed, as Claude Code runs them before sending: one after another, through
+    /// the agent's bash as its calls run (its sandbox, its hidden stores, asked first under
+    /// `--ask`). The first that fails or is denied stops it, saying why: the prompt is not sent.
+    pub(super) fn run_shell_commands(
+        &mut self,
+        name: &str,
+        mut text: String,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<String, String> {
+        for (raw, command) in shell_commands(&text) {
+            let call = Call {
+                name: "bash",
+                arguments: json!({"command": command}),
+            };
+            if let Approval::Ask(question) = call.approval(&self.config.root)
+                && self.config.ask
+            {
+                ui.question(&format!(
+                    "/{name} runs this command before its prompt is sent:\n\n```bash\n{command}\n```"
+                ));
+                match ui.approve(&question, cancel) {
+                    Answer::Deny => {
+                        return Err(format!(
+                            "/{name} was not sent: the user denied its command `{command}`"
+                        ));
+                    }
+                    Answer::AllowAll => self.config.ask = false,
+                    Answer::Allow => {}
+                }
+            }
+            let output = self.run_aside(&call, ui, cancel);
+            if output.failed {
+                return Err(format!(
+                    "/{name} was not sent: its command `{command}` failed: {}",
+                    output.text.trim()
+                ));
+            }
+            let printed = match output.text.as_str() {
+                tools::NO_OUTPUT => "",
+                printed => printed.trim(),
+            };
+            if let Some(at) = text.find(&raw) {
+                text.replace_range(at..at + raw.len(), printed);
+            }
+        }
+        Ok(text)
     }
 }
 
@@ -288,7 +342,7 @@ fn substitute(body: &str, args: &str, names: &[String]) -> String {
         };
         match value {
             Some(value) => {
-                out.push_str(value);
+                out.push_str(&inert(value));
                 used = true;
             }
             None => out.push_str(&body[dollar..dollar + 1 + length]),
@@ -298,9 +352,91 @@ fn substitute(body: &str, args: &str, names: &[String]) -> String {
     out.push_str(&body[at..]);
     if !used && !args.is_empty() {
         out.push_str("\n\nARGUMENTS: ");
-        out.push_str(args);
+        out.push_str(&inert(args));
     }
     out
+}
+
+/// An argument as Claude Code puts it in a command's body, where it cannot start one of
+/// `shell_commands`: `` `! `` and `` !` `` split by a space, and a `!` at the start or after
+/// white space escaped as `\!`.
+fn inert(value: &str) -> String {
+    let value = value.replace("`!", "` !").replace("!`", "! `");
+    let mut out = String::with_capacity(value.len());
+    let mut after_space = true;
+    for character in value.chars() {
+        if character == '!' && after_space {
+            out.push('\\');
+        }
+        out.push(character);
+        after_space = character.is_whitespace();
+    }
+    out
+}
+
+/// The shell commands a Claude Code command's body runs before it is sent, as Claude Code finds
+/// them: each ```` ```! ```` block and each `` !`command` `` at the start or after white space,
+/// outside other code spans, in the order they come. Each is the text it replaces and its
+/// command, trimmed; empty ones are left out.
+pub(super) fn shell_commands(body: &str) -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    let mut at = 0;
+    while let Some(start) = body[at..].find("```!").map(|start| at + start) {
+        let content = start + "```!".len();
+        let Some(end) = body[content..].find("```").map(|end| content + end) else {
+            break;
+        };
+        found.push((start, &body[start..end + 3], &body[content..end]));
+        at = end + 3;
+    }
+    if body.contains("!`") {
+        let blanked = blank_code_spans(body);
+        let bytes = blanked.as_bytes();
+        let mut at = 0;
+        while let Some(bang) = blanked[at..].find("!`").map(|bang| at + bang) {
+            let after_space = bang == 0 || blanked[..bang].ends_with(char::is_whitespace);
+            let content = bang + 2;
+            let end = (bytes[content..].iter()).position(|&byte| byte == b'`');
+            match end.filter(|&end| after_space && end > 0) {
+                Some(end) => {
+                    let end = content + end;
+                    found.push((bang, &body[bang..=end], &body[content..end]));
+                    at = end + 1;
+                }
+                None => at = bang + 1,
+            }
+        }
+    }
+    found.sort_by_key(|(at, ..)| *at);
+    (found.into_iter())
+        .filter(|(_, _, command)| !command.trim().is_empty())
+        .map(|(_, raw, command)| (raw.to_owned(), command.trim().to_owned()))
+        .collect()
+}
+
+/// `body` with each one-line code span not right after `!` or `` ` `` blanked to spaces between
+/// its backticks, as Claude Code keeps a `` !`command` `` written in one from running.
+fn blank_code_spans(body: &str) -> String {
+    let mut bytes = body.as_bytes().to_vec();
+    let mut at = 0;
+    while at < bytes.len() {
+        let end = (bytes[at] == b'`')
+            .then(|| (bytes[at + 1..].iter()).position(|&byte| byte == b'`' || byte == b'\n'))
+            .flatten()
+            .filter(|&length| length > 0 && bytes[at + 1 + length] == b'`');
+        match end {
+            Some(length) => {
+                let kept = at > 0 && matches!(body.as_bytes()[at - 1], b'!' | b'`');
+                if !kept {
+                    bytes[at + 1..at + 1 + length].fill(b' ');
+                }
+                at += length + 2;
+            }
+            None => at += 1,
+        }
+    }
+    // Only ASCII bytes between backticks became spaces; a character cut there was all replaced.
+    String::from_utf8(bytes).unwrap_or_else(|_| body.to_owned())
 }
 
 #[cfg(test)]
@@ -434,6 +570,43 @@ mod tests {
             mine.iter().filter(|p| **p == home.join(COMMANDS)).count(),
             1
         );
+    }
+
+    #[test]
+    fn shell_commands_are_found_as_claude_code_finds_them() {
+        let found = |body: &str| -> Vec<(String, String)> { shell_commands(body) };
+        let pair = |raw: &str, command: &str| (raw.to_owned(), command.to_owned());
+        assert_eq!(
+            found("Status: !`git status`\n!`git diff`, and !`  `."),
+            [
+                pair("!`git status`", "git status"),
+                pair("!`git diff`", "git diff")
+            ]
+        );
+        assert_eq!(
+            found("Log: !`git log`\n```!\ngit log -3\ngit tag\n```\nthen !`date`"),
+            [
+                pair("!`git log`", "git log"),
+                pair("```!\ngit log -3\ngit tag\n```", "git log -3\ngit tag"),
+                pair("!`date`", "date")
+            ]
+        );
+        // Not after a word, nor in a code span, nor unclosed; a span right after `!` is one.
+        assert_eq!(found("Hi!`no` and `!`no`` and !`open"), []);
+        assert_eq!(found("`code` !`yes` `x`"), [pair("!`yes`", "yes")]);
+        assert_eq!(found("é !`echo ü`"), [pair("!`echo ü`", "echo ü")]);
+        assert_eq!(found("```!```"), []);
+    }
+
+    #[test]
+    fn arguments_cannot_start_a_shell_command() {
+        assert_eq!(inert("!`rm -rf x`"), "\\! `rm -rf x`");
+        assert_eq!(inert("a `!b` c! !d"), "a ` \\!b` c! \\!d");
+        let body = substitute("Look at $ARGUMENTS", "!`touch x`", &[]);
+        assert_eq!(body, "Look at \\! `touch x`");
+        assert_eq!(shell_commands(&body), []);
+        let body = substitute("No placeholders.", "x !`id`", &[]);
+        assert_eq!(shell_commands(&body), []);
     }
 
     #[test]

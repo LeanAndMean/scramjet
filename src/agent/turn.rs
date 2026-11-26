@@ -62,7 +62,9 @@ impl Agent {
                 (files.message(prompt), files.typed(prompt))
             }
             None => {
-                let message = self.user_message(prompt, ui);
+                let Some(message) = self.user_message(prompt, ui, cancel) else {
+                    return Ok(());
+                };
                 if message.get(TYPED).is_some() {
                     ui.command_sent(prompt, message["content"].as_str().unwrap_or_default());
                 }
@@ -83,10 +85,20 @@ impl Agent {
     /// as Scramjet's input handling does: a command or skill prompt sends its expansion, and the
     /// prompt as typed is kept for recall and display; one of Claude Code's commands is sent as
     /// a skill is, starting no command. A skill or Claude Code command whose file cannot be read
-    /// now is said so, and the prompt sent as typed, as Pi does.
-    fn user_message(&mut self, prompt: &str, ui: &mut dyn AgentUi) -> Value {
+    /// now is said so, and the prompt sent as typed, as Pi does. `None` when one of Claude
+    /// Code's commands is not sent, as one of its shell commands failed or was denied.
+    fn user_message(
+        &mut self,
+        prompt: &str,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Option<Value> {
         self.commands.refresh(prompt);
         let command = (self.commands.named(prompt)).map(|command| command.name.clone());
+        let claude = (command.is_none())
+            .then(|| self.claude_commands.named(prompt))
+            .flatten()
+            .map(|command| command.name.clone());
         let skill = command
             .is_none()
             .then(|| (self.claude_commands.expand(prompt)).or_else(|| self.skills.expand(prompt)));
@@ -107,10 +119,20 @@ impl Agent {
                 None => None,
             },
         };
-        match sent {
+        let sent = match (sent, claude) {
+            (Some(sent), Some(name)) => match self.run_shell_commands(&name, sent, ui, cancel) {
+                Ok(sent) => Some(sent),
+                Err(error) => {
+                    ui.notice(&error);
+                    return None;
+                }
+            },
+            (sent, _) => sent,
+        };
+        Some(match sent {
             Some(sent) => json!({"role":"user","content":sent,TYPED:prompt}),
             None => json!({"role":"user","content":prompt}),
-        }
+        })
     }
 
     /// Shows on `ui`, from a thread of its own, what the paused turn left running (its calls or
@@ -526,8 +548,10 @@ to a larger-context model)"
             let Some(told) = self.prompt_hooks(&prompt, ui, cancel) else {
                 continue;
             };
+            let Some(message) = self.user_message(&prompt, ui, cancel) else {
+                continue;
+            };
             added = true;
-            let message = self.user_message(&prompt, ui);
             match message.get(TYPED) {
                 Some(_) => {
                     ui.command_prompt(&prompt, message["content"].as_str().unwrap_or_default())
@@ -1213,6 +1237,50 @@ mod tests {
         let mut shown = Recorder::default();
         agent.show_conversation(&mut shown);
         assert_eq!(shown.shown[0], format!("command /fix 42 test sent {sent}"));
+    }
+
+    #[test]
+    fn a_claude_code_commands_shell_commands_run_before_it_is_sent_and_a_failed_one_stops_it() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "one",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, scratch) = agent(endpoint, "claude-command-shell");
+        let directory = scratch.0.join(".claude").join("commands");
+        std::fs::create_dir_all(&directory).unwrap();
+        let text = "Branch: !`printf main`\n```!\necho one\necho two >&2\n```\nEmpty: !`true`.\nAsk: $ARGUMENTS";
+        std::fs::write(directory.join("state.md"), text).unwrap();
+        std::fs::write(directory.join("broken.md"), "Never: !`echo no; exit 3`").unwrap();
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("/state !`touch made`", &mut ui, &cancel)
+            .unwrap();
+        assert!(!scratch.0.join("made").exists());
+        agent.turn("/broken", &mut ui, &cancel).unwrap();
+        // Under --ask, a denied command stops its prompt as well.
+        agent.config.ask = true;
+        agent.turn("/state", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 1);
+        let sent = "Branch: main\none\ntwo\nEmpty: .\nAsk: \\! `touch made`";
+        assert_eq!(bodies[0]["input"], json!([{"role":"user","content":sent}]));
+        let notices: Vec<_> = (ui.shown.iter())
+            .filter(|shown| shown.starts_with("notice /"))
+            .collect();
+        assert_eq!(notices.len(), 2, "{:?}", ui.shown);
+        assert!(notices[0].starts_with(
+            "notice /broken was not sent: its command `echo no; exit 3` failed: no\n"
+        ));
+        assert!(notices[0].contains('3'), "{notices:?}");
+        assert!(
+            notices[1].contains("the user denied its command `printf main`"),
+            "{notices:?}"
+        );
+        assert_eq!(ui.questions, 1);
+        assert!(!ui.shown.iter().any(|shown| shown.starts_with("call ")));
+        assert_eq!(agent.prompts(), ["/state !`touch made`"]);
     }
 
     #[test]
