@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.385.0 — Claude Code's alwaysThinkingEnabled
+
+### Added
+
+- Claude Code's `alwaysThinkingEnabled` setting: `false` starts sessions with thinking off, whatever `effortLevel` says, until you choose a level.
+
 ## 2.384.0 — `/hooks`
 
 ### Added

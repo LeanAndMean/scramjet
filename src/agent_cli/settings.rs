@@ -991,6 +991,12 @@ impl Settings {
             }
             Some(_) => wrong(effort, &LEVELS.map(|l| format!("\"{l}\"")).join(", ")),
         }
+        // Claude Code turns thinking off with `false` whatever its effort says.
+        match object.get("alwaysThinkingEnabled") {
+            None | Some(Value::Bool(true)) => {}
+            Some(Value::Bool(false)) => self.default_thinking_level = Some("none".to_owned()),
+            Some(_) => wrong("alwaysThinkingEnabled", "true or false"),
+        }
         match object.get("defaultProvider") {
             None => {}
             Some(Value::String(provider)) if !provider.trim().is_empty() => {
@@ -2067,6 +2073,9 @@ impl Settings {
         self.default_thinking_level = Some(level.to_owned());
         self.update(|object| {
             object.remove("defaultThinkingLevel");
+            if object.get("alwaysThinkingEnabled") == Some(&Value::Bool(false)) {
+                object.remove("alwaysThinkingEnabled");
+            }
             object.insert("effortLevel".into(), json!(scramjet_level(level)));
         })
     }
@@ -2912,6 +2921,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "banner",
             "bottom",
             "effortLevel",
+            "alwaysThinkingEnabled",
             "defaultThinkingLevel",
             "defaultProvider",
             "defaultModel",
@@ -4649,6 +4659,39 @@ or false; ignored"
             warnings[0].ends_with("did you mean effortLevel?"),
             "{warnings:?}"
         );
+    }
+
+    #[test]
+    fn claude_codes_thinking_off_wins_over_the_effort_until_a_level_is_chosen() {
+        let scratch = Scratch::new("always-thinking");
+        let level = |text: &str| {
+            let settings = settings_with(&scratch, text);
+            (settings.default_thinking_level, settings.warnings)
+        };
+        assert_eq!(
+            level(r#"{"effortLevel": "xhigh", "alwaysThinkingEnabled": false}"#),
+            (Some("none".into()), vec![])
+        );
+        assert_eq!(
+            level(r#"{"effortLevel": "xhigh", "alwaysThinkingEnabled": true}"#),
+            (Some("xhigh".into()), vec![])
+        );
+        let (read, warnings) = level(r#"{"alwaysThinkingEnabled": "no"}"#);
+        assert_eq!(read, None);
+        assert!(
+            warnings[0].ends_with("alwaysThinkingEnabled must be true or false; ignored"),
+            "{warnings:?}"
+        );
+
+        let path = scratch.0.join("settings.json");
+        std::fs::write(&path, r#"{"alwaysThinkingEnabled": false}"#).unwrap();
+        let mut settings = Settings::read(Some(path.clone()));
+        settings.set_default_thinking_level("high").unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, json!({"effortLevel": "high"}));
+        settings.set_default_thinking_level("none").unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved, json!({"effortLevel": "off"}));
     }
 
     #[test]

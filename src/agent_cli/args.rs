@@ -443,8 +443,8 @@ Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramj
 with the keys hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
-effortLevel (else defaultThinkingLevel); tools, the agent's coding tools among read, bash, edit,
-write (the default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
+effortLevel (else defaultThinkingLevel; Claude Code's alwaysThinkingEnabled: false starts at
+off); tools, the agent's coding tools among read, bash, edit, write (the default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
 list and the agent save (Claude Code's model, an id or alias such as sonnet, read before them
 and saved in their place when set); and startupModel: per-directory (new sessions start with the model
