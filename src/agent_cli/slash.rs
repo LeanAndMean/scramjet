@@ -30,6 +30,7 @@ pub(super) enum Builtin<'a> {
     Status,
     Diff,
     Agents,
+    Skills,
     Memory,
     Doctor,
     /// With whether the details come first.
@@ -82,6 +83,7 @@ impl<'a> Builtin<'a> {
             "status" if argument.is_empty() => Self::Status,
             "diff" if argument.is_empty() => Self::Diff,
             "agents" if argument.is_empty() => Self::Agents,
+            "skills" if argument.is_empty() => Self::Skills,
             "memory" if argument.is_empty() => Self::Memory,
             "doctor" if argument.is_empty() => Self::Doctor,
             "usage" if argument.is_empty() || argument == "details" => {
@@ -127,6 +129,7 @@ impl<'a> Builtin<'a> {
                 | Self::Status
                 | Self::Diff
                 | Self::Agents
+                | Self::Skills
                 | Self::Memory
                 | Self::Doctor
                 | Self::Btw(_)
@@ -171,6 +174,7 @@ impl Interactive {
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Diff) => self.diff(),
             Some(Builtin::Agents) => self.agents(),
+            Some(Builtin::Skills) => self.skills(),
             Some(Builtin::Memory) => self.memory(),
             Some(Builtin::Doctor) => self.doctor(),
             Some(Builtin::Usage(details)) => self.usage(details),
@@ -412,6 +416,37 @@ impl Interactive {
             return self.show_listing("Agents", installed::agents);
         }
         let text = installed::agents_text(&self.loaded(&found, &problems));
+        self.say(text.trim_end());
+    }
+
+    /// `/skills`, as Claude Code's: the skills the session found, each with where it comes from
+    /// and whether the model is offered it; on the full screen in a list whose Enter opens its
+    /// file.
+    fn skills(&mut self) {
+        let agent = &self.session.agent;
+        let user = agent.agent_directory().map(Path::to_path_buf);
+        let root = agent.root().to_path_buf();
+        let places = installed::Places {
+            user: user.as_deref(),
+            root: &root,
+        };
+        let found = self.session.agent.installed();
+        let problems = self.problems(&found);
+        let loaded = self.loaded(&found, &problems);
+        if installed::skills(&loaded, &places).rows.is_empty() {
+            let user = (user.as_deref())
+                .map(|config| scramjet::os::tilde(&config.join("skills")))
+                .unwrap_or_else(|| "your skills directory".to_owned());
+            let note = format!(
+                "No skills: a directory with a SKILL.md in {user} or in this project's \
+                 .scramjet/skills adds one"
+            );
+            return self.say_styled(style::MUTED, &note);
+        }
+        if self.screen.is_some() {
+            return self.show_listing("Skills", |loaded| installed::skills(loaded, &places));
+        }
+        let text = installed::skills_text(&loaded, &places);
         self.say(text.trim_end());
     }
 
@@ -1115,6 +1150,7 @@ mod tests {
             "/status",
             "/diff",
             "/agents",
+            "/skills",
             "/memory",
             "/doctor",
             "/context",

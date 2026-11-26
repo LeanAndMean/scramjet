@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.359.0 — /skills
+
+### Added
+
+- `/skills` lists the skills, as Claude Code's `/skills` does: each with where it comes from (a command set, yours, the project's, or a path the settings or `--skill` give) and whether the model is offered it, after any problem in skill files. On the full screen Enter opens a skill's file in your editor; without one it prints them.
+
 ## 2.358.0 — /effort
 
 ### Added

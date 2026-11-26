@@ -361,6 +361,8 @@ available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disabl
 starts or stops them, saved in disabledMcpServers.
 /agents lists the agents subagent calls can name, each with where it comes from, the tools and
 model its file asks for and any problem in agent files; on the full screen Enter opens one's file.
+/skills lists the skills, each with where it comes from and whether the model is offered it, and
+any problem in skill files; on the full screen Enter opens one's SKILL.md.
 /memory lists the context files read, those not read, and where your AGENTS.md, the project's and
 its CLAUDE.local.md would go; on the full screen Enter opens one in your editor, creating it.
 /doctor checks, as scramjet doctor does, the program and the scramjet on PATH, a newer release,
@@ -371,7 +373,7 @@ no tool runs, the answer shows apart (on the full screen in a view of its own), 
 never sees the question or the answer again; what it spent is counted with the session.
 /effort LEVEL sets the thinking level, as Shift+Tab does, saved as defaultThinkingLevel; /effort
 alone lists the levels the model takes (on the full screen to pick one).
-Typed while a turn runs, /status, /diff, /agents, /memory, /doctor, /btw, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

@@ -157,14 +157,12 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     agents_section(&mut listing, installed);
     let skills = (loaded.skills.iter())
         .map(|skill| {
-            let offered = match skill.listed {
-                true => "Offered to the model",
-                false => "Not offered to the model (disable-model-invocation)",
-            };
             let path = shown(&skill.path);
             let note = format!(
-                "{path}\n{offered}; /skill:{} runs it. {}",
-                skill.name, skill.description
+                "{path}\n{}; /skill:{} runs it. {}",
+                offered(skill),
+                skill.name,
+                skill.description
             );
             (
                 vec![skill.name.clone(), path],
@@ -348,6 +346,103 @@ pub(super) fn agents_text(loaded: &Loaded) -> String {
         }
     }
     text
+}
+
+/// Where `skill` comes from, as its row's column and its note's sentence: the command set whose
+/// directory holds it, the user's skills, the project's, else a path the settings or `--skill`
+/// gave.
+fn skill_source(skill: &Skill, installed: &Installed, places: &Places) -> (String, String) {
+    let path = &skill.path;
+    if let Some(set) = (installed.sets.iter()).find(|set| path.starts_with(&set.directory)) {
+        let from = format!("From the command set {}.", set.name);
+        return (set.name.clone(), from);
+    }
+    let user = places.user.map(|user| user.join("skills"));
+    let agents = std::env::home_dir().map(|home| scramjet::os::join(&home, ".agents/skills"));
+    if let Some(user) = user.filter(|user| path.starts_with(user)) {
+        let from = format!("In your skills, {}.", shown(&user));
+        return ("user".to_owned(), from);
+    }
+    if agents
+        .as_ref()
+        .is_some_and(|agents| path.starts_with(agents))
+    {
+        let from = "In your ~/.agents/skills, which other agents read too.";
+        return ("user".to_owned(), from.to_owned());
+    }
+    let project = path.starts_with(places.root)
+        || (places.root.ancestors())
+            .any(|above| path.starts_with(scramjet::os::join(above, ".agents/skills")));
+    match project {
+        true => ("project".to_owned(), "In this project.".to_owned()),
+        false => (
+            "listed".to_owned(),
+            "Listed in the settings (skills) or given with --skill.".to_owned(),
+        ),
+    }
+}
+
+/// `/skills`, as Claude Code's: what is wrong in skill files, then each skill with where it
+/// comes from and whether the model is offered it, Enter opening its file.
+pub(super) fn skills(loaded: &Loaded, places: &Places) -> Listing {
+    let mut listing = Listing::default();
+    let problems = (loaded.problems.iter())
+        .filter(|problem| problem.text.starts_with("skills: "))
+        .map(|problem| problem_row(problem, loaded.settings))
+        .collect();
+    listing.section("Needs attention", problems);
+    let skills = (loaded.skills.iter())
+        .map(|skill| {
+            let (source, from) = skill_source(skill, loaded.installed, places);
+            let mut columns = vec![skill.name.clone(), source];
+            if !skill.listed {
+                columns.push("not offered".to_owned());
+            }
+            let note = format!(
+                "{}\n{from} {}; /skill:{} runs it. {}",
+                shown(&skill.path),
+                offered(skill),
+                skill.name,
+                skill.description
+            );
+            (columns, note, Some(skill.path.clone()))
+        })
+        .collect();
+    listing.section("Skills", skills);
+    listing
+}
+
+/// `/skills` without a full screen: the rows of `skills`, each skill's file, description and
+/// whether the model is offered it under it.
+pub(super) fn skills_text(loaded: &Loaded, places: &Places) -> String {
+    let listing = skills(loaded, places);
+    let mut text = String::new();
+    let mut found = loaded.skills.iter();
+    let mut in_skills = false;
+    for (at, row) in listing.rows.iter().enumerate() {
+        text.push_str(row);
+        text.push('\n');
+        if listing.headings[at] {
+            in_skills = row == "Skills";
+        } else if in_skills && let Some(skill) = found.next() {
+            let path = shown(&skill.path);
+            text.push_str(&format!("      {path}\n      {}\n", skill.description));
+            text.push_str(&format!(
+                "      {}; /skill:{} runs it.\n",
+                offered(skill),
+                skill.name
+            ));
+        }
+    }
+    text
+}
+
+/// Whether the instructions offer `skill` to the model.
+fn offered(skill: &Skill) -> &'static str {
+    match skill.listed {
+        true => "Offered to the model",
+        false => "Not offered to the model (disable-model-invocation)",
+    }
 }
 
 /// Where `/memory` looks for context files: the user's directory (none with `--bare`) and the
@@ -1070,6 +1165,115 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn skills_say_where_each_comes_from_and_whether_the_model_is_offered_it() {
+        let base = std::env::temp_dir().join(format!("scramjet-skills-{}", std::process::id()));
+        let _scratch = Scratch(base.clone());
+        let set = scramjet::os::join(&base, "sets/demo");
+        write(&scramjet::os::join(&set, "commands/greet.md"), "Hi\n");
+        let (user, root) = (base.join("config"), base.join("work/project"));
+        let sets = Sets::find(std::slice::from_ref(&set), &root.join(".scramjet"));
+        let skill = |name: &str, path: PathBuf, listed| Skill {
+            name: name.to_owned(),
+            description: format!("Does {name}."),
+            path,
+            listed,
+        };
+        let found_skills = [
+            skill(
+                "pdf",
+                scramjet::os::join(&root, ".scramjet/skills/pdf/SKILL.md"),
+                true,
+            ),
+            skill(
+                "above",
+                scramjet::os::join(&base, "work/.agents/skills/above/SKILL.md"),
+                true,
+            ),
+            skill(
+                "draw",
+                scramjet::os::join(&set, "skills/draw/SKILL.md"),
+                true,
+            ),
+            skill("notes", scramjet::os::join(&user, "skills/notes.md"), false),
+            skill("extra", scramjet::os::join(&base, "extra.md"), true),
+        ];
+        let found = Installed {
+            sets: sets.list().to_vec(),
+            agents: Vec::new(),
+            context_files: Vec::new(),
+            prompt_files: Vec::new(),
+            autonomy: (root.join(".scramjet/autonomy.yaml"), None),
+            problems: Vec::new(),
+        };
+        let problems = [
+            Problem::new("skills: x/SKILL.md: no description"),
+            Problem::new("agents: y.md: broken"),
+        ];
+        let loaded = Loaded {
+            installed: &found,
+            commands: &[],
+            skills: &found_skills,
+            settings: None,
+            problems: &problems,
+        };
+        let places = Places {
+            user: Some(&user),
+            root: &root,
+        };
+        let list = skills(&loaded, &places);
+        assert_eq!(
+            list.rows,
+            [
+                "Needs attention",
+                "  skills: x/SKILL.md: no description",
+                "Skills",
+                "  pdf    project",
+                "  above  project",
+                "  draw   demo",
+                "  notes  user     not offered",
+                "  extra  listed",
+            ]
+        );
+        let at = |name: &str| {
+            (list.rows.iter()).position(|row| row.split_whitespace().next() == Some(name))
+        };
+        let note = |name| &list.notes[at(name).unwrap()];
+        assert_eq!(
+            note("pdf"),
+            &format!(
+                "{}\nIn this project. Offered to the model; /skill:pdf runs it. Does pdf.",
+                shown(&found_skills[0].path)
+            )
+        );
+        assert!(note("draw").contains("\nFrom the command set demo. Offered"));
+        assert!(note("notes").contains(&format!(
+            "\nIn your skills, {}. Not offered to the model (disable-model-invocation); \
+             /skill:notes runs it.",
+            shown(&user.join("skills"))
+        )));
+        assert!(note("extra").contains("\nListed in the settings (skills) or given with --skill."));
+        assert_eq!(
+            list.files[at("draw").unwrap()],
+            Some(found_skills[2].path.clone())
+        );
+        let text = skills_text(&loaded, &places);
+        assert!(
+            text.contains(&format!(
+                "  notes  user     not offered\n      {}\n      Does notes.\n      Not offered to \
+                 the model (disable-model-invocation); /skill:notes runs it.\n  extra",
+                shown(&found_skills[3].path)
+            )),
+            "{text}"
+        );
+        let none = Loaded {
+            skills: &[],
+            problems: &[],
+            ..loaded
+        };
+        assert!(skills(&none, &places).rows.is_empty());
+    }
+
     #[test]
     fn a_problem_opens_its_file_or_offers_to_remove_a_link_that_leads_nowhere() {
         let base = std::env::temp_dir().join(format!("scramjet-problems-{}", std::process::id()));
