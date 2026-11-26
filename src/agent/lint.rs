@@ -383,6 +383,7 @@ mod tests {
                 "commands/bug.md",
                 "commands/init.md",
                 "commands/review.md",
+                "commands/security-review.md",
                 "commands/troubleshoot.md",
                 "agents/command-architect.md",
                 "agents/command-failure-analyst.md",

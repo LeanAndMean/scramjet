@@ -634,10 +634,11 @@ impl Commands {
 
 /// The built-in set's commands typed without the set, as Claude Code and Codex name them: the
 /// first name is the one the `/` list shows, the others are accepted too.
-const SHORT: [(&str, &[&str]); 3] = [
+const SHORT: [(&str, &[&str]); 4] = [
     ("scramjet:bug", &["bug", "feedback", "report-issue"]),
     ("scramjet:init", &["init"]),
     ("scramjet:review", &["review"]),
+    ("scramjet:security-review", &["security-review"]),
 ];
 
 impl Command {
@@ -1468,6 +1469,7 @@ or agents directory, nor a models.json",
             ("scramjet:bug.md", "Report $ARGUMENTS"),
             ("scramjet:init.md", "Initialize $ARGUMENTS"),
             ("scramjet:review.md", "Review $ARGUMENTS"),
+            ("scramjet:security-review.md", "Audit $ARGUMENTS"),
         ]);
         let framed = |name, text| {
             format!("<scramjet-command name=\"scramjet:{name}\">\n{text}\n</scramjet-command>")
@@ -1484,19 +1486,25 @@ or agents directory, nor a models.json",
             let expected = Some(framed("review", "Review main"));
             assert_eq!(commands.expand(&format!("{typed} main")), expected);
         }
+        for typed in ["/security-review", "/scramjet:security-review"] {
+            let expected = Some(framed("security-review", "Audit main"));
+            assert_eq!(commands.expand(&format!("{typed} main")), expected);
+        }
         assert_eq!(commands.expand("/bugs"), None);
         let listed = |name| commands.get(name).unwrap().listed_name();
         assert_eq!(
             [
                 listed("scramjet:bug"),
                 listed("scramjet:init"),
-                listed("scramjet:review")
+                listed("scramjet:review"),
+                listed("scramjet:security-review")
             ],
-            ["bug", "init", "review"]
+            ["bug", "init", "review", "security-review"]
         );
         assert_eq!(Commands::default().expand("/bug"), None);
         assert_eq!(Commands::default().expand("/init"), None);
         assert_eq!(Commands::default().expand("/review"), None);
+        assert_eq!(Commands::default().expand("/security-review"), None);
     }
 
     #[test]

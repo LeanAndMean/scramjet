@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.357.0 — /security-review
+
+### Added
+
+- `/security-review` has the agent review your changes for security vulnerabilities only, as Claude Code's does: the same changes `/review` looks at, or what you name after it. It reports only what someone could exploit that the change introduces, checking each candidate (in a fresh subagent where it can) before reporting it with its severity, file and line, how it would be exploited and the fix, and changes nothing.
+
 ## 2.356.0 — /btw
 
 ### Added
