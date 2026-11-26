@@ -589,6 +589,7 @@ pub(super) fn run_turn(
         agent, settings, ..
     } = front.session();
     agent.set_hide_credentials(settings.hide_credentials.hides(start == Start::Unattended));
+    agent.set_hooks(settings.hooks.clone());
     agent.set_unattended(start == Start::Unattended);
     let model = agent.model().to_owned();
     front.turn_starts();

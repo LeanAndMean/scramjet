@@ -2085,20 +2085,48 @@ pub fn run_with_input(
     timeout: Duration,
     cancel: &AtomicBool,
 ) -> Result<String, String> {
+    let exited = run_piped(root, command, input, &[], timeout, cancel)?;
+    match exited.code {
+        Some(0) => Ok(exited.stdout),
+        Some(code) => Err(format!("exited with {code}")),
+        None => Err("was killed".to_owned()),
+    }
+}
+
+/// How a `run_piped` command ended: its exit code (`None` when a signal ended it) and the
+/// first `WITH_INPUT_BYTES` of each output.
+pub struct Exited {
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// As `run_with_input`, with `env` set for it, and however it exits within `timeout`.
+pub fn run_piped(
+    root: &Path,
+    command: &str,
+    input: &[u8],
+    env: &[(&str, &std::ffi::OsStr)],
+    timeout: Duration,
+    cancel: &AtomicBool,
+) -> Result<Exited, String> {
     let mut process = Command::new(shell_program()?);
     bash_runs(&mut process, command);
     process
         .current_dir(root)
+        .envs(env.iter().copied())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     crate::os::own_group(&mut process);
     let mut child = process
         .spawn()
         .map_err(|e| format!("cannot start bash: {e}"))?;
     crate::os::hold_group(&child);
     let id = child.id();
-    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+    let (Some(mut stdin), Some(stdout), Some(stderr)) =
+        (child.stdin.take(), child.stdout.take(), child.stderr.take())
+    else {
         crate::os::kill_group(id);
         let _ = child.wait();
         return Err("cannot reach the command".to_owned());
@@ -2108,12 +2136,19 @@ pub fn run_with_input(
     std::thread::spawn(move || {
         let _ = io::Write::write_all(&mut stdin, &input);
     });
-    let (sent, read) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = stdout.take(WITH_INPUT_BYTES).read_to_end(&mut output);
-        let _ = sent.send(output);
-    });
+    let read = |output: Box<dyn Read + Send>| {
+        let (sent, read) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut kept = Vec::new();
+            let mut output = output.take(WITH_INPUT_BYTES);
+            let _ = output.read_to_end(&mut kept);
+            // The rest is read and dropped, for the command not to block on a full pipe.
+            let _ = io::copy(&mut output.into_inner(), &mut io::sink());
+            let _ = sent.send(kept);
+        });
+        read
+    };
+    let (out, err) = (read(Box::new(stdout)), read(Box::new(stderr)));
     let started = Instant::now();
     let status = loop {
         match child.try_wait() {
@@ -2136,17 +2171,17 @@ pub fn run_with_input(
         }
     };
     crate::os::release_group(id);
-    // What it left running may still hold the output open.
-    let output = read
-        .recv_timeout(timeout.saturating_sub(started.elapsed()))
-        .map_err(|_| "its output did not end".to_owned())?;
-    match status.success() {
-        true => Ok(String::from_utf8_lossy(&output).into_owned()),
-        false => Err(match status.code() {
-            Some(code) => format!("exited with {code}"),
-            None => "was killed".to_owned(),
-        }),
-    }
+    // What it left running may still hold the outputs open.
+    let ended = |read: std::sync::mpsc::Receiver<Vec<u8>>| {
+        (read.recv_timeout(timeout.saturating_sub(started.elapsed())))
+            .map(|output| String::from_utf8_lossy(&output).into_owned())
+            .map_err(|_| "its output did not end".to_owned())
+    };
+    Ok(Exited {
+        code: status.code(),
+        stdout: ended(out)?,
+        stderr: ended(err).unwrap_or_default(),
+    })
 }
 
 /// The settings' `shellPath` and `shellCommandPrefix`, as Scramjet's: the shell that runs the

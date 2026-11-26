@@ -20,6 +20,7 @@ pub mod copilot;
 mod delegate;
 mod forge;
 mod goal;
+mod hooks;
 mod image;
 mod instructions;
 mod leftovers;
@@ -71,6 +72,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, s
 pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use goal::{GoalCheck, Verdict};
+pub use hooks::Hooks;
 pub use image::{decode_base64, mime as image_type, set_images};
 pub use instructions::{Part, Section};
 pub use lint::{Diagnostic, Severity, lint};
@@ -695,6 +697,8 @@ pub struct Agent {
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
+    /// The settings' hooks, run around the agent's tools (`set_hooks`).
+    hooks: Arc<Hooks>,
     /// The paths the user's settings hide as the credential stores are, and re-open (`set_reads`).
     reads: Reads,
     /// The directories made writable without a sandbox (`set_writable`).
@@ -903,6 +907,7 @@ impl Agent {
             runtime_windows: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
+            hooks: Arc::default(),
             reads: Reads::default(),
             writable: Vec::new(),
             offline: false,
@@ -2012,6 +2017,12 @@ impl Agent {
     /// always do. A `!` command, which the user runs, never does.
     pub fn set_hide_credentials(&mut self, hide: bool) {
         self.hide_credentials = hide;
+    }
+
+    /// The hooks run before and after the agent's own tools in the turns that follow, as
+    /// Claude Code's `hooks` setting runs them; not its subagents'.
+    pub fn set_hooks(&mut self, hooks: Arc<Hooks>) {
+        self.hooks = hooks;
     }
 
     /// Hides `reads.deny` (the settings' `sandbox.filesystem.denyRead`) but what `reads.allow`

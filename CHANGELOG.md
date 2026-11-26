@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.377.0 — Claude Code's hooks around the agent's tools
+
+### Added
+
+- The settings' `hooks`, in Claude Code's form and copied as they are: `PreToolUse`, `PostToolUse` and `PostToolUseFailure` command hooks run around the agent's tool calls, matched by Claude Code's tool names (`Bash`, `Write|Edit`, …) or Scramjet's. A hook can block a call (exit code 2, or `permissionDecision: "deny"`), ask you about it, change its input, or tell the model or you more. Claude Code's other events and kinds of hooks are named in a warning at start; subagents' tools run no hooks yet.
+
 ## 2.376.0 — Told when the agent waits for you
 
 ### Added

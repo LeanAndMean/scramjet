@@ -268,6 +268,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         ui.notice(warning);
     }
     agent.set_hide_credentials(settings.hide_credentials.hides(true));
+    agent.set_hooks(settings.hooks.clone());
     agent.set_unattended(true);
     // A message read from stdin (`-`) may start a command.
     let commands = (messages.iter()).any(|message| message == "-" || message.starts_with('/'));
