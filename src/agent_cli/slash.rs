@@ -7,7 +7,7 @@ use super::drive::{self, SandboxChange};
 use super::interactive::{Interactive, completions};
 use super::terminal;
 use super::text::{clip, visible};
-use super::{changelog, clipboard, completion, export, installed, keymap, style};
+use super::{changelog, clipboard, completion, doctor, export, installed, keymap, style};
 use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode};
 use std::{
     io::IsTerminal,
@@ -29,6 +29,7 @@ pub(super) enum Builtin<'a> {
     Diff,
     Agents,
     Memory,
+    Doctor,
     /// With whether the details come first.
     Usage(bool),
     Context,
@@ -76,6 +77,7 @@ impl<'a> Builtin<'a> {
             "diff" if argument.is_empty() => Self::Diff,
             "agents" if argument.is_empty() => Self::Agents,
             "memory" if argument.is_empty() => Self::Memory,
+            "doctor" if argument.is_empty() => Self::Doctor,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
@@ -118,6 +120,7 @@ impl<'a> Builtin<'a> {
                 | Self::Diff
                 | Self::Agents
                 | Self::Memory
+                | Self::Doctor
                 | Self::Usage(_)
                 | Self::Context
                 | Self::SystemPrompt
@@ -159,6 +162,7 @@ impl Interactive {
             Some(Builtin::Diff) => self.diff(),
             Some(Builtin::Agents) => self.agents(),
             Some(Builtin::Memory) => self.memory(),
+            Some(Builtin::Doctor) => self.doctor(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
             Some(Builtin::SystemPrompt) => self.system_prompt(),
@@ -416,6 +420,30 @@ impl Interactive {
         let found = self.session.agent.installed();
         let problems = self.problems(&found);
         let text = installed::memory_text(&self.loaded(&found, &problems), &places);
+        self.say(text.trim_end());
+    }
+
+    /// `/doctor`, as Claude Code's: `scramjet doctor`'s checks, with what this session loaded,
+    /// its model and how its MCP servers are.
+    fn doctor(&mut self) {
+        let found = self.session.agent.installed();
+        let problems = self
+            .problems(&found)
+            .into_iter()
+            .map(|problem| problem.text);
+        let agent = &self.session.agent;
+        let mcp = (agent.mcp_servers().into_iter())
+            .map(|(server, state)| (server.name, state))
+            .collect();
+        let setup = doctor::Setup {
+            settings: &self.session.settings,
+            providers: agent.providers(),
+            root: agent.root(),
+            problems: problems.collect(),
+            model: Some(agent.model().to_owned()),
+            mcp: Some(mcp),
+        };
+        let text = doctor::text(&doctor::checks(&setup));
         self.say(text.trim_end());
     }
 
@@ -988,6 +1016,7 @@ mod tests {
             "/diff",
             "/agents",
             "/memory",
+            "/doctor",
             "/context",
             "/system-prompt",
             "/export",

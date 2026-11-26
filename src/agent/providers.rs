@@ -570,6 +570,32 @@ impl Providers {
             .or_else(|| models.iter().find(|model| model.id == name))
     }
 
+    /// The reference of the model `name` names (`find`), if a provider offers it.
+    pub fn offered(&self, name: &str) -> Option<String> {
+        self.find(name).map(Model::reference)
+    }
+
+    /// The servers on this machine the models' requests go to, each once: the provider, the
+    /// host and the port.
+    pub fn local_servers(&self) -> Vec<(String, String, u16)> {
+        let mut servers: Vec<(String, String, u16)> = Vec::new();
+        for route in self
+            .models
+            .iter()
+            .filter_map(|model| model.info.route.as_ref())
+        {
+            let host = route.host.to_ascii_lowercase();
+            let local = host == "localhost"
+                || (host.trim_matches(['[', ']']).parse::<std::net::IpAddr>())
+                    .is_ok_and(|ip| ip.is_loopback());
+            let server = (route.provider.clone(), route.host.clone(), route.port);
+            if local && !servers.contains(&server) {
+                servers.push(server);
+            }
+        }
+        servers
+    }
+
     /// The reference of the model `name` names (`find`), else `name`.
     pub(super) fn reference(&self, name: &str) -> String {
         self.find(name)

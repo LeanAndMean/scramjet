@@ -47,6 +47,17 @@ pub(super) fn start_check() -> Option<String> {
     start_check_in(&file, &releases(), env!("CARGO_PKG_VERSION"), now).0
 }
 
+/// What the last check for a newer release found (`version.json`): the newest version, when it
+/// looked (seconds since the epoch), and why it failed if it did. `None` before any check.
+pub(super) fn last_check() -> Option<(Option<String>, u64, Option<String>)> {
+    let file = scramjet::agent::state_directory()
+        .ok()?
+        .join("version.json");
+    let last: Value = serde_json::from_slice(&fs::read(file).ok()?).ok()?;
+    let text = |key: &str| last[key].as_str().map(str::to_owned);
+    Some((text("latest"), last["checked"].as_u64()?, text("error")))
+}
+
 fn start_check_in(
     file: &Path,
     releases: &str,

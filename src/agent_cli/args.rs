@@ -87,6 +87,7 @@ Commands:
   catalog add|remove|list  add, remove or list the model catalogs' URLs
   lint [--strict] DIR...   check command sets as Scramjet loads them
   import [--dry-run]       copy Scramjet 1's setup
+  doctor                   check whether Scramjet can work here
   acp                      run as an Agent Client Protocol agent, for editors
 Each takes --help.
 
@@ -122,6 +123,7 @@ pub(super) const HELP_ALL: &str =
        scramjet catalog add URL | remove URL | list
        scramjet lint [--strict] [--json] DIR...
        scramjet import [--dry-run] [DIR]
+       scramjet doctor
        scramjet acp [OPTIONS]
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
@@ -361,7 +363,10 @@ starts or stops them, saved in disabledMcpServers.
 model its file asks for and any problem in agent files; on the full screen Enter opens one's file.
 /memory lists the context files read, those not read, and where your AGENTS.md, the project's and
 its CLAUDE.local.md would go; on the full screen Enter opens one in your editor, creating it.
-Typed while a turn runs, /status, /diff, /agents, /memory, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+/doctor checks, as scramjet doctor does, the program and the scramjet on PATH, a newer release,
+the disk, the settings and what they load, the models, the providers' servers on this machine,
+the sandbox, git and the shell, the terminal and how the MCP servers are.
+Typed while a turn runs, /status, /diff, /agents, /memory, /doctor, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

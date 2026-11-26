@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.355.0 — scramjet doctor
+
+### Added
+
+- `scramjet doctor`, and `/doctor` in a session, as in Claude Code and Codex: a line per check of whether Scramjet can work here, with what to do when it cannot. It says which `scramjet` your `PATH` runs (Scramjet 1's marked), whether a newer release is out, the room on the disk, problems in the settings and what they load, the models and the one a session starts with, whether anything answers at a provider's server on this machine (a local proxy or a runtime for local models), whether the sandbox can start, git, the shell and `gh`, the terminal, and in a session how the MCP servers are. Nothing is sent to a provider; `scramjet doctor` exits with an error when a check fails.
+
 ## 2.354.0 — /memory
 
 ### Added
