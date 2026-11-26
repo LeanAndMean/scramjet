@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.352.0 — /review
+
+### Added
+
+- `/review` has the agent review your changes, as Codex's and Claude Code's `/review` do: what is uncommitted, else the current branch against its default branch, or the commit, range, branch or pull request you name after it, with any focus you add. It reports the defects first, most severe first, each with its file and line and the fix it needs, then open questions, and changes nothing.
+
 ## 2.351.0 — /diff
 
 ### Added

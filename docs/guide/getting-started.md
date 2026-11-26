@@ -62,6 +62,8 @@ The agent reads the code, runs commands and edits files, and each step shows as 
 
 `/init` has the agent write an `AGENTS.md` describing the project, its commands and conventions, which it reads at the start of each session; review it and commit it as your own.
 
+`/review` has the agent review what is uncommitted, or a commit, branch or pull request you name after it, and report bugs and risks with their file and line, changing nothing.
+
 ## 6. Steer and queue while it works
 
 The prompt stays usable during a turn:

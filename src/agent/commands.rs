@@ -634,9 +634,10 @@ impl Commands {
 
 /// The built-in set's commands typed without the set, as Claude Code and Codex name them: the
 /// first name is the one the `/` list shows, the others are accepted too.
-const SHORT: [(&str, &[&str]); 2] = [
+const SHORT: [(&str, &[&str]); 3] = [
     ("scramjet:bug", &["bug", "feedback", "report-issue"]),
     ("scramjet:init", &["init"]),
+    ("scramjet:review", &["review"]),
 ];
 
 impl Command {
@@ -1466,6 +1467,7 @@ or agents directory, nor a models.json",
         let commands = Commands::parsed(&[
             ("scramjet:bug.md", "Report $ARGUMENTS"),
             ("scramjet:init.md", "Initialize $ARGUMENTS"),
+            ("scramjet:review.md", "Review $ARGUMENTS"),
         ]);
         let framed = |name, text| {
             format!("<scramjet-command name=\"scramjet:{name}\">\n{text}\n</scramjet-command>")
@@ -1478,14 +1480,23 @@ or agents directory, nor a models.json",
             let expected = Some(framed("init", "Initialize the tests"));
             assert_eq!(commands.expand(&format!("{typed} the tests")), expected);
         }
+        for typed in ["/review", "/scramjet:review"] {
+            let expected = Some(framed("review", "Review main"));
+            assert_eq!(commands.expand(&format!("{typed} main")), expected);
+        }
         assert_eq!(commands.expand("/bugs"), None);
         let listed = |name| commands.get(name).unwrap().listed_name();
         assert_eq!(
-            (listed("scramjet:bug"), listed("scramjet:init")),
-            ("bug", "init")
+            [
+                listed("scramjet:bug"),
+                listed("scramjet:init"),
+                listed("scramjet:review")
+            ],
+            ["bug", "init", "review"]
         );
         assert_eq!(Commands::default().expand("/bug"), None);
         assert_eq!(Commands::default().expand("/init"), None);
+        assert_eq!(Commands::default().expand("/review"), None);
     }
 
     #[test]
