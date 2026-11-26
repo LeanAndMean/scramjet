@@ -39,7 +39,7 @@ Commands reach the network unless `sandbox.network` is `false`, which keeps them
 - On macOS Seatbelt closes every socket (untried).
 - On Windows nothing can, so the Network row says it stays on.
 
-A `!` command, which you run, keeps the network.
+The agent's `web_fetch` tool, which Scramjet runs itself rather than a command, is refused then too (not on Windows, where the network stays on). A `!` command, which you run, keeps the network.
 
 ### Writable, hidden and readable paths
 

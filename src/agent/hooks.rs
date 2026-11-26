@@ -1135,6 +1135,7 @@ fn names(call: &Call) -> Vec<String> {
         "find" => "Glob",
         "ls" => "LS",
         subagent::NAME => "Agent",
+        super::web::NAME => "WebFetch",
         mcp::CALL => {
             let part = |field: &str| call.arguments[field].as_str().unwrap_or_default();
             let name = format!("mcp__{}__{}", part("server"), part("tool"));

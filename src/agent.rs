@@ -58,6 +58,7 @@ pub mod todo;
 mod tools;
 mod tree;
 mod turn;
+pub mod web;
 pub use turn::ShownPaused;
 mod ui;
 pub mod usage;

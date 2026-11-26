@@ -3829,6 +3829,7 @@ fn kind(name: &str) -> &'static str {
         "edit" | "write" => "edit",
         "grep" | "find" | "ls" => "search",
         "bash" | "powershell" | "cmd" => "execute",
+        "web_fetch" => "fetch",
         _ => "other",
     }
 }

@@ -2985,7 +2985,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
     on_screen('\u203a [ ] grep')
     # The harness's own tools follow the coding tools.
-    send(b'\x1b[B' * 12 + b'\r')
+    send(b'\x1b[B' * 13 + b'\r')
     rows = on_screen('\u203a [ ] switch_scramjet_model')
     assert rows[-1] == '  Changes the session\'s model', rows
     send(b'\x1b')

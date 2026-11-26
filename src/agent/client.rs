@@ -488,6 +488,7 @@ pub(super) struct Fetched {
     pub body: Vec<u8>,
     pub location: Option<String>,
     pub etag: Option<String>,
+    pub content_type: Option<String>,
     /// What of the request's headers may be credentials, for `said`.
     pub secrets: Vec<String>,
 }
@@ -539,6 +540,21 @@ pub(super) async fn fetch_within(
         None => (url, String::new()),
     };
     let parts = super::providers::base_url(url)?;
+    fetch_at(what, method, parts, &query, headers, body, limit, timeout).await
+}
+
+/// As `fetch_within`, to the URL `parts` give with `query` (empty, or from its `?`).
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn fetch_at(
+    what: &str,
+    method: &str,
+    parts: super::providers::BaseUrl,
+    query: &str,
+    headers: &[(&str, &str)],
+    body: Option<(&str, Vec<u8>)>,
+    limit: usize,
+    timeout: Duration,
+) -> Result<Fetched, Failure> {
     let route = Route {
         provider: what.to_owned(),
         tls: parts.tls,
@@ -590,6 +606,9 @@ pub(super) async fn fetch_within(
         let etag = (response.headers().get(hyper::header::ETAG))
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
+        let content_type = (response.headers().get(hyper::header::CONTENT_TYPE))
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
         let mut body = response.into_body();
         let mut bytes = Vec::new();
         while let Some(frame) = body.frame().await {
@@ -611,6 +630,7 @@ pub(super) async fn fetch_within(
             body: bytes,
             location,
             etag,
+            content_type,
             secrets,
         })
     };

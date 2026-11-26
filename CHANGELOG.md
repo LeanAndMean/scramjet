@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.388.0 — The agent reads web pages
+
+### Added
+
+- The agent reads web pages, as Claude Code's `WebFetch`: its `web_fetch` tool fetches a URL and gives a page as Markdown (headings, lists, links, code and tables) and a text or JSON file as it is, the first 2000 lines or 50KB with the whole saved for `read`. It is refused while `sandbox.network` is `false`; `"tools": {"web_fetch": false}` turns it off.
+
 ## 2.387.0 — The agent's todo list
 
 ### Added
