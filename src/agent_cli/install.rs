@@ -538,7 +538,10 @@ fn here(settings: &Settings) -> Result<Inventory, String> {
 fn contents(found: &Inventory, set: &Set) -> String {
     let commands = (found.commands.list().iter())
         .filter(|command| command.path.starts_with(&set.directory))
-        .count();
+        .count()
+        + (found.claude_commands.list().iter())
+            .filter(|command| command.plugin.as_ref() == Some(&set.directory))
+            .count();
     let agents = (found.agents.iter())
         .filter(|(_, path)| path.starts_with(&set.directory))
         .count();

@@ -25,6 +25,9 @@ A scenario (scripts/screens/*.json) holds:
                 else a scratch "project";
     "settings": scramjet-rs's settings, which --set (a JSON value, else a string) adds to;
     "config":   more files beside the settings, by name, such as "words.txt" or "agents/x.md";
+    "claude":   files in Claude Code's directory (CLAUDE_CONFIG_DIR, a scratch one, empty without
+                them), by name, such as "plugins/installed_plugins.json", `{claude}` in a text
+                being that directory;
     "model":    the scripted server's model (default gpt-6-luna);
     "window":   its context window, unknown unless given;
     "total":    the total tokens each response reports, so the context's size is known, its input
@@ -396,7 +399,13 @@ def main():
             os.makedirs(os.path.dirname(os.path.join(work, 'config/scramjet', name)), exist_ok=True)
             with open(os.path.join(work, 'config/scramjet', name), 'w') as file:
                 file.write(text)
-        env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'),
+        claude = os.path.join(work, 'claude')
+        os.makedirs(claude)
+        for name, text in scenario.get('claude', {}).items():
+            os.makedirs(os.path.dirname(os.path.join(claude, name)), exist_ok=True)
+            with open(os.path.join(claude, name), 'w') as file:
+                file.write(text.replace('{claude}', claude))
+        env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), CLAUDE_CONFIG_DIR=claude,
                    XDG_CONFIG_HOME=os.path.join(work, 'config'), XDG_DATA_HOME=os.path.join(work, 'data'),
                    TERM='xterm-256color',
                    COLORTERM='truecolor', SCRAMJET_OFFLINE='1')

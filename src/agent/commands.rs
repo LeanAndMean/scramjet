@@ -5,6 +5,7 @@
 
 use super::Problem;
 use super::autonomy::{self, Publication, Publications, Suggestion};
+use super::claude_plugins;
 use super::subagent::ours;
 use super::yaml;
 use std::{
@@ -22,6 +23,8 @@ pub enum Origin {
     Project,
     /// Carried by the program (`builtin`).
     BuiltIn,
+    /// One of Claude Code's installed plugins, on in its settings (`claude_plugins`).
+    ClaudeCode,
 }
 
 impl Origin {
@@ -30,6 +33,7 @@ impl Origin {
             Self::Installed => "installed",
             Self::Project => "project",
             Self::BuiltIn => "built in",
+            Self::ClaudeCode => "Claude Code plugin",
         }
     }
 }
@@ -181,13 +185,19 @@ impl Sets {
     /// whose name an installed set has is skipped with a warning, as is an installed one that is
     /// missing.
     pub fn find(installed: &[PathBuf], project: &Path) -> Self {
-        Self::find_besides(installed, project, None)
+        Self::find_besides(installed, &[], project, None)
     }
 
     /// As `find`, never taking `scramjet_1`, Scramjet 1's agent directory, for a project set:
     /// in the home directory, the project's `.scramjet` is Scramjet 1's, and its `agent`
-    /// directory, with its `agents`, looks like one.
-    fn find_besides(installed: &[PathBuf], project: &Path, scramjet_1: Option<&Path>) -> Self {
+    /// directory, with its `agents`, looks like one. Claude Code's `plugins` follow the
+    /// installed sets, but for one whose name an installed set has.
+    fn find_besides(
+        installed: &[PathBuf],
+        plugins: &[claude_plugins::Plugin],
+        project: &Path,
+        scramjet_1: Option<&Path>,
+    ) -> Self {
         let scramjet_1 = scramjet_1.map(|v1| std::fs::canonicalize(v1).unwrap_or(v1.to_path_buf()));
         let mut sets = Self::default();
         for directory in installed {
@@ -204,6 +214,15 @@ impl Sets {
                 Err(error) => (sets.warnings).push(Problem::in_settings(format!(
                     "skipping installed command set: {error}"
                 ))),
+            }
+        }
+        for plugin in plugins {
+            if sets.list.iter().all(|known| known.name != plugin.name) {
+                sets.list.push(Set {
+                    name: plugin.name.clone(),
+                    directory: plugin.directory.clone(),
+                    origin: Origin::ClaudeCode,
+                });
             }
         }
         let installed = sets.list.len();
@@ -238,14 +257,23 @@ impl Sets {
         sets
     }
 
-    /// The sets of a session in `root`: the `installed` ones, then those in the project's
-    /// `.scramjet` directory, then the program's own `scramjet` set unless one of them has its
-    /// name, as one installed from a checkout does. Sets left in Scramjet 1's global root are
-    /// not read, each said in a warning.
+    /// The sets of a session in `root`: the `installed` ones, then Claude Code's plugins on
+    /// there (not with `--bare`), then those in the project's `.scramjet` directory, then the
+    /// program's own `scramjet` set unless one of them has its name, as one installed from a
+    /// checkout does. Sets left in Scramjet 1's global root are not read, each said in a
+    /// warning.
     pub fn for_project(installed: &[PathBuf], root: &Path) -> Self {
         let project = root.join(".scramjet");
         let scramjet_1 = scramjet_1_directory();
-        let mut sets = Self::find_besides(installed, &project, scramjet_1.as_deref());
+        let mut problems = Vec::new();
+        let plugins = match super::login::claude_directory() {
+            Some(claude) if !cfg!(test) && !super::bare() => {
+                claude_plugins::enabled(&claude, root, &mut problems)
+            }
+            _ => Vec::new(),
+        };
+        let mut sets = Self::find_besides(installed, &plugins, &project, scramjet_1.as_deref());
+        sets.warnings.extend(problems);
         if let Some(global) = global_root() {
             let unread = sets.unread(&global);
             sets.warnings.extend(unread);
@@ -416,7 +444,12 @@ impl Commands {
             publications: Vec::new(),
             suggestions: Vec::new(),
         };
-        for set in &sets.list {
+        // A Claude Code plugin's commands run as Claude Code's (`ClaudeCommands`).
+        for set in sets
+            .list
+            .iter()
+            .filter(|set| set.origin != Origin::ClaudeCode)
+        {
             let directory = set.directory.join("commands");
             for (file, content) in command_files(&directory) {
                 let path = directory.join(&file);
@@ -1112,7 +1145,7 @@ mod tests {
         };
         assert_eq!(names(&project_sets(&home)), ["agent", "mine"]);
         let v1 = home.join("agent");
-        let besides = Sets::find_besides(&[], &home, Some(&v1));
+        let besides = Sets::find_besides(&[], &[], &home, Some(&v1));
         assert_eq!(names(&besides), ["mine"]);
         assert!(besides.warnings().is_empty());
         // Also when Scramjet 1's directory is reached through a link.
@@ -1121,7 +1154,7 @@ mod tests {
             let link = scratch.0.join("v1");
             std::os::unix::fs::symlink(&v1, &link).unwrap();
             assert_eq!(
-                names(&Sets::find_besides(&[], &home, Some(&link))),
+                names(&Sets::find_besides(&[], &[], &home, Some(&link))),
                 ["mine"]
             );
         }
@@ -1195,6 +1228,36 @@ mod tests {
         assert!(!only("skills"));
         scratch.file("plain/commands/x.md", "");
         assert!(!only("plain"));
+    }
+
+    #[test]
+    fn claude_codes_plugins_follow_the_installed_sets_and_go_before_the_projects() {
+        let scratch = Scratch::new("plugin-sets");
+        let project = scratch.0.join("project");
+        scratch.file("installed/mach12/commands/x.md", "");
+        scratch.file("project/dev/commands/y.md", "");
+        scratch.file("project/rs/commands/z.md", "");
+        let plugin = |name: &str| claude_plugins::Plugin {
+            name: name.into(),
+            directory: scratch.0.join("cache").join(name),
+        };
+        let installed = [scratch.0.join("installed/mach12")];
+        let plugins = [plugin("mach12"), plugin("dev")];
+        let sets = Sets::find_besides(&installed, &plugins, &project, None);
+        let found: Vec<String> = (sets.list().iter())
+            .map(|set| format!("{} {}", set.name, set.origin.name()))
+            .collect();
+        assert_eq!(
+            found,
+            ["mach12 installed", "dev Claude Code plugin", "rs project"]
+        );
+        assert_eq!(sets.list()[1].directory, scratch.0.join("cache/dev"));
+        assert_eq!(sets.warnings().len(), 1, "{:?}", sets.warnings());
+        assert!(
+            sets.warnings()[0]
+                .text
+                .contains("skipping project command set")
+        );
     }
 
     #[test]

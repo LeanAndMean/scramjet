@@ -25,6 +25,49 @@ pub(super) fn first(text: &str) -> Result<Yaml, String> {
     Ok(documents.into_iter().next().unwrap_or(Yaml::Null))
 }
 
+/// A Claude Code file's frontmatter, as Claude Code 2.1.259 reads it: when it does not parse, again
+/// with each `key: value` line's unquoted value that holds one of `{}[]*&#!|>%@` and backquote,
+/// or `: `, put in double quotes, and leading tabs made two spaces each; the first error when
+/// that fails too.
+pub(super) fn frontmatter(text: &str) -> Result<Yaml, String> {
+    let error = match first(text) {
+        Ok(yaml) => return Ok(yaml),
+        Err(error) => error,
+    };
+    let special =
+        |value: &str| value.contains(": ") || value.contains(|c| "{}[]*&#!|>%@`".contains(c));
+    let quoted: Vec<String> = (text.split('\n'))
+        .map(|line| {
+            let key_end = line.find(|c: char| !(c.is_ascii_alphabetic() || c == '_' || c == '-'));
+            let Some(end) = key_end.filter(|&end| end > 0 && line[end..].starts_with(':')) else {
+                return line.to_owned();
+            };
+            let after = &line[end + 1..];
+            let value = after.trim_start();
+            let quoted = |mark: char| value.starts_with(mark) && value.ends_with(mark);
+            let list = value.starts_with('[')
+                && value.ends_with(']')
+                && matches!(first(value), Ok(Yaml::Array(_)));
+            if value.is_empty()
+                || after.len() == value.len()
+                || quoted('"')
+                || quoted('\'')
+                || list
+                || !special(value)
+            {
+                return line.to_owned();
+            }
+            let value = value.replace('\\', "\\\\").replace('"', "\\\"");
+            format!("{}: \"{value}\"", &line[..end])
+        })
+        .map(|line| {
+            let tabs = line.len() - line.trim_start_matches('\t').len();
+            format!("{}{}", "  ".repeat(tabs), &line[tabs..])
+        })
+        .collect();
+    first(&quoted.join("\n")).map_err(|_| error)
+}
+
 /// Counts the nodes each anchor holds and those its aliases copy.
 #[derive(Default)]
 struct Size {
@@ -61,6 +104,22 @@ impl MarkedEventReceiver for Size {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frontmatter_that_does_not_parse_is_read_again_with_its_values_quoted() {
+        let text = "name: review\ndescription: Use it: when (1) a PR \"lands\" #3\n\
+tools: [Read, Grep]\nmodel: 'x: y'";
+        assert!(first(text).is_err());
+        let read = frontmatter(text).unwrap();
+        let description = "Use it: when (1) a PR \"lands\" #3";
+        assert_eq!(read["description"].as_str(), Some(description));
+        assert_eq!(read["tools"][1].as_str(), Some("Grep"));
+        assert_eq!(read["model"].as_str(), Some("x: y"));
+        assert_eq!(read["name"].as_str(), Some("review"));
+        let broken = "description: a: b\n<example>\nuser: x";
+        assert_eq!(frontmatter(broken), first(broken));
+        assert_eq!(frontmatter("a: 1").unwrap()["a"].as_i64(), Some(1));
+    }
 
     #[test]
     fn aliases_load_as_copies_until_they_would_expand_too_far() {

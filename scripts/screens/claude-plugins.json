@@ -1,0 +1,63 @@
+{
+  "size": "100x30",
+  "claude": {
+    "settings.json": "{\"enabledPlugins\": {\"dev@market\": true, \"off@market\": false}}\n",
+    "plugins/installed_plugins.json": "{\"version\": 2, \"plugins\": {\"dev@market\": [{\"scope\": \"user\", \"installPath\": \"{claude}/plugins/cache/market/dev/1.0.0\", \"version\": \"1.0.0\"}], \"off@market\": [{\"scope\": \"user\", \"installPath\": \"{claude}/plugins/cache/market/off/1.0.0\"}]}}\n",
+    "plugins/cache/market/dev/1.0.0/.claude-plugin/plugin.json": "{\"name\": \"dev\", \"version\": \"1.0.0\"}\n",
+    "plugins/cache/market/dev/1.0.0/commands/feature.md": "---\ndescription: Guided feature development\nargument-hint: Optional feature description\n---\n\nPlugin: !`basename \"$(dirname \"${CLAUDE_PLUGIN_ROOT}\")\"`\n\nDevelop: $ARGUMENTS\n",
+    "plugins/cache/market/dev/1.0.0/agents/code-explorer.md": "---\nname: code-explorer\ndescription: Use this agent when: you need a feature traced, e.g. <example>user: \"how does login work\"</example>\ntools: Glob, Grep, Read\nmodel: sonnet\n---\n\nTrace the feature.\n",
+    "plugins/cache/market/dev/1.0.0/skills/changelog/SKILL.md": "---\nname: changelog\ndescription: Writes changelog entries.\n---\n\nWrite an entry for $ARGUMENTS.\n",
+    "plugins/cache/market/off/1.0.0/commands/never.md": "Never listed.\n"
+  },
+  "replies": [
+    [
+      {
+        "text": "Developing login, from the dev plugin."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "gpt-6-luna"
+    },
+    {
+      "type": "/dev"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-plugins-list"
+    },
+    {
+      "type": ":feature login\r"
+    },
+    {
+      "until": "Developing login"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-plugins-sent"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "type": "/agents\r"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-plugins-agents"
+    }
+  ]
+}

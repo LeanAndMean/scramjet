@@ -80,6 +80,19 @@ impl Listing {
     }
 }
 
+/// How many `.md` files are under `directory`, as a Claude Code plugin's commands.
+fn markdown_files(directory: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return 0;
+    };
+    (entries.filter_map(Result::ok).map(|entry| entry.path()))
+        .map(|path| match path.is_dir() {
+            true => markdown_files(&path),
+            false => usize::from(path.extension().is_some_and(|e| e == "md")),
+        })
+        .sum()
+}
+
 /// The problems, the command sets, commands, agents, skills, system prompt, context and settings
 /// files.
 pub(super) fn listing(loaded: &Loaded) -> Listing {
@@ -92,9 +105,12 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     let settings = loaded.settings.map(shown);
     let sets = (installed.sets.iter())
         .map(|set| {
-            let commands = (loaded.commands.iter())
-                .filter(|command| command.path.starts_with(&set.directory))
-                .count();
+            let commands = match set.origin {
+                Origin::ClaudeCode => markdown_files(&set.directory.join("commands")),
+                _ => (loaded.commands.iter())
+                    .filter(|command| command.path.starts_with(&set.directory))
+                    .count(),
+            };
             let agents = (installed.agents.iter())
                 .filter(|agent| agent.source == AgentSource::Set(set.name.clone()))
                 .count();
@@ -128,6 +144,11 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
                 Origin::BuiltIn => {
                     "Comes with Scramjet; a set installed under its name replaces it.".to_owned()
                 }
+                Origin::ClaudeCode => format!(
+                    "Installed in Claude Code and on in its settings; its commands run as \
+                     /{}:NAME, as Claude Code's own.",
+                    set.name
+                ),
             };
             let columns = vec![
                 set.name.clone(),

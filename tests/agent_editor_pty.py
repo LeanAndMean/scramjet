@@ -373,7 +373,8 @@ approved = serve_call('echo approved-$((6*7)); sleep 30')
 pausing = serve_call('sleep 2')
 env = dict(os.environ, XDG_STATE_HOME=os.path.join(work, 'state'), SCRAMJET_CACHE=os.path.join(work, 'cache'),
            XDG_CONFIG_HOME=os.path.join(work, 'config'), XDG_DATA_HOME=os.path.join(work, 'data'),
-           XDG_RUNTIME_DIR=os.path.join(work, 'runtime'), SCRAMJET_OFFLINE='1')
+           XDG_RUNTIME_DIR=os.path.join(work, 'runtime'), SCRAMJET_OFFLINE='1',
+           CLAUDE_CONFIG_DIR=os.path.join(work, 'claude'))
 os.makedirs(env['XDG_RUNTIME_DIR'], mode=0o700)
 VERSION = subprocess.run([BINARY, '--version'], capture_output=True, text=True, check=True, env=env).stdout.strip()
 env.pop('VISUAL', None)

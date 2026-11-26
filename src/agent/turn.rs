@@ -1232,7 +1232,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let text = "---\ndescription: Fix an issue\n---\nFix issue $0, then $ARGUMENTS[1].\n!`echo \"${CLAUDE_PROJECT_DIR}\"` ${CLAUDE_SESSION_ID} ${CLAUDE_EFFORT}";
         std::fs::write(directory.join("fix.md"), text).unwrap();
-        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0);
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[]);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("/fix 42 test", &mut ui, &cancel).unwrap();
@@ -1263,7 +1263,7 @@ mod tests {
         let text = "Branch: !`printf main`\n```!\necho one\necho two >&2\n```\nEmpty: !`true`.\nAsk: $ARGUMENTS";
         std::fs::write(directory.join("state.md"), text).unwrap();
         std::fs::write(directory.join("broken.md"), "Never: !`echo no; exit 3`").unwrap();
-        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0);
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[]);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent
@@ -1316,7 +1316,7 @@ mod tests {
         let commands = scratch.0.join(".claude").join("commands");
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(commands.join("state.md"), "The command").unwrap();
-        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0);
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[]);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent
@@ -1339,6 +1339,57 @@ In: state\nAsk: \\! `touch\n</skill>",
         assert_eq!(notices.len(), 1, "{:?}", ui.shown);
         assert!(notices[0].starts_with("notice /skill:broken was not sent: its command `exit 3`"));
         assert_eq!(agent.prompts(), ["/state !`touch made`"]);
+    }
+
+    #[test]
+    fn a_claude_code_plugins_command_and_skill_run_by_its_name() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("one", fixture::known_usage())),
+            stream(&fixture::text_events("two", fixture::known_usage())),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "claude-plugin");
+        let plugin = scratch.0.join("cache").join("dev").join("1.0.0");
+        let write = |path: &str, text: &str| {
+            let path = plugin.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        write(
+            "commands/feature.md",
+            "---\ndescription: Develop\n---\nBranch: !`basename \"${CLAUDE_PLUGIN_ROOT}\"`\nDo $ARGUMENTS",
+        );
+        write(
+            "skills/pdf/SKILL.md",
+            "---\nname: pdf\ndescription: PDFs.\n---\nFill $0",
+        );
+        let sets = [super::super::Set {
+            name: "dev".into(),
+            directory: plugin.clone(),
+            origin: super::super::Origin::ClaudeCode,
+        }];
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &sets);
+        agent.skills = super::super::Skills::discover(&[], &sets, &Default::default(), &scratch.0);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/dev:feature login", &mut ui, &cancel).unwrap();
+        agent.turn("/dev:pdf form.pdf", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 2);
+        let sent = |body: &Value| body["input"].as_array().unwrap()[0]["content"].clone();
+        assert_eq!(sent(&bodies[0]), json!("Branch: 1.0.0\nDo login"));
+        let skill = plugin.join("skills/pdf/SKILL.md");
+        let expected = format!(
+            "<skill name=\"dev:pdf\" location=\"{}\">\nReferences are relative to {}.\n\n\
+Fill form.pdf\n</skill>",
+            skill.display(),
+            skill.parent().unwrap().display()
+        );
+        let second = bodies[1]["input"].as_array().unwrap();
+        assert_eq!(
+            second.last().unwrap()["content"],
+            json!(expected),
+            "{second:?}"
+        );
     }
 
     #[test]

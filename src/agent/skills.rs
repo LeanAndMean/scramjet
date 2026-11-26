@@ -3,7 +3,7 @@
 //! model to read when a task matches, and `/skill:<name> args` sends one's instructions.
 use super::Problem;
 use super::claude_commands::{self, Variables};
-use super::commands::{Set, split_frontmatter};
+use super::commands::{Origin, Set, split_frontmatter};
 use super::yaml;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::{
@@ -52,6 +52,9 @@ enum Place {
     Directory { top_files: bool },
     /// One of Claude Code's `skills` directories, looked for when it exists.
     Claude,
+    /// The `skills` directory of a Claude Code plugin, as `Claude`, each skill named
+    /// `PLUGIN:NAME` by the plugin's name.
+    Plugin(String),
     /// A file or directory the settings' `skills` list, which should exist.
     Listed,
     /// A file or directory `--skill` names, which should exist.
@@ -78,7 +81,8 @@ fn places(
         home,
         claude: claude.as_deref(),
     };
-    places_of(listed, sets, options, root, agent_directory, user)
+    let sets: Vec<(PathBuf, Option<String>)> = sets.iter().map(|set| (set.clone(), None)).collect();
+    places_of(listed, &sets, options, root, agent_directory, user)
 }
 
 /// The user's home directory and Claude Code's, `~/.claude` unless `CLAUDE_CONFIG_DIR` moves it.
@@ -91,12 +95,12 @@ struct User<'a> {
 /// Where Pi looks, first wins: the project's `.scramjet/skills`, then the `.agents/skills` and
 /// Claude Code's `.claude/skills` of the project and the directories above it up to its Git
 /// root, the settings' `listed` paths, the `skills` directories of the command sets (as a Claude
-/// Code plugin's), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
+/// Code plugin's; those of Claude Code's plugins, named with a plugin's name), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
 /// and the `skills` of Claude Code's directory (with `--bare`, none of them, and never as a
 /// project's); then, as Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
 fn places_of(
     listed: &[PathBuf],
-    sets: &[PathBuf],
+    sets: &[(PathBuf, Option<String>)],
     options: &SkillOptions,
     root: &Path,
     agent_directory: Option<&Path>,
@@ -139,10 +143,13 @@ fn places_of(
         }
     }
     places.extend(listed.iter().map(|path| (path.clone(), Place::Listed)));
-    places.extend(
-        sets.iter()
-            .map(|set| nested(crate::os::join(set, "skills"))),
-    );
+    places.extend(sets.iter().map(|(set, plugin)| {
+        let skills = crate::os::join(set, "skills");
+        match plugin {
+            Some(plugin) => (skills, Place::Plugin(plugin.clone())),
+            None => nested(skills),
+        }
+    }));
     if let Some(directory) = agent_directory {
         places.push((
             directory.join("skills"),
@@ -167,7 +174,12 @@ impl Skills {
     pub fn discover(listed: &[PathBuf], sets: &[Set], options: &SkillOptions, root: &Path) -> Self {
         let agent_directory = super::login::config_directory().filter(|_| !super::bare());
         let (home, claude) = (std::env::home_dir(), super::login::claude_directory());
-        let sets: Vec<PathBuf> = sets.iter().map(|set| set.directory.clone()).collect();
+        let sets: Vec<(PathBuf, Option<String>)> = (sets.iter())
+            .map(|set| {
+                let plugin = (set.origin == Origin::ClaudeCode).then(|| set.name.clone());
+                (set.directory.clone(), plugin)
+            })
+            .collect();
         let user = User {
             home: home.as_deref(),
             claude: claude.as_deref(),
@@ -187,7 +199,7 @@ impl Skills {
         let mut loaded = HashSet::new();
         for (path, place) in places {
             let files = match place {
-                Place::Directory { .. } | Place::Claude
+                Place::Directory { .. } | Place::Claude | Place::Plugin(_)
                     if let Some(owner) = crate::os::stranger(path) =>
                 {
                     let text = crate::os::left_out(path, owner);
@@ -195,7 +207,7 @@ impl Skills {
                     continue;
                 }
                 Place::Directory { top_files } => skill_files(path, *top_files),
-                Place::Claude => skill_files(path, false),
+                Place::Claude | Place::Plugin(_) => skill_files(path, false),
                 _ if path.is_dir() => skill_files(path, true),
                 _ if path.is_file() && path.extension() == Some("md".as_ref()) => {
                     vec![path.clone()]
@@ -221,7 +233,11 @@ impl Skills {
                     continue;
                 }
                 let mut warnings = Vec::new();
-                let loaded = load_skill(&file, *place == Place::Claude, &mut warnings);
+                let claude = matches!(place, Place::Claude | Place::Plugin(_));
+                let mut loaded = load_skill(&file, claude, &mut warnings);
+                if let (Place::Plugin(plugin), Some(skill)) = (place, &mut loaded) {
+                    skill.name = format!("{plugin}:{}", skill.name);
+                }
                 let in_file = |text| Problem::in_file(text, &file);
                 found.warnings.extend(warnings.into_iter().map(in_file));
                 let Some(skill) = loaded else {
@@ -348,7 +364,7 @@ SKILL.md / dirname of the path) and use that absolute path in tool commands.
         let (frontmatter, body) = split_frontmatter(content);
         let (body, args) = match skill.claude {
             true => {
-                let names = yaml::first(&frontmatter)
+                let names = yaml::frontmatter(&frontmatter)
                     .map(|frontmatter| claude_commands::argument_names(&frontmatter["arguments"]))
                     .unwrap_or_default();
                 let body = claude_commands::substitute(body.trim(), args.trim(), &names);
@@ -474,7 +490,7 @@ fn load_skill(path: &Path, claude: bool, warnings: &mut Vec<String>) -> Option<S
         }
     };
     let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-    let frontmatter = match yaml::first(&split_frontmatter(content).0) {
+    let frontmatter = match yaml::frontmatter(&split_frontmatter(content).0) {
         Ok(frontmatter) => frontmatter,
         Err(error) => {
             warnings.push(format!(
@@ -719,7 +735,7 @@ mod tests {
             &agents.join("none/SKILL.md"),
             "---\nname: none\n---\nNo description.",
         );
-        write(&agents.join("bad/SKILL.md"), "---\nname: [\n---\n");
+        write(&agents.join("bad/SKILL.md"), "---\nname: x\n[\n---\n");
         let listed = scratch.0.join("one.md");
         write(&listed, &skill("Bad--Name-", "Listed in the settings."));
         // A link to a directory already loaded adds nothing and is no collision.

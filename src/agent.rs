@@ -9,6 +9,7 @@ mod builtin;
 mod calls;
 mod catalog;
 mod claude_commands;
+mod claude_plugins;
 mod client;
 pub mod codex;
 mod commands;
@@ -780,9 +781,11 @@ pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inve
         .map(|agent| (agent.name, agent.path))
         .collect();
     let skills = Skills::discover(listed, sets.list(), &SkillOptions::default(), root);
+    let claude_commands = ClaudeCommands::discover(root, sets.list());
     Inventory {
         sets,
         commands,
+        claude_commands,
         agents,
         warnings,
         skills,
@@ -846,6 +849,8 @@ pub enum ProjectApproval {
 pub struct Inventory {
     pub sets: Sets,
     pub commands: Commands,
+    /// Claude Code's commands, those of its plugins among `sets` included.
+    pub claude_commands: ClaudeCommands,
     /// Every agent a subagent call could name, with its file.
     pub agents: Vec<(String, PathBuf)>,
     /// Why sets, commands and agent files were skipped.
@@ -1141,7 +1146,7 @@ impl Agent {
         let config = &self.config;
         self.sets = Sets::for_project(&config.command_sets, &config.root);
         self.commands = Commands::discover(&self.sets);
-        self.claude_commands = ClaudeCommands::discover(&config.root);
+        self.claude_commands = ClaudeCommands::discover(&config.root, self.sets.list());
         self.skills = Skills::discover(
             &config.skills,
             self.sets.list(),

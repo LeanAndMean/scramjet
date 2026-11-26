@@ -4,6 +4,16 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.400.0 — Claude Code's plugins
+
+### Added
+
+- Claude Code's installed plugins that its settings turn on are loaded: their commands run as `/PLUGIN:NAME`, as Claude Code runs them, and their agents and skills are there as `PLUGIN:NAME`. `scramjet list` and `/settings` show them with the command sets.
+
+### Fixed
+
+- Agents, skills and Claude Code commands whose frontmatter is not valid YAML (a description holding `: `, as several of Claude Code's own plugins' agents have) load as in Claude Code, their values quoted, rather than being skipped.
+
 ## 2.399.0 — Skills run as /NAME
 
 ### Changed

@@ -1,8 +1,9 @@
 //! Claude Code's custom commands: the `.md` files of a `.claude/commands` directory, which a
 //! prompt runs as `/NAME args` (a file in a subdirectory as `/DIR:NAME`). Unlike a command
 //! set's, one is sent as the user's prompt, with Claude Code's argument substitution, and starts
-//! no command: no next steps, no status report.
-use super::commands::{split_args, split_frontmatter};
+//! no command: no next steps, no status report. A Claude Code plugin's commands are its
+//! `commands` directory's, named `/PLUGIN:NAME`.
+use super::commands::{Origin, Set, split_args, split_frontmatter};
 use super::tools::{self, Approval, Call};
 use super::{Agent, AgentUi, Answer, Problem, yaml};
 use serde_json::json;
@@ -20,6 +21,25 @@ pub struct ClaudeCommand {
     pub description: String,
     pub argument_hint: Option<String>,
     pub path: PathBuf,
+    /// The directory of the Claude Code plugin it comes from, its `${CLAUDE_PLUGIN_ROOT}`.
+    pub plugin: Option<PathBuf>,
+}
+
+/// A directory of commands, with what their names start with and the plugin they come from.
+struct Place {
+    directory: PathBuf,
+    prefix: String,
+    plugin: Option<PathBuf>,
+}
+
+impl Place {
+    fn plain(directory: PathBuf) -> Self {
+        Self {
+            directory,
+            prefix: String::new(),
+            plugin: None,
+        }
+    }
 }
 
 /// The commands found, first of a name wins, and why files were skipped.
@@ -34,7 +54,7 @@ const COMMANDS: &str = ".claude/commands";
 /// Where Claude Code's commands are looked for, first wins: the `.claude/commands` of `root` and
 /// of the directories above it up to its Git root, then the `commands` of the user's `claude`
 /// directory, `~/.claude` (not with `--bare`, and never also as a project's).
-fn places(root: &Path, claude: Option<&Path>) -> Vec<PathBuf> {
+fn places(root: &Path, claude: Option<&Path>) -> Vec<Place> {
     let user = claude.map(|claude| crate::os::join(claude, "commands"));
     let real = claude
         .and_then(|claude| crate::os::canonicalize(claude).ok())
@@ -43,26 +63,33 @@ fn places(root: &Path, claude: Option<&Path>) -> Vec<PathBuf> {
     for directory in root.ancestors() {
         let commands = crate::os::join(directory, COMMANDS);
         if user.as_ref() != Some(&commands) && real.as_ref() != Some(&commands) {
-            places.push(commands);
+            places.push(Place::plain(commands));
         }
         if directory.join(".git").exists() {
             break;
         }
     }
-    places.extend(user.filter(|_| !super::bare()));
+    places.extend(user.filter(|_| !super::bare()).map(Place::plain));
     places
 }
 
 impl ClaudeCommands {
-    /// The commands of a session in `root`.
-    pub fn discover(root: &Path) -> Self {
-        Self::load(&places(root, super::login::claude_directory().as_deref()))
+    /// The commands of a session in `root`, then those of the Claude Code plugins among `sets`.
+    pub fn discover(root: &Path, sets: &[Set]) -> Self {
+        let mut places = places(root, super::login::claude_directory().as_deref());
+        places.extend(plugins(sets));
+        Self::load(&places)
     }
 
-    fn load(places: &[PathBuf]) -> Self {
+    fn load(places: &[Place]) -> Self {
         let mut found = Self::default();
         let mut seen = HashSet::new();
-        for place in places {
+        for Place {
+            directory: place,
+            prefix,
+            plugin,
+        } in places
+        {
             if !place.is_dir() {
                 continue;
             }
@@ -72,7 +99,7 @@ impl ClaudeCommands {
                 continue;
             }
             let mut files = Vec::new();
-            command_files(place, "", &mut seen, &mut files);
+            command_files(place, prefix, &mut seen, &mut files);
             for (name, path) in files {
                 let content = match fs::read_to_string(&path) {
                     Ok(content) => content,
@@ -83,7 +110,10 @@ impl ClaudeCommands {
                     }
                 };
                 let mut notices = Vec::new();
-                let command = parse(name, &path, &content, &mut notices);
+                let command = ClaudeCommand {
+                    plugin: plugin.clone(),
+                    ..parse(name, &path, &content, &mut notices)
+                };
                 let in_file = |text| Problem::in_file(text, &path);
                 found.warnings.extend(notices.into_iter().map(in_file));
                 match found.list.iter().find(|known| known.name == command.name) {
@@ -133,10 +163,16 @@ impl ClaudeCommands {
             Ok(content) => {
                 let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
                 let (frontmatter, body) = split_frontmatter(content);
-                let names = yaml::first(&frontmatter)
+                let names = yaml::frontmatter(&frontmatter)
                     .map(|frontmatter| argument_names(&frontmatter["arguments"]))
                     .unwrap_or_default();
-                Ok(session.substitute(&substitute(&body, args.trim(), &names)))
+                let text = session.substitute(&substitute(&body, args.trim(), &names));
+                Ok(match &command.plugin {
+                    Some(root) => {
+                        text.replace("${CLAUDE_PLUGIN_ROOT}", &root.display().to_string())
+                    }
+                    None => text,
+                })
             }
             Err(error) => Err(format!(
                 "/{}: cannot read {} ({error}); the prompt was sent as typed",
@@ -145,6 +181,16 @@ impl ClaudeCommands {
             )),
         })
     }
+}
+
+/// The `commands` directories of the Claude Code plugins among `sets`.
+fn plugins(sets: &[Set]) -> impl Iterator<Item = Place> {
+    let plugins = sets.iter().filter(|set| set.origin == Origin::ClaudeCode);
+    plugins.map(|set| Place {
+        directory: set.directory.join("commands"),
+        prefix: format!("{}:", set.name),
+        plugin: Some(set.directory.clone()),
+    })
 }
 
 /// What Claude Code puts for `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_SESSION_ID}` and
@@ -263,7 +309,7 @@ fn parse(name: String, path: &Path, content: &str, notices: &mut Vec<String>) ->
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let (frontmatter, body) = split_frontmatter(content);
     // Claude Code loads a command whose frontmatter does not parse, without it.
-    let frontmatter = yaml::first(&frontmatter).unwrap_or_else(|error| {
+    let frontmatter = yaml::frontmatter(&frontmatter).unwrap_or_else(|error| {
         notices.push(format!(
             "{}: frontmatter ignored, as it does not parse: {error}",
             path.display()
@@ -289,6 +335,7 @@ fn parse(name: String, path: &Path, content: &str, notices: &mut Vec<String>) ->
         description,
         argument_hint: field("argument-hint"),
         path: path.to_path_buf(),
+        plugin: None,
     }
 }
 
@@ -578,7 +625,7 @@ mod tests {
         write(top.join(COMMANDS).join("review.md"), "another");
         write(
             top.join(COMMANDS).join("top.md"),
-            "---\nbad: [\n---\nFrom the top",
+            "---\nbad: x\n[\n---\nFrom the top",
         );
         write(
             scratch.0.join(COMMANDS).join("above.md"),
@@ -621,7 +668,9 @@ mod tests {
                 .contains("cannot read")
         );
         // The home as the project lists its commands once, as the user's.
-        let mine = places(&home, Some(&home.join(".claude")));
+        let mine: Vec<PathBuf> = (places(&home, Some(&home.join(".claude"))).into_iter())
+            .map(|place| place.directory)
+            .collect();
         assert_eq!(mine.last(), Some(&home.join(COMMANDS)));
         assert_eq!(
             mine.iter().filter(|p| **p == home.join(COMMANDS)).count(),
@@ -673,10 +722,40 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         let text = "---\narguments: [issue, \"2\", branch]\n---\nFix $issue on $branch";
         fs::write(directory.join("fix.md"), text).unwrap();
-        let found = ClaudeCommands::load(&[directory]);
+        let found = ClaudeCommands::load(&[Place::plain(directory)]);
         assert_eq!(
             found.expand("/fix 12 main", &none()),
             Some(Ok("Fix 12 on main".to_owned()))
         );
+    }
+
+    #[test]
+    fn a_plugins_commands_are_named_by_it_and_given_its_directory() {
+        let scratch = scratch("plugin");
+        let directory = scratch.0.join("dev").join("1.0.0");
+        fs::create_dir_all(directory.join("commands/sub")).unwrap();
+        let text = "---\ndescription: Develop\n---\nRun ${CLAUDE_PLUGIN_ROOT}/go.sh $ARGUMENTS";
+        fs::write(directory.join("commands/feature.md"), text).unwrap();
+        fs::write(directory.join("commands/sub/deep.md"), "Deep").unwrap();
+        let sets = [
+            Set {
+                name: "dev".into(),
+                directory: directory.clone(),
+                origin: Origin::ClaudeCode,
+            },
+            Set {
+                name: "other".into(),
+                directory: directory.clone(),
+                origin: Origin::Installed,
+            },
+        ];
+        let found = ClaudeCommands::load(&plugins(&sets).collect::<Vec<_>>());
+        let names: Vec<_> = found.list().iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["dev:feature", "dev:sub:deep"]);
+        assert_eq!(found.list()[0].description, "Develop");
+        assert_eq!(found.list()[0].plugin.as_ref(), Some(&directory));
+        let run = format!("Run {}/go.sh now", directory.display());
+        assert_eq!(found.expand("/dev:feature now", &none()), Some(Ok(run)));
+        assert_eq!(found.expand("/feature", &none()), None);
     }
 }

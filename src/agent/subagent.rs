@@ -546,7 +546,7 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
     let digest = approvals::digest(content);
     let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     let (frontmatter, body) = commands::split_frontmatter(content);
-    let frontmatter = yaml::first(&frontmatter)
+    let frontmatter = yaml::frontmatter(&frontmatter)
         .map_err(|error| format!("{shown}: invalid YAML frontmatter ({error})"))?;
     let text = |key: &str| frontmatter[key].as_str().map(str::trim).unwrap_or_default();
     let (name, description) = (text("name"), text("description"));
@@ -1953,7 +1953,7 @@ disallowedTools: [Write]\n---\n",
                 "/a/x.md: frontmatter must include string name and description"
             );
         }
-        let error = parse(path, "---\nname: [x\n---\n", "user").unwrap_err();
+        let error = parse(path, "---\nname: x\n[\n---\n", "user").unwrap_err();
         assert!(
             error.starts_with("/a/x.md: invalid YAML frontmatter ("),
             "{error}"
