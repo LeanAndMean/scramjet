@@ -1,8 +1,9 @@
 //! Commands the agent runs in the background, as Claude Code's bash `run_in_background`: each
 //! writes its output to a file and runs on across turns until it ends, `task_stop` or the user's
-//! `/tasks stop` stops it, or Scramjet exits (`tools::end_commands`). The first prompt after
-//! one ends tells the model how it ended.
+//! `/tasks stop` stops it, or Scramjet exits (`tools::end_commands`). The model is told how
+//! one ended before its next request: with the next prompt, or within the turn running.
 use super::tools::{Group, Output};
+use super::{AgentError, AgentUi};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -19,8 +20,8 @@ pub const STOP: &str = "task_stop";
 /// What bash's `run_in_background` parameter says.
 pub(super) const PARAMETER: &str = "Run the command in the background and return at once with \
 its task id and the file its output goes to (read it with read). Use it for servers, watchers and \
-long builds or tests you need not wait for; no `&` needed. It runs on across turns; the next \
-prompt after it ends says how it ended, with the end of its output. task_stop stops it.";
+long builds or tests you need not wait for; no `&` needed. It runs on across turns; when it ends \
+you are told how, with the end of its output, before your next request. task_stop stops it.";
 
 /// Lines of a task's output its notification ends with, and the bytes they come from at most.
 const TAIL_LINES: usize = 20;
@@ -161,7 +162,7 @@ impl Tasks {
         Ok(Output {
             text: format!(
                 "Command running in background with task id {id}. Its output goes to {}: read \
-                 it with read. The next prompt after it ends says how it ended; {STOP} stops it.",
+                 it with read. You are told how it ended once it ends; {STOP} stops it.",
                 path.display()
             ),
             detail: None,
@@ -251,16 +252,18 @@ impl Tasks {
         }
     }
 
-    /// What the next prompt says of the tasks that ended since the model was last told, which
-    /// it is now; `None` when none did.
-    pub(super) fn notifications(&self) -> Option<String> {
+    /// What the model is told of the tasks that ended since it was last told, which it is now,
+    /// with a line for the user for each (`Background task 1 exited with code 0.`); `None` when
+    /// none did.
+    pub(super) fn notifications(&self) -> Option<(String, Vec<String>)> {
         let mut list = self.lock();
-        let mut text = String::new();
+        let (mut text, mut said) = (String::new(), Vec::new());
         for entry in list.iter_mut().filter(|entry| !entry.told) {
             let Some((ending, ran)) = &entry.ended else {
                 continue;
             };
             entry.told = true;
+            said.push(format!("Background task {} {}.", entry.id, ending.said()));
             text += &format!(
                 "<task-notification>\n<task-id>{}</task-id>\n<command>{}</command>\n\
                  <status>{} after {}s</status>\n<output-file>{}</output-file>\n",
@@ -280,10 +283,10 @@ impl Tasks {
             text += "</task-notification>\n";
         }
         (!text.is_empty()).then(|| {
-            format!(
-                "<system-reminder>Background commands ended since the last prompt:\n{text}\
-                 </system-reminder>\n\n"
-            )
+            let text = format!(
+                "<system-reminder>Background commands ended:\n{text}</system-reminder>\n\n"
+            );
+            (text, said)
         })
     }
 }
@@ -324,9 +327,20 @@ impl super::Agent {
 
     /// Puts before `message`'s text how the tasks that ended since the last prompt ended.
     pub(super) fn tell_tasks(&mut self, message: &mut Value) {
-        if let Some(note) = self.tasks.notifications() {
+        if let Some((note, _)) = self.tasks.notifications() {
             super::plan::put_before(message, &note);
         }
+    }
+
+    /// Before a request within a turn, tells the model how the tasks that ended since it was
+    /// last told ended, in a message the user never typed, and the user in a notice.
+    pub(super) fn tell_tasks_within(&mut self, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
+        if let Some((note, said)) = self.tasks.notifications() {
+            ui.notice(&said.join("\n"));
+            let note = note.trim_end();
+            self.add(json!({"role":"user","content":note,super::PROBE:true}))?;
+        }
+        Ok(())
     }
 }
 
@@ -433,6 +447,56 @@ mod tests {
             shown.shown
         );
         let _ = std::fs::remove_file(&listed[0].output);
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "runs bash")]
+    fn a_task_that_ends_within_a_turn_is_told_before_the_next_request() {
+        let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let background = json!({"command": "echo built; exit 4", "run_in_background": true});
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", "bash", background),
+            tool_call("call_2", "bash", json!({"command": "sleep 1"})),
+            text("Seen."),
+            text("Nothing more."),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "task-within");
+        let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+        agent.turn("build it", &mut ui, &cancel).unwrap();
+        // Told within the turn, so it neither wakes the agent nor goes with the next prompt.
+        assert!(agent.tasks().woken().is_none());
+        agent.turn("and?", &mut ui, &cancel).unwrap();
+        let requests = server.join().unwrap();
+        let input = requests[2]["input"].as_array().unwrap();
+        let told = input.last().unwrap();
+        assert_eq!(told["role"], "user", "{told}");
+        let told = told["content"].as_str().unwrap();
+        assert!(told.starts_with("<system-reminder>Background commands ended:"));
+        assert!(told.contains("<status>exited with code 4 after 0s</status>"));
+        assert!(
+            told.contains("<output-tail>\nbuilt\n</output-tail>"),
+            "{told}"
+        );
+        assert!(told.ends_with("</system-reminder>"), "{told}");
+        // The bash result comes before it.
+        assert_eq!(input[input.len() - 2]["type"], "function_call_output");
+        assert_eq!(sent(&requests, 3), "and?");
+        assert!(
+            (ui.shown.iter()).any(|line| line == "notice Background task 1 exited with code 4."),
+            "{:?}",
+            ui.shown
+        );
+        // Neither shown again nor recalled as a prompt.
+        let mut shown = Recorder::default();
+        agent.show_conversation(&mut shown);
+        assert!(
+            !(shown.shown.iter()).any(|line| line.contains("system-reminder")),
+            "{:?}",
+            shown.shown
+        );
+        for task in agent.tasks().list() {
+            let _ = std::fs::remove_file(&task.output);
+        }
     }
 
     #[test]

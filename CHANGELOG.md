@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.367.0 — A background command's end is told within the turn
+
+### Changed
+
+- A background command that ends while the agent is still working is told to it before its next request, with a notice, rather than at your next prompt, as Claude Code's are.
+
 ## 2.366.0 — A background command's end wakes the agent
 
 ### Added

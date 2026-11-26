@@ -1,0 +1,47 @@
+{
+  "size": "100x30",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo tick; sleep 0.3; echo built",
+          "run_in_background": true
+        }
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "sleep 1.5; echo tests passed"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The build ended with code 0 while the tests ran."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "[Skills]"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "build it, then run the tests\r"
+    },
+    {
+      "until": "while the tests ran"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "told"
+    }
+  ]
+}

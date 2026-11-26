@@ -368,6 +368,7 @@ finish and is not checked on. Reply to continue.",
                     }
                     let steering = ui.steering();
                     self.add_queued(steering, ui)?;
+                    self.tell_tasks_within(ui)?;
                     if let Some(level) = ui.effort() {
                         self.set_effort(level)?;
                     }
