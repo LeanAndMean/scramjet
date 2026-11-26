@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.348.0 — A file in /tmp the sandbox's commands do not see
+
+### Changed
+
+- On Linux, a sandboxed command that fails naming a file in your `/tmp`, which the sandbox's private `/tmp` does not show it, is now told so after its output: `read`, `grep`, `find` and `ls` reach the file, and the main agent can ask for its directory with `request_permissions`, while a subagent says so in its result, so that the file can be put where commands see it. A subagent checking a dump its parent left in `/tmp` took the file for missing.
+
 ## 2.347.8 — Lazy lines in a quote
 
 ### Fixed

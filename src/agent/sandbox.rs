@@ -786,6 +786,28 @@ pub(super) fn network_said(network: bool) -> &'static str {
     }
 }
 
+/// What a failed command naming `unseen` (`Hidden::unseen_in_tmp`) is told after its output,
+/// then `way_out` of `it` or `them`, what the agent can do when a command needs them: sandboxed commands not
+/// seeing what other programs, or the agent that started a subagent, put in `/tmp` is otherwise
+/// taken for a missing file (a session of 2026-11-19).
+pub(super) fn unseen_in_tmp(unseen: &[PathBuf], way_out: impl Fn(&str) -> String) -> String {
+    let named: Vec<String> = unseen
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    let (is, it) = match named.len() {
+        1 => ("is", "it"),
+        _ => ("are", "them"),
+    };
+    format!(
+        "\n\nScramjet: {} {is} in the user's /tmp, which this sandbox's commands do not see: \
+         they have a private /tmp of their own. read, grep, find and ls reach {it} there. If a \
+         command needs {it}, {}",
+        named.join(", "),
+        way_out(it)
+    )
+}
+
 /// The directory an agent's sandboxed commands have as `/tmp` on Linux, made at the first and
 /// kept for the next (`scramjet-tmp-PID-N`, the user's alone, in the temporary directory),
 /// removed with the agent or as the process exits, else by a later run (`leftovers`), as it is
@@ -942,6 +964,45 @@ impl Hidden {
             }
             let mapped = scratch.join(rest);
             (write || mapped.symlink_metadata().is_ok()).then(|| (mapped, scratch.to_owned()))
+        }
+    }
+
+    /// The paths under `/tmp` that `command` names which sandboxed commands do not see, as their
+    /// private `/tmp` holds no such path and none is bound into it (`bound`, the re-opened
+    /// paths), while the user's `/tmp` has it, not hidden. None on other systems, whose commands
+    /// share `/tmp`.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+    pub(super) fn unseen_in_tmp(&self, command: &str, bound: &[PathBuf]) -> Vec<PathBuf> {
+        #[cfg(not(target_os = "linux"))]
+        return Vec::new();
+        #[cfg(target_os = "linux")]
+        {
+            let Some(scratch) = self.scratch.as_deref().and_then(Scratch::made) else {
+                return Vec::new();
+            };
+            let word = |c: char| c.is_ascii_alphanumeric() || "/._-+@%".contains(c);
+            let mut unseen: Vec<PathBuf> = Vec::new();
+            for word in command.split(|c: char| !word(c)) {
+                let path = Path::new(word.trim_end_matches(['.', '/']));
+                let Ok(rest) = path.strip_prefix("/tmp") else {
+                    continue;
+                };
+                let kept = |kept: &PathBuf| path.starts_with(kept);
+                if rest.as_os_str().is_empty()
+                    || rest
+                        .components()
+                        .any(|part| part == std::path::Component::ParentDir)
+                    || unseen.iter().any(|seen| seen == path)
+                    || bound.iter().chain(&self.allowed).any(kept)
+                    || scratch.join(rest).symlink_metadata().is_ok()
+                    || path.symlink_metadata().is_err()
+                    || self.check(path).is_err()
+                {
+                    continue;
+                }
+                unseen.push(path.to_owned());
+            }
+            unseen
         }
     }
 

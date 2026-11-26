@@ -712,6 +712,25 @@ impl Tools<'_> {
                 if let Some(sandbox) = refused {
                     output.text += &write_refused(sandbox);
                 }
+                if let (Some(sandbox), Some(hidden)) = (self.sandbox, &hidden)
+                    && shell
+                    && output.failed
+                {
+                    let mut bound = sandbox.writable_roots(root);
+                    bound.push(root.to_owned());
+                    let command = call.arguments["command"].as_str().unwrap_or_default();
+                    let unseen = hidden.unseen_in_tmp(command, &bound);
+                    if !unseen.is_empty() {
+                        let way_out = |it: &str| {
+                            format!(
+                                "ask the user with `{}` for the directory holding {it}, which \
+                                 commands then see; else go on without {it}.",
+                                permissions::NAME
+                            )
+                        };
+                        output.text += &sandbox::unseen_in_tmp(&unseen, way_out);
+                    }
+                }
                 (output, Usage::default())
             }
         };
@@ -1754,6 +1773,123 @@ worktree\n---\n\nWrite.\n",
             "{remote}"
         );
         assert!(!agent.root().join(".git/made").exists());
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_command_missing_a_file_in_the_users_tmp_is_told_its_tmp_is_private() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let outside = PathBuf::from(format!("/tmp/scramjet-unseen-{}", std::process::id()));
+        let _outside = ScratchDir::new(outside.clone());
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("dump.txt"), "dumped\n").unwrap();
+        let dump = outside.join("dump.txt").display().to_string();
+        let gone = format!("/tmp/scramjet-unseen-none-{}", std::process::id());
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                "bash",
+                json!({ "command": format!("cat '{dump}'") }),
+            ),
+            tool_call(
+                "call_2",
+                "bash",
+                json!({ "command": format!("cat {dump} || true") }),
+            ),
+            tool_call(
+                "call_3",
+                "bash",
+                json!({ "command": format!("cat {gone}") }),
+            ),
+            tool_call(
+                "call_4",
+                "bash",
+                json!({ "command": format!("mkdir -p {0} && echo in > {1}; cat {1}; exit 1", outside.display(), dump) }),
+            ),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "unseen-tmp");
+        agent.set_sandbox(Some(Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        }));
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("look", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        let missed = last_output(&bodies[1]);
+        assert!(
+            missed.contains(&format!(
+                "Scramjet: {dump} is in the user's /tmp, which this sandbox's commands do not see"
+            )) && missed
+                .contains("ask the user with `request_permissions` for the directory holding it"),
+            "{missed}"
+        );
+        for (body, what) in [
+            (2, "a command that ended well"),
+            (3, "a file nowhere"),
+            (4, "a file its own /tmp holds"),
+        ] {
+            let output = last_output(&bodies[body]);
+            assert!(!output.contains("Scramjet:"), "{what}: {output}");
+        }
+        assert!(last_output(&bodies[4]).contains("in\n"));
+        assert_eq!(
+            std::fs::read_to_string(outside.join("dump.txt")).unwrap(),
+            "dumped\n"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_subagents_command_missing_its_parents_file_in_tmp_is_told_to_say_so() {
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let outside = PathBuf::from(format!("/tmp/scramjet-unseen-child-{}", std::process::id()));
+        let _outside = ScratchDir::new(outside.clone());
+        std::fs::create_dir_all(&outside).unwrap();
+        let dump = outside.join("a.json").display().to_string();
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                subagent::NAME,
+                json!({"agent":"reviewer","task":format!("Check {dump}")}),
+            ),
+            tool_call(
+                "call_2",
+                "bash",
+                json!({"command":format!("python3 -c 'import json,sys; json.load(open(sys.argv[1]))' {dump}")}),
+            ),
+            tool_call("call_3", "read", json!({"path": dump})),
+            reply("read it"),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "subagent-unseen");
+        std::fs::write(&dump, "{\"from\": \"parent\"}\n").unwrap();
+        let agents = agent.root().join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews\ntools: read, bash\n---\n\nYou review.\n",
+        )
+        .unwrap();
+        agent.agents_directory = Some(agents);
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("review", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        let missed = last_output(&bodies[2]);
+        assert!(
+            missed.contains(&format!("Scramjet: {dump} is in the user's /tmp"))
+                && missed.contains("read, grep, find and ls reach it there")
+                && missed
+                    .contains("say so in your result, so that it can be put where commands see it"),
+            "{missed}"
+        );
+        assert!(!missed.contains("request_permissions"), "{missed}");
+        assert!(last_output(&bodies[3]).contains("parent"));
     }
 
     #[test]

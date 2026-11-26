@@ -29,7 +29,7 @@ Tool calls run without asking; there is no permission mode, and by default the m
 
 The `write` and `edit` tools refuse what the mode does not allow.
 
-On Linux the sandbox's `/tmp` is the agent's own, apart from yours and from the sockets in it: a file a command writes there is still there for its next command, until the session's process ends (each subagent has one of its own, removed as it ends). The file tools share it: `read` finds there what a command wrote to `/tmp`, and `write` puts a file under `/tmp` there, whatever the sandbox's mode, for the next command to find; a path in your `/tmp` that it does not hold, or in a directory the sandbox shows from your `/tmp` (a project or a granted directory there), they read from yours. On macOS the temporary directories are shared with your programs.
+On Linux the sandbox's `/tmp` is the agent's own, apart from yours and from the sockets in it: a file a command writes there is still there for its next command, until the session's process ends (each subagent has one of its own, removed as it ends). The file tools share it: `read` finds there what a command wrote to `/tmp`, and `write` puts a file under `/tmp` there, whatever the sandbox's mode, for the next command to find; a path in your `/tmp` that it does not hold, or in a directory the sandbox shows from your `/tmp` (a project or a granted directory there), they read from yours. A command that fails naming a file your `/tmp` has and its own does not is told so after its output, with what it can do: the main agent can ask for the file's directory with `request_permissions`, a subagent says so in its result. On macOS the temporary directories are shared with your programs.
 
 ### The network
 

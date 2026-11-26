@@ -33,6 +33,15 @@ pub(super) mod worktree;
 
 pub const NAME: &str = "subagent";
 
+/// What a child's command that missed a file the user's `/tmp` holds is told it can do
+/// (`sandbox::unseen_in_tmp`): it cannot ask for the directory, the agent that started it can
+/// move the file.
+fn unseen_way_out(it: &str) -> String {
+    format!(
+        "say so in your result, so that {it} can be put where commands see {it}, as in the project."
+    )
+}
+
 /// Scramjet's `promptSnippet`, listed under the available tools.
 pub(super) const SNIPPET: &str = "effort: optional thinking level \
 (off/minimal/low/medium/high/xhigh). Guidance: low for exploration and information gathering; \
@@ -1591,6 +1600,20 @@ uncommitted.",
                         }
                         (true, None) => call.run_read_only(&job.cwd, &hidden, network, cancel),
                     };
+                    let ran = ran.map(|mut output| {
+                        if call.name == "bash" && output.failed {
+                            let mut bound = writer
+                                .map(|writer| writer.writable_roots(&job.cwd))
+                                .unwrap_or_default();
+                            bound.push(job.cwd.clone());
+                            let command = call.arguments["command"].as_str().unwrap_or_default();
+                            let unseen = hidden.unseen_in_tmp(command, &bound);
+                            if !unseen.is_empty() {
+                                output.text += &sandbox::unseen_in_tmp(&unseen, unseen_way_out);
+                            }
+                        }
+                        output
+                    });
                     ran.map(|output| output.sent())
                         .unwrap_or_else(|error| json!(format!("Error: {error}")))
                 }
