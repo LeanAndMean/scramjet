@@ -463,7 +463,8 @@ off elsewhere and inside tmux: the terminal's tab shows the agent busy while it 
 Claude Code's terminalProgressBarEnabled is read too) and Claude Code's preferredNotifChannel
 (auto, terminal_bell, iterm2, iterm2_with_bell, kitty, ghostty or notifications_disabled: how
 the terminal is told the agent waits for you, a minute after a reply or 6 seconds into a
-question; auto: iTerm2's, kitty's or Ghostty's notification, none elsewhere).";
+question; auto: iTerm2's, kitty's or Ghostty's notification, none elsewhere); Claude Code's env,
+environment variables set at start, over the shell's, for Scramjet and what it runs.";
 
 /// The session the agent starts in.
 pub(super) enum Start {

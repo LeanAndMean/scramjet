@@ -1147,6 +1147,7 @@ impl Settings {
                 "{path}: modelCatalogs must be a list of URLs; ignored"
             )),
         }
+        environment(object, &path, &mut self.warnings);
         if let Some(hooks) = object.get("hooks") {
             let read = scramjet::agent::Hooks::read(hooks, &path, &mut self.warnings);
             std::sync::Arc::make_mut(&mut self.hooks).extend(read);
@@ -2883,6 +2884,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "statusLine",
             "preferredNotifChannel",
             "hooks",
+            "env",
             // Scramjet 1's, not read here.
             "anthropicExtraUsage",
             "dockEditor",
@@ -2962,6 +2964,61 @@ fn mistyped_keys(object: &Map<String, Value>, path: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// Sets the settings' `env` in this process, over the variables it was started with, as Claude
+/// Code's: its commands, hooks, MCP servers and subagents inherit them. Read at start only; the
+/// settings' other warnings name what is wrong in it.
+pub(super) fn set_environment() {
+    let config = scramjet::agent::login::config_directory();
+    let Some(Ok(object)) = config.map(|config| read_object(&config.join("settings.json"))) else {
+        return;
+    };
+    for (name, value) in environment(&object, "", &mut Vec::new()) {
+        // SAFETY: called before the process starts a thread.
+        unsafe { std::env::set_var(name, value) };
+    }
+}
+
+/// Claude Code's `env`: the variables to set, each a text, a number or true/false, as Claude
+/// Code takes them; a name or value the system cannot hold is warned of and left out.
+fn environment(
+    object: &Map<String, Value>,
+    path: &str,
+    warnings: &mut Vec<String>,
+) -> Vec<(String, String)> {
+    let variables = match object.get("env") {
+        None => return Vec::new(),
+        Some(Value::Object(variables)) => variables,
+        Some(_) => {
+            warnings.push(format!(
+                "{path}: env must be an object of environment variables by name; ignored"
+            ));
+            return Vec::new();
+        }
+    };
+    let mut set = Vec::new();
+    for (name, value) in variables {
+        let value = match value {
+            Value::String(text) => text.clone(),
+            Value::Number(number) => number.to_string(),
+            Value::Bool(on) => on.to_string(),
+            _ => {
+                warnings.push(format!(
+                    "{path}: env.{name} must be a text, a number or true/false; ignored"
+                ));
+                continue;
+            }
+        };
+        if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
+            warnings.push(format!(
+                "{path}: env.{name} cannot be set: a name holds no = and neither holds a NUL; ignored"
+            ));
+            continue;
+        }
+        set.push((name.clone(), value));
+    }
+    set
 }
 
 /// What a token count in the settings must be.
@@ -3304,6 +3361,41 @@ mod tests {
             ),
             "{:?}",
             settings.warnings
+        );
+    }
+
+    #[test]
+    fn claude_codes_env_is_read_with_what_cannot_be_set_left_out() {
+        let scratch = Scratch::new("env");
+        let settings = settings_with(
+            &scratch,
+            r#"{"env": {"HTTPS_PROXY": "http://127.0.0.1:3128", "DISABLE_TELEMETRY": 1,
+                "ON": true, "LIST": ["a"], "A=B": "x", "NUL": "a\u0000b"}}"#,
+        );
+        let object = read_object(settings.path().unwrap()).unwrap();
+        let mut warnings = Vec::new();
+        let set = environment(&object, "settings.json", &mut warnings);
+        let set: Vec<_> = (set.iter())
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            set,
+            [
+                ("DISABLE_TELEMETRY", "1"),
+                ("HTTPS_PROXY", "http://127.0.0.1:3128"),
+                ("ON", "true")
+            ]
+        );
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert!(warnings[0].starts_with("settings.json: env.A=B cannot be set"));
+        assert!(warnings[1].contains("env.LIST must be a text"));
+        assert!(warnings[2].contains("env.NUL cannot be set"));
+        assert_eq!(settings.warnings.len(), 3, "{:?}", settings.warnings);
+        let wrong = settings_with(&scratch, r#"{"env": "HTTPS_PROXY=x"}"#);
+        assert!(
+            wrong.warnings[0].contains(": env must be an object"),
+            "{:?}",
+            wrong.warnings
         );
     }
 

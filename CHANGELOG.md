@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.379.0 — Claude Code's env in the settings
+
+### Added
+
+- The settings' `env`, as Claude Code's: environment variables set at start, over the shell's, for Scramjet itself (an `HTTPS_PROXY`, a provider's key variable) and for the agent's commands, hooks, MCP servers and subagents. Claude Code's `env` can be copied as it is; a value that cannot be set is named in a warning.
+
 ## 2.378.0 — Claude Code's effortLevel in the settings
 
 ### Changed
