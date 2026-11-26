@@ -23,7 +23,7 @@ By default the agent's tool calls run without asking, and its commands run with 
 
 On Linux, commands run under Bubblewrap:
 
-- **`read-only`:** commands change no file: `/tmp` is a private one, discarded after each command; `write` and `edit` are refused. Commands see only their own processes, never get the terminal, and cannot reach the session's sockets under `/run` (D-Bus, Docker's, WSL's way to Windows' programs) or WSLg's. The credential stores are hidden.
+- **`read-only`:** commands change no file but in a private `/tmp` of the agent's own (each subagent has another), kept from one command to the next and removed when the agent ends; `write` and `edit` are refused everywhere else. Commands see only their own processes, never get the terminal, and cannot reach the session's sockets under `/run` (D-Bus, Docker's, WSL's way to Windows' programs) or WSLg's. The credential stores are hidden.
 - **`workspace-write`:** the same, but the project and the directories you add (`allowWrite`, `--add-dir`, `/add-dir`) are writable. The project's `.git`, `.scramjet` and `.agents` stay read-only, so a command cannot add a Git hook or change the project's commands and agents.
 - **`sandbox.network: false`:** commands reach no network: not the internet, the local network or this machine's own servers. It applies without the sandbox too, on Linux and macOS.
 - **Subagents** run read-only and off the network whatever the main agent's sandbox is, unless `sandbox.subagents` says otherwise, and with the main agent's sandbox on they never write where it may not.

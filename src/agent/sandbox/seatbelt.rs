@@ -232,7 +232,7 @@ pub(super) fn open(root: &Path, hidden: Hiding, network: bool) -> Command {
 
 /// The directories a closed profile's commands write their temporary files in, by their real
 /// paths: `/tmp`, `/var/tmp` and the user's `TMPDIR`, shared with everything else, as Codex
-/// leaves them writable, where bubblewrap gives each command a `/tmp` of its own.
+/// leaves them writable, where bubblewrap gives each agent a `/tmp` of its own.
 pub(super) fn temporary() -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = ["/tmp".into(), "/var/tmp".into(), std::env::temp_dir()]
         .iter()
