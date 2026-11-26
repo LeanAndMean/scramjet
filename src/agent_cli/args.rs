@@ -346,6 +346,10 @@ a heading, then its tool definitions; before any request, those the next sends. 
 PgUp and PgDn, Home and End scroll it, the mouse or Shift and the arrows select, Escape closes it.
 /diff shows the Git repository's uncommitted changes against HEAD, untracked files as new ones
 (ignored files left out), without a model turn; on the full screen d lists the files changed.
+/tasks lists the commands the agent runs in the background (bash's run_in_background, as Claude
+Code's), each running or how it ended, with the file its output goes to; /tasks stop N stops one
+(/bashes and Codex's /ps too). They run on across turns until they end, are stopped (the agent's
+task_stop) or Scramjet exits; the first prompt after one ends tells the agent how it ended.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
@@ -386,7 +390,7 @@ starts it with that prompt, /plan off ends it.
 alone lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /goal, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /diff, /tasks, /agents, /skills, /memory, /doctor, /btw, /goal, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /autocompact, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

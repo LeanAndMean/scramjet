@@ -66,6 +66,7 @@ impl Agent {
             }
         };
         self.tell_plan(&mut message);
+        self.tell_tasks(&mut message);
         self.add_shown(message, ui)?;
         self.save_command()?;
         self.say_saving(ui);

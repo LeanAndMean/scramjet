@@ -29,6 +29,8 @@ pub(super) enum Builtin<'a> {
     Rename(&'a str),
     Status,
     Diff,
+    /// Claude Code's `/tasks [stop N]`: the commands bash runs in the background.
+    Tasks(&'a str),
     Agents,
     Skills,
     Memory,
@@ -92,6 +94,7 @@ impl<'a> Builtin<'a> {
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
             "diff" if argument.is_empty() => Self::Diff,
+            "tasks" => Self::Tasks(argument),
             "agents" if argument.is_empty() => Self::Agents,
             "skills" if argument.is_empty() => Self::Skills,
             "memory" if argument.is_empty() => Self::Memory,
@@ -143,6 +146,7 @@ impl<'a> Builtin<'a> {
                 | Self::Rename(_)
                 | Self::Status
                 | Self::Diff
+                | Self::Tasks(_)
                 | Self::Agents
                 | Self::Skills
                 | Self::Memory
@@ -192,6 +196,7 @@ impl Interactive {
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Diff) => self.diff(),
+            Some(Builtin::Tasks(argument)) => self.tasks(argument),
             Some(Builtin::Agents) => self.agents(),
             Some(Builtin::Skills) => self.skills(),
             Some(Builtin::Memory) => self.memory(),
@@ -417,6 +422,47 @@ impl Interactive {
             },
             Err(error) => self.say(&format!("Error: {error}")),
         }
+    }
+
+    /// `/tasks`, as Claude Code's: the commands bash runs in the background, each with how it
+    /// ended or how long it has run, and its output's file; `/tasks stop N` stops one.
+    fn tasks(&mut self, argument: &str) {
+        let tasks = self.session.agent.tasks();
+        if let Some(id) = argument.strip_prefix("stop") {
+            let stopped = match id.trim().parse() {
+                Ok(id) => tasks.stop(id, false),
+                Err(_) => Err("Usage: /tasks [stop N]".to_owned()),
+            };
+            return match stopped {
+                Ok(text) => self.say_styled(style::MUTED, &text),
+                Err(error) => self.say(&format!("Error: {error}")),
+            };
+        }
+        if !argument.is_empty() {
+            return self.say("Usage: /tasks [stop N]");
+        }
+        let listed = tasks.list();
+        if listed.is_empty() {
+            let note = "No background tasks: the agent starts one with bash's run_in_background";
+            return self.say_styled(style::MUTED, note);
+        }
+        let mut text = String::from("Background tasks:");
+        for task in &listed {
+            let state = match &task.ended {
+                Some(ending) => format!("{} after {}s", ending.said(), task.ran.as_secs()),
+                None => format!("running for {}s", task.ran.as_secs()),
+            };
+            text += &format!(
+                "\n{}  {state}  {}\n   output: {}",
+                task.id,
+                clip(task.command.lines().next().unwrap_or_default(), 120),
+                scramjet::os::tilde(&task.output)
+            );
+        }
+        if listed.iter().any(|task| task.ended.is_none()) {
+            text += "\n/tasks stop N stops one.";
+        }
+        self.say(&text);
     }
 
     /// `/agents`, as Claude Code's: the agents a subagent call can name, each with where it

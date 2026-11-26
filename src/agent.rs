@@ -51,6 +51,7 @@ mod status;
 mod subagent;
 mod suggest;
 mod switch;
+pub mod tasks;
 mod tools;
 mod tree;
 mod turn;
@@ -723,6 +724,8 @@ pub struct Agent {
     mcp: Option<Arc<mcp::Servers>>,
     /// What the agent's sandboxed commands have as `/tmp`, kept between them.
     scratch: Arc<sandbox::Scratch>,
+    /// The commands bash runs in the background.
+    tasks: Arc<tasks::Tasks>,
     /// A reply's calls that a pause of the turn left running (`AgentError::Paused`).
     calls: Option<calls::Calls>,
     /// A step's request that a pause of the turn left streaming.
@@ -912,6 +915,7 @@ impl Agent {
             plan_told: false,
             mcp: None,
             scratch: Arc::default(),
+            tasks: Arc::default(),
             calls: None,
             replying: None,
             config,

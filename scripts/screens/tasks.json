@@ -1,0 +1,92 @@
+{
+  "size": "100x40",
+  "replies": [
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "for i in 1 2 3; do echo tick $i; sleep 0.3; done; echo built",
+          "run_in_background": true
+        }
+      },
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "sleep 300",
+          "run_in_background": true
+        }
+      }
+    ],
+    [
+      {
+        "text": "The build and the server run in the background."
+      }
+    ],
+    [
+      {
+        "call": "task_stop",
+        "arguments": {
+          "task_id": 2
+        }
+      }
+    ],
+    [
+      {
+        "text": "The build ended and the server is stopped."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "[Skills]"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "build it and start the server\r"
+    },
+    {
+      "until": "run in the background"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "/tasks\r"
+    },
+    {
+      "until": "Background tasks"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "running"
+    },
+    {
+      "sleep": 1.5
+    },
+    {
+      "type": "stop the server\r"
+    },
+    {
+      "until": "server is stopped"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "/tasks\r"
+    },
+    {
+      "until": "was stopped after"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "ended"
+    }
+  ]
+}

@@ -47,22 +47,28 @@ impl Agent {
             (false, false) => return,
         };
         self.plan_told = self.planning;
-        if message.get(TYPED).is_none()
-            && let Some(prompt) = message["content"].as_str()
-        {
-            message[TYPED] = json!(prompt);
-        }
-        match &mut message["content"] {
-            Value::String(text) => text.insert_str(0, &note),
-            Value::Array(parts) => match parts.first_mut() {
-                Some(part) if part["type"] == "input_text" => {
-                    let text = part["text"].as_str().unwrap_or_default();
-                    part["text"] = json!(format!("{note}{text}"));
-                }
-                _ => parts.insert(0, json!({"type":"input_text","text":note})),
-            },
-            _ => {}
-        }
+        put_before(message, &note);
+    }
+}
+
+/// Puts `note`, a reminder to the model, before the text of the user's `message`, which keeps
+/// the prompt as typed for showing it.
+pub(super) fn put_before(message: &mut Value, note: &str) {
+    if message.get(TYPED).is_none()
+        && let Some(prompt) = message["content"].as_str()
+    {
+        message[TYPED] = json!(prompt);
+    }
+    match &mut message["content"] {
+        Value::String(text) => text.insert_str(0, note),
+        Value::Array(parts) => match parts.first_mut() {
+            Some(part) if part["type"] == "input_text" => {
+                let text = part["text"].as_str().unwrap_or_default();
+                part["text"] = json!(format!("{note}{text}"));
+            }
+            _ => parts.insert(0, json!({"type":"input_text","text":note})),
+        },
+        _ => {}
     }
 }
 

@@ -180,7 +180,9 @@ pub(super) fn offered(
         .filter(|tool| only.map_or(!named(off, tool), |only| named(only, tool)))
         .filter(|tool| mcp || !super::mcp::TOOLS.contains(tool))
         .filter(|tool| sandbox || *tool != super::permissions::NAME);
-    coding.chain(harness).collect()
+    let coding: Vec<_> = coding.collect();
+    let stop = (coding.contains(&"bash")).then_some(super::tasks::STOP);
+    coding.into_iter().chain(stop).chain(harness).collect()
 }
 
 /// The definitions of the tools `offered` names, in the order `offered` gives them.
@@ -188,6 +190,11 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     let mut tools: Vec<Value> = (CODING_TOOLS.iter())
         .map(|tool| definition(tool, false, false))
         .collect();
+    if let Some(bash) = tools.iter_mut().find(|tool| tool["name"] == "bash") {
+        bash["parameters"]["properties"]["run_in_background"] =
+            json!({"type":"boolean","description":super::tasks::PARAMETER});
+    }
+    tools.push(super::tasks::definition());
     tools.push(super::status::definition());
     tools.extend(super::publish::definitions());
     tools.push(super::question::definition());
@@ -397,6 +404,7 @@ impl<'a> Call<'a> {
                 super::publish::summary(name, &self.arguments)
             }
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
+            super::tasks::STOP => format!("task {}", self.arguments["task_id"]),
             super::mcp::SEARCH | super::mcp::CALL => {
                 super::mcp::summary_line(self.name, &self.arguments)
             }
@@ -608,12 +616,9 @@ impl<'a> Call<'a> {
                 }
             }
             "bash" => {
-                let process = sandbox::sandboxed(root, self.str("command")?, hidden, sandbox)?;
+                let (process, program) = self.bash_process(root, Some(sandbox), Some(hidden))?;
                 let timeout = timeout(self);
-                Ok(
-                    run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress)?
-                        .tool_output(),
-                )
+                Ok(run_process(process, program, false, timeout, cancel, progress)?.tool_output())
             }
             _ => self.run(root, Some(hidden), cancel, progress),
         }
@@ -684,6 +689,47 @@ impl<'a> Call<'a> {
             images: Vec::new(),
             before: None,
         })
+    }
+
+    /// The process that runs this bash call's command in `root`: in the main agent's `sandbox`,
+    /// else with `hidden` hidden from it, else as it is; with the name its errors give it.
+    fn bash_process(
+        &self,
+        root: &Path,
+        sandbox: Option<&Sandbox>,
+        hidden: Option<&Hidden>,
+    ) -> Result<(Command, &'static str), String> {
+        let command = self.str("command")?;
+        Ok(match (sandbox, hidden) {
+            (Some(sandbox), Some(hidden)) => (
+                sandbox::sandboxed(root, command, hidden, sandbox)?,
+                sandbox::PROGRAM,
+            ),
+            (_, Some(hidden)) => (sandbox::hiding(root, command, hidden)?, sandbox::PROGRAM),
+            (_, None) => {
+                let mut process = Command::new(shell_program()?);
+                bash_runs(&mut process, command);
+                process.current_dir(root);
+                (process, "bash")
+            }
+        })
+    }
+
+    /// Whether this is a bash call the model asked to run in the background.
+    pub fn in_background(&self) -> bool {
+        self.name == "bash" && self.arguments["run_in_background"].as_bool() == Some(true)
+    }
+
+    /// Starts this bash call's command among `tasks`, as `run` or `run_in_sandbox` would run it.
+    pub fn start(
+        &self,
+        root: &Path,
+        sandbox: Option<&Sandbox>,
+        hidden: Option<&Hidden>,
+        tasks: &Arc<super::tasks::Tasks>,
+    ) -> Result<Output, String> {
+        let (process, program) = self.bash_process(root, sandbox, hidden)?;
+        tasks.start(process, program, self.str("command")?)
     }
 
     /// Refuses a path argument in a hidden credential store; the shells have none.
@@ -1695,18 +1741,15 @@ fn bash(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Output, String> {
-    let command = call.str("command")?;
-    let timeout = timeout(call);
+    let (process, program) = call.bash_process(root, None, hidden)?;
+    let ran = run_process(process, program, false, timeout(call), cancel, progress);
     let ran = match hidden {
-        None => run_command(root, command, timeout, cancel, progress)?,
-        Some(hidden) => {
-            let process = sandbox::hiding(root, command, hidden)?;
-            run_process(process, sandbox::PROGRAM, false, timeout, cancel, progress).map_err(
-                |error| format!("{error}; it keeps this command to what the settings say"),
-            )?
+        Some(_) => {
+            ran.map_err(|error| format!("{error}; it keeps this command to what the settings say"))
         }
+        None => ran,
     };
-    Ok(ran.tool_output())
+    Ok(ran?.tool_output())
 }
 
 /// Whether commands run with the credential stores hidden when asked: not on Windows, which has

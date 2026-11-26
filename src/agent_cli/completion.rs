@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 40] = [
+const SLASH_COMMANDS: [(&str, &str); 41] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -32,6 +32,10 @@ const SLASH_COMMANDS: [(&str, &str); 40] = [
     ("rename", "Set session display name"),
     ("status", "Show session info and stats"),
     ("diff", "Show uncommitted changes, untracked files included"),
+    (
+        "tasks",
+        "Show the commands running in the background, or stop one: /tasks [stop N]",
+    ),
     (
         "usage",
         "Show quota left and what was spent, or its details (/usage details)",
@@ -119,7 +123,7 @@ const SLASH_COMMANDS: [(&str, &str); 40] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 18] = [
+const ALIASES: [(&str, &str); 20] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
@@ -134,6 +138,8 @@ const ALIASES: [(&str, &str); 18] = [
     ("keymap", "hotkeys"),
     ("changelog", "release-notes"),
     ("permissions", "sandbox"),
+    ("bashes", "tasks"),
+    ("ps", "tasks"),
     ("checkpoint", "rewind"),
     ("undo", "rewind"),
     // The built-in set's `scramjet:bug`, listed as `bug` (`Command::listed_name`).
@@ -564,6 +570,7 @@ mod tests {
                 "/rename",
                 "/status",
                 "/diff",
+                "/tasks",
                 "/usage",
                 "/context",
                 "/system-prompt",
@@ -603,7 +610,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /effort         Set the thinking level, or pick it from …",
                 "  /theme          Change the theme, or pick it from a list…",
-                "  (1/40)",
+                "  (1/41)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -619,10 +626,10 @@ mod tests {
                 "→ /rename",
                 "  /status",
                 "  /diff",
-                "  (9/40)"
+                "  (9/41)"
             ]
         );
-        for _ in 0..32 {
+        for _ in 0..33 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);

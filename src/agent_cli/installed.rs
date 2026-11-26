@@ -1275,6 +1275,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_problem_opens_its_file_or_offers_to_remove_a_link_that_leads_nowhere() {
         let base = std::env::temp_dir().join(format!("scramjet-problems-{}", std::process::id()));
         let _scratch = Scratch(base.clone());

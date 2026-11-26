@@ -4445,7 +4445,7 @@ touch made 2>/dev/null && echo wrote || echo read-only; \
     let tools: Vec<&str> = (body["tools"].as_array().unwrap().iter())
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(tools, ["read", "bash"], "{body}");
+    assert_eq!(tools, ["read", "bash", "task_stop"], "{body}");
     assert!(output.contains("secret:hidden"), "{output}");
     assert!(output.contains("from the refs"), "{output}");
     assert!(

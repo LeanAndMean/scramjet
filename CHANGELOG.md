@@ -4,6 +4,17 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.365.0 — Background commands and /tasks
+
+### Added
+
+- The agent can run a command in the background, as Claude Code's bash `run_in_background`: a server, a watcher or a long build returns at once with a task number and the file its output goes to, and runs on across turns until it ends, the agent stops it (`task_stop`) or Scramjet exits. The first prompt after it ends tells the agent how it ended, with the end of its output.
+- `/tasks` (also `/bashes` and `/ps`) lists the background commands, each running or how it ended, with its output's file; `/tasks stop N` stops one.
+
+### Fixed
+
+- A unit test no longer stops the tests from building on Windows.
+
 ## 2.364.0 — /rewind
 
 ### Added
