@@ -1438,6 +1438,51 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
 }
 
 #[test]
+fn a_session_color_is_kept_with_its_name_and_goes_with_a_clone() {
+    let (endpoint, _server) = serve(vec![stream(&fixture::text_events(
+        "A",
+        fixture::known_usage(),
+    ))]);
+    let (mut agent, scratch) = agent(endpoint, "color");
+    let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+    agent.set_session_name("Parser work").unwrap();
+    agent.set_session_color(Some("blue")).unwrap();
+    agent.turn("one", &mut ui, &cancel).unwrap();
+    assert_eq!(agent.session_color(), Some("blue"));
+    let path = agent.session_path().to_owned();
+    // A color's line keeps the name, which versions before colors read from it.
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains(r#"{"color":"blue","name":"Parser work","type":"session_info"}"#),
+        "{text}"
+    );
+    let (session, _, _) = Session::open(&path).unwrap();
+    assert_eq!(
+        (session.name(), session.color()),
+        (Some("Parser work"), Some("blue"))
+    );
+    // A name given as versions before colors give it leaves the color as it was.
+    Session::name_file(&path, "Lexer work").unwrap();
+    let (mut session, _, _) = Session::open(&path).unwrap();
+    assert_eq!(
+        (session.name(), session.color()),
+        (Some("Lexer work"), Some("blue"))
+    );
+    let (clone, _, _) = session.clone_at_leaf(&scratch.0).unwrap();
+    assert_eq!(
+        (clone.name(), clone.color()),
+        (Some("Lexer work"), Some("blue"))
+    );
+    // The default clears it, and the name stays.
+    session.set_color(None).unwrap();
+    let (session, _, _) = Session::open(&path).unwrap();
+    assert_eq!(
+        (session.name(), session.color()),
+        (Some("Lexer work"), None)
+    );
+}
+
+#[test]
 fn resume_lists_sessions_with_a_conversation_and_switches_to_one() {
     let (endpoint, _server) = serve(vec![]);
     let (mut agent, scratch) = agent(endpoint, "resume-session");

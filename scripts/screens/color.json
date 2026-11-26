@@ -1,0 +1,78 @@
+{
+  "size": "90x24",
+  "replies": [
+    [
+      {
+        "text": "Hello."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "[Skills]"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "hi\r"
+    },
+    {
+      "until": "Hello."
+    },
+    {
+      "type": "/color Blue\r"
+    },
+    {
+      "until": "Session color set to: blue"
+    },
+    {
+      "type": "/color mauve\r"
+    },
+    {
+      "until": "Invalid color"
+    },
+    {
+      "type": "/color p"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "blue"
+    },
+    {
+      "type": "\u0015/branch\r"
+    },
+    {
+      "until": "Cloned to new session"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "branched"
+    },
+    {
+      "type": "!ls"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "command"
+    },
+    {
+      "type": "\u0015/color default\r"
+    },
+    {
+      "until": "reset to default"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "default"
+    }
+  ]
+}

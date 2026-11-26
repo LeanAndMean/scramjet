@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 43] = [
+const SLASH_COMMANDS: [(&str, &str); 44] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -30,6 +30,10 @@ const SLASH_COMMANDS: [(&str, &str); 43] = [
     ("import", "Import and resume a session from a JSONL file"),
     ("copy", "Copy last agent message to clipboard"),
     ("rename", "Set session display name"),
+    (
+        "color",
+        "Set the prompt bar's color for this session: /color [red|blue|green|yellow|purple|orange|pink|cyan|default]",
+    ),
     ("status", "Show session info and stats"),
     ("diff", "Show uncommitted changes, untracked files included"),
     (
@@ -275,9 +279,9 @@ impl Completion {
 
     /// The argument of a built-in command that Scramjet completes: after `/model `, the
     /// providers' `models` (references, `provider/id`) whose id and provider match it fuzzily,
-    /// each shown by its id with its provider; after `/autopilot `, the words starting with it;
-    /// after `/mcp reconnect `, `enable ` or `disable `, `all` and the `mcp_servers` starting
-    /// with it.
+    /// each shown by its id with its provider; after `/autopilot ` and `/color `, the words
+    /// starting with it; after `/mcp reconnect `, `enable ` or `disable `, `all` and the
+    /// `mcp_servers` starting with it.
     pub(super) fn argument(
         before: &str,
         models: &[String],
@@ -307,6 +311,10 @@ impl Completion {
                     .map(word)
                     .collect()
             }
+            "color" => (super::style::session_colors().chain(["default"]))
+                .filter(|color| color.starts_with(typed))
+                .map(word)
+                .collect(),
             "autopilot" | "mcp" => (match name {
                 "autopilot" => &["on", "off", "status"][..],
                 _ => &["reconnect", "enable", "disable"][..],
@@ -574,6 +582,7 @@ mod tests {
                 "/import",
                 "/copy",
                 "/rename",
+                "/color",
                 "/status",
                 "/diff",
                 "/tasks",
@@ -618,7 +627,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /effort         Set the thinking level, or pick it from …",
                 "  /theme          Change the theme, or pick it from a list…",
-                "  (1/43)",
+                "  (1/44)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -632,12 +641,12 @@ mod tests {
                 "  /import",
                 "  /copy",
                 "→ /rename",
+                "  /color",
                 "  /status",
-                "  /diff",
-                "  (9/43)"
+                "  (9/44)"
             ]
         );
-        for _ in 0..35 {
+        for _ in 0..36 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -761,6 +770,11 @@ mod tests {
         assert_eq!(words("/autopilot st").unwrap(), "status");
         assert!(words("/autopilot O").is_none());
         assert!(words("/autopilot on x").is_none());
+        assert_eq!(
+            words("/color ").unwrap(),
+            "red blue green yellow purple orange pink cyan default"
+        );
+        assert_eq!(words("/color p").unwrap(), "purple pink");
         assert_eq!(words("/mcp r").unwrap(), "reconnect");
         assert_eq!(words("/mcp ").unwrap(), "reconnect enable disable");
         assert_eq!(words("/mcp reconnect ").unwrap(), "all tavily test");

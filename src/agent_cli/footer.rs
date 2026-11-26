@@ -27,6 +27,8 @@ const BRANCH_CHECK: Duration = Duration::from_secs(1);
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Shown {
     pub(super) name: Option<String>,
+    /// The session's color, as `/color` sets it.
+    pub(super) color: Option<String>,
     pub(super) tokens: Tokens,
     /// How full the context is (`Agent::context_tokens`), out of `window` when known.
     pub(super) context: Option<u64>,
@@ -90,6 +92,7 @@ impl Shown {
         let none = agent.providers().options().is_empty();
         Self {
             name: agent.session_name().map(str::to_owned),
+            color: agent.session_color().map(str::to_owned),
             tokens: agent.session_tokens(),
             context: agent.context_tokens(),
             window: agent.context_window(),

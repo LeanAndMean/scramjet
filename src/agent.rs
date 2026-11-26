@@ -1435,6 +1435,16 @@ impl Agent {
         Ok(self.session.set_name(name)?)
     }
 
+    /// The current session's color, as `/color` sets it; `None` for the default.
+    pub fn session_color(&self) -> Option<&str> {
+        self.session.color()
+    }
+
+    /// Sets the current session's color, saved at once; `None` for the default.
+    pub fn set_session_color(&mut self, color: Option<&str>) -> Result<(), AgentError> {
+        Ok(self.session.set_color(color)?)
+    }
+
     /// The current session's id, its file name without the extension.
     pub fn session_id(&self) -> String {
         self.session.id()

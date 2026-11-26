@@ -27,6 +27,8 @@ pub(super) enum Builtin<'a> {
     /// With the new session's name, if given.
     Clear(&'a str),
     Rename(&'a str),
+    /// Claude Code's `/color [NAME|default]`: the prompt's border in the session's own color.
+    Color(&'a str),
     Status,
     Diff,
     /// Claude Code's `/tasks [stop N]`: the commands bash runs in the background.
@@ -96,6 +98,7 @@ impl<'a> Builtin<'a> {
             "copy" if argument.is_empty() => Self::Copy,
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
+            "color" => Self::Color(argument),
             "status" if argument.is_empty() => Self::Status,
             "diff" if argument.is_empty() => Self::Diff,
             "tasks" => Self::Tasks(argument),
@@ -150,6 +153,7 @@ impl<'a> Builtin<'a> {
                 | Self::Export(_)
                 | Self::Copy
                 | Self::Rename(_)
+                | Self::Color(_)
                 | Self::Status
                 | Self::Diff
                 | Self::Tasks(_)
@@ -202,6 +206,7 @@ impl Interactive {
                 }
             }
             Some(Builtin::Rename(name)) => self.name(name),
+            Some(Builtin::Color(wanted)) => self.color(wanted),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Diff) => self.diff(),
             Some(Builtin::Tasks(argument)) => self.tasks(argument),
@@ -257,6 +262,38 @@ impl Interactive {
                 Ok(()) => self.say_styled(style::MUTED, &format!("Session name set: {name}")),
                 Err(error) => self.say(&format!("Error: {error}")),
             }
+        }
+    }
+
+    /// `/color [NAME|default]`, as Claude Code's: the prompt's border in a color of the session's
+    /// own, saved with it, to tell sessions apart; a color picked at random when none is named.
+    fn color(&mut self, wanted: &str) {
+        let wanted = wanted.to_lowercase();
+        let colors: Vec<&str> = style::session_colors().collect();
+        let color = match wanted.as_str() {
+            "" => {
+                let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+                let at = since.unwrap_or_default().subsec_nanos() as usize % colors.len();
+                Some(colors[at])
+            }
+            "default" | "reset" | "none" | "gray" | "grey" => None,
+            name if colors.contains(&name) => Some(name),
+            name => {
+                let available = colors.join(", ");
+                let said =
+                    format!("Invalid color \"{name}\". Available colors: {available}, default");
+                return self.say(&said);
+            }
+        };
+        if let Err(error) = self.session.agent.set_session_color(color) {
+            return self.say(&format!("Error: {error}"));
+        }
+        if let Some(screen) = &self.screen {
+            screen.footer(super::footer::Shown::of(&self.session.agent));
+        }
+        match color {
+            Some(color) => self.say_styled(style::MUTED, &format!("Session color set to: {color}")),
+            None => self.say_styled(style::MUTED, "Session color reset to default"),
         }
     }
 
@@ -1530,6 +1567,8 @@ mod tests {
             Builtin::parse("/rename  my work "),
             Some(Builtin::Rename("my work"))
         );
+        assert_eq!(Builtin::parse("/color Blue"), Some(Builtin::Color("Blue")));
+        assert_eq!(Builtin::parse("/color"), Some(Builtin::Color("")));
         // A new session's name, as Claude Code's `/clear [name]` and `/branch [name]` take one.
         assert_eq!(
             Builtin::parse("/clear  next "),

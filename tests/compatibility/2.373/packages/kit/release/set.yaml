@@ -1,0 +1,2 @@
+name: release
+description: Tag a release once its changelog is written.

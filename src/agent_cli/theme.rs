@@ -410,6 +410,11 @@ impl Theme {
         self.colors[token as usize]
     }
 
+    /// Whether it uses only the terminal's own colors, which the terminal's theme may change.
+    pub(super) fn palette_only(&self) -> bool {
+        (self.colors.iter().chain([&self.background])).all(|color| !matches!(color, Color::Rgb(..)))
+    }
+
     /// The main background, under everything; the terminal's own unless the theme colors it.
     pub(super) fn background(&self) -> Color {
         self.background

@@ -173,13 +173,16 @@ fn prompt_rule(border: style::Style, width: usize, hidden: Option<(char, usize)>
 }
 
 /// The style of the prompt's rules, as Scramjet's editor border: the bash-mode color while
-/// `draft` is a command, else the color of the thinking level `effort`, off for a model that
-/// does not reason or a level Scramjet does not know.
-fn prompt_border(effort: Option<&str>, draft: &Draft) -> style::Style {
+/// `draft` is a command, else the session's `color` from `/color`, else the color of the
+/// thinking level `effort`, off for a model that does not reason or a level Scramjet does not
+/// know.
+fn prompt_border(effort: Option<&str>, color: Option<&str>, draft: &Draft) -> style::Style {
     if draft.text().trim_start().starts_with('!') {
         return style::PROMPT_COMMAND;
     }
-    level_style(effort)
+    color
+        .and_then(style::session_color)
+        .unwrap_or_else(|| level_style(effort))
 }
 
 /// The style of the thinking level `effort`, off for a model that does not reason or a level
@@ -421,7 +424,9 @@ impl App {
                     .collect();
             }
             None => {
-                let border = prompt_border(self.footer.shown.effort.as_deref(), &self.draft);
+                let shown = &self.footer.shown;
+                let (effort, color) = (shown.effort.as_deref(), shown.color.as_deref());
+                let border = prompt_border(effort, color, &self.draft);
                 let (rows, cursor, hidden) =
                     prompt_rows(&self.draft, (width, room), self.layout, true);
                 (held.rows, held.cursor, held.typed) = (rows, Some(cursor), true);
@@ -850,14 +855,35 @@ mod tests {
             (Some("ultra"), style::PROMPT_OFF),
         ];
         for (effort, border) in levels {
-            assert_eq!(prompt_border(effort, &prompt), border, "{effort:?}");
+            assert_eq!(prompt_border(effort, None, &prompt), border, "{effort:?}");
         }
+        // The session's color wins over the level's, and a command's over both.
+        let blue = Some("blue");
+        assert_eq!(
+            prompt_border(Some("high"), blue, &prompt),
+            style::SESSION_BLUE
+        );
+        assert_eq!(
+            prompt_border(None, Some("pink"), &prompt),
+            style::SESSION_PINK
+        );
+        let unknown = Some("mauve");
+        assert_eq!(
+            prompt_border(Some("high"), unknown, &prompt),
+            style::PROMPT_HIGH
+        );
         for text in ["!cargo test", "  !!git status"] {
             let command = editor.draft(text.into());
-            assert_eq!(prompt_border(Some("high"), &command), style::PROMPT_COMMAND);
+            assert_eq!(
+                prompt_border(Some("high"), blue, &command),
+                style::PROMPT_COMMAND
+            );
         }
         let mentioned = editor.draft("Why did !cargo test fail?".into());
-        assert_eq!(prompt_border(Some("high"), &mentioned), style::PROMPT_HIGH);
+        assert_eq!(
+            prompt_border(Some("high"), None, &mentioned),
+            style::PROMPT_HIGH
+        );
     }
 
     #[test]

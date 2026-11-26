@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.373.0 — /color
+
+### Added
+
+- `/color [red|blue|green|yellow|purple|orange|pink|cyan|default]` draws the prompt's border in a color of the session's own, as Claude Code's, to tell sessions running side by side apart: a color at random without a name, `default` (or `reset`, `none`, `gray`) back to the thinking level's. It is saved with the session, kept on resume and by `/branch`, and completed as you type it. A `!` command's border keeps its own color.
+
 ## 2.372.0 — The status line
 
 ### Added
