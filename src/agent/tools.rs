@@ -4068,7 +4068,10 @@ to see full lines]",
             std::thread::sleep(Duration::from_millis(20));
             left_running(group.parse().unwrap()).is_none()
         });
-        crate::os::kill_group(group.parse().unwrap());
+        // Once its group is gone, its id may be another process's.
+        if !gone {
+            crate::os::kill_group(group.parse().unwrap());
+        }
         assert!(gone, "{text}");
         let hidden = call(
             "bash",
