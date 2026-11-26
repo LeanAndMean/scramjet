@@ -196,6 +196,22 @@ impl Tasks {
             .count()
     }
 
+    /// The prompt that wakes an idle agent for the tasks that ended by themselves since it was
+    /// last told, as Claude Code's: `Background task 1 exited with code 0.`; `None` when none
+    /// did. One the user stopped wakes nothing, and is told at the next prompt.
+    pub fn woken(&self) -> Option<String> {
+        let list = self.lock();
+        let said: Vec<String> = (list.iter().filter(|entry| !entry.told))
+            .filter_map(|entry| match &entry.ended {
+                Some((Ending::Stopped, _)) | None => None,
+                Some((ending, _)) => {
+                    Some(format!("Background task {} {}.", entry.id, ending.said()))
+                }
+            })
+            .collect();
+        (!said.is_empty()).then(|| said.join("\n"))
+    }
+
     /// Stops task `id` with all it started; `by_model`: the model asked, so it is not told again.
     pub fn stop(&self, id: u32, by_model: bool) -> Result<String, String> {
         let mut list = self.lock();
@@ -372,7 +388,13 @@ mod tests {
         let listed = agent.tasks().list();
         assert_eq!(listed[0].ended, Some(Ending::Exited(3)));
         assert_eq!(listed[0].command, command);
+        let woken = agent.tasks().woken();
+        assert_eq!(
+            woken.as_deref(),
+            Some("Background task 1 exited with code 3.")
+        );
         agent.turn("and?", &mut ui, &cancel).unwrap();
+        assert!(agent.tasks().woken().is_none());
         let requests = server.join().unwrap();
         let started = result(&requests, 1);
         assert!(
@@ -435,6 +457,8 @@ mod tests {
         agent.tasks().stop(2, false).unwrap();
         assert!(agent.tasks().stop(9, false).is_err());
         until(|| agent.tasks().running() == 0);
+        // Stopped by the user, so it wakes nothing, but is told.
+        assert!(agent.tasks().woken().is_none());
         agent.turn("well?", &mut ui, &cancel).unwrap();
         let requests = server.join().unwrap();
         assert!(result(&requests, 2).starts_with("Task 1 stopped"));

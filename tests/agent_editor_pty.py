@@ -1928,6 +1928,34 @@ run([], calls_running_together_show_at_once, serve_items([
 run_in_shell(suspend_in_shell, talking)
 
 
+def woken_by_a_task(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'build it\r')
+    on_screen('Started.')
+    ended(read, output)
+    # Typed while idle, and kept through the turn the task's end starts.
+    send(b'next one')
+    on_screen('Background task 1 exited with code 0.')
+    on_screen('Woken.')
+    ended(read, output)
+    assert 'next one' in '\n'.join(shown()), '\n'.join(shown())
+    send(b'\r')
+    on_screen('Drafted.')
+    ended(read, output)
+    send(b'\x04')
+
+
+woken_bodies = []
+run(['--no-session'], woken_by_a_task, serve_items([
+    [tool_call('call_1', 'bash', {'command': 'sleep 1.5; echo built-$((1+1))', 'run_in_background': True})],
+    [message('Started.')], [message('Woken.')], [message('Drafted.')]], bodies=woken_bodies))
+told = woken_bodies[2]['input'][-1]['content']
+assert '<task-notification>' in told and 'built-2' in told, told
+assert told.endswith('Background task 1 exited with code 0.'), told
+assert woken_bodies[3]['input'][-1]['content'] == 'next one', woken_bodies[3]['input'][-1]
+
+
 def printing_in_background(read, until, send, output):
     mark = until(b'Waiting for reply')
     send(b'\x1a')

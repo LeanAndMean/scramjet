@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.366.0 — A background command's end wakes the agent
+
+### Added
+
+- On the full screen, a background command that ends while the agent waits for you starts a turn at once, as Claude Code's does, so the agent follows up on a finished build or a server that stopped without being asked; what you were typing stays in the editor.
+
 ## 2.365.0 — Background commands and /tasks
 
 ### Added

@@ -660,6 +660,8 @@ impl App {
                 self.working.get_or_insert((Instant::now(), false));
                 self.efforts = efforts;
                 self.handed = None;
+                // A turn the session started unasked: what is typed meanwhile waits for it.
+                self.ready = false;
             }
             ToScreen::AsideEnded => {
                 if let Some(kept) = self.aside_from.take()

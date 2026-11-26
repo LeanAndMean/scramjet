@@ -24,6 +24,11 @@
     ],
     [
       {
+        "text": "The build ended with code 0 and printed built."
+      }
+    ],
+    [
+      {
         "call": "task_stop",
         "arguments": {
           "task_id": 2
@@ -32,7 +37,7 @@
     ],
     [
       {
-        "text": "The build ended and the server is stopped."
+        "text": "The server is stopped."
       }
     ]
   ],
@@ -65,7 +70,13 @@
       "shot": "running"
     },
     {
-      "sleep": 1.5
+      "until": "printed built."
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "woken"
     },
     {
       "type": "stop the server\r"

@@ -449,6 +449,11 @@ impl Handle {
         self.waiting.set(false);
         Some(input)
     }
+
+    /// Ends a wait `input_within` left going on, the session going on without input.
+    pub(in crate::agent_cli) fn stop_waiting(&self) {
+        self.waiting.set(false);
+    }
 }
 
 impl std::ops::Deref for Handle {

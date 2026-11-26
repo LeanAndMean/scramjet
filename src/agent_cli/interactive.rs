@@ -33,6 +33,8 @@ use std::{
 /// How often the full screen, waiting for a prompt, tries again to write the lines a full disk
 /// kept the session from writing.
 const RETRY_HELD: Duration = Duration::from_secs(5);
+/// How often an idle full screen looks whether a background task has ended, while one runs.
+const TASK_POLL: Duration = Duration::from_millis(200);
 
 pub(super) struct Interactive {
     pub(super) session: Session,
@@ -291,12 +293,28 @@ impl Interactive {
                 screen.footer(footer::Shown::of(&self.session.agent));
                 let kept = super::login::Kept::of(self.session.agent.providers());
                 *self.kept.lock().unwrap_or_else(PoisonError::into_inner) = kept;
-                let holding = self.session.agent.session_holding().then_some(RETRY_HELD);
-                let Some(input) = screen.input_within(holding) else {
-                    if let Some(notice) = self.session.agent.write_held() {
-                        screen.say(&notice);
+                let mut held_at = Instant::now();
+                let input = loop {
+                    if let Some(prompt) = self.session.agent.tasks().woken() {
+                        screen.stop_waiting();
+                        return Ok(Read::Prompt(prompt));
                     }
-                    continue;
+                    let holding = self.session.agent.session_holding();
+                    let within = match self.session.agent.tasks().running() {
+                        0 => holding.then_some(RETRY_HELD),
+                        _ => Some(TASK_POLL),
+                    };
+                    if let Some(input) = screen.input_within(within) {
+                        break input;
+                    }
+                    if held_at.elapsed() >= RETRY_HELD {
+                        held_at = Instant::now();
+                        if let Some(notice) =
+                            (holding.then(|| self.session.agent.write_held())).flatten()
+                        {
+                            screen.say(&notice);
+                        }
+                    }
                 };
                 match input {
                     screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
