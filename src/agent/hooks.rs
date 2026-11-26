@@ -1,7 +1,8 @@
 //! Claude Code's hooks: the user's commands that its `hooks` setting runs before and after the
 //! agent's tools, given the call as JSON on their input, and able to block it, change its input,
 //! ask the user or tell the model more; and as a prompt is sent, as a turn would end, as a session
-//! starts and ends, before a compaction and as the user is told the agent waits.
+//! starts and ends, before and after a compaction, as the user is told the agent waits, as a
+//! turn fails on the provider's error, and as subagents start and finish.
 
 use super::tools::{self, Call, Output};
 use super::{Agent, AgentError, AgentUi, Answer, PROBE, mcp, message_text, subagent};
@@ -11,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The events run, as Claude Code names them.
-pub const EVENTS: [&str; 9] = [
+pub const EVENTS: [&str; 13] = [
     "PreToolUse",
     "PostToolUse",
     "PostToolUseFailure",
@@ -21,11 +22,15 @@ pub const EVENTS: [&str; 9] = [
     "SessionEnd",
     "PreCompact",
     "Notification",
+    "PostCompact",
+    "StopFailure",
+    "SubagentStart",
+    "SubagentStop",
 ];
 
-/// How many times in a row `Stop` hooks may keep a turn going, as Claude Code's
-/// `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` by default.
-const STOP_BLOCKS: usize = 8;
+/// How many times in a row `Stop` (or a subagent's `SubagentStop`) hooks may keep a turn going,
+/// as Claude Code's `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` by default.
+pub(super) const STOP_BLOCKS: usize = 8;
 
 /// Claude Code's time limit for a command hook.
 const TIMEOUT: Duration = Duration::from_secs(600);
@@ -48,10 +53,18 @@ enum Event {
     PreCompact,
     /// Its matcher names the notification's type: `permission_prompt` or `idle_prompt`.
     Notification,
+    /// Its matcher names the trigger: `manual` or `auto`.
+    PostCompact,
+    /// Its matcher names the error's kind, as Claude Code's: `rate_limit`, `server_error`, ….
+    StopFailure,
+    /// Its matcher names the agent.
+    SubagentStart,
+    /// Its matcher names the agent.
+    SubagentStop,
 }
 
 impl Event {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 13] = [
         Self::PreToolUse,
         Self::PostToolUse,
         Self::PostToolUseFailure,
@@ -61,6 +74,10 @@ impl Event {
         Self::SessionEnd,
         Self::PreCompact,
         Self::Notification,
+        Self::PostCompact,
+        Self::StopFailure,
+        Self::SubagentStart,
+        Self::SubagentStop,
     ];
 
     fn name(self) -> &'static str {
@@ -536,6 +553,111 @@ impl Bound {
         }
     }
 
+    /// Runs the `PostCompact` hooks matching `trigger` once a compaction wrote `summary`: what
+    /// they printed, for the user, as Claude Code shows it.
+    pub fn compacted(
+        &self,
+        trigger: &str,
+        summary: &str,
+        root: &Path,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Vec<String> {
+        let event = Event::PostCompact;
+        let commands = self.hooks.matching(event, Some(&[trigger.to_owned()]));
+        if commands.is_empty() {
+            return Vec::new();
+        }
+        let input = json!({"trigger": trigger, "compact_summary": summary});
+        let label = format!("{}:{trigger}", event.name());
+        let notice = &mut |text: &str| ui.notice(text);
+        let said = self.run(event, &label, &commands, input, root, notice, cancel);
+        (commands.iter().zip(said))
+            .filter_map(|(command, said)| {
+                let printed = said.plain?;
+                Some(format!(
+                    "PostCompact [{}] completed successfully: {printed}",
+                    command.command
+                ))
+            })
+            .collect()
+    }
+
+    /// Runs the `StopFailure` hooks matching `kind`, Claude Code's name for the error that ended
+    /// the turn, with its `details` and `last`, the model's last text; what they say is not read,
+    /// as in Claude Code.
+    pub fn stop_failed(
+        &self,
+        kind: &str,
+        details: &str,
+        last: Option<String>,
+        root: &Path,
+        cancel: &AtomicBool,
+    ) {
+        let event = Event::StopFailure;
+        let commands = self.hooks.matching(event, Some(&[kind.to_owned()]));
+        if commands.is_empty() {
+            return;
+        }
+        let mut input = json!({"error": kind, "error_details": details});
+        if let Some(last) = last {
+            input["last_assistant_message"] = json!(last);
+        }
+        let label = format!("{}:{kind}", event.name());
+        self.run(event, &label, &commands, input, root, &mut |_| {}, cancel);
+    }
+
+    /// Runs the `SubagentStart` hooks matching `agent` as a child running it as `id` starts:
+    /// their `additionalContext`, for the child.
+    pub fn subagent_started(
+        &self,
+        agent: &str,
+        id: &str,
+        root: &Path,
+        notice: &mut dyn FnMut(&str),
+        cancel: &AtomicBool,
+    ) -> Vec<String> {
+        let event = Event::SubagentStart;
+        let commands = self.hooks.matching(event, Some(&[agent.to_owned()]));
+        if commands.is_empty() {
+            return Vec::new();
+        }
+        let input = json!({"agent_id": id, "agent_type": agent});
+        let label = format!("{}:{agent}", event.name());
+        let said = self.run(event, &label, &commands, input, root, notice, cancel);
+        (said.into_iter())
+            .filter_map(|said| said.context.map(|context| additional(&label, &context)))
+            .collect()
+    }
+
+    /// Runs the `SubagentStop` hooks matching `agent` as the child `id` would finish after
+    /// `last`, its last text; `active` when one kept it going before. If any blocks, what has it
+    /// go on, for the child and for the user.
+    #[allow(clippy::too_many_arguments)]
+    pub fn subagent_stopping(
+        &self,
+        active: bool,
+        agent: &str,
+        id: &str,
+        last: &str,
+        root: &Path,
+        notice: &mut dyn FnMut(&str),
+        cancel: &AtomicBool,
+    ) -> Option<(String, String)> {
+        let event = Event::SubagentStop;
+        let commands = self.hooks.matching(event, Some(&[agent.to_owned()]));
+        if commands.is_empty() {
+            return None;
+        }
+        let input = json!({"stop_hook_active": active, "agent_id": id, "agent_type": agent,
+            "last_assistant_message": last});
+        let said = self.run(event, event.name(), &commands, input, root, notice, cancel);
+        let (blocked, why): (Vec<_>, Vec<_>) = (said.into_iter())
+            .filter_map(|said| said.blocking.zip(said.why))
+            .unzip();
+        (!blocked.is_empty()).then(|| (blocked.join("\n"), why.join("\n")))
+    }
+
     /// Runs `commands` at once, each given `input` with the session's fields; what each said.
     #[allow(clippy::too_many_arguments)]
     fn run(
@@ -662,6 +784,33 @@ impl Agent {
         }
     }
 
+    /// Tells the user what `PostCompact` hooks printed once a compaction wrote `summary`.
+    pub(super) fn post_compact_hooks(
+        &self,
+        summary: &str,
+        automatic: bool,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) {
+        if let Some(hooks) = self.bound_hooks() {
+            let trigger = if automatic { "auto" } else { "manual" };
+            for line in hooks.compacted(trigger, summary, &self.config.root, ui, cancel) {
+                ui.notice(&line);
+            }
+        }
+    }
+
+    /// Runs the `StopFailure` hooks once the turn ended on `error`, if the provider's.
+    pub(super) fn stop_failure_hooks(&self, error: &AgentError, cancel: &AtomicBool) {
+        let (Some(kind), Some(hooks)) = (failure_kind(error), self.bound_hooks()) else {
+            return;
+        };
+        let last = (self.conversation.iter().rev())
+            .find(|item| item["type"] == "message" && item["role"] == "assistant")
+            .map(message_text);
+        hooks.stop_failed(kind, &error.to_string(), last, &self.config.root, cancel);
+    }
+
     /// The instructions for a compaction's summary, `focus` with what `PreCompact` hooks add to
     /// it; `Err` when one blocks the compaction.
     pub(super) fn pre_compact_hooks(
@@ -777,6 +926,32 @@ impl Drop for Agent {
     }
 }
 
+/// Claude Code's name for the kind of provider error that ended a turn, which `StopFailure` hooks
+/// are given and matched on; `None` for an end that is not the provider's.
+fn failure_kind(error: &AgentError) -> Option<&'static str> {
+    match error {
+        AgentError::OutputLimit(_) => Some("max_output_tokens"),
+        AgentError::ContextOverflow(_) => Some("invalid_request"),
+        AgentError::CompactionFailed(error) => failure_kind(error),
+        AgentError::Provider(message) => {
+            let status = (message.strip_prefix("HTTP "))
+                .and_then(|rest| rest.get(..3))
+                .and_then(|code| code.parse::<u16>().ok());
+            Some(match status {
+                Some(401 | 403) => "authentication_failed",
+                Some(402) => "billing_error",
+                Some(404) => "model_not_found",
+                Some(429) => "rate_limit",
+                Some(529) => "overloaded",
+                Some(500..) => "server_error",
+                Some(400..) => "invalid_request",
+                _ => "unknown",
+            })
+        }
+        _ => None,
+    }
+}
+
 fn additional(label: &str, context: &str) -> String {
     format!("{label} hook additional context: {}", context.trim())
 }
@@ -816,9 +991,12 @@ fn said(
             // As Claude Code's, a session's start or end and a notification cannot be blocked:
             // the user is told.
             match event {
-                Event::SessionStart | Event::SessionEnd | Event::Notification => {
-                    notice(&format!("{label} hook error: {why}"))
-                }
+                Event::SessionStart
+                | Event::SessionEnd
+                | Event::Notification
+                | Event::PostCompact
+                | Event::StopFailure
+                | Event::SubagentStart => notice(&format!("{label} hook error: {why}")),
                 _ => {
                     said.blocking = Some(blocking(label, command, why));
                     said.why = Some(why.to_owned());
@@ -883,6 +1061,7 @@ fn said(
         | Event::PostToolUseFailure
         | Event::UserPromptSubmit
         | Event::Stop
+        | Event::SubagentStop
         | Event::PreCompact => {
             if answer.get("decision").and_then(Value::as_str) == Some("block") {
                 let why = reason.unwrap_or("Blocked by hook");
@@ -890,7 +1069,12 @@ fn said(
                 said.why = Some(why.to_owned());
             }
         }
-        Event::SessionStart | Event::SessionEnd | Event::Notification => {}
+        Event::SessionStart
+        | Event::SessionEnd
+        | Event::Notification
+        | Event::PostCompact
+        | Event::StopFailure
+        | Event::SubagentStart => {}
     }
     said
 }
@@ -1021,20 +1205,21 @@ mod tests {
                 {"matcher": "(", "hooks": [{"type": "command", "command": "b"}]},
                 {"hooks": [{"type": "command", "command": "c", "timeout": 0}]},
             ],
-            "SubagentStop": [{"hooks": [{"type": "command", "command": "d"}]}],
+            "PermissionRequest": [{"hooks": [{"type": "command", "command": "d"}]}],
             "PostToolUse": {"matcher": "Write"},
         }));
         assert_eq!(
             warnings,
             [
+                "s.json: hooks.PermissionRequest is not run: Scramjet runs PreToolUse, PostToolUse, \
+                 PostToolUseFailure, UserPromptSubmit, Stop, SessionStart, SessionEnd, \
+                 PreCompact, Notification, PostCompact, StopFailure, SubagentStart, SubagentStop \
+                 hooks; ignored",
                 "s.json: hooks.PostToolUse must be a list of matchers with their hooks; ignored",
                 "s.json: hooks.PreToolUse[0].hooks[1]: Scramjet runs only \"command\" hooks, \
                  not \"prompt\"; ignored",
                 "s.json: hooks.PreToolUse[1].matcher is not a regular expression; ignored",
                 "s.json: hooks.PreToolUse[2].hooks[0].timeout must be seconds, above 0; ignored",
-                "s.json: hooks.SubagentStop is not run: Scramjet runs PreToolUse, PostToolUse, \
-                 PostToolUseFailure, UserPromptSubmit, Stop, SessionStart, SessionEnd, \
-                 PreCompact, Notification hooks; ignored",
             ]
         );
         let bash = names(&call("bash", json!({})));
@@ -1279,6 +1464,187 @@ mod tests {
             "{:?}",
             ui.shown
         );
+    }
+
+    #[test]
+    fn subagents_compactions_and_failed_turns_run_claude_codes_hooks() {
+        use crate::agent::tests::{Recorder, agent, missing, serve, stream, tool_call};
+        use crate::provider_fixture as fixture;
+        if missing("bash") {
+            return;
+        }
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                subagent::NAME,
+                json!({"agent": "reviewer", "task": "Look"}),
+            ),
+            reply("first look"),
+            reply("second look"),
+            reply("done"),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "hook-subagents");
+        let root = agent.root().to_owned();
+        let agents = root.join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reviewer.md"),
+            "---\nname: reviewer\ndescription: Reviews\ntools: read\n---\n\nYou review.\n",
+        )
+        .unwrap();
+        agent.agents_directory = Some(agents);
+        let command = |command: &str| json!([{"type": "command", "command": command}]);
+        let start = r#"cat > start.json; echo '{"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": "use the tests"}}'"#;
+        let stop = r#"input=$(cat); echo "$input" >> stops.jsonl; case $input in *'"stop_hook_active":false'*) echo 'check again' >&2; exit 2;; esac"#;
+        let (hooks, warnings) = read(json!({
+            "SubagentStart": [
+                {"matcher": "reviewer", "hooks": command(start)},
+                {"matcher": "other", "hooks": command("touch other")},
+            ],
+            "SubagentStop": [{"matcher": "reviewer", "hooks": command(stop)}],
+        }));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        agent.set_hooks(std::sync::Arc::new(hooks));
+        let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+        agent.turn("review", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 4);
+        let input = |at: usize| bodies[at]["input"].as_array().unwrap().clone();
+        assert_eq!(
+            input(1)[1]["content"],
+            "<system-reminder>\nSubagentStart:reviewer hook additional context: use the tests\n\
+             </system-reminder>"
+        );
+        assert_eq!(
+            input(2).last().unwrap()["content"],
+            format!("SubagentStop hook blocking error from command: \"{stop}\": check again")
+        );
+        assert!(
+            (ui.shown.iter())
+                .any(|shown| shown == "notice SubagentStop hook feedback (reviewer): check again"),
+            "{:?}",
+            ui.shown
+        );
+        assert_eq!(crate::agent::tests::last_output(&bodies[3]), "second look");
+        assert!(!root.join("other").exists());
+        let started: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("start.json")).unwrap())
+                .unwrap();
+        assert_eq!(started["hook_event_name"], "SubagentStart");
+        assert_eq!(started["agent_type"], "reviewer");
+        assert_eq!(started["session_id"], agent.session_id());
+        let stops: Vec<Value> = (std::fs::read_to_string(root.join("stops.jsonl")).unwrap())
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let stopped: Vec<_> = (stops.iter())
+            .map(|stop| {
+                assert_eq!(stop["agent_id"], started["agent_id"]);
+                assert_eq!(stop["hook_event_name"], "SubagentStop");
+                (
+                    stop["stop_hook_active"].clone(),
+                    stop["last_assistant_message"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            stopped,
+            [
+                (json!(false), json!("first look")),
+                (json!(true), json!("second look"))
+            ]
+        );
+
+        let failed = b"HTTP/1.1 400 Bad Request\r\ncontent-length: 3\r\n\r\nbad".to_vec();
+        let (endpoint, server) = serve(vec![reply("history"), reply("prefix"), failed]);
+        let (mut agent, _scratch) = crate::agent::tests::agent(endpoint, "hook-post-compact");
+        let root = agent.root().to_owned();
+        let compacted = "cat > compacted.json; echo kept notes";
+        let (hooks, warnings) = read(json!({
+            "PostCompact": [
+                {"matcher": "manual", "hooks": command(compacted)},
+                {"matcher": "auto", "hooks": command("touch auto")},
+            ],
+            "StopFailure": [
+                {"matcher": "invalid_request", "hooks": command("cat > failed.json; exit 2")},
+                {"matcher": "rate_limit", "hooks": command("touch limited")},
+            ],
+        }));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        agent.set_hooks(std::sync::Arc::new(hooks));
+        let call = |id: &str| json!({"type": "function_call", "call_id": id, "name": "read", "arguments": json!({"path": format!("{id}.rs")}).to_string()});
+        let output = |id: &str, text: String| json!({"type": "function_call_output", "call_id": id, "output": text});
+        for item in [
+            json!({"role": "user", "content": "old goal"}),
+            json!({"type": "message", "role": "assistant", "content": [{"text": "noted"}]}),
+            json!({"role": "user", "content": "long task"}),
+            call("a"),
+            output("a", "x".repeat(90_000)),
+            call("b"),
+            output("b", "y".repeat(1000)),
+            json!({"type": "message", "role": "assistant", "content": [{"text": "read them"}]}),
+        ] {
+            agent.add(item).unwrap();
+        }
+        let mut ui = Recorder::default();
+        let compaction = agent.compact("", None, &mut ui, &cancel).unwrap().unwrap();
+        let notice = format!("notice PostCompact [{compacted}] completed successfully: kept notes");
+        assert!(ui.shown.contains(&notice), "{:?}", ui.shown);
+        let given: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("compacted.json")).unwrap())
+                .unwrap();
+        assert_eq!(given["hook_event_name"], "PostCompact");
+        assert_eq!(given["trigger"], "manual");
+        assert_eq!(given["compact_summary"], compaction.summary);
+        assert!(!root.join("auto").exists());
+        let Err(error) = agent.turn("go", &mut ui, &cancel) else {
+            panic!("the turn did not fail");
+        };
+        assert_eq!(server.join().unwrap().len(), 3);
+        let given: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("failed.json")).unwrap())
+                .unwrap();
+        assert_eq!(given["hook_event_name"], "StopFailure");
+        assert_eq!(given["error"], "invalid_request");
+        assert_eq!(given["error_details"], error.to_string());
+        assert_eq!(given["last_assistant_message"], "read them");
+        assert!(!root.join("limited").exists());
+        assert!(
+            ui.shown.iter().all(|shown| !shown.contains("hook error")),
+            "a StopFailure hook's exit is not read: {:?}",
+            ui.shown
+        );
+    }
+
+    #[test]
+    fn provider_errors_take_claude_codes_kinds() {
+        let kind = |message: &str| failure_kind(&AgentError::Provider(message.into()));
+        assert_eq!(
+            kind("HTTP 429 Too Many Requests: slow down"),
+            Some("rate_limit")
+        );
+        assert_eq!(
+            kind("HTTP 401 Unauthorized: no"),
+            Some("authentication_failed")
+        );
+        assert_eq!(
+            kind("HTTP 529 <unknown status code>: busy"),
+            Some("overloaded")
+        );
+        assert_eq!(
+            kind("HTTP 503 Service Unavailable: x"),
+            Some("server_error")
+        );
+        assert_eq!(kind("HTTP 404 Not Found: x"), Some("model_not_found"));
+        assert_eq!(kind("connection refused"), Some("unknown"));
+        let limit = AgentError::OutputLimit("cut".into());
+        assert_eq!(failure_kind(&limit), Some("max_output_tokens"));
+        let wrapped =
+            AgentError::CompactionFailed(Box::new(AgentError::Provider("HTTP 500 x".into())));
+        assert_eq!(failure_kind(&wrapped), Some("server_error"));
+        assert_eq!(failure_kind(&AgentError::Cancelled), None);
+        assert_eq!(failure_kind(&AgentError::Hook("blocked".into())), None);
     }
 
     #[test]

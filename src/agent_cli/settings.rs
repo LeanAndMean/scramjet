@@ -3408,15 +3408,16 @@ mod tests {
         let settings = settings_with(
             &scratch,
             r#"{"hooks": {"PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "cargo fmt"}]}],
-                "SubagentStop": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#,
+                "PermissionRequest": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#,
         );
         assert!(!settings.hooks.is_empty());
         assert_eq!(settings.warnings.len(), 1, "{:?}", settings.warnings);
         assert!(
             settings.warnings[0].ends_with(
-                ": hooks.SubagentStop is not run: Scramjet runs PreToolUse, PostToolUse, \
+                ": hooks.PermissionRequest is not run: Scramjet runs PreToolUse, PostToolUse, \
                  PostToolUseFailure, UserPromptSubmit, Stop, SessionStart, SessionEnd, \
-                 PreCompact, Notification hooks; ignored"
+                 PreCompact, Notification, PostCompact, StopFailure, SubagentStart, SubagentStop \
+                 hooks; ignored"
             ),
             "{:?}",
             settings.warnings

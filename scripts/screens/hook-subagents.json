@@ -1,0 +1,50 @@
+{
+  "size": "100x40",
+  "settings": {
+    "compaction": {"keepRecentTokens": 1},
+    "hooks": {
+      "SubagentStart": [
+        {"matcher": "reviewer", "hooks": [{"type": "command", "command": "mkdir -p /tmp/scramjet-hook-subagents; cat >> /tmp/scramjet-hook-subagents/log.jsonl; echo >> /tmp/scramjet-hook-subagents/log.jsonl; echo '{\"hookSpecificOutput\": {\"hookEventName\": \"SubagentStart\", \"additionalContext\": \"Run the tests before you answer.\"}}'"}]}
+      ],
+      "SubagentStop": [
+        {"matcher": "reviewer", "hooks": [{"type": "command", "command": "mkdir -p /tmp/scramjet-hook-subagents; input=$(cat); echo \"$input\" >> /tmp/scramjet-hook-subagents/log.jsonl; case $input in *'\"stop_hook_active\":false'*) echo 'Say whether the tests passed.' >&2; exit 2;; esac"}]}
+      ],
+      "PostCompact": [
+        {"hooks": [{"type": "command", "command": "mkdir -p /tmp/scramjet-hook-subagents; cat >> /tmp/scramjet-hook-subagents/log.jsonl; echo >> /tmp/scramjet-hook-subagents/log.jsonl; echo 'Summary saved for the notes.'"}]}
+      ],
+      "StopFailure": [
+        {"matcher": "rate_limit|invalid_request", "hooks": [{"type": "command", "command": "mkdir -p /tmp/scramjet-hook-subagents; cat >> /tmp/scramjet-hook-subagents/log.jsonl; echo >> /tmp/scramjet-hook-subagents/log.jsonl"}]}
+      ]
+    }
+  },
+  "config": {
+    "agents/reviewer.md": "---\nname: reviewer\ndescription: Reviews the change\ntools: read, ls\n---\n\nReview what you are asked to.\n"
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "replies": [
+    [{"call": "subagent", "arguments": {"agent": "reviewer", "task": "Review README.md"}}],
+    [{"text": "README.md looks fine."}],
+    [{"text": "README.md looks fine; the tests pass."}],
+    [{"text": "The reviewer found nothing."}],
+    [{"text": "The user asked for a review."}],
+    {"status": 400, "body": {"error": {"message": "the request was refused"}}}
+  ],
+  "steps": [
+    {"until": "[Skills]"},
+    {"sleep": 0.5},
+    {"type": "review the change\r"},
+    {"until": "The reviewer found nothing."},
+    {"sleep": 0.5},
+    {"shot": "reviewed"},
+    {"type": "/compact\r"},
+    {"until": "Summary saved"},
+    {"sleep": 0.5},
+    {"shot": "compacted"},
+    {"type": "again\r"},
+    {"until": "refused"},
+    {"sleep": 1},
+    {"shot": "failed"}
+  ]
+}

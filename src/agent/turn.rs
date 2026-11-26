@@ -158,6 +158,7 @@ impl Agent {
             match ran {
                 Err(AgentError::Paused) => return Err(AgentError::Paused),
                 Err(error) => {
+                    self.stop_failure_hooks(&error, cancel);
                     self.suggestion = suggest::Pending::Nothing;
                     self.interrupted = self.lifecycle.interrupted();
                     self.save_command()?;

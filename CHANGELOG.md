@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.383.0 — Hooks around subagents, after compactions and as turns fail
+
+### Added
+
+- Claude Code's `SubagentStart`, `SubagentStop`, `PostCompact` and `StopFailure` hooks: as each subagent starts (telling it more) and would finish (keeping it going, at most 8 times), after a compaction (what they print shown to you), and as a turn ends on the provider's error (matched on Claude Code's kinds, such as `rate_limit` or `invalid_request`), with Claude Code's input fields and matchers.
+
 ## 2.382.0 — Hooks as sessions end, before compactions and as you are told the agent waits
 
 ### Added

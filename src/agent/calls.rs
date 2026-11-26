@@ -650,6 +650,7 @@ impl Kit {
                 subagents: &self.subagents,
                 writable: self.writable.clone(),
                 sandbox: self.sandbox.as_ref(),
+                hooks: self.hooks.as_ref(),
             },
             hide_credentials: self.hide_credentials,
             planning: self.planning,

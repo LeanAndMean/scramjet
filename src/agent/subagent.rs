@@ -11,7 +11,7 @@ use super::{
     MAX_STEPS, Problem, Skills, ToolDetail, Usage,
     approvals::{self, Approvals},
     commands::{self, Sets},
-    instructions,
+    hooks, instructions,
     providers::{ModelInfo, Providers},
     rates,
     request::{self, Sending},
@@ -728,6 +728,8 @@ pub(super) struct Parent<'a> {
     pub writable: Vec<PathBuf>,
     /// The agent's own sandbox, outside which no child writes.
     pub sandbox: Option<&'a sandbox::Sandbox>,
+    /// The settings' hooks, whose `SubagentStart` and `SubagentStop` ones run for each child.
+    pub hooks: Option<&'a hooks::Bound>,
 }
 
 impl Parent<'_> {
@@ -1254,6 +1256,8 @@ enum Event {
     Item(ChildItem),
     /// Its usage so far, after each response.
     Usage(ChildUsage),
+    /// For the user, from its hooks.
+    Notice(String),
     Done(Run),
 }
 
@@ -1309,6 +1313,7 @@ fn run_jobs(
             match event {
                 Event::Item(item) => child.items.push(item),
                 Event::Usage(usage) => child.usage = usage,
+                Event::Notice(text) => ui.notice(&text),
                 Event::Done(run) => {
                     child.state = run.shown_state();
                     child.usage = run.shown_usage();
@@ -1356,6 +1361,14 @@ fn child_effort(requested: Option<&str>, parent: Option<&str>) -> Option<String>
     };
     // Scramjet's `off` is the endpoint's `none`.
     Some(if effort == "off" { "none" } else { effort }.to_owned())
+}
+
+/// An id for a child's hooks, as Claude Code gives each subagent one.
+fn agent_id() -> String {
+    let mut bytes = [0u8; 8];
+    let _ = getrandom::getrandom(&mut bytes);
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("a{hex}")
 }
 
 /// Says once what the low integrity level that subagents' commands run at on Windows leaves
@@ -1503,6 +1516,16 @@ uncommitted.",
         );
     }
     let mut input = vec![json!({"role":"user","content":task})];
+    let id = agent_id();
+    let notice = &mut |text: &str| report(Event::Notice(text.to_owned()));
+    if let Some(hooks) = parent.hooks {
+        let told = hooks.subagent_started(&agent.name, &id, parent.root, notice, cancel);
+        if !told.is_empty() {
+            let note = format!("<system-reminder>\n{}\n</system-reminder>", told.join("\n"));
+            input.push(json!({"role": "user", "content": note}));
+        }
+    }
+    let mut stop_blocks = 0;
     for _ in 0..MAX_STEPS {
         if cancel.load(Ordering::Relaxed) {
             run.error = Some((Some("aborted"), "Subagent was aborted".into()));
@@ -1584,7 +1607,38 @@ uncommitted.",
             return run;
         }
         if calls.is_empty() {
-            return run;
+            let notice = &mut |text: &str| report(Event::Notice(text.to_owned()));
+            let stopping =
+                (parent.hooks.filter(|_| !cancel.load(Ordering::Relaxed))).and_then(|hooks| {
+                    let (active, name) = (stop_blocks > 0, &agent.name);
+                    hooks.subagent_stopping(
+                        active,
+                        name,
+                        &id,
+                        &run.output,
+                        parent.root,
+                        notice,
+                        cancel,
+                    )
+                });
+            let Some((why, shown)) = stopping else {
+                return run;
+            };
+            stop_blocks += 1;
+            if stop_blocks > hooks::STOP_BLOCKS {
+                notice(&format!(
+                    "A SubagentStop hook blocked {} from finishing {stop_blocks} times in a row; it \
+                     finishes now.",
+                    agent.name
+                ));
+                return run;
+            }
+            notice(&format!(
+                "SubagentStop hook feedback ({}): {shown}",
+                agent.name
+            ));
+            input.push(json!({"role": "user", "content": why}));
+            continue;
         }
         let hidden =
             sandbox::Hidden::current(parent.providers.credential_files(), &reads).scratch(&scratch);
