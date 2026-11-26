@@ -2173,6 +2173,8 @@ fn run_process(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(&str),
 ) -> Result<Ran, String> {
+    let shell = (process.get_args().last())
+        .map_or_else(String::new, |last| last.to_string_lossy().into_owned());
     let (mut reader, writer) = std::io::pipe().map_err(|e| e.to_string())?;
     let (mut child, group) = {
         let mut process = match own_console {
@@ -2226,6 +2228,7 @@ fn run_process(
     };
     let started = Instant::now();
     let mut stopped = None;
+    let mut running = Vec::new();
     let mut reported = (0, started);
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
@@ -2241,6 +2244,9 @@ fn run_process(
             stopped = Some("cancelled by the user");
         } else if timeout.is_some_and(|timeout| started.elapsed() > timeout) {
             stopped = Some("timed out");
+        }
+        if stopped == Some("timed out") {
+            running = still_running(group.0, &shell);
         }
         if stopped.is_some() {
             group.kill();
@@ -2276,14 +2282,74 @@ fn run_process(
         status,
         elapsed: started.elapsed(),
         left,
+        running,
     })
+}
+
+const LISTED: usize = 20;
+
+/// Shortens a listed command line to 200 characters.
+#[cfg(unix)]
+fn command_line(args: &str) -> String {
+    let args = args.trim();
+    match args.char_indices().nth(200) {
+        Some((at, _)) => format!("{}…", &args[..at]),
+        None => args.to_owned(),
+    }
+}
+
+/// The command lines of what the process `leader` started that still run, itself included,
+/// parents first; those ending with `shell`, the last argument the leader was started with (bash's
+/// `scramjet-bash-…` name, which its forks and the sandbox around it share), and a fork with its
+/// parent's command line are left out.
+#[cfg(unix)]
+fn still_running(leader: u32, shell: &str) -> Vec<String> {
+    let listed = Command::new("ps")
+        .args(["-ww", "-A", "-o", "pid=", "-o", "ppid=", "-o", "args="])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|listed| String::from_utf8_lossy(&listed.stdout).into_owned())
+        .unwrap_or_default();
+    let processes: Vec<(u32, u32, &str)> = listed
+        .lines()
+        .filter_map(|line| {
+            let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
+            let (ppid, args) = rest.trim_start().split_once(char::is_whitespace)?;
+            Some((pid.parse().ok()?, ppid.parse().ok()?, args.trim()))
+        })
+        .collect();
+    let args_of = |pid: u32| processes.iter().find(|p| p.0 == pid).map(|p| p.2);
+    let mut running = Vec::new();
+    let mut next = vec![(leader, None)];
+    while let Some((pid, parent_args)) = next.pop() {
+        let Some(args) = args_of(pid) else {
+            continue;
+        };
+        let the_shell = !shell.is_empty() && args.ends_with(shell);
+        if !the_shell && Some(args) != parent_args {
+            running.push(command_line(args));
+        }
+        let children = processes.iter().filter(|p| p.1 == pid);
+        next.extend(children.rev().map(|p| (p.0, Some(args))));
+    }
+    running
+}
+
+/// The programs still running in the job of the command that led it.
+#[cfg(windows)]
+fn still_running(group: u32, _shell: &str) -> Vec<String> {
+    crate::os::group_left(group)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, program)| program)
+        .collect()
 }
 
 /// What still runs in process group `group` after the command that led it ended: the group, and
 /// each process's id and command line.
 #[cfg(unix)]
 fn left_running(group: u32) -> Option<String> {
-    const LISTED: usize = 20;
     let pid = rustix::process::Pid::from_raw(i32::try_from(group).ok()?)?;
     if rustix::process::test_kill_process_group(pid) == Err(rustix::io::Errno::SRCH) {
         return None;
@@ -2301,12 +2367,7 @@ fn left_running(group: u32) -> Option<String> {
         .filter_map(|line| {
             let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
             let (pgid, args) = rest.trim_start().split_once(char::is_whitespace)?;
-            let args = args.trim();
-            let args = match args.char_indices().nth(200) {
-                Some((at, _)) => format!("{}…", &args[..at]),
-                None => args.to_owned(),
-            };
-            (pgid == group_text).then(|| format!("{pid} {args}"))
+            (pgid == group_text).then(|| format!("{pid} {}", command_line(args)))
         })
         .collect();
     let mut text = format!(
@@ -2329,7 +2390,6 @@ fn left_running(group: u32) -> Option<String> {
 /// program.
 #[cfg(windows)]
 fn left_running(group: u32) -> Option<String> {
-    const LISTED: usize = 20;
     let processes = crate::os::group_left(group).filter(|left| !left.is_empty())?;
     let mut text = "Processes it started still run; `taskkill /F /PID PID` stops one \
                     (`taskkill //F //PID PID` in Git Bash):"
@@ -2410,6 +2470,8 @@ pub(super) struct Ran {
     elapsed: Duration,
     /// What it started that still runs after it ended (`left_running`).
     left: Option<String>,
+    /// What still ran when it timed out (`still_running`).
+    running: Vec<String>,
 }
 
 impl Ran {
@@ -2417,7 +2479,19 @@ impl Ran {
     /// failure with its reason after the output.
     pub fn tool_output(&self) -> Output {
         let ending = match (self.stopped, self.status.code()) {
-            (Some(reason), _) => format!("Command {reason} after {}s", self.elapsed.as_secs()),
+            (Some(reason), _) => {
+                let mut ending = format!("Command {reason} after {}s", self.elapsed.as_secs());
+                if !self.running.is_empty() {
+                    ending += "; these still ran and were stopped:";
+                }
+                for program in self.running.iter().take(LISTED) {
+                    ending += &format!("\n{program}");
+                }
+                if self.running.len() > LISTED {
+                    ending += &format!("\n… and {} more", self.running.len() - LISTED);
+                }
+                ending
+            }
             (None, Some(0)) => {
                 let mut text = if self.output.is_empty() {
                     "(no output)".into()
@@ -2903,6 +2977,42 @@ inline image size limit.]",
         cancel.store(true, Ordering::Relaxed);
         let aborted = read(json!({"path":"wide.txt"})).unwrap_err();
         assert_eq!(aborted, "Operation aborted");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_timed_out_command_names_what_still_ran() {
+        use super::super::sandbox::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-tool-hung-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let hidden = Hidden::under(&home, Vec::new());
+        let cancel = AtomicBool::new(false);
+        let sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        let piped = "{ echo started; sleep 31; } | tail -3";
+        let mut ways = vec!["plain", "hidden"];
+        if super::super::sandbox::available().is_ok() {
+            ways.push("sandboxed");
+        }
+        for way in ways {
+            for (command, expected) in [(piped, "sleep 31\ntail -3"), ("sleep 32", "sleep 32")] {
+                let call = call("bash", json!({"command":command,"timeout":1}));
+                let output = match way {
+                    "plain" => call.run(&root, None, &cancel, &mut |_| {}),
+                    "hidden" => call.run(&root, Some(&hidden), &cancel, &mut |_| {}),
+                    _ => call.run_in_sandbox(&root, &sandbox, &hidden, &cancel, &mut |_| {}),
+                }
+                .unwrap();
+                let ending = format!("; these still ran and were stopped:\n{expected}");
+                assert!(output.failed, "{way}: {}", output.text);
+                assert!(output.text.ends_with(&ending), "{way}: {}", output.text);
+            }
+        }
     }
 
     #[test]

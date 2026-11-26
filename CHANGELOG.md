@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.349.0 — What a timed-out command was still running
+
+### Changed
+
+- A command the agent runs that times out now says, after `Command timed out after Ns`, which of its programs were still running when it was stopped (`sleep 31`, `tail -3`), so the agent sees which part hung, and that a `| tail` held back its output, instead of guessing; the shell itself is left out. Hung commands in real sessions each cost the full 30 minutes, then the agent had only that line to go on.
+
 ## 2.348.0 — A file in /tmp the sandbox's commands do not see
 
 ### Changed
