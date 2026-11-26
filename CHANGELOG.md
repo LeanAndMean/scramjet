@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.381.0 — Claude Code's model in the settings
+
+### Added
+
+- Claude Code's `model` setting: an id, `provider/id` or one of its aliases (`sonnet`, `opus`, `haiku`, `best`, `opusplan`, `default`, with or without `[1m]`) names the model new sessions start with, found as `--model` finds one (`sonnet`: the newest Sonnet the providers offer). It is read before `defaultModel`, and when it is set, choosing a model saves the choice there.
+
 ## 2.380.0 — Hooks as prompts are sent, turns end and sessions start
 
 ### Added

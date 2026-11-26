@@ -547,6 +547,9 @@ pub(super) struct Settings {
     /// saves it; a `defaultModel` alone names a model as `--model` does.
     pub(super) default_provider: Option<String>,
     pub(super) default_model: Option<String>,
+    /// `model`, Claude Code's name for the model sessions start with: an id, `provider/id` or an
+    /// alias (`sonnet`, `opus`, …), found as `--model` finds one; read before `defaultModel`.
+    pub(super) claude_model: Option<String>,
     pub(super) startup_model: StartupModel,
     /// The file of the model last chosen in each project, `last-used-models.json` in the state
     /// directory, as Scramjet keeps it apart from the settings; `None`: none is kept.
@@ -727,6 +730,7 @@ impl Settings {
             default_thinking_level: None,
             default_provider: None,
             default_model: None,
+            claude_model: None,
             startup_model: StartupModel::PerDirectory,
             recall: None,
             tools: DEFAULT_TOOLS.map(str::to_owned).to_vec(),
@@ -1000,6 +1004,13 @@ impl Settings {
                 self.default_model = Some(model.clone())
             }
             Some(_) => wrong("defaultModel", "a model's id"),
+        }
+        match object.get("model") {
+            None => {}
+            Some(Value::String(model)) if !model.trim().is_empty() => {
+                self.claude_model = Some(model.trim().to_owned())
+            }
+            Some(_) => wrong("model", "a model's id or alias"),
         }
         match object.get("startupModel").map(|value| value.as_str()) {
             None => {}
@@ -2086,7 +2097,8 @@ impl Settings {
 
     /// The models chosen before that a launch in the project `root` may start a new session
     /// with, as Scramjet's, by reference (`provider/id`): the one last chosen there (with
-    /// `startupModel` `per-directory`), and `defaultProvider` and `defaultModel`.
+    /// `startupModel` `per-directory`), and Claude Code's `model` (as `claude_pattern` reads it),
+    /// else `defaultProvider` and `defaultModel`.
     pub(super) fn remembered_models(&self, root: &Path) -> (Option<String>, Option<String>) {
         let here = match (self.startup_model, &self.recall) {
             (StartupModel::PerDirectory, Some(recall)) => (recalled(recall))
@@ -2094,16 +2106,29 @@ impl Settings {
                 .and_then(|model| model.as_str().map(str::to_owned)),
             _ => None,
         };
-        let anywhere = (self.default_model.as_ref()).map(|model| match &self.default_provider {
-            Some(provider) => format!("{provider}/{model}"),
-            None => model.clone(),
-        });
+        let anywhere = match &self.claude_model {
+            Some(model) => claude_pattern(model),
+            None => (self.default_model.as_ref()).map(|model| match &self.default_provider {
+                Some(provider) => format!("{provider}/{model}"),
+                None => model.clone(),
+            }),
+        };
         (here, anywhere)
+    }
+
+    /// The key the model chosen anywhere was read from: Claude Code's `model`, which names one
+    /// as `--model` does, else `defaultModel`.
+    pub(super) fn default_model_key(&self) -> &'static str {
+        match self.claude_model {
+            Some(_) => "model",
+            None => "defaultModel",
+        }
     }
 
     /// The model `id` of `provider` (`None` for a model no provider offers), chosen during a
     /// session in the project `root`, remembered as Scramjet remembers one: as `defaultProvider`
-    /// and `defaultModel`, and as the one last chosen there. Saves what changed.
+    /// and `defaultModel` (as Claude Code's `model`, `provider/id`, when the file has that), and as
+    /// the one last chosen there. Saves what changed.
     pub(super) fn remember_model(
         &mut self,
         root: &Path,
@@ -2112,6 +2137,21 @@ impl Settings {
     ) -> io::Result<()> {
         let reference = provider.map_or_else(|| id.to_owned(), |p| format!("{p}/{id}"));
         let recalled = self.recall_model(root, &reference);
+        if self.claude_model.is_some() {
+            // As Claude Code's /model saves it, so that it and `defaultModel` never disagree.
+            let saved = match self.claude_model.as_deref() == Some(&*reference) {
+                true => Ok(()),
+                false => {
+                    self.claude_model = Some(reference.clone());
+                    self.update(|object| {
+                        object.insert("model".into(), json!(reference));
+                        object.remove("defaultProvider");
+                        object.remove("defaultModel");
+                    })
+                }
+            };
+            return recalled.and(saved);
+        }
         let same = self.default_provider.as_deref() == provider
             && self.default_model.as_deref() == Some(id);
         let saved = match same {
@@ -2721,6 +2761,23 @@ impl Settings {
 
 /// The models last chosen in each project that the file `path` keeps; none when it cannot be
 /// read, and the next choice replaces it, as they only choose a session's first model.
+/// The model Claude Code's `model` setting names, as a `--model` pattern: `[1m]` left out (a
+/// model's own window is used), `best` and `opusplan` as `opus` (no plan-mode switch), and
+/// `default`, the account's own choice there, as none.
+fn claude_pattern(model: &str) -> Option<String> {
+    let model = match model.len().checked_sub(4) {
+        Some(cut) if model.is_char_boundary(cut) && model[cut..].eq_ignore_ascii_case("[1m]") => {
+            &model[..cut]
+        }
+        _ => model,
+    };
+    match model.to_ascii_lowercase().as_str() {
+        "default" | "" => None,
+        "best" | "opusplan" => Some("opus".to_owned()),
+        _ => Some(model.to_owned()),
+    }
+}
+
 fn recalled(path: &Path) -> Map<String, Value> {
     let text = std::fs::read(path).ok();
     text.and_then(|text| serde_json::from_slice(&text).ok())
@@ -2858,6 +2915,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "defaultThinkingLevel",
             "defaultProvider",
             "defaultModel",
+            "model",
             "startupModel",
             "hideCredentials",
             "steeringMode",
@@ -4491,6 +4549,47 @@ or false; ignored"
                     r#"{shown_path}: startupModel must be "per-directory" or "global"; ignored"#
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn claude_codes_model_is_read_before_scramjets_names_and_saved_in_their_place() {
+        let scratch = Scratch::new("claude-model");
+        let here = Path::new("/work/here");
+        let anywhere = |text: &str| settings_with(&scratch, text).remembered_models(here).1;
+        let both = r#"{"defaultProvider": "p", "defaultModel": "m", "model": "sonnet"}"#;
+        assert_eq!(anywhere(both).as_deref(), Some("sonnet"));
+        assert_eq!(settings_with(&scratch, both).default_model_key(), "model");
+        for (alias, pattern) in [
+            ("opus[1m]", Some("opus")),
+            ("claude-opus-5-5[1M]", Some("claude-opus-5-5")),
+            ("best", Some("opus")),
+            ("opusplan[1m]", Some("opus")),
+            ("default", None),
+            (
+                "anthropic/claude-haiku-5-5",
+                Some("anthropic/claude-haiku-5-5"),
+            ),
+        ] {
+            let text = format!(r#"{{"defaultModel": "m", "model": "{alias}"}}"#);
+            assert_eq!(anywhere(&text).as_deref(), pattern, "{alias}");
+        }
+        let wrong = settings_with(&scratch, r#"{"defaultModel": "m", "model": 5}"#);
+        assert_eq!(wrong.remembered_models(here).1.as_deref(), Some("m"));
+        assert_eq!(wrong.default_model_key(), "defaultModel");
+        assert!(wrong.warnings[0].ends_with("model must be a model's id or alias; ignored"));
+        // Choosing a model saves it as `model`, and the two keys that would disagree go.
+        let mut settings = settings_with(&scratch, both);
+        settings
+            .remember_model(here, Some("anthropic"), "claude-opus-5-5")
+            .unwrap();
+        let path = scratch.0.join("settings.json");
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved, json!({"model": "anthropic/claude-opus-5-5"}));
+        let later = Settings::read(Some(path));
+        assert_eq!(
+            later.remembered_models(here).1.as_deref(),
+            Some("anthropic/claude-opus-5-5")
         );
     }
 

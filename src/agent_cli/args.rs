@@ -444,7 +444,8 @@ Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFi
 effortLevel (else defaultThinkingLevel); tools, the agent's coding tools among read, bash, edit,
 write (the default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
-list and the agent save; and startupModel: per-directory (new sessions start with the model
+list and the agent save (Claude Code's model, an id or alias such as sonnet, read before them
+and saved in their place when set); and startupModel: per-directory (new sessions start with the model
 chosen last in their project, kept in $XDG_STATE_HOME/scramjet/last-used-models.json) or
 global; retry: enabled (true; false: no retry, and a provider's Retry-After is neither kept
 for other requests nor waited out), maxRetries (10), baseDelayMs (2000, doubled at each retry up to

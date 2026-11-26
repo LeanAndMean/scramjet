@@ -759,25 +759,39 @@ fn remembered(settings: &Settings, agent: &Agent, warnings: &mut Vec<String>) ->
     }
     let listed = agent.models();
     let path = settings.shown_path().unwrap_or_default();
+    let key = settings.default_model_key();
     let remembered = [
         here.map(|model| {
             (
                 format!("{model}, the model last chosen in this project,"),
                 model,
+                false,
             )
         }),
-        anywhere.map(|model| (format!("settings: {path}: defaultModel {model}"), model)),
+        anywhere.map(|model| {
+            let what = format!("settings: {path}: {key} {model}");
+            (what, model, key == "model")
+        }),
     ];
-    for (what, model) in remembered.into_iter().flatten() {
+    for (what, model, named) in remembered.into_iter().flatten() {
         if listed.is_none() {
             return Some(model);
         }
-        if let Some(reference) = agent.offered_model(&model) {
+        if let Some(reference) = offered(agent.providers(), &model, named) {
             return Some(reference);
         }
         warnings.push(format!("{what} is not one the providers offer; not used"));
     }
     None
+}
+
+/// The reference of the model `model`, chosen before, if the providers offer it: as written, or
+/// when `named` (Claude Code's `model` setting, which takes aliases) as `--model` finds one.
+pub(super) fn offered(providers: &Providers, model: &str, named: bool) -> Option<String> {
+    (providers.offered(model)).or_else(|| {
+        let found = named.then(|| scope::named(model, &providers.options()))??;
+        Some(found.model)
+    })
 }
 
 /// Ctrl-C sets `cancel`, and a second one while it is set exits; Ctrl+T during a turn (SIGQUIT,

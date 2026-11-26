@@ -25,6 +25,7 @@ There is no project settings file: what `/sandbox` changes for one project is ke
 | `startupModel` | `"per-directory"`, `"global"` | `"per-directory"` | The model a new session starts with unless `--model` names one: the one last chosen in this project, else anywhere, or the one last chosen anywhere. |
 | `defaultProvider` | a provider's name | none | Written when you choose a model: the provider of the one last chosen anywhere. |
 | `defaultModel` | a model's id | none | Written with `defaultProvider`. On its own it names a model as `--model` does. |
+| `model` | a model's id, `provider/id` or Claude Code's alias (`sonnet`, `opus`, `haiku`, `fable`, `best`, `opusplan`, `default`, each with or without `[1m]`) | none | Claude Code's name for the model sessions start with, found as `--model` finds one (`sonnet`: the newest whose id holds it); read before `defaultProvider` and `defaultModel`, and when it is set `/model` and the others save their choice here, as `provider/id`, removing those two. `[1m]` is left out (a model's own window is used), `best` and `opusplan` are `opus`, `default` names none. |
 | `enabledModels` | a list of patterns | all models | The models Ctrl+P cycles through: each a model's id, part of its id or name, or `provider/id`. `--models` replaces it for a run. |
 | `modelCatalogs` | a list of URLs | none | Model catalogs in models.dev's `api.json` shape whose providers and models are offered; `scramjet catalog add URL` and `remove URL` edit it ([model catalogs](providers.md#model-catalogs)). |
 

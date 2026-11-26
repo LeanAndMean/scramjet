@@ -433,15 +433,20 @@ fn models(setup: &Setup) -> Check {
 }
 
 /// The model a session here has, or starts with: the one last chosen in the project, else the
-/// settings' `defaultModel`; with a note for each of those no provider offers.
+/// settings' `model` or `defaultModel`; with a note for each of those no provider offers.
 fn starting(setup: &Setup) -> (Option<String>, Vec<String>) {
     if let Some(model) = &setup.model {
         return (Some(model.clone()), Vec::new());
     }
     let (here, anywhere) = setup.settings.remembered_models(setup.root);
+    let named = setup.settings.default_model_key() == "model";
     let mut notes = Vec::new();
-    let starts = here.into_iter().chain(anywhere).find_map(|model| {
-        let offered = setup.providers.offered(&model);
+    let chosen = here.map(|model| (model, false));
+    let starts = chosen
+        .into_iter()
+        .chain(anywhere.map(|model| (model, named)));
+    let starts = starts.into_iter().find_map(|(model, named)| {
+        let offered = super::offered(setup.providers, &model, named);
         if offered.is_none() {
             notes.push(format!("{model}, chosen before, is not offered now"));
         }
