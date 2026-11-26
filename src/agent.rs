@@ -8,6 +8,7 @@ mod batch;
 mod builtin;
 mod calls;
 mod catalog;
+mod claude_commands;
 mod client;
 pub mod codex;
 mod commands;
@@ -69,6 +70,7 @@ pub use autonomy::{
     Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting, Suggestion,
 };
 pub use catalog::{Catalog, Offered, check_url as check_catalog_url};
+pub use claude_commands::{ClaudeCommand, ClaudeCommands};
 pub use client::{StreamProgress, download};
 pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, sets_in};
 pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
@@ -210,7 +212,8 @@ static BARE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(
 /// For `--bare`: nothing is looked for in the user's own directories, but the settings, models
 /// and credentials: no context files, `SYSTEM.md` or `APPEND_SYSTEM.md` of the configuration
 /// directory or the home directory, no skills of the configuration directory or
-/// `~/.agents/skills` or `~/.claude/skills`, no loose agents of the user's. What the settings list still loads.
+/// `~/.agents/skills` or `~/.claude/skills`, no commands of `~/.claude/commands`, no loose agents
+/// of the user's. What the settings list still loads.
 pub fn set_bare() {
     BARE.store(true, std::sync::atomic::Ordering::Relaxed);
 }
@@ -632,6 +635,8 @@ pub struct Agent {
     conversation: Vec<Value>,
     prompts: Vec<String>,
     commands: Commands,
+    /// Claude Code's commands, from `.claude/commands`.
+    claude_commands: ClaudeCommands,
     skills: Skills,
     /// The command the last command prompt ran, until it is reported or left.
     lifecycle: status::Lifecycle,
@@ -903,6 +908,7 @@ impl Agent {
             context_files: Vec::new(),
             prompt_files: Default::default(),
             commands: Commands::default(),
+            claude_commands: ClaudeCommands::default(),
             skills: Skills::default(),
             lifecycle,
             completed: None,
@@ -1134,6 +1140,7 @@ impl Agent {
         let config = &self.config;
         self.sets = Sets::for_project(&config.command_sets, &config.root);
         self.commands = Commands::discover(&self.sets);
+        self.claude_commands = ClaudeCommands::discover(&config.root);
         self.skills = Skills::discover(
             &config.skills,
             self.sets.list(),
@@ -1732,6 +1739,11 @@ impl Agent {
         &self.commands
     }
 
+    /// Claude Code's commands found at start or `reload`, which `/<name>` runs.
+    pub fn claude_commands(&self) -> &ClaudeCommands {
+        &self.claude_commands
+    }
+
     /// The skills found at start or `reload`, which `/skill:<name>` runs.
     pub fn skills(&self) -> &Skills {
         &self.skills
@@ -1779,6 +1791,7 @@ impl Agent {
         };
         let mut problems = prefixed(self.commands.warnings(), "scramjet: ");
         problems.extend(prefixed(&discovery.diagnostics, "agents: "));
+        problems.extend(prefixed(self.claude_commands.warnings(), "commands: "));
         problems.extend(prefixed(self.skills.warnings(), "skills: "));
         problems.extend(prefixed(&self.prompt_files.1, "instructions: "));
         problems.extend(edges.diagnostics);
@@ -1795,7 +1808,9 @@ impl Agent {
     /// The text `prompt` sends when it runs a command or a skill, `None` when it is sent as typed.
     pub fn expand(&mut self, prompt: &str) -> Option<String> {
         self.commands.refresh(prompt);
-        (self.commands.expand(prompt)).or_else(|| self.skills.expand(prompt)?.ok())
+        (self.commands.expand(prompt))
+            .or_else(|| self.claude_commands.expand(prompt)?.ok())
+            .or_else(|| self.skills.expand(prompt)?.ok())
     }
 
     /// Sends `files` with the next prompt `turn` runs, as Scramjet sends the command line's `@`

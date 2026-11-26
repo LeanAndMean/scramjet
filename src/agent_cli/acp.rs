@@ -2410,7 +2410,7 @@ impl Acp {
         }
     }
 
-    /// Lists the command sets' commands and the skills for the client.
+    /// Lists the command sets' commands, Claude Code's and the skills for the client.
     fn commands(&mut self) {
         let agent = &self.session.agent;
         let commands = (agent.commands().list().iter())
@@ -2423,10 +2423,17 @@ impl Acp {
                 }
                 listed
             });
+        let claude = super::interactive::claude_commands(agent).map(|command| {
+            let mut listed = json!({"name": command.name, "description": command.description});
+            if let Some(hint) = &command.argument_hint {
+                listed["input"] = json!({"hint": hint});
+            }
+            listed
+        });
         let skills = (agent.skills().list().iter()).map(|skill| {
             json!({"name": format!("skill:{}", skill.name), "description": skill.description})
         });
-        let listed: Vec<Value> = commands.chain(skills).collect();
+        let listed: Vec<Value> = commands.chain(claude).chain(skills).collect();
         let update =
             json!({"sessionUpdate": "available_commands_update", "availableCommands": listed});
         self.ui.update(update);

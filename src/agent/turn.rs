@@ -81,15 +81,16 @@ impl Agent {
 
     /// The message `prompt` sends, typed or queued during a turn, starting the command it names
     /// as Scramjet's input handling does: a command or skill prompt sends its expansion, and the
-    /// prompt as typed is kept for recall and display. A skill whose file cannot be read now is
-    /// said so, and the prompt sent as typed, as Pi does.
+    /// prompt as typed is kept for recall and display; one of Claude Code's commands is sent as
+    /// a skill is, starting no command. A skill or Claude Code command whose file cannot be read
+    /// now is said so, and the prompt sent as typed, as Pi does.
     fn user_message(&mut self, prompt: &str, ui: &mut dyn AgentUi) -> Value {
         self.commands.refresh(prompt);
         let command = (self.commands.named(prompt)).map(|command| command.name.clone());
         let skill = command
             .is_none()
-            .then(|| self.skills.expand(prompt))
-            .flatten();
+            .then(|| (self.claude_commands.expand(prompt)).or_else(|| self.skills.expand(prompt)));
+        let skill = skill.flatten();
         self.lifecycle.prompted(match (&command, &skill) {
             (Some(name), _) => status::Prompt::Command(name),
             (None, None) if prompt.starts_with('/') => status::Prompt::Unknown,
@@ -1185,6 +1186,31 @@ mod tests {
         show_items(&conversation, None, &mut shown);
         assert_eq!(shown.shown[0], format!("command {typed} sent {expansion}"));
         assert!(shown.shown.contains(&"prompt /sjrstest:other x".to_owned()));
+    }
+
+    #[test]
+    fn a_claude_code_command_sends_its_body_and_starts_no_command() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "one",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, scratch) = agent(endpoint, "claude-command");
+        let directory = scratch.0.join(".claude").join("commands");
+        std::fs::create_dir_all(&directory).unwrap();
+        let text = "---\ndescription: Fix an issue\n---\nFix issue $0, then $ARGUMENTS[1].";
+        std::fs::write(directory.join("fix.md"), text).unwrap();
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent.turn("/fix 42 test", &mut ui, &cancel).unwrap();
+        // One request: no status check follows, as no command ran.
+        let bodies = server.join().unwrap();
+        let sent = "Fix issue 42, then test.";
+        assert_eq!(bodies[0]["input"], json!([{"role":"user","content":sent}]));
+        assert_eq!(agent.prompts(), ["/fix 42 test"]);
+        let mut shown = Recorder::default();
+        agent.show_conversation(&mut shown);
+        assert_eq!(shown.shown[0], format!("command /fix 42 test sent {sent}"));
     }
 
     #[test]

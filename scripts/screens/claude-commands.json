@@ -1,0 +1,56 @@
+{
+  "size": "100x30",
+  "files": {
+    ".claude/commands/quality-review.md": "---\ndescription: \"Audit the selection against the engineering standards.\"\nargument-hint: \"[files]\"\n---\n\n# Review: Quality\n\nAudit $ARGUMENTS against our rules: small functions, no dead code.\n",
+    ".claude/commands/docs/wiki-review.md": "# Review the wiki branch\n\nReview the changes on this branch.\n",
+    ".claude/commands/review.md": "Taken by the built-in /review, so never listed.\n"
+  },
+  "replies": [
+    [
+      {
+        "text": "All checks passed."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "gpt-6-luna"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-commands-start"
+    },
+    {
+      "type": "/qu"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-commands-list"
+    },
+    {
+      "type": "\u0015/docs"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-commands-nested"
+    },
+    {
+      "type": "\u0015/quality-review src/app.ts\r"
+    },
+    {
+      "until": "All checks passed."
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-commands-ran"
+    }
+  ]
+}

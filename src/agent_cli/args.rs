@@ -191,9 +191,9 @@ but to NO_PROXY's hosts and this machine.
                          and auth.json, as Claude Code's --bare: no AGENTS.md, CLAUDE.md,
                          SYSTEM.md or APPEND_SYSTEM.md of ~/.config/scramjet or of the home
                          directory, no skills of ~/.config/scramjet/skills, ~/.agents/skills or
-                         ~/.claude/skills, no agents of ~/.config/scramjet/agents; what the
-                         settings list (command sets, skills, MCP servers) and the project's
-                         own still load
+                         ~/.claude/skills, no commands of ~/.claude/commands, no agents of
+                         ~/.config/scramjet/agents; what the settings list (command sets,
+                         skills, MCP servers) and the project's own still load
   --ephemeral            leave nothing behind, as Codex's --ephemeral: no session saved, as
                          with --no-session; the settings' changes, the models last chosen, the
                          output rates, the quotas and the agents approved last for the run only.

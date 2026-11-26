@@ -606,6 +606,11 @@ impl Commands {
         self.get(short.map_or(name, |(command, _)| command))
     }
 
+    /// Whether `/<name>` runs one of these commands, by its name or a short one.
+    pub fn takes(&self, name: &str) -> bool {
+        self.named(&format!("/{name}")).is_some()
+    }
+
     /// Takes the command `prompt` names again from its file, so that one edited since start or
     /// `/reload` runs as edited, its `next:` block included; one whose file no longer reads as
     /// that command stays as found.
@@ -942,7 +947,7 @@ pub(super) fn split_frontmatter(content: &str) -> (String, String) {
 
 /// The arguments of a command as Scramjet splits them: at spaces and tabs, where quotes group
 /// words and are removed.
-fn split_args(text: &str) -> Vec<String> {
+pub(super) fn split_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut quote = None;

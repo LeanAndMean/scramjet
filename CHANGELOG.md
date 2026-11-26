@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.390.0 — Claude Code's commands
+
+### Added
+
+- Claude Code's commands run here too: each `.md` file of the project's `.claude/commands` (and of the directories above it up to the Git root) and of your `~/.claude/commands` is `/NAME`, one in a subdirectory `/DIR:NAME`, its arguments filled in as Claude Code fills them (`$ARGUMENTS`, `$0`, `$ARGUMENTS[1]`, named `arguments`). The banner lists them under `[Commands]`, and the `/` list and ACP clients with the other commands. `--bare` leaves out `~/.claude/commands`.
+
 ## 2.389.0 — Claude Code's skills
 
 ### Added

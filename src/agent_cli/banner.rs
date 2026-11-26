@@ -58,6 +58,9 @@ pub(super) struct Opening {
     pub(super) sets: Vec<(String, PathBuf)>,
     pub(super) providers: Vec<(String, PathBuf)>,
     pub(super) skills: Vec<(String, PathBuf)>,
+    /// Claude Code's commands that run, as `/<name>`, with where each is.
+    pub(super) claude_commands: Vec<(String, PathBuf)>,
+    /// The command sets' commands and Claude Code's.
     pub(super) commands: usize,
     pub(super) agents: usize,
 }
@@ -291,6 +294,7 @@ fn sections(opening: &Opening, width: usize, full: bool) -> Vec<String> {
     for (heading, listed) in [
         ("Context", context),
         ("Command sets", named(&opening.sets)),
+        ("Commands", named(&opening.claude_commands)),
         ("Providers", named(&opening.providers)),
         ("Skills", named(&opening.skills)),
     ] {
@@ -347,11 +351,13 @@ fn card(opening: &Opening, width: usize, full: bool, marks: Marks) -> Vec<String
     }
     if full {
         let listed = (opening.sets.iter())
+            .chain(&opening.claude_commands)
             .chain(&opening.providers)
             .chain(&opening.skills);
         let widest = listed.map(|(name, _)| columns(name)).max().unwrap_or(0);
         let lists = [
             ("sets", &opening.sets),
+            ("commands", &opening.claude_commands),
             ("providers", &opening.providers),
             ("skills", &opening.skills),
         ];
@@ -474,6 +480,7 @@ mod tests {
             sets: vec![("mach12".into(), "/sets/mach12".into())],
             providers: Vec::new(),
             skills: vec![("writing".into(), "/skills/writing/SKILL.md".into())],
+            claude_commands: Vec::new(),
             commands: 14,
             agents: 3,
         }
@@ -598,6 +605,24 @@ mod tests {
         );
         assert!(
             rows.iter().any(|row| row.contains("1 command set ·")),
+            "{rows:#?}"
+        );
+    }
+
+    #[test]
+    fn claude_codes_commands_are_listed_after_the_command_sets() {
+        let mut opening = sample();
+        let path = "/work/words/.claude/commands/fix.md";
+        opening.claude_commands = vec![("/fix".into(), path.into())];
+        let rows = shown(Banner::Header, &opening, 100, false);
+        assert_eq!(
+            rows[6..11],
+            ["[Command sets]", "  mach12", "", "[Commands]", "  /fix"]
+        );
+        let rows = shown(Banner::Card, &opening, 100, true);
+        assert!(
+            rows.iter()
+                .any(|row| row.contains(&format!("commands  /fix     {path}"))),
             "{rows:#?}"
         );
     }

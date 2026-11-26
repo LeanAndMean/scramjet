@@ -16,8 +16,8 @@ use super::{
     editor, footer, installed, keymap, scope, select, settings, style, terminal, tree, update,
 };
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Aside, Attached, Choice, Command, EarlierSession, Installed,
-    Problem,
+    Agent, AgentError, AgentUi, Aside, Attached, Choice, ClaudeCommand, Command, EarlierSession,
+    Installed, Problem,
 };
 use std::{
     collections::HashMap,
@@ -640,7 +640,11 @@ impl Interactive {
             skills: (self.session.agent.skills().list().iter())
                 .map(|skill| named(&skill.name, &skill.path))
                 .collect(),
-            commands: self.session.agent.commands().list().len(),
+            claude_commands: (claude_commands(&self.session.agent))
+                .map(|command| named(&format!("/{}", command.name), &command.path))
+                .collect(),
+            commands: self.session.agent.commands().list().len()
+                + claude_commands(&self.session.agent).count(),
             agents: installed.agents.len(),
         }
     }
@@ -949,11 +953,13 @@ fn add_shells(agent: &mut Agent, screen: &mut Handle) {
 }
 
 /// What the loaded settings complete: in the `/` list after the built-in commands, the loaded
-/// commands that are not only delegated, then the skills as `skill:<name>`; and the MCP servers.
+/// commands that are not only delegated, Claude Code's commands that neither a built-in nor one
+/// of those takes, then the skills as `skill:<name>`; and the MCP servers.
 pub(super) fn completions(agent: &Agent) -> Completions {
     let commands = (agent.commands().list().iter())
         .filter(|command| !command.delegate_only)
         .map(command_entry)
+        .chain(claude_commands(agent).map(claude_entry))
         .chain(
             (agent.skills().list().iter())
                 .map(|skill| (format!("skill:{}", skill.name), skill.description.clone())),
@@ -963,6 +969,23 @@ pub(super) fn completions(agent: &Agent) -> Completions {
         commands,
         mcp_servers: agent.mcp_names(),
     }
+}
+
+/// Claude Code's commands that `/<name>` runs: those whose names no built-in command and no
+/// command set's command takes.
+pub(super) fn claude_commands(agent: &Agent) -> impl Iterator<Item = &ClaudeCommand> {
+    (agent.claude_commands().list().iter()).filter(|command| {
+        Builtin::parse(&format!("/{}", command.name)).is_none()
+            && !agent.commands().takes(&command.name)
+    })
+}
+
+fn claude_entry(command: &ClaudeCommand) -> (String, String) {
+    let description = match &command.argument_hint {
+        Some(hint) => format!("{hint} — {}", command.description),
+        None => command.description.clone(),
+    };
+    (command.name.clone(), description)
 }
 
 /// A loaded command's row in the `/` list: the argument hint before the description, as

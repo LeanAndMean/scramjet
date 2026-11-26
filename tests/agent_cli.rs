@@ -3165,7 +3165,9 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
     let scratch =
         Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-{}", std::process::id())));
     let project = scratch.0.join("project");
-    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(project.join(".claude/commands")).unwrap();
+    let fix = "---\nargument-hint: \"[issue]\"\n---\nFix issue $ARGUMENTS";
+    std::fs::write(project.join(".claude/commands/fix.md"), fix).unwrap();
     let (port, bodies) = serve_bash_call("sleep 2; echo from-acp");
     let (mut child, mut stdin, messages) = acp(&scratch.0, port);
     // Framing: a line that is not JSON, a request before `initialize`.
@@ -3200,6 +3202,13 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
         "{commands}"
     );
     assert!(commands["params"]["_meta"].is_null(), "{commands}");
+    // Claude Code's commands are listed with the others.
+    let listed = commands["params"]["update"]["availableCommands"]
+        .as_array()
+        .unwrap();
+    let claude = serde_json::json!({"name": "fix", "description": "Fix issue $ARGUMENTS",
+        "input": {"hint": "[issue]"}});
+    assert!(listed.contains(&claude), "{commands}");
     // The window shows from the start, before any reply.
     let usage = next(&messages);
     let update = &usage["params"]["update"];
