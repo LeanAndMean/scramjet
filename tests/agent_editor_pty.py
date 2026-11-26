@@ -678,6 +678,25 @@ def full_screen(columns=60, rows=24):
             return shown()
         return shown, on_screen
     return make
+# A key pressed after the footer is drawn but before the session first waits for a prompt.
+NOT_READY = 'Busy: the session is not ready for a prompt yet'
+
+
+def once_ready(read, send, shown, key, taken):
+    """Sends `key`, again each time the screen refused it as `NOT_READY`, until `taken()`."""
+    end = time.monotonic() + 20
+    send(key)
+    while not taken():
+        rows = shown()
+        assert time.monotonic() < end, (key, '\n'.join(rows))
+        if NOT_READY in '\n'.join(rows):
+            while NOT_READY in '\n'.join(shown()):
+                assert time.monotonic() < end, (key, '\n'.join(shown()))
+                read(.05)
+            send(key)
+        read(.05)
+
+
 def until_file(path):
     """Waits until a program the agent started has written `path`."""
     end = time.monotonic() + 10
@@ -2723,7 +2742,8 @@ def ctrl_p_cycles_models(read, until, send, output):
     # A new session starts with the first model in the scope, at the effort its pattern sets.
     footer_ends(read, output, 'gpt-6-terra \u2022 high', columns=80)
     assert 'settings: enabledModels: no models match pattern "nothing"' in '\n'.join(rows), rows
-    send(b'\x10')
+    once_ready(read, send, shown, b'\x10',
+               lambda: (Screen(output, 80, 24).footer() or ['', ''])[1].endswith('gpt-6-luna \u2022 low'))
     footer_shows(read, output, [project, stats('0', 'gpt-6-luna \u2022 low', 80)], columns=80)
     assert 'Switched' not in '\n'.join(shown()), shown()
     # Shift+Ctrl+P, as a terminal reporting modified keys sends it, goes back.
@@ -2767,8 +2787,7 @@ def ctrl_p_in_a_scope_of_one(read, until, send, output):
     rows = on_screen('\u2500' * 20)
     footer_ends(read, output, 'gpt-6-terra \u2022 medium', columns=80)
     assert '--models: no models match pattern "x"' in '\n'.join(rows), rows
-    send(b'\x10')
-    on_screen('Only one model in scope')
+    once_ready(read, send, shown, b'\x10', lambda: 'Only one model in scope' in '\n'.join(shown()))
     send(b'\x04')
 
 
