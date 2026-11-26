@@ -92,6 +92,9 @@ struct Fence {
     /// A block of lines indented by `indent`, which has no fence and ends at a line indented
     /// less; its blank lines wait, as Scramjet shows only those between its lines.
     indented: bool,
+    /// An indented block a quote's lazy line opened, as marked's, which keeps the quote's next
+    /// lazy lines in the quote.
+    lazy: bool,
 }
 
 /// An open list. As Scramjet's, each level is four columns in, an ordered list is numbered from
@@ -132,6 +135,9 @@ pub struct Markdown {
     /// The current line came to this quote's renderer without its `>`, as a lazy line. As
     /// Scramjet's, it ends a table's rows, and is no delimiter under a header that had its `>`.
     lazily: bool,
+    /// The current line came lazily, as each since the last line with its `>`, all indented by
+    /// four columns or more: as marked's, indented code going on with the quote's paragraph.
+    folding: bool,
     /// The current line's indent as written.
     indent: usize,
     /// The ended line was blank; and the blank lines whose newlines wait for the next line.
@@ -263,6 +269,7 @@ impl Markdown {
             lists: Vec::new(),
             lazy: false,
             lazily: false,
+            folding: false,
             indent: 0,
             blank: false,
             blanks: 0,
@@ -379,6 +386,7 @@ impl Markdown {
                     indent: self.indent,
                     shown: fence.len() - marker.len(),
                     indented: false,
+                    lazy: false,
                 };
                 let (shown, info) = match self.block.take() {
                     Some(open) => (open, ""),
@@ -477,12 +485,22 @@ impl Markdown {
         let Some(mut quote) = self.quote.take() else {
             return String::new();
         };
-        // A table's lines held until this blank or lazy line show with it.
-        let mut text = quote.inner.end_line();
+        // A table's lines held until this blank or lazy line show with it; a line not started
+        // is not ended, so that a code block's fence closes on it, ending it as Scramjet's.
+        let inner = &mut quote.inner;
+        let fresh = !inner.ended && inner.line == Line::Start && inner.pending.is_empty();
+        let mut text = match fresh {
+            true => String::new(),
+            false => inner.end_line(),
+        };
+        let closed = fresh && inner.block.is_some();
         // An item's quote that showed nothing still shows the item, as Scramjet's.
-        let ended = quote.inner.blank || quote.inner.blanks > 0;
-        quote.inner.blanks = 0;
-        text += &quote.inner.finish();
+        let ended = inner.blank || inner.blanks > 0;
+        inner.blanks = 0;
+        text += &inner.finish();
+        if closed {
+            text.push('\n');
+        }
         let shown = quote.show(&text);
         match quote.bullet {
             Some(bullet) => bullet + if ended { "\n" } else { "" },
@@ -493,13 +511,17 @@ impl Markdown {
     /// Whether a line of text or a table's goes on in the paragraph or table the text before
     /// ended in, as CommonMark's lazy lines, in the innermost quote.
     fn continues(&self) -> bool {
-        if self.blank || self.blanks > 0 || self.block.is_some() {
+        let lazy_code = |fence: Fence| fence.lazy && self.lazily;
+        if self.blank || self.blanks > 0 || self.block.is_some_and(|fence| !lazy_code(fence)) {
             return false;
         }
         match &self.quote {
             Some(quote) => quote.inner.continues(),
+            None if self.block.is_some() => true,
             // As Scramjet's, a quoted table's rows end there, and the line goes on in the quote.
             None if self.table.is_some() => true,
+            // As marked's, whose quotes take lazy lines after a heading or rule too, as blocks.
+            None if matches!(self.previous, Some(Block::Heading | Block::Rule)) => true,
             None => self.lazy && matches!(self.previous, Some(Block::Paragraph | Block::List)),
         }
     }
@@ -692,10 +714,10 @@ impl Markdown {
         let item = self.lists[..self.within(indent)].last();
         let relative = indent - item.map_or(0, |list| list.written);
         // As marked's tables, whose rows go on in any line that starts no other block.
-        let row = (self.table.as_ref())
-            .is_some_and(|table| table.rows.is_some() && (table.lazy || !self.lazily));
+        let rows = (self.table.as_ref()).filter(|table| table.rows.is_some());
+        let row = rows.is_some_and(|table| table.lazy || !self.lazily);
         // As CommonMark's indented code, which cannot go on with a paragraph's text.
-        if relative >= 4 && (!self.lazy || row) {
+        if relative >= 4 && (!self.lazy || rows.is_some()) {
             return Some(Kind::Indented);
         }
         if relative < 4 {
@@ -834,18 +856,27 @@ impl Markdown {
             Kind::Text | Kind::Lazy | Kind::Quote | Kind::Held if lazy => {}
             _ => self.lists.truncate(within),
         }
+        let folded = std::mem::take(&mut self.folding) && relative >= 4;
         if matches!(kind, Kind::Indented) {
             return false;
         }
+        // As marked's, a lazy line goes on in the quote with its columns past its item's text.
+        if matches!(kind, Kind::Lazy) {
+            self.pending.drain(..indent - relative);
+            return false;
+        }
+        self.folding = folded && matches!(kind, Kind::Text);
         // As marked's, which keeps a text line's columns past its item's indent, but for four
         // it takes as indented code going on with the text.
         let kept = match (kind, relative) {
-            (Kind::Text, 4..) => relative - 4,
+            (Kind::Text, 4..) if self.folding || !self.lists.is_empty() => relative - 4,
             (Kind::Text, _) => relative,
             _ => 0,
         };
-        if let Some(list) = self.lists.last() {
-            self.pending = " ".repeat(list.shown + kept) + &self.pending[indent..];
+        match self.lists.last() {
+            Some(list) => self.pending = " ".repeat(list.shown + kept) + &self.pending[indent..],
+            None if self.folding => self.pending = " ".repeat(kept) + &self.pending[indent..],
+            None => {}
         }
         false
     }
@@ -858,9 +889,9 @@ impl Markdown {
         let base = self.base;
         match kind {
             Kind::Lazy => {
-                self.pending = text.to_owned();
                 self.quoting = true;
                 if let Some(quote) = &mut self.quote {
+                    quote.inner.folding |= !quote.inner.lazily;
                     quote.inner.lazily = true;
                 }
                 Line::Quote(false)
@@ -896,6 +927,7 @@ impl Markdown {
                     indent: list.map_or(0, |list| list.written) + 4,
                     shown: list.map_or(0, |list| list.shown),
                     indented: true,
+                    lazy: self.lazily,
                 };
                 self.block = Some(fence);
                 *out += &self.fence(fence, "");
@@ -2079,7 +2111,7 @@ mod tests {
         let border = "\x1b[0m\x1b[34m│\x1b[0m\x1b[2;3m ";
         assert_eq!(
             rendered_alike(80, "> > r\n lazy\n>\nnew"),
-            format!("{border}{border}r\x1b[0m\n{border}{border}lazy\x1b[0m\n\nnew")
+            format!("{border}{border}r\x1b[0m\n{border}{border} lazy\x1b[0m\n\nnew")
         );
     }
 
@@ -2207,6 +2239,102 @@ mod tests {
         let header = format!("{border}│ \x1b[1mt\x1b[0m{quote} │\x1b[0m\n");
         assert!(shown.contains(&header), "{shown:?}");
         assert!(shown.ends_with("└───┘\x1b[0m\n\nafter"), "{shown:?}");
+    }
+
+    #[test]
+    fn a_quotes_lazy_lines_keep_their_columns_and_after_a_table_open_code_as_in_scramjet() {
+        // Each checked against Scramjet's renderer: a lazy line keeps its columns past its
+        // item's text; indented by four after a table, it opens code in the quote, which the
+        // lazy lines after it go on in; after a paragraph it goes on in it without those four.
+        let cases = [
+            (
+                "> | t |\n> |-|\n> | 1 |\n    code",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ ```\n│   code\n│ ```",
+            ),
+            (
+                "> | t |\n> |-|\n> | 1 |\n    code\n    more\nafter",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ ```\n│   code\n│   more\n│ ```\n│\n│ after",
+            ),
+            (
+                "> | t |\n> |-|\n> | 1 |\n      deep\n    x\n\n    y",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ ```\n│     deep\n│   x\n│ ```\n\n```\n  y\n```",
+            ),
+            (
+                "> | t |\n> |-|\n> | 1 |\n    code\n> back",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ ```\n│   code\n│ ```\n│\n│ back",
+            ),
+            (
+                "> | t |\n> |-|\n> | 1 |\n    code\n- item",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ ```\n│   code\n│ ```\n\n- item",
+            ),
+            (
+                "> | t |\n> |-|\n    code\n  x",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ └───┘\n│\n│ ```\n│   code\n│ ```\n│\n│   x",
+            ),
+            (
+                "> | t |\n> |-|\n    code\n>     more2\nlazy3",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ └───┘\n│\n│ ```\n│   code\n│   more2\n│ ```\n\nlazy3",
+            ),
+            (
+                "> > | t |\n> > |-|\n    code",
+                "│ │ ┌───┐\n│ │ │ t │\n│ │ ├───┤\n│ │ └───┘\n│ │\n│ │ ```\n│ │   code\n│ │ ```",
+            ),
+            (
+                "- > | t |\n  > |-|\n    code",
+                "- │ ┌───┐\n  │ │ t │\n  │ ├───┤\n  │ └───┘\n  │\n  │   code",
+            ),
+            (
+                "- > | t |\n  > |-|\n      code",
+                "- │ ┌───┐\n  │ │ t │\n  │ ├───┤\n  │ └───┘\n  │\n  │ ```\n  │   code\n  │ ```",
+            ),
+            ("> | t |\n    code", "│ | t |\n│ code"),
+            (
+                "> | t |\n> |-|\n> | 1 |\nlazy\n    code",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ lazy\n│     code",
+            ),
+            (
+                "> | t |\n> |-|\n> | 1 |\nlazy\n  two",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ │ 1 │\n│ └───┘\n│\n│ lazy\n│   two",
+            ),
+            ("> text\n    code", "│ text\n│ code"),
+            ("> text\n  two", "│ text\n│   two"),
+            ("> text\nlazy\n    code", "│ text\n│ lazy\n│     code"),
+            ("> text\n    a\n    b\n  c", "│ text\n│ a\n│ b\n│   c"),
+            ("> > t\n    code", "│ │ t\n│ │ code"),
+            ("> > r\n  lazy", "│ │ r\n│ │   lazy"),
+            ("- > q\n   lazy", "- │ q\n  │  lazy"),
+            ("> ```\n> c\n- item", "│ ```\n│   c\n│ ```\n\n- item"),
+            ("> ```\n> c\n\nafter", "│ ```\n│   c\n│ ```\n\nafter"),
+            ("> # H\n    code", "│ H\n│\n│ ```\n│   code\n│ ```"),
+            ("> - a\n    b", "│ - a\n│     b"),
+            ("> # H\nlazy", "│ H\n│\n│ lazy"),
+            ("> ---\nlazy", "│ ────────────────────────────\n│\n│ lazy"),
+            ("> ```\n> c\n> ```\nlazy", "│ ```\n│   c\n│ ```\n\nlazy"),
+            (
+                "> # H\n    code\nmore",
+                "│ H\n│\n│ ```\n│   code\n│ ```\n│\n│ more",
+            ),
+            (
+                "> ---\n    code",
+                "│ ────────────────────────────\n│\n│ ```\n│   code\n│ ```",
+            ),
+            ("> # H\n\nlazy", "│ H\n\nlazy"),
+            ("> > # H\nlazy", "│ │ H\n│ │\n│ │ lazy"),
+            (
+                "> | t |\n> |-|\n    code\nplain\nmore",
+                "│ ┌───┐\n│ │ t │\n│ ├───┤\n│ └───┘\n│\n│ ```\n│   code\n│ ```\n│\n│ plain\n│ more",
+            ),
+            (
+                "> text\n    a\nplain\n    b",
+                "│ text\n│ a\n│ plain\n│     b",
+            ),
+            ("> x\n      a\n    b", "│ x\n│   a\n│ b"),
+        ];
+        for (text, shown) in cases {
+            let lines = plain(&rendered_alike(30, text));
+            let lines: Vec<&str> = lines.lines().map(str::trim_end).collect();
+            assert_eq!(lines.join("\n"), shown, "{text:?}");
+        }
     }
 
     #[test]

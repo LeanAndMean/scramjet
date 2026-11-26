@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.8 — Lazy lines in a quote
+
+### Fixed
+
+- In a reply, a line indented four columns after a quoted table, without its `>`, now shows as code in the quote, as in Scramjet, where it was plain text; the lines after it stay in the quote too.
+- Lines without their `>` after a quoted heading or rule now go on in the quote, and keep their indent, as Scramjet shows them; a code block that closes with its quote no longer shows an empty quote line before its closing fence.
+
 ## 2.347.7 — One note for a refused write
 
 ### Fixed
