@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.395.0 — Claude Code's subagents
+
+### Added
+
+- Claude Code's agents are subagents here too: the `.md` files of `~/.claude/agents` (or `CLAUDE_CONFIG_DIR`'s) with your own agents, and of `.claude/agents` in the project and the directories above it up to its Git root with the project's, each named by its frontmatter's `name`, subdirectories included. Scramjet's own agent of a name wins over Claude Code's, and a project's over yours. Project ones still need your approval once.
+- An agent file's `tools` and `disallowedTools` may be a list, as Claude Code takes them, `"*"` meaning the default tools; `model: inherit` runs on the main agent's model, and a model no provider offers by that name, such as `haiku` or `sonnet`, names the newest of that family, the main agent's provider's first.
+
 ## 2.394.0 — Claude Code's rules for subagents' files
 
 ### Added

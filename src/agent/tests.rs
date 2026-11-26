@@ -595,7 +595,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
     let config = config(endpoint, &root);
     let mut agent = Agent::start(config, SessionChoice::Open(path)).unwrap();
     // The user's own agents and command sets stay out of the tests.
-    agent.agents_directory = None;
+    agent.agents_directories = Vec::new();
     agent.agent_directory = None;
     agent.approvals = Some(root.join("approved-agents.json"));
     agent.file_history = Some(root.join("file-history"));
@@ -2568,7 +2568,7 @@ fn installed_says_where_each_comes_from_and_what_is_wrong() {
         "edges:\n  demo:gone:\n    demo:go: chain\n",
     );
     write(&root.join("AGENTS.md"), "Be careful.\n");
-    agent.agents_directory = Some(user.clone());
+    agent.agents_directories = vec![user.clone()];
     agent.autonomy = None;
     project_sets(&mut agent);
     agent.instruct();
@@ -3079,7 +3079,7 @@ fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
         let commands = Commands::discover(&sets);
         let edges = autonomy::Edges::load(None, &project, &commands);
         let sources = subagent::Sources {
-            user: None,
+            user: &[],
             sets: &sets,
         };
         let agents = subagent::discover(&sources, &project, subagent::Scope::Both);

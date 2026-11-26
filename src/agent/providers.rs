@@ -203,6 +203,12 @@ pub(super) fn reference(provider: &str, id: &str) -> String {
     format!("{provider}/{id}")
 }
 
+/// Whether `id` ends in a date, as `claude-haiku-4-5-20251001` does, rather than being an alias.
+fn dated(id: &str) -> bool {
+    let tail = id.rsplit('-').next().unwrap_or("");
+    !id.ends_with("-latest") && tail.len() == 8 && tail.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// Where the key requests to a provider carry comes from, as `/login` shows it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum KeyFrom {
@@ -573,6 +579,23 @@ impl Providers {
     /// The reference of the model `name` names (`find`), if a provider offers it.
     pub fn offered(&self, name: &str) -> Option<String> {
         self.find(name).map(Model::reference)
+    }
+
+    /// The model an agent file's `model` names: the one `find` finds, else, as Claude Code's
+    /// `sonnet`, `opus` and `haiku` name the newest of a family, the newest whose id contains
+    /// `name` (an alias before a dated id), `provider`'s first.
+    pub(super) fn family(&self, name: &str, provider: &str) -> Option<&Model> {
+        if let Some(model) = self.find(name) {
+            return Some(model);
+        }
+        let lower = name.to_lowercase();
+        let newest = |of_provider: bool| {
+            (self.models.iter())
+                .filter(|model| !of_provider || model.provider == provider)
+                .filter(|model| model.id.to_lowercase().contains(&lower))
+                .max_by(|a, b| (!dated(&a.id), &a.id).cmp(&(!dated(&b.id), &b.id)))
+        };
+        newest(true).or_else(|| newest(false))
     }
 
     /// The servers on this machine the models' requests go to, each once: the provider, the
@@ -2241,6 +2264,33 @@ mod tests {
                  openai-completions); did you mean anthropic-messages?",
             ]
         );
+    }
+
+    #[test]
+    fn an_agent_files_model_names_the_newest_of_its_family() {
+        let providers = Providers::given(json!({
+            "providers": {
+                "a": {"baseUrl": "http://a/v1", "api": "anthropic-messages", "models": [
+                    {"id": "claude-sonnet-4-5"}, {"id": "claude-sonnet-5-20261001"},
+                    {"id": "claude-haiku-4-5"},
+                ]},
+                "b": {"baseUrl": "http://b/v1", "api": "anthropic-messages", "models": [
+                    {"id": "claude-sonnet-5"}, {"id": "claude-opus-5-5"},
+                ]},
+            },
+        }));
+        let family = |name, provider| providers.family(name, provider).map(Model::reference);
+        assert_eq!(
+            family("sonnet", "a").as_deref(),
+            Some("a/claude-sonnet-4-5")
+        );
+        assert_eq!(family("Sonnet", "b").as_deref(), Some("b/claude-sonnet-5"));
+        assert_eq!(family("opus", "a").as_deref(), Some("b/claude-opus-5-5"));
+        assert_eq!(
+            family("a/claude-haiku-4-5", "b").as_deref(),
+            Some("a/claude-haiku-4-5")
+        );
+        assert_eq!(family("gpt", "a"), None);
     }
 
     #[test]

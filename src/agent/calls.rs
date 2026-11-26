@@ -122,7 +122,7 @@ impl Agent {
             max_output_tokens: self.config.max_output_tokens,
             root: self.config.root.clone(),
             cache_key: self.session.id(),
-            user_agents: self.agents_directory.clone(),
+            user_agents: self.agents_directories.clone(),
             sets: self.sets.clone(),
             skills: self.skills.clone(),
             agent_directory: self.agent_directory.clone(),
@@ -614,7 +614,7 @@ struct Kit {
     max_output_tokens: Option<u64>,
     root: PathBuf,
     cache_key: String,
-    user_agents: Option<PathBuf>,
+    user_agents: Vec<PathBuf>,
     sets: Sets,
     skills: Skills,
     agent_directory: Option<PathBuf>,
@@ -655,7 +655,7 @@ impl Kit {
                 root: &self.root,
                 cache_key: self.cache_key.clone(),
                 sources: subagent::Sources {
-                    user: self.user_agents.as_deref(),
+                    user: &self.user_agents,
                     sets: &self.sets,
                 },
                 skills: &self.skills,
@@ -1159,7 +1159,7 @@ You review code.\n",
         .unwrap();
         let kept = agent.root().join("kept.txt");
         std::fs::write(&kept, "original\n").unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         // The child has the parent's model, and so its prices.
         agent.info.prices = prices(1_000.0, 100.0, 10_000.0);
         let rates = agent.root().join("output-rates.json");
@@ -1488,7 +1488,7 @@ worktree\n---\n\nWrite.\n",
             "---\nname: reader\ndescription: Reads\ntools: read\n---\n\nRead.\n",
         )
         .unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let state = scratch.0.join("state");
         agent.worktrees = Some(state.clone());
         agent.set_subagents(sandbox::Subagents {
@@ -1651,7 +1651,7 @@ worktree\n---\n\nWrite.\n",
             "---\nname: writer\ndescription: Writes\ntools: read, bash, write, edit\n---\n\nWrite.\n",
         )
         .unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         agent.set_subagents(sandbox::Subagents {
             mode: SandboxMode::WorkspaceWrite,
             ..Default::default()
@@ -1742,7 +1742,7 @@ worktree\n---\n\nWrite.\n",
             "---\nname: reviewer\ndescription: Reviews\ntools: read, bash\n---\n\nYou review.\n",
         )
         .unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let store = agent.root().join("store");
         std::fs::create_dir_all(&store).unwrap();
         std::fs::write(store.join("token"), "SECRET-named\n").unwrap();
@@ -2078,7 +2078,7 @@ worktree\n---\n\nWrite.\n",
             "---\nname: reviewer\ndescription: Reviews\ntools: read, bash\n---\n\nYou review.\n",
         )
         .unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let cancel = AtomicBool::new(false);
         agent
             .turn("review", &mut Recorder::default(), &cancel)
@@ -2199,7 +2199,7 @@ worktree\n---\n\nWrite.\n",
             "---\nname: reviewer\ndescription: Reviews\ntools: bash\n---\n\nYou review.\n",
         )
         .unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let mut ui = Recorder::default();
         agent
             .turn("review", &mut ui, &AtomicBool::new(false))
@@ -2286,7 +2286,7 @@ the tool call it was making did not run"
         std::fs::create_dir_all(&agents).unwrap();
         let file = "---\nname: a\ndescription: Agent a\ntools: read\n---\n";
         std::fs::write(agents.join("a.md"), file).unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let mut ui = Recorder {
             together: true,
             ..Recorder::default()
@@ -2341,7 +2341,7 @@ the tool call it was making did not run"
             let file = format!("---\nname: {name}\ndescription: Agent {name}\ntools: read\n---\n");
             std::fs::write(agents.join(format!("{name}.md")), file).unwrap();
         }
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         agent.config.effort = Some("low".into());
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
@@ -2442,7 +2442,7 @@ Unknown agent: \"nope\". Available agents: \"a\", \"b\".\n\n[b] completed: Task:
         std::fs::create_dir_all(&project).unwrap();
         std::fs::write(agents.join("a.md"), "---\nname: a\ndescription: A\n---\n").unwrap();
         std::fs::write(project.join("p.md"), "---\nname: p\ndescription: P\n---\n").unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let mut ui = Recorder {
             choices: vec![Some(1)],
             ..Recorder::default()

@@ -1537,7 +1537,7 @@ mod tests {
             "---\nname: reviewer\ndescription: Reviews\ntools: read\n---\n\nYou review.\n",
         )
         .unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let command = |command: &str| json!([{"type": "command", "command": command}]);
         let start = r#"cat > start.json; echo '{"hookSpecificOutput": {"hookEventName": "SubagentStart", "additionalContext": "use the tests"}}'"#;
         let stop = r#"input=$(cat); echo "$input" >> stops.jsonl; case $input in *'"stop_hook_active":false'*) echo 'check again' >&2; exit 2;; esac"#;

@@ -12,7 +12,7 @@ use super::{
     approvals::{self, Approvals},
     commands::{self, Sets},
     guidance, hooks, instructions,
-    providers::{ModelInfo, Providers},
+    providers::{Model, ModelInfo, Providers},
     rates,
     request::{self, Sending},
     sandbox,
@@ -20,6 +20,7 @@ use super::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -181,15 +182,59 @@ pub(super) enum Scope {
 
 /// Where agents are found, besides the project.
 pub(super) struct Sources<'a> {
-    /// The user's loose agents: `~/.config/scramjet/agents`.
-    pub user: Option<&'a Path>,
+    /// The user's loose agent directories, a later one's agent replacing an earlier one's of its
+    /// name: Claude Code's `~/.claude/agents`, then `~/.config/scramjet/agents` (`user_directories`).
+    pub user: &'a [PathBuf],
     /// The session's command sets, whose agents are registered.
     pub sets: &'a Sets,
 }
 
-/// The user's loose agent directory.
-pub(super) fn user_directory() -> Option<PathBuf> {
-    super::login::config_directory().map(|dir| dir.join("agents"))
+/// The user's loose agent directories (none with `--bare`): Claude Code's, then Scramjet's.
+pub(super) fn user_directories() -> Vec<PathBuf> {
+    if super::bare() {
+        return Vec::new();
+    }
+    let claude = super::login::claude_directory().map(|dir| crate::os::join(&dir, CLAUDE_AGENTS));
+    let ours = super::login::config_directory().map(|dir| dir.join("agents"));
+    claude.into_iter().chain(ours).collect()
+}
+
+/// The directory of Claude Code's agents within its own directory or a project's `.claude`.
+const CLAUDE_AGENTS: &str = "agents";
+
+/// Whether `directory` holds Claude Code's agents, whose files are read as Claude Code reads them.
+fn claude_code(directory: &Path) -> bool {
+    directory
+        .file_name()
+        .is_some_and(|name| name == CLAUDE_AGENTS)
+        && (directory.parent()).is_some_and(|parent| {
+            parent.file_name().is_some_and(|name| name == ".claude")
+                || super::login::claude_directory().is_some_and(|claude| claude == parent)
+        })
+}
+
+/// Claude Code's project agent directories, outermost first: the `.claude/agents` of `cwd` and
+/// of the directories above it up to its Git root, but those that are the user's.
+fn claude_project_directories(cwd: &Path, user: &[PathBuf]) -> Vec<PathBuf> {
+    let users: Vec<PathBuf> = (user.iter())
+        .flat_map(|path| {
+            [path.clone()]
+                .into_iter()
+                .chain(crate::os::canonicalize(path).ok())
+        })
+        .collect();
+    let mut places = Vec::new();
+    for directory in cwd.ancestors() {
+        let agents = crate::os::join(directory, ".claude/agents");
+        if !users.contains(&agents) && agents.is_dir() {
+            places.push(agents);
+        }
+        if directory.join(".git").exists() {
+            break;
+        }
+    }
+    places.reverse();
+    places
 }
 
 /// The agents a call can use, and what was wrong with the files skipped.
@@ -199,31 +244,42 @@ pub(super) struct Discovery {
     pub diagnostics: Vec<Problem>,
 }
 
-/// As Scramjet's `discoverAgents`: the user's loose agents and those of the nearest
-/// `.scramjet/agents` above `cwd`, by `scope` (with `Both`, a project agent replaces a user one of
-/// its name), then the agents of the command sets, which replace loose ones. Unlike Scramjet, a
-/// loose agent whose name is in a set's namespace (`<set>:`) is skipped with a warning: such
-/// names belong to the set.
+/// As Scramjet's `discoverAgents`: the user's loose agents and the project's, by `scope`, then
+/// the agents of the command sets, which replace loose ones. The project's are those of Claude
+/// Code's `.claude/agents` from `cwd`'s Git root down to it, then of the nearest
+/// `.scramjet/agents` above `cwd`; each directory's agent replaces an earlier one's of its name,
+/// a project's a user's. Unlike Scramjet, a loose agent whose name is in a set's namespace
+/// (`<set>:`) is skipped with a warning: such names belong to the set.
 pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery {
     let mut found = Discovery::default();
-    let mut project = project_directory(cwd);
-    if let Some(directory) = &project
-        && let Some(owner) = crate::os::stranger(directory)
-    {
-        let text = crate::os::left_out(directory, owner);
-        found.diagnostics.push(Problem::in_file(text, directory));
-        project = None;
+    let mut projects = claude_project_directories(cwd, sources.user);
+    projects.extend(project_directory(cwd));
+    projects.retain(|directory| match crate::os::stranger(directory) {
+        Some(owner) => {
+            let text = crate::os::left_out(directory, owner);
+            found.diagnostics.push(Problem::in_file(text, directory));
+            false
+        }
+        None => true,
+    });
+    let mut places: Vec<(&Path, &'static str)> = Vec::new();
+    if scope != Scope::Project {
+        places.extend(sources.user.iter().map(|user| (user.as_path(), "user")));
+    }
+    if scope != Scope::User {
+        places.extend(
+            projects
+                .iter()
+                .map(|project| (project.as_path(), "project")),
+        );
     }
     let mut agents: Vec<Definition> = Vec::new();
-    if scope != Scope::Project
-        && let Some(user) = sources.user
-    {
-        agents = loose(user, "user", sources.sets, &mut found.diagnostics);
-    }
-    if scope != Scope::User
-        && let Some(project) = &project
-    {
-        for agent in loose(project, "project", sources.sets, &mut found.diagnostics) {
+    for (directory, source) in places {
+        let loaded = match claude_code(directory) {
+            true => claude_loose(directory, source, &mut found.diagnostics),
+            false => loose(directory, source, sources.sets, &mut found.diagnostics),
+        };
+        for agent in loaded {
             match agents.iter_mut().find(|known| known.name == agent.name) {
                 Some(known) => *known = agent,
                 None => agents.push(agent),
@@ -347,6 +403,75 @@ command set {}",
     agents
 }
 
+/// The agents of Claude Code's agent `directory`, as Claude Code 2.1.259 reads them: its `.md`
+/// files and those of its subdirectories, hidden ones included, links followed, each named by its
+/// frontmatter's `name` alone, which must not start with `-` or hold `:`; a literal `\n` in
+/// `description` is a line break. Of two files of a name, the later in path order wins.
+fn claude_loose(
+    directory: &Path,
+    source: &'static str,
+    diagnostics: &mut Vec<Problem>,
+) -> Vec<Definition> {
+    let mut files = Vec::new();
+    markdown_files(directory, &mut HashSet::new(), &mut files);
+    let mut agents: Vec<Definition> = Vec::new();
+    for path in files {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(error) => {
+                let text = format!("{}: failed to read agent file ({error})", path.display());
+                diagnostics.push(Problem::in_file(text, &path));
+                continue;
+            }
+        };
+        let mut agent = match parse(&path, &content, source) {
+            Ok(agent) => agent,
+            Err(error) => {
+                diagnostics.push(Problem::in_file(error, &path));
+                continue;
+            }
+        };
+        if agent.name.starts_with('-') || agent.name.contains(':') {
+            let text = format!(
+                "skipping {source} agent {}: its name \"{}\" must not start with \"-\" or hold \":\"",
+                path.display(),
+                agent.name
+            );
+            diagnostics.push(Problem::in_file(text, &path));
+            continue;
+        }
+        agent.description = agent.description.replace("\\n", "\n");
+        diagnostics.extend(agent.problems());
+        match agents.iter_mut().find(|known| known.name == agent.name) {
+            Some(known) => *known = agent,
+            None => agents.push(agent),
+        }
+    }
+    agents
+}
+
+/// The `.md` files under `directory`, sorted, each directory and file once.
+fn markdown_files(directory: &Path, seen: &mut HashSet<PathBuf>, files: &mut Vec<PathBuf>) {
+    if !seen.insert(crate::os::canonicalize(directory).unwrap_or(directory.to_path_buf())) {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            markdown_files(&path, seen, files);
+        } else if path.extension().is_some_and(|extension| extension == "md")
+            && path.is_file()
+            && seen.insert(crate::os::canonicalize(&path).unwrap_or(path.clone()))
+        {
+            files.push(path);
+        }
+    }
+}
+
 /// The agents of `sets`, as Scramjet's `buildAgentRegistry`: `<set>/agents/<name>.md` or
 /// `<set>:<name>.md`, a bare `name` in either taken as `<set>:<name>`; the first of a name kept.
 pub(super) fn registered(sets: &Sets, diagnostics: &mut Vec<Problem>) -> Vec<Definition> {
@@ -431,20 +556,24 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
         ));
     }
     let mut diagnostics = Vec::new();
-    let mut list = |key: &str| match &frontmatter[key] {
-        Yaml::String(list) => Some(
-            list.split(',')
-                .map(str::trim)
-                .filter(|tool| !tool.is_empty())
-                .map(|tool| ours(tool).to_owned())
-                .collect::<Vec<_>>(),
-        )
-        .filter(|tools| !tools.is_empty()),
-        Yaml::BadValue => None,
-        _ => {
-            diagnostics.push(format!("{shown}: ignoring non-string {key} frontmatter"));
-            None
-        }
+    // A comma-separated string or, as Claude Code also takes, a list; `*` is all, the default.
+    let mut list = |key: &str| {
+        let items: Vec<&str> = match &frontmatter[key] {
+            Yaml::String(list) => list.split(',').collect(),
+            Yaml::Array(items) if items.iter().all(|item| item.as_str().is_some()) => {
+                items.iter().filter_map(Yaml::as_str).collect()
+            }
+            Yaml::BadValue => return None,
+            _ => {
+                diagnostics.push(format!("{shown}: ignoring non-string {key} frontmatter"));
+                return None;
+            }
+        };
+        let tools: Vec<String> = (items.iter().map(|tool| tool.trim()))
+            .filter(|tool| !tool.is_empty())
+            .map(|tool| ours(tool).to_owned())
+            .collect();
+        (!tools.is_empty() && !tools.iter().any(|tool| tool == "*")).then_some(tools)
     };
     let tools = list("tools");
     let disallowed = list("disallowedTools").unwrap_or_default();
@@ -459,6 +588,8 @@ fn parse(path: &Path, content: &str, source: &'static str) -> Result<Definition,
         }
     };
     let model = match &frontmatter["model"] {
+        // Claude Code's `inherit`: the parent's model, as without one.
+        Yaml::String(model) if model.trim().eq_ignore_ascii_case("inherit") => None,
         Yaml::String(model) => Some(model.trim().to_owned()).filter(|model| !model.is_empty()),
         Yaml::BadValue => None,
         _ => {
@@ -740,7 +871,7 @@ impl Parent<'_> {
         let sets = (self.sources.sets.list().iter()).map(|set| set.directory.clone());
         let skills =
             (self.skills.list().iter()).filter_map(|skill| skill.path.parent().map(Path::to_owned));
-        let agents = self.sources.user.map(Path::to_owned);
+        let agents = self.sources.user.iter().cloned();
         let sessions = super::session::directory(self.root).ok();
         let root = crate::os::canonicalize(self.root).unwrap_or_else(|_| self.root.to_owned());
         let worktrees = (self.worktrees).map(|state| worktree::directory(state, &root));
@@ -841,7 +972,19 @@ impl<'a> Job<'a> {
             }
             None => Default::default(),
         };
-        let model = agent.map_or("", |agent| agent.model.as_deref().unwrap_or(parent.model));
+        let model = match agent.and_then(|agent| agent.model.as_deref()) {
+            Some(named) => {
+                let provider = parent
+                    .providers
+                    .find(parent.model)
+                    .map(|m| m.provider.as_str());
+                (parent.providers.family(named, provider.unwrap_or_default()))
+                    .map_or_else(|| named.to_owned(), Model::reference)
+            }
+            None if agent.is_some() => parent.model.to_owned(),
+            None => String::new(),
+        };
+        let model = model.as_str();
         let info = match model == parent.model {
             true => parent.info.clone(),
             false => parent.providers.info(model),
@@ -1758,7 +1901,7 @@ disallowedTools: bash\n---\n\nBody\n",
         assert!(agent.diagnostics.is_empty());
         let odd = parse(
             path,
-            "---\nname: x\ndescription: d\ntools: [read]\nmodel: 3\ndisallowedTools: 1\n---\n",
+            "---\nname: x\ndescription: d\ntools: [read, 2]\nmodel: 3\ndisallowedTools: 1\n---\n",
             "user",
         )
         .unwrap();
@@ -1774,6 +1917,24 @@ disallowedTools: Write, MultiEdit\n---\n",
         let tools = ["read", "grep", "find", "ls", "bash", "WebFetch"];
         assert_eq!(claude.tools, Some(tools.map(str::to_owned).to_vec()));
         assert_eq!(claude.disallowed, ["write", "edit"]);
+        let listed = parse(
+            path,
+            "---\nname: x\ndescription: d\ntools: [Read, \" Bash \"]\nmodel: Inherit\n\
+disallowedTools: [Write]\n---\n",
+            "user",
+        )
+        .unwrap();
+        assert_eq!(listed.tools, Some(vec!["read".into(), "bash".into()]));
+        assert_eq!(
+            (listed.disallowed, listed.model),
+            (vec!["write".into()], None)
+        );
+        let all = parse(
+            path,
+            "---\nname: x\ndescription: d\ntools: \"*\"\n---\n",
+            "user",
+        );
+        assert_eq!(all.unwrap().tools, None);
         assert_eq!(
             odd.diagnostics,
             [
@@ -1845,8 +2006,9 @@ disallowedTools: Write, MultiEdit\n---\n",
             &[installed.clone(), global.join("x")],
             &root.join(".scramjet"),
         );
+        let users = [user.clone()];
         let sources = Sources {
-            user: Some(&user),
+            user: &users,
             sets: &sets,
         };
         let cwd = root.join("src/deep");
@@ -1957,6 +2119,121 @@ belong to the installed command set {}",
 tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e agent\n- z:a: z:a agent"
         );
         assert_eq!(catalog(&[]), "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_codes_agents_are_found_from_the_git_root_down_and_the_users() {
+        let base =
+            std::env::temp_dir().join(format!("scramjet-claude-agents-{}", std::process::id()));
+        let _scratch = ScratchDir::new(base.clone());
+        let claude = base.join("home/.claude/agents");
+        let ours = base.join("config/agents");
+        let (outside, root) = (base.join("work"), base.join("work/repo"));
+        let cwd = root.join("apps/api");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&cwd).unwrap();
+        let claude_file = |name: &str, extra: &str| {
+            format!("---\nname: {name}\ndescription: {name} one\\ntwo\n{extra}---\nBe {name}.\n")
+        };
+        write(&claude.join("mine.md"), &claude_file("mine", ""));
+        write(
+            &claude.join("both.md"),
+            &claude_file("both", "model: haiku\n"),
+        );
+        write(&ours.join("both.md"), &agent_file("both", ""));
+        write(
+            &outside.join(".claude/agents/above.md"),
+            &claude_file("above", ""),
+        );
+        write(
+            &root.join(".claude/agents/team/review.md"),
+            &claude_file("reviewer", "tools: [Read, Grep, Glob]\nmodel: inherit\n"),
+        );
+        write(
+            &root.join(".claude/agents/.hidden.md"),
+            &claude_file("hidden", ""),
+        );
+        write(
+            &root.join(".claude/agents/near.md"),
+            &claude_file("near", "tools: Read\n"),
+        );
+        write(
+            &cwd.join(".claude/agents/near.md"),
+            &claude_file("near", "tools: Bash\n"),
+        );
+        write(&root.join(".claude/agents/bad.md"), &claude_file("a:b", ""));
+        write(&root.join(".claude/agents/dash.md"), &claude_file("-x", ""));
+        write(&root.join(".claude/agents/notes.txt"), "not an agent");
+        write(
+            &root.join(".scramjet/agents/near.md"),
+            &agent_file("near", ""),
+        );
+        let users = [claude.clone(), ours.clone()];
+        let sets = Sets::find(&[], &root.join(".scramjet"));
+        let sources = Sources {
+            user: &users,
+            sets: &sets,
+        };
+        let discovery = discover(&sources, &cwd, Scope::Both);
+        let found: Vec<String> = (discovery.agents.iter())
+            .map(|agent| format!("{} {} {}", agent.name, agent.source, agent.path.display()))
+            .collect();
+        let path = |path: PathBuf| path.display().to_string();
+        assert_eq!(
+            found,
+            [
+                format!("both user {}", path(ours.join("both.md"))),
+                format!("mine user {}", path(claude.join("mine.md"))),
+                format!(
+                    "hidden project {}",
+                    path(root.join(".claude/agents/.hidden.md"))
+                ),
+                format!(
+                    "near project {}",
+                    path(root.join(".scramjet/agents/near.md"))
+                ),
+                format!(
+                    "reviewer project {}",
+                    path(root.join(".claude/agents/team/review.md"))
+                ),
+            ]
+        );
+        let reviewer = &discovery.agents[4];
+        assert_eq!(reviewer.description, "reviewer one\ntwo");
+        assert_eq!(
+            reviewer.tools,
+            Some(vec!["read".into(), "grep".into(), "find".into()])
+        );
+        assert_eq!(reviewer.model, None);
+        let problems: Vec<&str> = (discovery.diagnostics.iter())
+            .map(|problem| problem.text.as_str())
+            .collect();
+        let bad = path(root.join(".claude/agents/bad.md"));
+        let dash = path(root.join(".claude/agents/dash.md"));
+        assert_eq!(
+            problems,
+            [
+                format!(
+                    "skipping project agent {bad}: its name \"a:b\" must not start with \"-\" or hold \":\""
+                ),
+                format!(
+                    "skipping project agent {dash}: its name \"-x\" must not start with \"-\" or hold \":\""
+                ),
+            ]
+        );
+        // Without the Scramjet file, the nearest `.claude/agents` wins.
+        std::fs::remove_file(root.join(".scramjet/agents/near.md")).unwrap();
+        let near = discover(&sources, &cwd, Scope::Project).agents;
+        let near = near.iter().find(|agent| agent.name == "near").unwrap();
+        assert_eq!(near.tools, Some(vec!["bash".into()]));
+        let user = discover(&sources, &cwd, Scope::User).agents;
+        assert_eq!(
+            user.iter()
+                .map(|agent| agent.name.as_str())
+                .collect::<Vec<_>>(),
+            ["both", "mine"]
+        );
     }
 
     #[test]

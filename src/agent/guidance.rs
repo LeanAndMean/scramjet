@@ -206,7 +206,7 @@ mod tests {
             "---\nname: reader\ndescription: Reads\ntools: read\n---\n\nYou read.\n",
         )
         .unwrap();
-        agent.agents_directory = Some(agents);
+        agent.agents_directories = vec![agents];
         let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
         agent.turn("go", &mut ui, &cancel).unwrap();
         let requests = server.join().unwrap();

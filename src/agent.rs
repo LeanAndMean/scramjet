@@ -658,8 +658,8 @@ pub struct Agent {
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
     autonomy: Option<PathBuf>,
     autonomy_diagnostics: Vec<Problem>,
-    /// Where subagents are found: the user's agent directory and the command sets.
-    agents_directory: Option<PathBuf>,
+    /// The user's agent directories (`subagent::user_directories`).
+    agents_directories: Vec<PathBuf>,
     /// Where the user's approvals of project agents are remembered.
     approvals: Option<PathBuf>,
     /// Where replies' output rates are kept (`rates::path`).
@@ -768,9 +768,9 @@ pub struct Agent {
 pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inventory {
     let sets = Sets::for_project(installed, root);
     let commands = Commands::discover(&sets);
-    let user = subagent::user_directory().filter(|_| !bare());
+    let user = subagent::user_directories();
     let sources = subagent::Sources {
-        user: user.as_deref(),
+        user: &user,
         sets: &sets,
     };
     let discovery = subagent::discover(&sources, root, subagent::Scope::Both);
@@ -899,7 +899,7 @@ impl Agent {
         let mut agent = Self {
             sent: None,
             instructions: Vec::new(),
-            agents_directory: None,
+            agents_directories: Vec::new(),
             approvals: approvals::path(),
             rates: rates::path(),
             worktrees: subagent::worktrees(),
@@ -1148,7 +1148,7 @@ impl Agent {
             &config.skill_options,
             &config.root,
         );
-        self.agents_directory = subagent::user_directory().filter(|_| !bare());
+        self.agents_directories = subagent::user_directories();
         self.agent_directory = login::config_directory().filter(|_| !bare());
         self.instruct();
     }
@@ -1169,7 +1169,7 @@ impl Agent {
         let hidden = self.instruction_hidden();
         let loaded = instructions::load(&config.prompt, &config.root, directory, &hidden);
         let sources = subagent::Sources {
-            user: self.agents_directory.as_deref(),
+            user: &self.agents_directories,
             sets: &self.sets,
         };
         let agents = subagent::discover(&sources, &config.root, subagent::Scope::User).agents;
@@ -1765,7 +1765,7 @@ impl Agent {
     /// `reload` loaded.
     pub fn installed(&self) -> Installed {
         let sources = subagent::Sources {
-            user: self.agents_directory.as_deref(),
+            user: &self.agents_directories,
             sets: &self.sets,
         };
         let discovery = subagent::discover(&sources, &self.config.root, subagent::Scope::Both);
