@@ -1502,6 +1502,13 @@ impl Session {
         Ok(self.read()?.lines_of(self.leaf, items))
     }
 
+    /// The entries from the start of the conversation to where it ends now, by line.
+    pub fn current_path(&self) -> io::Result<Vec<(usize, Value)>> {
+        let entries = self.read()?;
+        let path = entries.path(self.leaf);
+        Ok(path.iter().map(|e| (e.line, e.value.clone())).collect())
+    }
+
     /// Every entry of the session, in file order.
     pub fn entries(&self) -> io::Result<Vec<Entry>> {
         Ok(self.read()?.entries)

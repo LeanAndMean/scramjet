@@ -314,11 +314,14 @@ from before a prompt, which is put in the prompt for editing, or from after a re
 or tool result. When that leaves part of the conversation, it asks whether the model should
 summarize that branch, also with your own instructions, for the conversation to continue
 with; Shift+L there labels the selected entry. Escape twice on an empty prompt opens /tree too.
-The lists of /resume, /fork, /tree and /model show in the prompt's place and take Up/Down,
+/rewind (/checkpoint, /undo) goes back to before one of the prompts on the way to here, as Claude
+Code's: it restores the files write and edit changed since, the conversation as /tree does, or
+both (what commands and subagents changed stays); /rewind N [code|conversation] at once.
+The lists of /resume, /fork, /tree, /rewind and /model show in the prompt's place and take Up/Down,
 Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; typed text filters the /resume
 and /model lists, best match first (a \"quoted phrase\" matches as written, and re:PATTERN is a
 case-insensitive regular expression). With piped input they are printed numbered instead, for
-/resume N, /fork N, /tree N and /model ID.
+/resume N, /fork N, /tree N, /rewind N and /model ID.
 In the prompt, Ctrl+Y puts back the text deleted last, Alt+Y then replaces it with what was
 deleted before; Ctrl+_ (Ctrl+Shift+-, or Ctrl+- where the terminal lets it through; Ctrl+Z too
 on native Windows) undoes, Ctrl+6 redoes; Ctrl+] then a character jumps to it, Ctrl+Alt+]

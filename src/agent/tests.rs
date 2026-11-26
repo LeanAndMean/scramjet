@@ -598,6 +598,7 @@ pub(super) fn agent(endpoint: SocketAddr, name: &str) -> (Agent, ScratchDir) {
     agent.agents_directory = None;
     agent.agent_directory = None;
     agent.approvals = Some(root.join("approved-agents.json"));
+    agent.file_history = Some(root.join("file-history"));
     agent.skills = Skills::default();
     project_sets(&mut agent);
     agent.instructions = instructions::agent(

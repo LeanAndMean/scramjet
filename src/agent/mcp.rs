@@ -1258,6 +1258,7 @@ fn output(result: Value) -> Output {
         detail: None,
         failed: result["isError"] == json!(true),
         images,
+        before: None,
     }
 }
 

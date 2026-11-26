@@ -76,6 +76,7 @@ pub(super) fn refused(tool: &str) -> Output {
         detail: None,
         failed: true,
         images: Vec::new(),
+        before: None,
     }
 }
 

@@ -499,7 +499,7 @@ impl<'a> Call<'a> {
             "write" | "edit" => {
                 let put = |path: &Path, content: &str| put(path, content, hidden);
                 return match self.name {
-                    "write" => write(root, self, &put),
+                    "write" => write(root, self, hidden, &put),
                     _ => edit(root, self, hidden, &put),
                 };
             }
@@ -530,6 +530,7 @@ impl<'a> Call<'a> {
             detail: None,
             failed: false,
             images: Vec::new(),
+            before: None,
         })
     }
 
@@ -602,7 +603,7 @@ impl<'a> Call<'a> {
                     None => sandbox.write(root, path, content.as_bytes()),
                 };
                 match self.name {
-                    "write" => write(root, self, &put),
+                    "write" => write(root, self, Some(hidden), &put),
                     _ => edit(root, self, Some(hidden), &put),
                 }
             }
@@ -681,6 +682,7 @@ impl<'a> Call<'a> {
             detail: None,
             failed: false,
             images: Vec::new(),
+            before: None,
         })
     }
 
@@ -724,6 +726,8 @@ pub(super) struct Output {
     /// The tool ran but reports failure, such as a command's non-zero exit.
     pub failed: bool,
     pub images: Vec<Image>,
+    /// What a `write` or `edit` replaced, for `/rewind`.
+    pub before: Option<Box<super::rewind::Before>>,
 }
 
 impl Output {
@@ -733,6 +737,7 @@ impl Output {
             detail: None,
             failed: true,
             images: Vec::new(),
+            before: None,
         }
     }
     /// The result's `output` as the conversation keeps it: the text, or with an image the
@@ -915,6 +920,7 @@ fn read(
         detail: Some(ToolDetail::Read(given.to_owned())),
         failed: false,
         images: image.into_iter().collect(),
+        before: None,
     })
 }
 
@@ -1348,11 +1354,16 @@ fn checked_directory(path: &Path, hidden: &Hidden) -> Result<std::fs::File, Stri
     hidden.opened(path, opened)
 }
 
-fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
+fn write(root: &Path, call: &Call, hidden: Option<&Hidden>, put: &Put) -> Result<Output, String> {
     let given = call.str("path")?;
     let path = resolve(root, given);
     let content = call.str("content")?;
     let created = std::fs::symlink_metadata(&path).is_err();
+    // What is not a regular file is not kept: going back would remove it.
+    let before = match created {
+        true => Some(None),
+        false => contents(&path, hidden).ok().map(Some),
+    };
     put(&path, content)?;
     Ok(Output {
         text: format!("Wrote {} bytes to {}", content.len(), path.display()),
@@ -1363,6 +1374,7 @@ fn write(root: &Path, call: &Call, put: &Put) -> Result<Output, String> {
         }),
         failed: false,
         images: Vec::new(),
+        before: before.map(|content| Box::new(super::rewind::Before { path, content })),
     })
 }
 
@@ -1524,6 +1536,10 @@ might indicate an issue with special characters or the text not existing as expe
         detail: Some(ToolDetail::Diff(diff(text, &text_spans))),
         failed: false,
         images: Vec::new(),
+        before: Some(Box::new(super::rewind::Before {
+            path,
+            content: Some(original.into_bytes()),
+        })),
     })
 }
 
@@ -2519,6 +2535,7 @@ impl Ran {
                     detail: None,
                     failed: false,
                     images: Vec::new(),
+                    before: None,
                 };
             }
             (None, Some(code)) => format!("Command exited with code {code}"),
@@ -2536,6 +2553,7 @@ impl Ran {
             detail: None,
             failed: true,
             images: Vec::new(),
+            before: None,
         }
     }
 

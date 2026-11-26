@@ -354,6 +354,10 @@ impl Agent {
             }
             _ => {}
         }
+        if let Some(before) = &output.before {
+            result[super::rewind::BEFORE] =
+                super::rewind::keep(self.file_history.as_deref(), before);
+        }
         let spent = result.get(SUBAGENTS).is_some();
         self.add_shown(result, ui)?;
         if spent {
@@ -400,6 +404,7 @@ impl Agent {
             detail: None,
             failed: true,
             images: Vec::new(),
+            before: None,
         };
         let call = match Call::parse(item) {
             Ok(call) => call,
@@ -455,6 +460,7 @@ impl Agent {
                 detail: None,
                 failed,
                 images: Vec::new(),
+                before: None,
             };
             return Called::Done(output, false);
         }
@@ -472,6 +478,7 @@ impl Agent {
                 detail: None,
                 failed,
                 images: Vec::new(),
+                before: None,
             };
             return Called::Done(output, false);
         }
@@ -518,6 +525,7 @@ impl Agent {
                 detail: None,
                 failed,
                 images: Vec::new(),
+                before: None,
             };
             return Called::Done(output, ends);
         }
@@ -656,6 +664,7 @@ impl Tools<'_> {
             detail: None,
             failed: true,
             images: Vec::new(),
+            before: None,
         };
         let (output, usage) = match call.name {
             "write" | "edit" if self.planning => {
@@ -674,6 +683,7 @@ impl Tools<'_> {
                             detail: None,
                             failed: false,
                             images: Vec::new(),
+                            before: None,
                         }),
                     _ => servers.and_then(|mcp| mcp.call(&call.arguments, cancel)),
                 };
@@ -901,6 +911,7 @@ fn ask(
                 detail: None,
                 failed: true,
                 images: Vec::new(),
+                before: None,
             };
             return (output, false);
         }
@@ -935,6 +946,7 @@ fn ask(
         detail,
         failed: false,
         images: Vec::new(),
+        before: None,
     };
     (output, ends)
 }

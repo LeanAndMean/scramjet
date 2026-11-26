@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.364.0 — /rewind
+
+### Added
+
+- `/rewind` (also `/checkpoint` and `/undo`) goes back to before one of your prompts, as Claude Code's does: it puts back the files the agent's `write` and `edit` changed since, moves the conversation there with the prompt in the editor, or both. What commands and subagents changed stays as it is. `/rewind N code` or `/rewind N conversation` does one at once.
+
 ## 2.363.0 — /plan
 
 ### Added
