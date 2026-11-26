@@ -3474,7 +3474,7 @@ run([], shift_tab_cycles_effort, serve_replies([(['Reply.'], 'Reply.')], models=
 (effort,) = set(session_files()) - known
 # A new session starts at Scramjet's default level, medium.
 assert saved_levels(effort) == ['medium', 'high', 'xhigh'], saved_levels(effort)
-assert saved(levels) == {'defaultThinkingLevel': 'xhigh'}
+assert saved(levels) == {'effortLevel': 'xhigh'}
 prompts = [item['content'] for item in map(json.loads, open(effort)) if item.get('role') == 'user']
 assert prompts == ['aXb'], prompts
 run(['--continue'], shift_tab_resumed, serve_replies([], models=effort_models), variables=in_levels)
@@ -3483,7 +3483,7 @@ run(['-c', '--effort', 'low'], started_at('low'), serve_replies([], models=effor
     variables=in_levels)
 assert saved_levels(effort) == ['medium', 'high', 'xhigh', 'max', 'low'], saved_levels(effort)
 # --effort is not saved; a new session starts at the level Shift+Tab saved.
-assert saved(levels) == {'defaultThinkingLevel': 'max'}
+assert saved(levels) == {'effortLevel': 'max'}
 known = set(session_files())
 run([], started_at('max'), serve_replies([], models=effort_models), variables=in_levels)
 # Scramjet's `off` is requests' `none`, and is named `off`.
@@ -3501,7 +3501,7 @@ run([], ctrl_p_cycles_models, serve_items([
 assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-terra', 'high'), ('gpt-6-luna', 'low')], bodies
 assert saved(scoped) == {
-    'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'defaultThinkingLevel': 'low',
+    'enabledModels': ['gpt-6-terra:high', 'luna:low', 'nothing'], 'effortLevel': 'low',
     'defaultProvider': 'openai', 'defaultModel': 'gpt-6-luna'}
 # The model chosen last, when the scope has it, starts the next session, at its pattern's effort.
 run([], starts_with('gpt-6-luna \u2022 low'), serve_replies([], models=scope_models),
@@ -3516,7 +3516,7 @@ run([], agent_switches_the_model, serve_items([
     variables={'XDG_CONFIG_HOME': switching}, columns=80)
 # As /model, the agent's switch is remembered.
 assert saved(switching) == {
-    'defaultProvider': 'openai', 'defaultModel': 'gpt-6-terra', 'defaultThinkingLevel': 'low'}
+    'defaultProvider': 'openai', 'defaultModel': 'gpt-6-terra', 'effortLevel': 'low'}
 assert [(body['model'], body['reasoning']['effort']) for body in bodies] == [
     ('gpt-6-luna', 'medium'), ('gpt-6-terra', 'high')], bodies
 (switched,) = set(session_files()) - known
@@ -3622,7 +3622,7 @@ assert '\n- ls: List directory contents' not in bodies[1]['instructions'], bodie
 assert all('switch_scramjet_model' not in str(body['tools']) for body in bodies), bodies[0]['tools']
 assert 'suggest_scramjet_next_steps' in str(bodies[0]['tools']), bodies[0]['tools']
 assert saved(menu_home) == {
-    'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'defaultThinkingLevel': 'high',
+    'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'effortLevel': 'high',
     'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'collapseChangelog': True,
     'tools': {'grep': False, 'ls': False, 'switch_scramjet_model': False},
 }, open(settings_path(menu_home)).read()
@@ -4500,7 +4500,7 @@ switches = lambda path: [line['model'] for line in map(json.loads, open(path)) i
 assert 'test/gpt-6-sol' not in switches(first) and switches(second)[-1] == 'test/gpt-6-sol', (switches(first), switches(second))
 assert saved_levels(second)[-1] == 'xhigh' and 'xhigh' not in saved_levels(first), saved_levels(second)
 assert saved(routing) == {
-    'defaultThinkingLevel': 'xhigh', 'defaultProvider': 'test', 'defaultModel': 'gpt-6-sol'}
+    'effortLevel': 'xhigh', 'defaultProvider': 'test', 'defaultModel': 'gpt-6-sol'}
 prompts = lambda path: [line.get('_scramjet_typed') for line in map(json.loads, open(path))
                         if line.get('role') == 'user' and not line.get('_scramjet_probe')]
 assert prompts(first) == ['/flow:step one'], prompts(first)
@@ -5637,7 +5637,7 @@ run([], fullscreen_shell_and_effort_during_turn, rows=50, endpoint=serve_items([
     [message('Second.')],
 ], models=effort_models, bodies=bodies), variables={'XDG_CONFIG_HOME': during})
 assert [body['reasoning']['effort'] for body in bodies] == ['medium', 'high', 'high', 'high'], bodies
-assert saved(during) == {'defaultThinkingLevel': 'high'}
+assert saved(during) == {'effortLevel': 'high'}
 (during_session,) = set(session_files()) - known
 items = list(map(json.loads, open(during_session)))
 assert saved_levels(during_session) == ['medium', 'high'], saved_levels(during_session)

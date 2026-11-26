@@ -1,0 +1,7 @@
+edges:
+  ship:commit:
+    "*": pause
+publications:
+  ship:commit:
+    create_pr: always-ask
+    add_pr_comment: auto-approve

@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.378.0 — Claude Code's effortLevel in the settings
+
+### Changed
+
+- The settings' thinking level is read as Claude Code's `effortLevel`, so a settings file written with Claude Code's name starts sessions at that level; Scramjet's `defaultThinkingLevel` is still read when there is no `effortLevel`. Shift+Tab, `/effort` and the ACP thinking option now save `effortLevel`, replacing a `defaultThinkingLevel` in the file.
+
 ## 2.377.0 — Claude Code's hooks around the agent's tools
 
 ### Added

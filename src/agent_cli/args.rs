@@ -161,7 +161,7 @@ but to NO_PROXY's hosts and this machine.
   --thinking LEVEL       reasoning effort (also --effort): off, minimal, low, medium, high,
                          xhigh or max, the nearest the model takes (default: the
                          one --model's :LEVEL sets, else the one a resumed session last used,
-                         else the settings' defaultThinkingLevel, else medium)
+                         else the settings' effortLevel, else medium)
   --max-output-tokens N  the most tokens a reply may have, at most the model's limit (default)
   --retries N            resend a request that failed transiently up to N times (default:
                          the settings' retry.maxRetries, else 10)
@@ -395,8 +395,8 @@ starts it with that prompt, /plan off ends it.
 none is given, and PROMPT every 20m works too) while the full screen waits for you, as Claude
 Code's; one due during a turn runs once the turn ends. It lasts while the session runs, at most
 7 days; /loop says it, /loop stop ends it.
-/effort LEVEL sets the thinking level, as Shift+Tab does, saved as defaultThinkingLevel; /effort
-alone lists the levels the model takes (on the full screen to pick one).
+/effort LEVEL sets the thinking level, as Shift+Tab does, saved as effortLevel; /effort alone
+lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
 Typed while a turn runs, /status, /diff, /tasks, /agents, /skills, /memory, /doctor, /btw, /recap, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
@@ -441,8 +441,8 @@ Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramj
 with the keys hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
-defaultThinkingLevel; tools, the agent's coding tools among read, bash, edit, write (the
-default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
+effortLevel (else defaultThinkingLevel); tools, the agent's coding tools among read, bash, edit,
+write (the default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
 list and the agent save; and startupModel: per-directory (new sessions start with the model
 chosen last in their project, kept in $XDG_STATE_HOME/scramjet/last-used-models.json) or

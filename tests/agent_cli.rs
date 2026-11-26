@@ -4643,7 +4643,7 @@ fn acp_session_profiles_give_each_session_its_model_level_and_output_limit_savin
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
     assert_eq!(saved["defaultModel"], "claude-other", "{saved}");
-    assert_eq!(saved["defaultThinkingLevel"], "minimal", "{saved}");
+    assert_eq!(saved["effortLevel"], "minimal", "{saved}");
     assert!(recall.exists());
     drop(stdin);
     assert!(child.wait().unwrap().success());
@@ -8423,10 +8423,7 @@ fn acp_sets_the_model_and_thinking_level_between_and_during_turns() {
         "{answer}"
     );
     let saved = std::fs::read_to_string(scratch.0.join("config/scramjet/settings.json")).unwrap();
-    assert!(
-        saved.contains(r#""defaultThinkingLevel": "high""#),
-        "{saved}"
-    );
+    assert!(saved.contains(r#""effortLevel": "high""#), "{saved}");
     for (id, option, value) in [
         (5, "model", serde_json::json!("test/claude-none")),
         (6, "thought_level", "xhigh".into()),

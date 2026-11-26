@@ -540,7 +540,8 @@ pub(super) struct Settings {
     /// `hooks`, Claude Code's: commands run before and after the agent's tools, each file's
     /// after the one before's.
     pub(super) hooks: std::sync::Arc<scramjet::agent::Hooks>,
-    /// `defaultThinkingLevel`, named as requests send levels.
+    /// `effortLevel`, Claude Code's name, else `defaultThinkingLevel`, Scramjet's; named as
+    /// requests send levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultProvider` and `defaultModel`: the model last chosen in any project, as Scramjet
     /// saves it; a `defaultModel` alone names a model as `--model` does.
@@ -974,19 +975,17 @@ impl Settings {
                 &Bottom::ALL.map(|b| format!("\"{}\"", b.name())).join(", "),
             ),
         }
-        match object
-            .get("defaultThinkingLevel")
-            .map(|value| value.as_str())
-        {
+        let effort = match object.contains_key("effortLevel") {
+            true => "effortLevel",
+            false => "defaultThinkingLevel",
+        };
+        match object.get(effort).map(|value| value.as_str()) {
             None => {}
             Some(Some("off")) => self.default_thinking_level = Some("none".to_owned()),
             Some(Some(level)) if LEVELS.contains(&level) => {
                 self.default_thinking_level = Some(level.to_owned())
             }
-            Some(_) => wrong(
-                "defaultThinkingLevel",
-                &LEVELS.map(|l| format!("\"{l}\"")).join(", "),
-            ),
+            Some(_) => wrong(effort, &LEVELS.map(|l| format!("\"{l}\"")).join(", ")),
         }
         match object.get("defaultProvider") {
             None => {}
@@ -2054,7 +2053,10 @@ impl Settings {
             return Ok(());
         }
         self.default_thinking_level = Some(level.to_owned());
-        self.save("defaultThinkingLevel", json!(scramjet_level(level)))
+        self.update(|object| {
+            object.remove("defaultThinkingLevel");
+            object.insert("effortLevel".into(), json!(scramjet_level(level)));
+        })
     }
 
     /// `/autocompact on|off`: `compaction.enabled`.
@@ -2851,6 +2853,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "look",
             "banner",
             "bottom",
+            "effortLevel",
             "defaultThinkingLevel",
             "defaultProvider",
             "defaultModel",
@@ -4427,6 +4430,35 @@ or false; ignored"
     }
 
     #[test]
+    fn claude_codes_effort_level_is_read_before_scramjets_name() {
+        let scratch = Scratch::new("effort");
+        let level = |text: &str| {
+            let settings = settings_with(&scratch, text);
+            (settings.default_thinking_level, settings.warnings)
+        };
+        assert_eq!(
+            level(r#"{"effortLevel": "xhigh"}"#),
+            (Some("xhigh".into()), vec![])
+        );
+        assert_eq!(
+            level(r#"{"defaultThinkingLevel": "low", "effortLevel": "off"}"#),
+            (Some("none".into()), vec![])
+        );
+        let (read, warnings) = level(r#"{"defaultThinkingLevel": "low", "effortLevel": "hi"}"#);
+        assert_eq!(read, None);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].ends_with(r#"effortLevel must be "off", "minimal", "low", "medium", "high", "xhigh", "max"; ignored"#),
+            "{warnings:?}"
+        );
+        let (_, warnings) = level(r#"{"effortLevle": "low"}"#);
+        assert!(
+            warnings[0].ends_with("did you mean effortLevel?"),
+            "{warnings:?}"
+        );
+    }
+
+    #[test]
     fn saving_keeps_the_other_keys_and_a_broken_file_is_not_overwritten() {
         let scratch = Scratch::new("save");
         let path = scratch.0.join("config/scramjet-rs/settings.json");
@@ -4437,8 +4469,7 @@ or false; ignored"
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             saved,
-            json!({"hideThinkingBlock": true, "defaultThinkingLevel": "off",
-                "resumeChains": "threaded"})
+            json!({"hideThinkingBlock": true, "effortLevel": "off", "resumeChains": "threaded"})
         );
         assert_eq!(
             Settings::read(Some(path.clone())).resume_chains,
@@ -4446,13 +4477,18 @@ or false; ignored"
         );
 
         // Another process changed the file meanwhile: its keys stay.
-        std::fs::write(&path, r#"{"theme": "x", "hideThinkingBlock": true}"#).unwrap();
+        // Scramjet's name gives way to Claude Code's.
+        std::fs::write(
+            &path,
+            r#"{"theme": "x", "hideThinkingBlock": true, "defaultThinkingLevel": "low"}"#,
+        )
+        .unwrap();
         settings.set_default_thinking_level("high").unwrap();
         settings.set_hide_thinking_block(false).unwrap();
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             saved,
-            json!({"theme": "x", "hideThinkingBlock": false, "defaultThinkingLevel": "high"})
+            json!({"theme": "x", "hideThinkingBlock": false, "effortLevel": "high"})
         );
         let reread = Settings::read(Some(path.clone()));
         assert!(!reread.hide_thinking_block);
