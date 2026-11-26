@@ -6,6 +6,7 @@
 use super::drive::{self, SandboxChange};
 use super::interactive::{Interactive, completions};
 use super::report::{ReportView, Tab};
+use super::settings::{card_level, scramjet_level};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, doctor, export, installed, keymap, style};
@@ -44,6 +45,8 @@ pub(super) enum Builtin<'a> {
     Branch(&'a str),
     Tree(&'a str),
     Model(&'a str),
+    /// Claude Code's `/effort [LEVEL]`: the thinking level.
+    Effort(&'a str),
     ScopedModels,
     Login,
     Logout,
@@ -94,6 +97,7 @@ impl<'a> Builtin<'a> {
             "branch" => Self::Branch(argument),
             "tree" => Self::Tree(argument),
             "model" => Self::Model(argument),
+            "effort" => Self::Effort(argument),
             "scoped-models" if argument.is_empty() => Self::ScopedModels,
             "login" if argument.is_empty() => Self::Login,
             "logout" if argument.is_empty() => Self::Logout,
@@ -133,6 +137,7 @@ impl<'a> Builtin<'a> {
                 | Self::Hotkeys
                 | Self::Keybindings
                 | Self::Model(_)
+                | Self::Effort(_)
                 | Self::ScopedModels
                 | Self::Login
                 | Self::Logout
@@ -181,6 +186,7 @@ impl Interactive {
             Some(Builtin::Branch(name)) => self.clone_session(name),
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
+            Some(Builtin::Effort(wanted)) => self.effort(wanted),
             Some(Builtin::ScopedModels) => self.scoped_models(),
             Some(Builtin::Login) => self.login(),
             Some(Builtin::Logout) => self.logout(),
@@ -704,6 +710,43 @@ tools into its page",
         }
     }
 
+    /// `/effort [LEVEL]`: sets the thinking level, saved as the settings' default, as Shift+Tab
+    /// does; without one, the levels to pick from (on the full screen `/settings`' list).
+    fn effort(&mut self, wanted: &str) {
+        let agent = &self.session.agent;
+        let levels = agent.effort_levels().to_vec();
+        if !agent.reasons() || levels.is_empty() {
+            return self.say("Current model does not support thinking");
+        }
+        let named = levels.iter().map(|level| scramjet_level(level));
+        let named = named.collect::<Vec<_>>().join(", ");
+        if wanted.is_empty() {
+            if self.screen.is_some() {
+                return self.choose_thinking_level();
+            }
+            let current = agent.effort().map_or("the model's default", scramjet_level);
+            return self.say(&format!(
+                "Thinking level: {current}; {} takes {named}: /effort LEVEL",
+                agent.model()
+            ));
+        }
+        let Some(level) = card_level(wanted).filter(|&level| levels.iter().any(|l| l == level))
+        else {
+            return self.say(&format!(
+                "Error: {} takes no thinking level {wanted}; it takes {named}",
+                agent.model()
+            ));
+        };
+        let level = level.to_owned();
+        if let Err(error) = self.session.agent.set_effort(level.clone()) {
+            return self.say(&format!("Error: {error}"));
+        }
+        if let Err(error) = self.session.settings.set_default_thinking_level(&level) {
+            return self.say(&format!("Error: settings not saved: {error}"));
+        }
+        self.say(&format!("Thinking level: {}", scramjet_level(&level)));
+    }
+
     /// `/btw QUESTION`: the model's answer from the conversation so far, on the full screen in a
     /// view of its own. Typed during a turn, it is asked at the turn's next pause, the turn's
     /// reply and calls going on meanwhile, and kept once the turn has ended.
@@ -1138,6 +1181,11 @@ mod tests {
             Some(Builtin::Clear("next"))
         );
         assert_eq!(Builtin::parse("/branch try"), Some(Builtin::Branch("try")));
+        assert_eq!(
+            Builtin::parse("/effort  high "),
+            Some(Builtin::Effort("high"))
+        );
+        assert_eq!(Builtin::parse("/effort"), Some(Builtin::Effort("")));
     }
 
     #[test]

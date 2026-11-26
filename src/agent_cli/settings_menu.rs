@@ -334,7 +334,7 @@ impl Interactive {
 
     /// The model's levels to choose from; the one chosen is the session's and the
     /// settings' default, as Shift+Tab sets them.
-    fn choose_thinking_level(&mut self) {
+    pub(super) fn choose_thinking_level(&mut self) {
         let levels = self.session.agent.effort_levels().to_vec();
         let Some(screen) = self.screen.as_ref().filter(|_| !levels.is_empty()) else {
             return;

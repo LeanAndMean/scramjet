@@ -1663,7 +1663,7 @@ it another profile";
         {
             let name = prompt.text.split_whitespace().next().unwrap_or_default();
             let instead = match builtin {
-                Builtin::Model(_) | Builtin::Autopilot(_) => {
+                Builtin::Model(_) | Builtin::Effort(_) | Builtin::Autopilot(_) => {
                     "; session/set_config_option sets the model, thinking level and autopilot"
                         .to_owned()
                 }

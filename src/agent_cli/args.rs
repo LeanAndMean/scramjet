@@ -369,8 +369,10 @@ the sandbox, git and the shell, the terminal and how the MCP servers are.
 /btw QUESTION asks the model a side question with the conversation so far, as Claude Code's:
 no tool runs, the answer shows apart (on the full screen in a view of its own), and the model
 never sees the question or the answer again; what it spent is counted with the session.
+/effort LEVEL sets the thinking level, as Shift+Tab does, saved as defaultThinkingLevel; /effort
+alone lists the levels the model takes (on the full screen to pick one).
 Typed while a turn runs, /status, /diff, /agents, /memory, /doctor, /btw, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
-/model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
+/model, /effort, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,
 and the other commands stop the turn and run once it has.

@@ -21,7 +21,7 @@ There is no project settings file: what `/sandbox` changes for one project is ke
 
 | Key | Values | Default | What it does |
 |---|---|---|---|
-| `defaultThinkingLevel` | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` | `"medium"` | The level a new session starts at; Shift+Tab changes it in a session and saves it here, and `--thinking` sets it for a run. |
+| `defaultThinkingLevel` | `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"` | `"medium"` | The level a new session starts at; Shift+Tab and `/effort` change it in a session and save it here, and `--thinking` sets it for a run. |
 | `startupModel` | `"per-directory"`, `"global"` | `"per-directory"` | The model a new session starts with unless `--model` names one: the one last chosen in this project, else anywhere, or the one last chosen anywhere. |
 | `defaultProvider` | a provider's name | none | Written when you choose a model: the provider of the one last chosen anywhere. |
 | `defaultModel` | a model's id | none | Written with `defaultProvider`. On its own it names a model as `--model` does. |

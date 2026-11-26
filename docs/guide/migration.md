@@ -59,7 +59,7 @@ What does not carry over:
 - Any model its providers offer (GPT, Claude, DeepSeek… through a proxy), switched mid-session with `/model` or Ctrl+P; each model's reasoning goes back only to it.
 - Tool calls run without asking, as in Scramjet 1; there is no permission mode. `--sandbox read-only` or `workspace-write` (`-s`), as Codex names them, confines the main agent's commands ([the sandbox](configuration.md#the-sandbox)), and `--ask` asks before every shell command and every write or edit outside the project.
 - `-c` continues and `-p` prints, as in Claude Code (Codex: `codex resume --last`, `codex exec`).
-- Shift+Tab changes the reasoning effort (in Claude Code it changes the permission mode).
+- Shift+Tab changes the reasoning effort (in Claude Code it changes the permission mode); `/effort` sets it by name, as in Claude Code.
 - Both `CLAUDE.md` and `AGENTS.md` are read, and `CLAUDE.local.md` after them ([context files](configuration.md#context-files-and-skills)).
 - Commands come as command sets with next steps and delegation, rather than single prompt files ([command sets](command-sets.md)).
 - MCP servers come from the settings' `mcpServers`, as Claude Code's `.mcp.json` lists them, their tools named as Claude Code names them ([MCP](configuration.md#mcp-servers)). No hooks or plugins.

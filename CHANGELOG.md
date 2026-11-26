@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.358.0 — /effort
+
+### Added
+
+- `/effort LEVEL` sets the thinking level by name, as in Claude Code, and saves it as the default, as Shift+Tab does; `/effort` alone lists the levels the model takes, on the full screen to pick one.
+
 ## 2.357.0 — /security-review
 
 ### Added

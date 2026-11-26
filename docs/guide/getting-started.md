@@ -38,7 +38,7 @@ Type `/login` and choose one:
 - **A model on your machine:** Local models finds Ollama, llama.cpp, vLLM or LM Studio running here and checks that the model you choose can call tools before saving it.
 - **Any other server** speaking OpenAI's or Anthropic's API, such as a company proxy, goes in `~/.config/scramjet/models.json`, or comes from a model catalog URL.
 
-Logins and keys are saved in `~/.config/scramjet/auth.json`, readable by you only and hidden from the agent's tools. `/model` (or Ctrl+L) then chooses among the models, Ctrl+P switches to the next, and Shift+Tab changes the reasoning effort. [Providers and logins](providers.md).
+Logins and keys are saved in `~/.config/scramjet/auth.json`, readable by you only and hidden from the agent's tools. `/model` (or Ctrl+L) then chooses among the models, Ctrl+P switches to the next, and Shift+Tab (or `/effort LEVEL`) changes the reasoning effort. [Providers and logins](providers.md).
 
 ## 4. Decide what the agent may do
 
