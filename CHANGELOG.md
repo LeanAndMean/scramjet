@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.350.0 — /init
+
+### Added
+
+- `/init` has the agent write an `AGENTS.md` for the project, as Codex's and Claude Code's `/init` do: what the project is, its layout, the commands that build, test and lint it (each one run or taken from the project's files), and its conventions and pitfalls, left uncommitted for you to review. Text after it says what else to cover. A project that already has an `AGENTS.md` or `CLAUDE.md` gets proposed changes to it instead, made only once you approve them.
+
 ## 2.349.1 — A timed-out command's orphans named
 
 ### Fixed

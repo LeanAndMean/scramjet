@@ -2131,7 +2131,7 @@ def completes_paths_and_commands(read, until, send, output):
     # Commands are listed as soon as `/` starts the prompt, the built-in scramjet set's among
     # them; Escape closes the list.
     send(b'/')
-    on_screen('(1/33)')
+    on_screen('(1/34)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -3749,7 +3749,7 @@ def installed_view(read, until, send, output):
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     send(b'\x1b[A')
-    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 4 commands, 8 agents, 3 skills'))
+    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 5 commands, 8 agents, 3 skills'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')

@@ -10,7 +10,7 @@ Scramjet's settings (`~/.config/scramjet/settings.json`) and sessions (`~/.local
 
 ## Context files and skills
 
-Both `CLAUDE.md` and `AGENTS.md` are read, from `~/.config/scramjet`, the project and the directories above it, and after them each directory's `CLAUDE.local.md`: your own notes, kept out of version control, as in Claude Code. Skills are directories with a `SKILL.md`, found in `.scramjet/skills`, `.agents/skills`, the command sets, `~/.config/scramjet/skills` and `~/.agents/skills`; `/skill:<name>` runs one.
+Both `CLAUDE.md` and `AGENTS.md` are read, from `~/.config/scramjet`, the project and the directories above it, and after them each directory's `CLAUDE.local.md`: your own notes, kept out of version control, as in Claude Code. `/init` has the agent write an `AGENTS.md` for the project from what its files show (an existing `AGENTS.md` or `CLAUDE.md` it proposes changes to, made once you approve them), left uncommitted for you to review. Skills are directories with a `SKILL.md`, found in `.scramjet/skills`, `.agents/skills`, the command sets, `~/.config/scramjet/skills` and `~/.agents/skills`; `/skill:<name>` runs one.
 
 ## Credentials
 

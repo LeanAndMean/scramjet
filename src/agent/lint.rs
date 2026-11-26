@@ -381,6 +381,7 @@ mod tests {
             names,
             [
                 "commands/bug.md",
+                "commands/init.md",
                 "commands/troubleshoot.md",
                 "agents/command-architect.md",
                 "agents/command-failure-analyst.md",
