@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.402.2 — Protected directories under other spellings of their names
+
+### Fixed
+
+- In `workspace-write` on a drive that ignores case (WSL's `/mnt/c`), `write` and `edit` refuse the project's `.claude`, `.scramjet`, `.agents` and `.git` under other spellings too (`.CLAUDE`, `CLAUDE~1`); commands there still reach them (SECURITY.md says so).
+
 ## 2.402.1 — `write` and `edit` keep a missing `.claude` out
 
 ### Fixed

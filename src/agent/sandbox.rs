@@ -339,12 +339,27 @@ impl Sandbox {
                 SandboxMode::ReadOnly => "the sandbox is read-only there",
             });
         };
-        // A protected name not made yet is refused too, as Seatbelt refuses it to commands.
-        let named = (self.writable_roots(root).into_iter())
-            .flat_map(|writable| PROTECTED.map(|name| writable.join(name)))
-            .filter(|kept| !self.writable.contains(kept));
-        let mut kept = named.chain(self.protected_paths(root));
-        match kept.any(|kept| real.starts_with(&kept)) {
+        // A protected name not made yet is refused too, as Seatbelt refuses it to commands, in
+        // any case, for a filesystem that folds it (WSL's `/mnt/c`).
+        let roots = self.writable_roots(root);
+        let named = roots.iter().any(|writable| {
+            let first = real
+                .strip_prefix(writable)
+                .ok()
+                .and_then(|rest| rest.iter().next());
+            let first = first.and_then(|name| name.to_str()).unwrap_or_default();
+            PROTECTED.iter().any(|name| {
+                first.eq_ignore_ascii_case(name) && !self.writable.contains(&writable.join(name))
+            })
+        });
+        // What exists is compared by its file too, which other spellings of its name reach where
+        // the filesystem folds case or keeps Windows' short names (`CLAUDE~1`).
+        let kept = self.protected_paths(root);
+        let files: Vec<_> = kept.iter().filter_map(|kept| file_id(kept)).collect();
+        let reached = (real.ancestors())
+            .take_while(|above| above.starts_with(&writable))
+            .any(|above| file_id(above).is_some_and(|id| files.contains(&id)));
+        match named || reached || kept.iter().any(|kept| real.starts_with(kept)) {
             true => refused("kept read-only in the sandbox"),
             false => Ok((real, writable)),
         }
@@ -364,6 +379,19 @@ impl Sandbox {
 /// whatever the sandbox's mode, as its commands can; through no symlink its commands put there.
 pub(super) fn write_scratch(scratch: &Path, path: &Path, content: &[u8]) -> Result<(), String> {
     write_beneath(scratch, path, content).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// The device and inode of what `path` names, through symlinks.
+#[cfg(unix)]
+fn file_id(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn file_id(_: &Path) -> Option<(u64, u64)> {
+    None
 }
 
 /// `path` as the user gave it: from `~`, else relative to `root`.
@@ -2328,6 +2356,10 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
         for path in [".claude/commands/x.md", ".scramjet/agents/a.md", ".agents"] {
             assert!(refused(&write, path).contains("kept read-only"), "{path}");
         }
+        for path in [".Git/config", ".CLAUDE/commands/x.md", ".Agents"] {
+            assert!(refused(&write, path).contains("kept read-only"), "{path}");
+        }
+        assert!(write.check_write(&root, &root.join("src/.claude")).is_ok());
         for path in ["hook", "away", "away/a.rs", "loop"] {
             assert!(refused(&write, path).contains("points nowhere"), "{path}");
         }
