@@ -339,7 +339,12 @@ impl Sandbox {
                 SandboxMode::ReadOnly => "the sandbox is read-only there",
             });
         };
-        match (self.protected_paths(root).iter()).any(|kept| real.starts_with(kept)) {
+        // A protected name not made yet is refused too, as Seatbelt refuses it to commands.
+        let named = (self.writable_roots(root).into_iter())
+            .flat_map(|writable| PROTECTED.map(|name| writable.join(name)))
+            .filter(|kept| !self.writable.contains(kept));
+        let mut kept = named.chain(self.protected_paths(root));
+        match kept.any(|kept| real.starts_with(&kept)) {
             true => refused("kept read-only in the sandbox"),
             false => Ok((real, writable)),
         }
@@ -2320,6 +2325,9 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
             );
         }
         assert!(refused(&write, ".git/config").contains("kept read-only"));
+        for path in [".claude/commands/x.md", ".scramjet/agents/a.md", ".agents"] {
+            assert!(refused(&write, path).contains("kept read-only"), "{path}");
+        }
         for path in ["hook", "away", "away/a.rs", "loop"] {
             assert!(refused(&write, path).contains("points nowhere"), "{path}");
         }

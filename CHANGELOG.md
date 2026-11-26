@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.402.1 — `write` and `edit` keep a missing `.claude` out
+
+### Fixed
+
+- In `workspace-write`, `write` and `edit` refuse to create the project's `.claude`, `.scramjet`, `.agents` or `.git` when it does not exist yet, as they refuse to change it when it does; on Linux a command can still create one (SECURITY.md says so).
+
 ## 2.402.0 — The sandbox keeps `.claude` read-only
 
 ### Changed
