@@ -633,7 +633,9 @@ pub(super) fn context_files(
     let home = std::env::home_dir();
     let real_home = (home.as_deref()).and_then(|home| crate::os::canonicalize(home).ok());
     if let Some(claude) = super::login::claude_directory().filter(|_| !super::bare()) {
-        files.extend(context_file(&claude.join("CLAUDE.md"), hidden, problems));
+        if let Some(file) = context_file(&claude.join("CLAUDE.md"), hidden, problems) {
+            files.extend(memory(file, hidden, problems));
+        }
         files.extend(rules(&claude, hidden, problems));
     }
     for directory in root.ancestors() {
@@ -641,13 +643,20 @@ pub(super) fn context_files(
         if at_home && super::bare() {
             continue;
         }
-        let found = directory_context(directory, !at_home, hidden, problems).into_iter();
-        let found: Vec<_> = found
-            .filter(|(path, _)| !files.iter().any(|(seen, _)| seen == path))
-            .collect();
-        above.splice(0..0, found);
+        above.splice(
+            0..0,
+            directory_context(directory, !at_home, hidden, problems),
+        );
     }
     files.extend(above);
+    // A file read twice (imported by two files, or a link to one read already) is kept first.
+    let mut seen = Vec::new();
+    files.retain(|(path, _)| {
+        let real = crate::os::canonicalize(path).unwrap_or_else(|_| path.clone());
+        let new = !seen.contains(&real);
+        seen.push(real);
+        new
+    });
     files
 }
 
@@ -671,9 +680,15 @@ fn directory_context(
     }
     let agents = first(&["AGENTS.md", "AGENTS.MD"]);
     let local = first(&["CLAUDE.local.md"]);
-    let mut files = claudes.clone();
-    files.extend(agents.filter(|agents| !claudes.iter().any(|claude| claude.1 == agents.1)));
-    files.extend(local);
+    let agents = agents.filter(|agents| !claudes.iter().any(|claude| claude.1 == agents.1));
+    let mut files = Vec::new();
+    for file in claudes {
+        files.extend(memory(file, hidden, problems));
+    }
+    files.extend(agents);
+    if let Some(file) = local {
+        files.extend(memory(file, hidden, problems));
+    }
     if claude {
         files.extend(rules(&directory.join(".claude"), hidden, problems));
     }
@@ -738,13 +753,186 @@ fn rules(claude: &Path, hidden: &Hidden, problems: &mut Vec<Problem>) -> Vec<(Pa
         }
     }
     paths.sort();
-    (paths.iter())
-        .filter_map(|path| context_file(path, hidden, problems))
-        .filter_map(|(path, contents)| {
-            let (frontmatter, body) = super::commands::split_frontmatter(&contents);
-            (!scoped(&frontmatter)).then_some((path, body))
-        })
-        .collect()
+    let mut files = Vec::new();
+    for path in paths {
+        let Some((path, contents)) = context_file(&path, hidden, problems) else {
+            continue;
+        };
+        let (frontmatter, body) = super::commands::split_frontmatter(&contents);
+        if !scoped(&frontmatter) {
+            files.extend(memory((path, body), hidden, problems));
+        }
+    }
+    files
+}
+
+/// How deep Claude Code follows `@path` imports: the file itself, then four hops.
+const IMPORT_DEPTH: usize = 5;
+
+/// The extensions of the files an import reads, as Claude Code's; one without an extension is
+/// read too.
+const IMPORTED_EXTENSIONS: &str = "md txt text json yaml yml toml xml csv html htm css scss \
+    sass less js ts tsx jsx mjs cjs mts cts py pyi pyw rb erb rake go rs java kt kts scala c cpp \
+    cc cxx h hpp hxx cs swift sh bash zsh fish ps1 bat cmd env ini cfg conf config properties \
+    sql graphql gql proto vue svelte astro ejs hbs pug jade php pl pm lua r dart ex exs erl hrl \
+    clj cljs cljc edn hs lhs elm ml mli f f90 f95 for cmake make makefile gradle sbt rst adoc \
+    asciidoc org tex latex lock log diff patch";
+
+/// A Claude Code memory `file` as Claude Code reads it, without its block-level HTML comments,
+/// unless that leaves nothing, then each file it imports with `@path`, after it and depth first.
+fn memory(
+    file: (PathBuf, String),
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Vec<(PathBuf, String)> {
+    fn read(
+        (path, contents): (PathBuf, String),
+        depth: usize,
+        hidden: &Hidden,
+        problems: &mut Vec<Problem>,
+        files: &mut Vec<(PathBuf, String)>,
+    ) {
+        let (text, imports) = claude_markdown(&contents);
+        if text.trim().is_empty() {
+            return;
+        }
+        let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        files.push((path, text));
+        if depth + 1 >= IMPORT_DEPTH {
+            return;
+        }
+        let real = |path: &Path| crate::os::canonicalize(path).unwrap_or_else(|_| path.into());
+        for import in imports {
+            let path = match import.strip_prefix("~/") {
+                Some(rest) => match std::env::home_dir() {
+                    Some(home) => home.join(rest),
+                    None => continue,
+                },
+                None => directory.join(&import),
+            };
+            let path: PathBuf = path.components().collect();
+            let extension = path.extension().map(|e| e.to_string_lossy().to_lowercase());
+            if extension.is_some_and(|e| !IMPORTED_EXTENSIONS.split(' ').any(|known| known == e))
+                || files.iter().any(|(seen, _)| real(seen) == real(&path))
+            {
+                continue;
+            }
+            if let Some(file) = context_file(&path, hidden, problems) {
+                read(file, depth + 1, hidden, problems, files);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    read(file, 0, hidden, problems, &mut files);
+    files
+}
+
+/// `text` as Claude Code's lexer reads a memory file: without its block-level HTML comments (those
+/// starting a top-level HTML block that closes), and the paths it imports with `@path` outside code
+/// and other HTML, in order.
+fn claude_markdown(text: &str) -> (String, Vec<String>) {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    // Spans left out of the search for imports, each a comment block's text once its comments
+    // are cut, or `None` for code and other HTML, kept as it is.
+    let mut cuts: Vec<(std::ops::Range<usize>, Option<String>)> = Vec::new();
+    let mut depth = 0usize;
+    let comments = regex::Regex::new("(?s)<!--.*?-->").expect("a valid pattern");
+    for (event, range) in Parser::new_ext(text, Options::empty()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::HtmlBlock) => {
+                let raw = &text[range.clone()];
+                if depth == 0 && raw.trim_start().starts_with("<!--") && raw.contains("-->") {
+                    let start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
+                    let mut end = match text[..range.end].ends_with('\n') {
+                        true => range.end,
+                        false => text[range.end..]
+                            .find('\n')
+                            .map_or(text.len(), |i| range.end + i + 1),
+                    };
+                    // The blank lines after it go with it, as in Claude Code's lexer.
+                    while let Some(line) = text[end..].split_inclusive('\n').next()
+                        && line.trim().is_empty()
+                    {
+                        end += line.len();
+                    }
+                    let rest = comments.replace_all(&text[start..end], "").into_owned();
+                    cuts.push((start..end, Some(rest)));
+                } else {
+                    cuts.push((range, None));
+                }
+                depth += 1;
+            }
+            Event::Start(Tag::CodeBlock(_)) => {
+                cuts.push((range, None));
+                depth += 1;
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
+            Event::Code(_) | Event::InlineHtml(_) => cuts.push((range, None)),
+            _ => {}
+        }
+    }
+    cuts.sort_by_key(|(range, _)| range.start);
+    let (mut kept, mut imports, mut at) = (String::new(), Vec::new(), 0);
+    for (range, rest) in cuts {
+        if range.start < at {
+            continue;
+        }
+        let between = &text[at..range.start];
+        kept.push_str(between);
+        imports.extend(imported_paths(between));
+        match rest {
+            Some(rest) if rest.trim().is_empty() => {}
+            Some(rest) => {
+                kept.push_str(&rest);
+                imports.extend(imported_paths(&rest));
+            }
+            None => kept.push_str(&text[range.clone()]),
+        }
+        at = range.end;
+    }
+    kept.push_str(&text[at..]);
+    imports.extend(imported_paths(&text[at..]));
+    (kept, imports)
+}
+
+/// The paths `text` imports, as Claude Code finds them: an `@` at the start or after white space,
+/// then the path up to white space (a space escaped with `\` kept) or a `#`, starting with `./`,
+/// `~/`, `/` or a letter, digit, `.`, `_` or `-`.
+fn imported_paths(text: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut chars = text.char_indices().peekable();
+    let mut after_space = true;
+    while let Some((_, c)) = chars.next() {
+        if c != '@' || !after_space {
+            after_space = c.is_whitespace();
+            continue;
+        }
+        let mut path = String::new();
+        while let Some(&(i, c)) = chars.peek() {
+            if text[i..].starts_with("\\ ") {
+                chars.next();
+                chars.next();
+                path.push(' ');
+            } else if c.is_whitespace() || c == '\\' {
+                break;
+            } else {
+                chars.next();
+                path.push(c);
+            }
+        }
+        after_space = false;
+        let path = path.split('#').next().unwrap_or_default();
+        let starts = path.starts_with("./")
+            || path.starts_with("~/")
+            || (path.starts_with('/') && path != "/" && !path.starts_with("//"))
+            || (path.chars().next())
+                .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+        if starts {
+            paths.push(path.to_owned());
+        }
+    }
+    paths
 }
 
 /// Whether a rule's `frontmatter` gives `paths`, as a list or a comma-separated string. One that
@@ -1240,6 +1428,71 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             (rules.join("sub/a.md"), "Rule a."),
         ]
         .map(|(path, text)| (path, text.to_owned()));
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn memory_files_lose_their_block_comments_and_import_paths_outside_code() {
+        let text = "<!-- For maintainers. -->\n\n# Rules\n\nSee @README and @docs/a\\ b.md#part, \
+                    `@not` nor \"@quoted\" nor me@mail.\n\n```\n<!-- kept -->\n@fenced\n```\n\n\
+                    <!-- a\nb --> after @tail\n\n- item @./item.md @~/home.md @/abs.md @/ @@x\n\n\
+                    Inline <!-- kept --> too. <!-- open";
+        let (kept, imports) = claude_markdown(text);
+        assert_eq!(
+            kept,
+            "# Rules\n\nSee @README and @docs/a\\ b.md#part, `@not` nor \"@quoted\" nor me@mail.\n\n\
+             ```\n<!-- kept -->\n@fenced\n```\n\n after @tail\n\n- item @./item.md @~/home.md \
+             @/abs.md @/ @@x\n\nInline <!-- kept --> too. <!-- open"
+        );
+        let expected = [
+            "README",
+            "docs/a b.md",
+            "tail",
+            "./item.md",
+            "~/home.md",
+            "/abs.md",
+        ];
+        assert_eq!(imports, expected);
+        assert_eq!(claude_markdown("<!-- only -->\n").0, "");
+    }
+
+    #[test]
+    fn imports_follow_the_file_importing_them_four_hops_deep_each_once() {
+        let scratch = std::env::temp_dir().join(format!("sjrs-imports-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        let root = scratch.join("project");
+        std::fs::create_dir_all(root.join("docs/deep")).unwrap();
+        let write = |path: &str, text: &str| std::fs::write(root.join(path), text).unwrap();
+        write(
+            "CLAUDE.md",
+            "@AGENTS.md\n@docs/one.md @missing.md @logo.png @docs/one.md",
+        );
+        write("AGENTS.md", "Agents.");
+        write("logo.png", "Not text.");
+        write("docs/one.md", "One @deep/two.md");
+        write("docs/deep/two.md", "Two @../../CLAUDE.md @three");
+        write("docs/deep/three", "Three @four.md");
+        write("docs/deep/four.md", "Four @five.md");
+        write("docs/deep/five.md", "Five, too deep.");
+        write("CLAUDE.local.md", "<!-- Only a note. -->\n@docs/one.md");
+        let found: Vec<(PathBuf, String)> =
+            context_files(&root, None, &Hidden::default(), &mut Vec::new())
+                .into_iter()
+                .filter(|(path, _)| path.starts_with(&scratch))
+                .collect();
+        let expected = [
+            (
+                "CLAUDE.md",
+                "@AGENTS.md\n@docs/one.md @missing.md @logo.png @docs/one.md",
+            ),
+            ("AGENTS.md", "Agents."),
+            ("docs/one.md", "One @deep/two.md"),
+            ("docs/deep/two.md", "Two @../../CLAUDE.md @three"),
+            ("docs/deep/three", "Three @four.md"),
+            ("docs/deep/four.md", "Four @five.md"),
+            ("CLAUDE.local.md", "@docs/one.md"),
+        ]
+        .map(|(path, text)| (root.join(path), text.to_owned()));
         assert_eq!(found, expected);
     }
 

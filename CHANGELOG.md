@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.392.0 — Claude Code's imports and comments
+
+### Added
+
+- `@path` imports in `CLAUDE.md`, `CLAUDE.local.md` and Claude Code's rules are followed as Claude Code follows them: the file named (relative to the importing file, absolute or `~/`) is read right after the file importing it, with its own imports, up to four hops, and each file once. A `CLAUDE.md` holding only `@AGENTS.md` no longer adds anything twice. `/memory` lists imported files as "imported".
+- Block-level HTML comments (`<!-- … -->` on lines of their own, outside code) are left out of those files, as Claude Code leaves them out, so notes for maintainers cost no context.
+
 ## 2.391.0 — Claude Code's instructions files
 
 ### Added

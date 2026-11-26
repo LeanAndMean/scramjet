@@ -459,6 +459,22 @@ pub(super) struct Places<'a> {
 
 /// A context file's place and what it is for.
 fn memory_kind(path: &Path, places: &Places) -> (&'static str, &'static str) {
+    let named = (path.file_name()).is_some_and(|name| {
+        [
+            "CLAUDE.md",
+            "CLAUDE.MD",
+            "AGENTS.md",
+            "AGENTS.MD",
+            "CLAUDE.local.md",
+        ]
+        .iter()
+        .any(|known| name == *known)
+    });
+    let rule = (path.ancestors().skip(1)).any(|directory| directory.ends_with(".claude/rules"));
+    if !named && !rule {
+        let what = "Imported with @path by an instructions file listed above it, read after it.";
+        return ("imported", what);
+    }
     // Claude Code's `.claude/CLAUDE.md` and `.claude/rules` belong to the directory above `.claude`.
     let claude = (path.ancestors().skip(1)).find(|directory| directory.ends_with(".claude"));
     if let Some(claude) = claude {
@@ -1150,6 +1166,19 @@ mod tests {
             ..loaded
         });
         assert!(none.rows.is_empty());
+    }
+
+    #[test]
+    fn memory_labels_an_imported_file_as_imported_and_a_rule_by_its_project() {
+        let root = std::env::temp_dir().join("project");
+        let places = Places {
+            user: None,
+            root: &root,
+        };
+        let kind = |path: &str| memory_kind(&root.join(path), &places).0;
+        assert_eq!(kind("docs/conventions.md"), "imported");
+        assert_eq!(kind("AGENTS.md"), "this project's");
+        assert_eq!(kind(".claude/rules/sub/style.md"), "this project's");
     }
 
     #[test]

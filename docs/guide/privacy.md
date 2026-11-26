@@ -9,7 +9,7 @@ Scramjet sends nothing to its authors: no telemetry, usage statistics or crash r
 Each request to a model carries the conversation so far:
 
 - **What you write and attach:** your prompts, steers and queued messages, files and images you attach (`@FILE`, pasted images).
-- **The instructions:** Scramjet's own, the instruction files it reads (`CLAUDE.md`, `AGENTS.md` and `CLAUDE.local.md` in the project, the directories above it and `~/.config/scramjet`, Claude Code's `.claude/CLAUDE.md` and `.claude/rules` there and in your home directory, and `SYSTEM.md` or `APPEND_SYSTEM.md` where you wrote one), the lists of skills, agents, commands and MCP tools it offers, today's date, the project's path and the session file's path. `/system-prompt` shows exactly what was sent.
+- **The instructions:** Scramjet's own, the instruction files it reads (`CLAUDE.md`, `AGENTS.md` and `CLAUDE.local.md` in the project, the directories above it and `~/.config/scramjet`, Claude Code's `.claude/CLAUDE.md` and `.claude/rules` there and in your home directory, the files those name with `@path`, wherever they are, and `SYSTEM.md` or `APPEND_SYSTEM.md` where you wrote one), the lists of skills, agents, commands and MCP tools it offers, today's date, the project's path and the session file's path. `/system-prompt` shows exactly what was sent.
 - **What the tools returned:** the files the agent read, the output of the commands it ran, search results, the web pages it fetched and MCP servers' answers, so whatever those held, secrets included. `/context` shows what fills the window.
 - **The session's id,** a random one, as the cache key some providers take (`prompt_cache_key`, `session_id`).
 
