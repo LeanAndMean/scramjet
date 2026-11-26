@@ -3741,17 +3741,17 @@ def command_sets_resumed(read, until, send, output):
 def skills(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
-    # Skills are listed after the commands, as `skill:<name>` with their description.
-    send(b'/skill:p')
+    # Skills are listed after the commands, as Claude Code's `/<name>`, with their description.
+    send(b'/pd')
     rows = on_screen('Fills PDF forms.')
-    assert re.search(r'\u2192 /skill:pdf +Fills PDF forms\.', '\n'.join(rows)), rows
+    assert re.search(r'\u2192 /pdf +Fills PDF forms\.', '\n'.join(rows)), rows
     send(b'\t')
-    ending(read, output, ['> /skill:pdf'])
+    ending(read, output, ['> /pdf'])
     send(b'form.pdf\r')
     rows = on_screen('Filled.')
     # Shown as typed, as a command is, with what it sent behind Ctrl+O, without its tags or the
     # arguments typed.
-    assert ' \u203a /skill:pdf form.pdf\n\n\n [skill] pdf, sent as 3 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
+    assert ' \u203a /pdf form.pdf\n\n\n [skill] pdf, sent as 3 lines (Ctrl+O to expand)' in '\n'.join(rows), rows
     send(b'\x0f')
     rows = on_screen('Use ./fill.sh')
     assert ' [skill] pdf' in rows and ' form.pdf' not in rows, rows
@@ -4390,7 +4390,7 @@ known = set(session_files())
 run([], skills, serve_items([[message('Filled.')]], bodies=bodies))
 (skilled,) = set(session_files()) - known
 users = [line for line in map(json.loads, open(skilled)) if line.get('role') == 'user']
-assert users == [{'role': 'user', '_scramjet_typed': '/skill:pdf form.pdf',
+assert users == [{'role': 'user', '_scramjet_typed': '/pdf form.pdf',
                   'content': '<skill name="pdf" location="%s">\nReferences are relative to %s.\n\n'
                              'Use ./fill.sh\n</skill>\n\nform.pdf' % (pdf, os.path.dirname(pdf))}], users
 assert '<location>%s</location>' % pdf in bodies[0]['instructions'], bodies[0]['instructions']

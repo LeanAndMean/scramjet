@@ -953,17 +953,17 @@ fn add_shells(agent: &mut Agent, screen: &mut Handle) {
 }
 
 /// What the loaded settings complete: in the `/` list after the built-in commands, the loaded
-/// commands that are not only delegated, Claude Code's commands that neither a built-in nor one
-/// of those takes, then the skills as `skill:<name>`; and the MCP servers.
+/// commands that are not only delegated, Claude Code's commands that neither a built-in, one of
+/// those nor a skill takes, then the skills as `skill_call` names them; and the MCP servers.
 pub(super) fn completions(agent: &Agent) -> Completions {
     let commands = (agent.commands().list().iter())
         .filter(|command| !command.delegate_only)
         .map(command_entry)
         .chain(claude_commands(agent).map(claude_entry))
-        .chain(
-            (agent.skills().list().iter())
-                .map(|skill| (format!("skill:{}", skill.name), skill.description.clone())),
-        )
+        .chain((agent.skills().list().iter()).map(|skill| {
+            let call = skill_call(&skill.name, agent.commands().list());
+            (call, skill.description.clone())
+        }))
         .collect();
     Completions {
         commands,
@@ -971,13 +971,25 @@ pub(super) fn completions(agent: &Agent) -> Completions {
     }
 }
 
-/// Claude Code's commands that `/<name>` runs: those whose names no built-in command and no
-/// command set's command takes.
+/// Claude Code's commands that `/<name>` runs: those whose names no built-in command, no
+/// command set's command and no skill takes (a skill wins, as in Claude Code).
 pub(super) fn claude_commands(agent: &Agent) -> impl Iterator<Item = &ClaudeCommand> {
     (agent.claude_commands().list().iter()).filter(|command| {
         Builtin::parse(&format!("/{}", command.name)).is_none()
             && !agent.commands().takes(&command.name)
+            && !(agent.skills().list().iter()).any(|skill| skill.name == command.name)
     })
+}
+
+/// What `/` runs a skill by, without the slash: its name, as Claude Code's, unless a built-in
+/// or one of `commands` takes it, then `skill:<name>`, as Pi's (always accepted too).
+pub(super) fn skill_call(name: &str, commands: &[Command]) -> String {
+    let taken = Builtin::parse(&format!("/{name}")).is_some()
+        || commands.iter().any(|command| command.answers_to(name));
+    match taken {
+        true => format!("skill:{name}"),
+        false => name.to_owned(),
+    }
 }
 
 fn claude_entry(command: &ClaudeCommand) -> (String, String) {
@@ -1115,5 +1127,11 @@ mod tests {
             ))
         );
         assert_eq!(effort_note(Ok(Some("high".to_owned()))), None);
+    }
+
+    #[test]
+    fn a_skill_is_listed_by_its_name_unless_a_built_in_takes_it() {
+        assert_eq!(skill_call("pdf", &[]), "pdf");
+        assert_eq!(skill_call("model", &[]), "skill:model");
     }
 }

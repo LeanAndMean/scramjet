@@ -159,9 +159,9 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
         .map(|skill| {
             let path = shown(&skill.path);
             let note = format!(
-                "{path}\n{}; /skill:{} runs it. {}",
+                "{path}\n{}; /{} runs it. {}",
                 offered(skill),
-                skill.name,
+                super::interactive::skill_call(&skill.name, loaded.commands),
                 skill.description
             );
             (
@@ -404,10 +404,10 @@ pub(super) fn skills(loaded: &Loaded, places: &Places) -> Listing {
                 columns.push("not offered".to_owned());
             }
             let note = format!(
-                "{}\n{from} {}; /skill:{} runs it. {}",
+                "{}\n{from} {}; /{} runs it. {}",
                 shown(&skill.path),
                 offered(skill),
-                skill.name,
+                super::interactive::skill_call(&skill.name, loaded.commands),
                 skill.description
             );
             (columns, note, Some(skill.path.clone()))
@@ -433,9 +433,9 @@ pub(super) fn skills_text(loaded: &Loaded, places: &Places) -> String {
             let path = shown(&skill.path);
             text.push_str(&format!("      {path}\n      {}\n", skill.description));
             text.push_str(&format!(
-                "      {}; /skill:{} runs it.\n",
+                "      {}; /{} runs it.\n",
                 offered(skill),
-                skill.name
+                super::interactive::skill_call(&skill.name, loaded.commands)
             ));
         }
     }
@@ -1004,10 +1004,7 @@ mod tests {
                 shown(&scramjet::os::join(&set, "commands/inner.md"))
             )
         );
-        assert!(
-            list.notes[12]
-                .ends_with("\nOffered to the model; /skill:pdf runs it. Fills PDF forms.")
-        );
+        assert!(list.notes[12].ends_with("\nOffered to the model; /pdf runs it. Fills PDF forms."));
         // The settings file is there; the autonomy.yaml files are not yet.
         assert!(list.notes[19].ends_with("saved as you change them."));
         assert!(list.notes[20].ends_with(
@@ -1425,14 +1422,14 @@ mod tests {
         assert_eq!(
             note("pdf"),
             &format!(
-                "{}\nIn this project. Offered to the model; /skill:pdf runs it. Does pdf.",
+                "{}\nIn this project. Offered to the model; /pdf runs it. Does pdf.",
                 shown(&found_skills[0].path)
             )
         );
         assert!(note("draw").contains("\nFrom the command set demo. Offered"));
         assert!(note("notes").contains(&format!(
             "\nIn your skills, {}. Not offered to the model (disable-model-invocation); \
-             /skill:notes runs it.",
+             /notes runs it.",
             shown(&user.join("skills"))
         )));
         assert!(note("extra").contains("\nListed in the settings (skills) or given with --skill."));
@@ -1444,7 +1441,7 @@ mod tests {
         assert!(
             text.contains(&format!(
                 "  notes  user     not offered\n      {}\n      Does notes.\n      Not offered to \
-                 the model (disable-model-invocation); /skill:notes runs it.\n  extra",
+                 the model (disable-model-invocation); /notes runs it.\n  extra",
                 shown(&found_skills[4].path)
             )),
             "{text}"

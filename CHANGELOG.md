@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.399.0 — Skills run as /NAME
+
+### Changed
+
+- A skill now runs as `/NAME`, as in Claude Code, and the `/` list, `/skills` and ACP's command list show it so; `/skill:NAME` still works, and is the name shown when a built-in or a command has the skill's name. A skill goes before a `.claude/commands` command of the same name, as in Claude Code.
+
 ## 2.398.0 — Claude Code's skills as Claude Code runs them
 
 ### Added

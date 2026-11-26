@@ -2431,7 +2431,8 @@ impl Acp {
             listed
         });
         let skills = (agent.skills().list().iter()).map(|skill| {
-            json!({"name": format!("skill:{}", skill.name), "description": skill.description})
+            let name = super::interactive::skill_call(&skill.name, agent.commands().list());
+            json!({"name": name, "description": skill.description})
         });
         let listed: Vec<Value> = commands.chain(claude).chain(skills).collect();
         let update =

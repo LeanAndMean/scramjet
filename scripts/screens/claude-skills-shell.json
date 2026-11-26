@@ -16,7 +16,16 @@
       "until": "gpt-6-luna"
     },
     {
-      "type": "/skill:brief !`touch made`\r"
+      "type": "/br"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-skills-shell-list"
+    },
+    {
+      "type": "ief !`touch made`\r"
     },
     {
       "until": "You are on main"
