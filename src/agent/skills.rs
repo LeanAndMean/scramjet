@@ -2,6 +2,7 @@
 //! `.md` file at the top of a `.scramjet/skills` directory. The instructions list them for the
 //! model to read when a task matches, and `/skill:<name> args` sends one's instructions.
 use super::Problem;
+use super::claude_commands::{self, Variables};
 use super::commands::{Set, split_frontmatter};
 use super::yaml;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
@@ -23,6 +24,9 @@ pub struct Skill {
     pub path: PathBuf,
     /// Listed in the instructions; `disable-model-invocation: true` leaves it to `/skill:`.
     pub listed: bool,
+    /// Found in one of Claude Code's `skills` directories, so `/skill:` expands it as Claude Code
+    /// does: arguments and variables substituted, its shell commands run.
+    pub claude: bool,
 }
 
 /// What the command line says about skills, as Scramjet's `--skill` and `--no-skills`.
@@ -46,6 +50,8 @@ pub struct Skills {
 enum Place {
     /// Looked for when it exists; `.md` files at its top are skills when `top_files`.
     Directory { top_files: bool },
+    /// One of Claude Code's `skills` directories, looked for when it exists.
+    Claude,
     /// A file or directory the settings' `skills` list, which should exist.
     Listed,
     /// A file or directory `--skill` names, which should exist.
@@ -54,7 +60,8 @@ enum Place {
 
 /// The directories other agents read skills from, in a project and its parents and in the home
 /// directory: the Agent Skills standard's (Pi's and Codex's) and Claude Code's.
-const SHARED: [&str; 2] = [".agents/skills", ".claude/skills"];
+const AGENTS: &str = ".agents/skills";
+const CLAUDE: &str = ".claude/skills";
 
 /// `places_of` with Claude Code's directory in `home`.
 #[cfg(test)]
@@ -99,9 +106,9 @@ fn places_of(
     if options.no_skills {
         return given.collect();
     }
-    let nested = |path| (path, Place::Directory { top_files: false });
+    let nested = |path| (path, nested_place());
     let theirs = |home: Option<&Path>, claude: Option<&Path>| -> Vec<PathBuf> {
-        let agents = home.map(|home| crate::os::join(home, SHARED[0]));
+        let agents = home.map(|home| crate::os::join(home, AGENTS));
         let claude = claude.map(|claude| crate::os::join(claude, "skills"));
         agents.into_iter().chain(claude).collect()
     };
@@ -121,10 +128,10 @@ fn places_of(
         Place::Directory { top_files: true },
     )];
     for directory in root.ancestors() {
-        for shared in SHARED {
+        for (shared, place) in [(AGENTS, nested_place()), (CLAUDE, Place::Claude)] {
             let skills = crate::os::join(directory, shared);
             if !users.contains(&skills) && !reals.contains(&skills) {
-                places.push(nested(skills));
+                places.push((skills, place));
             }
         }
         if directory.join(".git").exists() {
@@ -143,10 +150,15 @@ fn places_of(
         ));
     }
     if !super::bare() {
-        places.extend(users.into_iter().map(nested));
+        let places_of = [nested_place(), Place::Claude];
+        places.extend(users.into_iter().zip(places_of));
     }
     places.extend(given);
     places
+}
+
+fn nested_place() -> Place {
+    Place::Directory { top_files: false }
 }
 
 impl Skills {
@@ -175,12 +187,15 @@ impl Skills {
         let mut loaded = HashSet::new();
         for (path, place) in places {
             let files = match place {
-                Place::Directory { .. } if let Some(owner) = crate::os::stranger(path) => {
+                Place::Directory { .. } | Place::Claude
+                    if let Some(owner) = crate::os::stranger(path) =>
+                {
                     let text = crate::os::left_out(path, owner);
                     found.warnings.push(Problem::in_file(text, path));
                     continue;
                 }
                 Place::Directory { top_files } => skill_files(path, *top_files),
+                Place::Claude => skill_files(path, false),
                 _ if path.is_dir() => skill_files(path, true),
                 _ if path.is_file() && path.extension() == Some("md".as_ref()) => {
                     vec![path.clone()]
@@ -206,7 +221,7 @@ impl Skills {
                     continue;
                 }
                 let mut warnings = Vec::new();
-                let loaded = load_skill(&file, &mut warnings);
+                let loaded = load_skill(&file, *place == Place::Claude, &mut warnings);
                 let in_file = |text| Problem::in_file(text, &file);
                 found.warnings.extend(warnings.into_iter().map(in_file));
                 let Some(skill) = loaded else {
@@ -239,6 +254,12 @@ impl Skills {
             directory.to_path_buf(),
             Place::Directory { top_files: true },
         )])
+    }
+
+    /// The skills in `directory`, as found in a `.claude/skills` directory.
+    #[cfg(test)]
+    pub(super) fn of_claude(directory: &Path) -> Self {
+        Self::load(&[(directory.to_path_buf(), Place::Claude)])
     }
 
     /// The skills in the `skills` directory of the command set in `directory`.
@@ -286,13 +307,29 @@ SKILL.md / dirname of the path) and use that absolute path in tool commands.
         )
     }
 
-    /// The text `/skill:<name> args` sends, as Pi's: the skill's instructions, read now, then
-    /// the arguments. `None` when the prompt names no skill; an error when its file cannot be
-    /// read.
-    pub(super) fn expand(&self, prompt: &str) -> Option<Result<String, String>> {
+    /// The skill `/skill:<name> args` names.
+    pub(super) fn named(&self, prompt: &str) -> Option<&Skill> {
         let rest = prompt.strip_prefix("/skill:")?;
-        let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-        let skill = self.list.iter().find(|skill| skill.name == name)?;
+        let name = rest.split(char::is_whitespace).next().unwrap_or(rest);
+        self.list.iter().find(|skill| skill.name == name)
+    }
+
+    /// The text `/skill:<name> args` sends, as Pi's: the skill's instructions, read now, then
+    /// the arguments. One of Claude Code's has them substituted as Claude Code does, then its
+    /// `${CLAUDE_SKILL_DIR}` and `session`'s variables; its shell commands are left for the
+    /// caller to run. `None` when the prompt names no skill; an error when its file cannot be
+    /// read.
+    pub(super) fn expand(
+        &self,
+        prompt: &str,
+        session: &Variables,
+    ) -> Option<Result<String, String>> {
+        let skill = self.named(prompt)?;
+        let name = &skill.name;
+        let rest = &prompt["/skill:".len()..];
+        let args = rest
+            .split_once(char::is_whitespace)
+            .map_or("", |(_, args)| args);
         let path = skill.path.display();
         let content = match fs::read_to_string(&skill.path) {
             Ok(content) => content,
@@ -303,13 +340,26 @@ SKILL.md / dirname of the path) and use that absolute path in tool commands.
             }
         };
         let content = content.strip_prefix('\u{feff}').unwrap_or(&content);
-        let directory = skill.path.parent().unwrap_or(Path::new("/")).display();
+        let directory = skill.path.parent().unwrap_or(Path::new("/"));
+        let (frontmatter, body) = split_frontmatter(content);
+        let (body, args) = match skill.claude {
+            true => {
+                let names = yaml::first(&frontmatter)
+                    .map(|frontmatter| claude_commands::argument_names(&frontmatter["arguments"]))
+                    .unwrap_or_default();
+                let body = claude_commands::substitute(body.trim(), args.trim(), &names);
+                let directory = directory.display().to_string();
+                let body = body.replace("${CLAUDE_SKILL_DIR}", &directory);
+                (session.substitute(&body), "")
+            }
+            false => (body.trim().to_owned(), args.trim()),
+        };
         let block = format!(
             "<skill name=\"{name}\" location=\"{path}\">\nReferences are relative to \
-{directory}.\n\n{}\n</skill>",
-            split_frontmatter(content).1.trim()
+{}.\n\n{body}\n</skill>",
+            directory.display()
         );
-        Some(Ok(match args.trim() {
+        Some(Ok(match args {
             "" => block,
             args => format!("{block}\n\n{args}"),
         }))
@@ -410,7 +460,7 @@ impl Walk<'_> {
 
 /// The skill in `path`, with warnings where it breaks the standard's rules, as Pi loads it
 /// regardless; `None`, with a warning, when it cannot be read or has no description.
-fn load_skill(path: &Path, warnings: &mut Vec<String>) -> Option<Skill> {
+fn load_skill(path: &Path, claude: bool, warnings: &mut Vec<String>) -> Option<Skill> {
     let shown = path.display();
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
@@ -457,6 +507,7 @@ characters ({length}); it is kept whole"
         description: description.to_owned(),
         path: path.to_path_buf(),
         listed: frontmatter["disable-model-invocation"] != Yaml::Boolean(true),
+        claude,
     })
 }
 
@@ -537,14 +588,17 @@ mod tests {
                 ),
                 (
                     PathBuf::from("/nonexistent/repo/sub/.claude/skills"),
-                    nested()
+                    Place::Claude
                 ),
                 (PathBuf::from("/nonexistent/repo/.agents/skills"), nested()),
-                (PathBuf::from("/nonexistent/repo/.claude/skills"), nested()),
+                (
+                    PathBuf::from("/nonexistent/repo/.claude/skills"),
+                    Place::Claude
+                ),
                 (PathBuf::from("/nonexistent/.agents/skills"), nested()),
-                (PathBuf::from("/nonexistent/.claude/skills"), nested()),
+                (PathBuf::from("/nonexistent/.claude/skills"), Place::Claude),
                 (PathBuf::from("/.agents/skills"), nested()),
-                (PathBuf::from("/.claude/skills"), nested()),
+                (PathBuf::from("/.claude/skills"), Place::Claude),
                 (PathBuf::from("/listed"), Place::Listed),
                 (PathBuf::from("/sets/mach12/skills"), nested()),
                 (
@@ -552,7 +606,7 @@ mod tests {
                     Place::Directory { top_files: true }
                 ),
                 (PathBuf::from("/home/u/.agents/skills"), nested()),
-                (PathBuf::from("/home/u/.claude/skills"), nested()),
+                (PathBuf::from("/home/u/.claude/skills"), Place::Claude),
             ]
         );
 
@@ -584,7 +638,7 @@ mod tests {
         );
         // The user's `~/.agents/skills` and `~/.claude/skills` are never also a project's.
         let found = places(&[], &[], &SkillOptions::default(), &home, None, Some(&home));
-        for shared in SHARED {
+        for shared in [AGENTS, CLAUDE] {
             let user = home.join(shared);
             assert_eq!(found.iter().filter(|(path, _)| path == &user).count(), 1);
         }
@@ -762,10 +816,7 @@ hyphens only)",
         assert_eq!(
             last,
             [
-                &(
-                    PathBuf::from("/home/u/.claude/skills"),
-                    Place::Directory { top_files: false }
-                ),
+                &(PathBuf::from("/home/u/.claude/skills"), Place::Claude),
                 &(PathBuf::from("/given"), Place::Given),
                 &(PathBuf::from("/more.md"), Place::Given),
             ]
@@ -907,6 +958,69 @@ hyphens only)",
         );
     }
 
+    impl Skills {
+        fn expand_now(&self, prompt: &str) -> Option<Result<String, String>> {
+            let variables = Variables {
+                project: PathBuf::from("/work"),
+                session: "S1".to_owned(),
+                effort: "low".to_owned(),
+            };
+            self.expand(prompt, &variables)
+        }
+    }
+
+    #[test]
+    fn claude_codes_skills_are_expanded_as_claude_code_does() {
+        let scratch = scratch("claude-expand");
+        let claude = crate::os::join(&scratch.0, ".claude/skills");
+        let file = crate::os::join(&claude, "brief/SKILL.md");
+        write(
+            &file,
+            "---\ndescription: Briefs.\narguments: [topic]\n---\nOn $topic from \
+${CLAUDE_SKILL_DIR} in ${CLAUDE_PROJECT_DIR}, ${CLAUDE_SESSION_ID}, ${CLAUDE_EFFORT}.\n\
+Status: !`git status`",
+        );
+        write(
+            &crate::os::join(&claude, "plain/SKILL.md"),
+            "---\ndescription: Plain.\n---\nPlain.",
+        );
+        let found = Skills::of_claude(&claude);
+        assert!(found.list().iter().all(|skill| skill.claude));
+        let directory = file.parent().unwrap().display().to_string();
+        let block = |body: &str, path: &Path| {
+            format!(
+                "<skill name=\"{}\" location=\"{}\">\nReferences are relative to {}.\n\n\
+{body}\n</skill>",
+                path.parent()
+                    .unwrap()
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy(),
+                path.display(),
+                path.parent().unwrap().display()
+            )
+        };
+        // Arguments go in the body, not after it, and cannot start a shell command there.
+        assert_eq!(
+            found.expand_now("/skill:brief !`id` rest"),
+            Some(Ok(block(
+                &format!("On \\! `id` from {directory} in /work, S1, low.\nStatus: !`git status`"),
+                &file
+            )))
+        );
+        let plain = crate::os::join(&claude, "plain/SKILL.md");
+        assert_eq!(
+            found.expand_now("/skill:plain more"),
+            Some(Ok(block("Plain.\n\nARGUMENTS: more", &plain)))
+        );
+        let others = Skills::in_directory(&claude);
+        assert!(others.list().iter().all(|skill| !skill.claude));
+        assert!(
+            (others.expand_now("/skill:brief x").unwrap().unwrap())
+                .ends_with("${CLAUDE_EFFORT}.\nStatus: !`git status`\n</skill>\n\nx")
+        );
+    }
+
     #[test]
     fn the_catalog_lists_skills_the_model_may_load_and_a_skill_prompt_sends_its_instructions() {
         let scratch = scratch("expand");
@@ -944,25 +1058,25 @@ Do it.\n</skill>",
             pdf.display(),
             directory.display()
         );
-        assert_eq!(found.expand("/skill:pdf"), Some(Ok(block.clone())));
+        assert_eq!(found.expand_now("/skill:pdf"), Some(Ok(block.clone())));
         assert_eq!(
-            found.expand("/skill:pdf  fill form.pdf\n"),
+            found.expand_now("/skill:pdf  fill form.pdf\n"),
             Some(Ok(format!("{block}\n\nfill form.pdf")))
         );
         // A skill left out of the instructions still runs; others are not skill prompts.
         assert!(
             found
-                .expand("/skill:manual")
+                .expand_now("/skill:manual")
                 .unwrap()
                 .unwrap()
                 .contains("Manual steps.")
         );
-        assert_eq!(found.expand("/skill:other"), None);
-        assert_eq!(found.expand("skill:pdf"), None);
-        assert_eq!(found.expand("/skill:pdfx"), None);
+        assert_eq!(found.expand_now("/skill:other"), None);
+        assert_eq!(found.expand_now("skill:pdf"), None);
+        assert_eq!(found.expand_now("/skill:pdfx"), None);
 
         fs::remove_file(&pdf).unwrap();
-        let error = found.expand("/skill:pdf").unwrap().unwrap_err();
+        let error = found.expand_now("/skill:pdf").unwrap().unwrap_err();
         assert!(error.starts_with(&format!("skill pdf: cannot read {}", pdf.display())));
         assert!(Skills::default().catalog().is_empty());
     }

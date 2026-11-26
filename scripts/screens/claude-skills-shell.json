@@ -1,0 +1,52 @@
+{
+  "size": "100x30",
+  "files": {
+    ".claude/skills/brief/SKILL.md": "---\ndescription: \"Brief me on the branch\"\narguments: [audience]\n---\n\nBranch: !`git branch --show-current`\n\nSkill: !`basename \"${CLAUDE_SKILL_DIR}\"`, project ${CLAUDE_PROJECT_DIR}, effort ${CLAUDE_EFFORT}.\n\nSummarize for $audience.\n",
+    ".claude/skills/broken/SKILL.md": "---\ndescription: \"Broken\"\n---\nMissing: !`cat no-such-file`\n"
+  },
+  "replies": [
+    [
+      {
+        "text": "You are on main; the skill ran in brief."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "gpt-6-luna"
+    },
+    {
+      "type": "/skill:brief !`touch made`\r"
+    },
+    {
+      "until": "You are on main"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-skills-shell-expanded"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "type": "/skill:broken\r"
+    },
+    {
+      "until": "was not sent"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-skills-shell-failed"
+    }
+  ]
+}

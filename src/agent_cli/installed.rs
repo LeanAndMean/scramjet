@@ -1354,6 +1354,7 @@ mod tests {
             description: format!("Does {name}."),
             path,
             listed,
+            claude: false,
         };
         let found_skills = [
             skill(

@@ -156,7 +156,7 @@ pub(super) struct Variables {
 }
 
 impl Variables {
-    fn substitute(&self, text: &str) -> String {
+    pub(super) fn substitute(&self, text: &str) -> String {
         let project = self.project.display().to_string();
         (text.replace("${CLAUDE_PROJECT_DIR}", &project))
             .replace("${CLAUDE_SESSION_ID}", &self.session)
@@ -294,7 +294,7 @@ fn parse(name: String, path: &Path, content: &str, notices: &mut Vec<String>) ->
 
 /// The names `arguments` gives the positional arguments, as Claude Code reads a list or a
 /// whitespace-separated string; numbers and empty names are not names.
-fn argument_names(value: &Yaml) -> Vec<String> {
+pub(super) fn argument_names(value: &Yaml) -> Vec<String> {
     let names: Vec<String> = match value {
         Yaml::Array(items) => (items.iter())
             .filter_map(|item| item.as_str().map(str::to_owned))
@@ -316,7 +316,7 @@ fn same_content(one: &Path, other: &Path) -> bool {
 /// and `$N` (counted from 0, left as written when not given) and `$ARGUMENTS`, the whole; `\$`
 /// before one of them keeps it as written. Values put in are not substituted again. With
 /// arguments but nothing substituted, they follow the body as `ARGUMENTS: …`.
-fn substitute(body: &str, args: &str, names: &[String]) -> String {
+pub(super) fn substitute(body: &str, args: &str, names: &[String]) -> String {
     let split = split_args(args);
     let mut names: Vec<(usize, &str)> = (names.iter().enumerate())
         .map(|(at, name)| (at, name.as_str()))

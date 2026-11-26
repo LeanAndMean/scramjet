@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.398.0 — Claude Code's skills as Claude Code runs them
+
+### Added
+
+- `/skill:NAME` for a skill of `.claude/skills` or `~/.claude/skills` now works as in Claude Code: its arguments go where `$ARGUMENTS`, `$0` or its `arguments` names say (else after it as `ARGUMENTS: …`), `${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_SESSION_ID}` and `${CLAUDE_EFFORT}` are replaced, and its `` !`command` `` lines run first, as a Claude Code command's do. Skills of other places are sent as before.
+
 ## 2.397.0 — Claude Code's command variables
 
 ### Added

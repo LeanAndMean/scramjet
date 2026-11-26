@@ -1820,17 +1820,21 @@ impl Agent {
     /// (`AgentUi::command_sent`) once they ran.
     pub fn expand(&mut self, prompt: &str) -> Option<String> {
         self.commands.refresh(prompt);
+        let variables = self.claude_variables();
+        let without_shell = |sent: String| {
+            claude_commands::shell_commands(&sent)
+                .is_empty()
+                .then_some(sent)
+        };
         (self.commands.expand(prompt))
+            .or_else(|| without_shell(self.claude_commands.expand(prompt, &variables)?.ok()?))
             .or_else(|| {
-                let sent = self
-                    .claude_commands
-                    .expand(prompt, &self.claude_variables())?
-                    .ok()?;
-                claude_commands::shell_commands(&sent)
-                    .is_empty()
-                    .then_some(sent)
+                let sent = self.skills.expand(prompt, &variables)?.ok()?;
+                match self.skills.named(prompt)?.claude {
+                    true => without_shell(sent),
+                    false => Some(sent),
+                }
             })
-            .or_else(|| self.skills.expand(prompt)?.ok())
     }
 
     /// Sends `files` with the next prompt `turn` runs, as Scramjet sends the command line's `@`

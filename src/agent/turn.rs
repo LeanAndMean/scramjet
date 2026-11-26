@@ -99,11 +99,14 @@ impl Agent {
             .then(|| self.claude_commands.named(prompt))
             .flatten()
             .map(|command| command.name.clone());
+        let claude = claude.or_else(|| {
+            let skill = self.skills.named(prompt).filter(|skill| skill.claude)?;
+            command.is_none().then(|| format!("skill:{}", skill.name))
+        });
         let skill = command.is_none().then(|| {
-            (self
-                .claude_commands
-                .expand(prompt, &self.claude_variables()))
-            .or_else(|| self.skills.expand(prompt))
+            let variables = self.claude_variables();
+            (self.claude_commands.expand(prompt, &variables))
+                .or_else(|| self.skills.expand(prompt, &variables))
         });
         let skill = skill.flatten();
         self.lifecycle.prompted(match (&command, &skill) {
@@ -1289,6 +1292,47 @@ mod tests {
         assert_eq!(ui.questions, 1);
         assert!(!ui.shown.iter().any(|shown| shown.starts_with("call ")));
         assert_eq!(agent.prompts(), ["/state !`touch made`"]);
+    }
+
+    #[test]
+    fn a_claude_code_skill_runs_its_shell_commands_and_a_failed_one_stops_it() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "one",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, scratch) = agent(endpoint, "claude-skill-shell");
+        let skills = scratch.0.join(".claude").join("skills");
+        let file = skills.join("state").join("SKILL.md");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let text =
+            "---\ndescription: State.\n---\nIn: !`basename \"${CLAUDE_SKILL_DIR}\"`\nAsk: $0";
+        std::fs::write(&file, text).unwrap();
+        let broken = skills.join("broken").join("SKILL.md");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::fs::write(&broken, "---\ndescription: B.\n---\nNever: !`exit 3`").unwrap();
+        agent.skills = super::super::Skills::of_claude(&skills);
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("/skill:state !`touch made`", &mut ui, &cancel)
+            .unwrap();
+        agent.turn("/skill:broken", &mut ui, &cancel).unwrap();
+        let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 1);
+        assert!(!scratch.0.join("made").exists());
+        let sent = format!(
+            "<skill name=\"state\" location=\"{}\">\nReferences are relative to {}.\n\n\
+In: state\nAsk: \\! `touch\n</skill>",
+            file.display(),
+            file.parent().unwrap().display()
+        );
+        assert_eq!(bodies[0]["input"], json!([{"role":"user","content":sent}]));
+        let notices: Vec<_> = (ui.shown.iter())
+            .filter(|shown| shown.starts_with("notice /"))
+            .collect();
+        assert_eq!(notices.len(), 1, "{:?}", ui.shown);
+        assert!(notices[0].starts_with("notice /skill:broken was not sent: its command `exit 3`"));
+        assert_eq!(agent.prompts(), ["/skill:state !`touch made`"]);
     }
 
     #[test]
