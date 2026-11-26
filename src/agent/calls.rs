@@ -700,16 +700,16 @@ impl Tools<'_> {
                     _ => call.run(root, hidden.as_ref(), cancel, progress),
                 };
                 let mut output = output.unwrap_or_else(failure);
-                if stores && hidden.is_some() && output.failed && tools::is_shell(call.name) {
+                // A refused write explains the failure, so the stores' note would only mislead.
+                let refused = (self.sandbox.filter(|_| self.asks_for_writes))
+                    .filter(|_| shell && shows_refused_write(&output.text, output.failed));
+                if refused.is_none() && stores && hidden.is_some() && output.failed && shell {
                     let command = call.arguments["command"].as_str().unwrap_or_default();
                     if needs_a_store(command) {
                         output.text += &stores_hidden(self.sandbox.is_some());
                     }
                 }
-                if let Some(sandbox) = self.sandbox.filter(|_| self.asks_for_writes)
-                    && shell
-                    && shows_refused_write(&output.text, output.failed)
-                {
+                if let Some(sandbox) = refused {
                     output.text += &write_refused(sandbox);
                 }
                 (output, Usage::default())
@@ -1703,6 +1703,16 @@ worktree\n---\n\nWrite.\n",
                 "bash",
                 json!({ "command": "echo 'it says \"Read-only file system\"'" }),
             ),
+            tool_call(
+                "call_5",
+                "bash",
+                json!({ "command": "git --version >/dev/null; echo x > .git/index.lock" }),
+            ),
+            tool_call(
+                "call_6",
+                "bash",
+                json!({ "command": "git -C . nowhere 2>/dev/null; exit 128" }),
+            ),
             reply("done"),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "refused-write");
@@ -1732,6 +1742,17 @@ worktree\n---\n\nWrite.\n",
         );
         let named = last_output(&bodies[4]);
         assert!(!named.contains("Scramjet:"), "{named}");
+        let stores = "Scramjet: this turn's commands run with the credential stores hidden";
+        let locked = last_output(&bodies[5]);
+        assert!(
+            locked.contains("refused a write") && !locked.contains(stores),
+            "{locked}"
+        );
+        let remote = last_output(&bodies[6]);
+        assert!(
+            remote.contains(stores) && !remote.contains("refused a write"),
+            "{remote}"
+        );
         assert!(!agent.root().join(".git/made").exists());
     }
 

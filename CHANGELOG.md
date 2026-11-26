@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.347.7 — One note for a refused write
+
+### Fixed
+
+- In the sandbox, a `git` command (or another that uses logins, such as `gh` or `ssh`) that failed on a write the sandbox refused, as `git checkout` on the read-only `.git`, told the agent both that the write was refused and that the credential stores are hidden and a login may be why. It now gets only the note about the refused write, which is the cause.
+
 ## 2.347.6 — A quoted table that ends without a blank quote line
 
 ### Fixed
