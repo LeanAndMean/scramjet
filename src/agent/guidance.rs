@@ -2,8 +2,9 @@
 //! whose `paths` match it and the `CLAUDE.md` files of the directories between the project and
 //! it (`instructions::guidance`).
 
+use super::sandbox::Hidden;
 use super::tools::{self, Call};
-use super::{Agent, AgentError, AgentUi, FAILED, PROBE, instructions};
+use super::{Agent, AgentError, AgentUi, FAILED, PROBE, Problem, instructions};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -13,6 +14,61 @@ const GUIDANCE: &str = "_scramjet_guidance";
 
 /// The tools whose file brings its instructions in, as Claude Code's Read, Edit and Write.
 const TOUCHING: [&str; 3] = ["read", "write", "edit"];
+
+/// The file `call` reads, writes or edits, resolved from `root`; `None` for another tool.
+pub(super) fn touched(call: &Call, root: &Path) -> Option<PathBuf> {
+    if !TOUCHING.contains(&call.name) {
+        return None;
+    }
+    let path = call.arguments["path"].as_str()?;
+    Some(tools::resolve(root, path))
+}
+
+/// The path as `loaded` holds it.
+pub(super) fn real(path: &Path) -> PathBuf {
+    crate::os::canonicalize(path).unwrap_or_else(|_| path.into())
+}
+
+/// The instructions the files `touched` bring in that are not in `loaded`, added to it: the
+/// files, and the user message that gives them to the model.
+pub(super) fn bring_in(
+    root: &Path,
+    touched: &[PathBuf],
+    loaded: &mut Vec<PathBuf>,
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Option<(Vec<PathBuf>, String)> {
+    let mut files = Vec::new();
+    for file in touched {
+        for (path, text) in instructions::guidance(root, file, hidden, problems) {
+            let path_real = real(&path);
+            if !loaded.contains(&path_real) {
+                loaded.push(path_real);
+                files.push((path, text));
+            }
+        }
+    }
+    if files.is_empty() {
+        return None;
+    }
+    let contents: Vec<String> = (files.iter())
+        .map(|(path, text)| format!("Contents of {}:\n\n{}", path.display(), text.trim()))
+        .collect();
+    let note = format!(
+        "<system-reminder>\n{}\n</system-reminder>",
+        contents.join("\n\n")
+    );
+    Some((files.into_iter().map(|(path, _)| path).collect(), note))
+}
+
+/// The files `paths` as the notice names them: from `root` when inside it.
+pub(super) fn shown(root: &Path, paths: &[PathBuf]) -> String {
+    let shown = |path: &PathBuf| match path.strip_prefix(root) {
+        Ok(inside) => inside.display().to_string(),
+        Err(_) => tools::shortened(&path.display().to_string()),
+    };
+    paths.iter().map(shown).collect::<Vec<_>>().join(", ")
+}
 
 impl Agent {
     /// Adds, for the model's next request, the instructions the files that `calls` read, wrote or
@@ -33,18 +89,12 @@ impl Agent {
             })
         };
         let touched: Vec<PathBuf> = (calls.iter())
-            .filter(|call| TOUCHING.contains(&call["name"].as_str().unwrap_or_default()))
             .filter(|call| succeeded(call))
-            .filter_map(|call| {
-                let call = Call::parse(call).ok()?;
-                let path = call.arguments["path"].as_str()?.to_owned();
-                Some(tools::resolve(&self.config.root, &path))
-            })
+            .filter_map(|call| touched(&Call::parse(call).ok()?, &self.config.root))
             .collect();
         if touched.is_empty() {
             return Ok(());
         }
-        let real = |path: &Path| crate::os::canonicalize(path).unwrap_or_else(|_| path.into());
         let mut loaded: Vec<PathBuf> = (self.context_files.iter().map(|path| real(path)))
             .chain(
                 (self.conversation.iter())
@@ -55,39 +105,18 @@ impl Agent {
             )
             .collect();
         let hidden = self.instruction_hidden();
-        let (mut files, mut problems) = (Vec::new(), Vec::new());
-        for file in touched {
-            for (path, text) in
-                instructions::guidance(&self.config.root, &file, &hidden, &mut problems)
-            {
-                let path_real = real(&path);
-                if !loaded.contains(&path_real) {
-                    loaded.push(path_real);
-                    files.push((path, text));
-                }
-            }
-        }
+        let mut problems = Vec::new();
+        let root = &self.config.root;
+        let brought = bring_in(root, &touched, &mut loaded, &hidden, &mut problems);
         for problem in problems {
             ui.notice(&problem.to_string());
         }
-        if files.is_empty() {
+        let Some((files, note)) = brought else {
             return Ok(());
-        }
-        let shown = |path: &Path| match path.strip_prefix(&self.config.root) {
-            Ok(inside) => inside.display().to_string(),
-            Err(_) => tools::shortened(&path.display().to_string()),
         };
-        let names: Vec<String> = files.iter().map(|(path, _)| shown(path)).collect();
-        ui.notice(&format!("Loaded {}", names.join(", ")));
-        let contents: Vec<String> = (files.iter())
-            .map(|(path, text)| format!("Contents of {}:\n\n{}", path.display(), text.trim()))
-            .collect();
-        let note = format!(
-            "<system-reminder>\n{}\n</system-reminder>",
-            contents.join("\n\n")
-        );
+        ui.notice(&format!("Loaded {}", shown(root, &files)));
         let paths: Vec<String> = (files.iter())
-            .map(|(path, _)| path.display().to_string())
+            .map(|path| path.display().to_string())
             .collect();
         self.add(json!({"role": "user", "content": note, PROBE: true, GUIDANCE: paths}))
     }
@@ -149,5 +178,52 @@ mod tests {
             notices[0].ends_with("sub/CLAUDE.md, .claude/rules/rust.md"),
             "{notices:?}"
         );
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore = "needs the sandbox, which Windows lacks")]
+    fn a_subagents_read_brings_in_its_files_once_for_that_child() {
+        let (endpoint, server) = serve(vec![
+            tool_call(
+                "call_1",
+                "subagent",
+                json!({"agent":"reader","task":"Read sub/a.rs"}),
+            ),
+            tool_call("call_2", "read", json!({"path": "sub/a.rs"})),
+            tool_call("call_3", "read", json!({"path": "sub/a.rs"})),
+            stream(&fixture::text_events("Read.", fixture::known_usage())),
+            stream(&fixture::text_events("Done.", fixture::known_usage())),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "child-guidance");
+        let root = scratch.0.clone();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/a.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("sub/CLAUDE.md"), "Sub rules.\n").unwrap();
+        let agents = root.join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("reader.md"),
+            "---\nname: reader\ndescription: Reads\ntools: read\n---\n\nYou read.\n",
+        )
+        .unwrap();
+        agent.agents_directory = Some(agents);
+        let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+        agent.turn("go", &mut ui, &cancel).unwrap();
+        let requests = server.join().unwrap();
+        let last = |at: usize| -> Value {
+            let input = requests[at]["input"].as_array().unwrap();
+            input.last().unwrap().clone()
+        };
+        let expected = format!(
+            "<system-reminder>\nContents of {}:\n\nSub rules.\n</system-reminder>",
+            root.join("sub/CLAUDE.md").display()
+        );
+        assert_eq!(last(2), json!({"role": "user", "content": expected}));
+        // Read again: nothing more is added.
+        assert_eq!(last(3)["type"], "function_call_output");
+        let notices: Vec<&String> = (ui.shown.iter())
+            .filter(|shown| shown.contains("loaded"))
+            .collect();
+        assert_eq!(notices, ["notice reader loaded sub/CLAUDE.md"]);
     }
 }

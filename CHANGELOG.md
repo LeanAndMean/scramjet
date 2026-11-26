@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.394.0 — Claude Code's rules for subagents' files
+
+### Added
+
+- Subagents now get the rules whose `paths` match the files they read, write or edit, and the `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` and rules of the directories down to them, as the main agent does since 2.393.0 and as Claude Code's subagents do. Each comes once in that subagent's conversation, and a notice names the subagent and what it loaded.
+
 ## 2.393.0 — Claude Code's rules for the files worked on
 
 ### Added

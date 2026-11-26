@@ -11,7 +11,7 @@ use super::{
     MAX_STEPS, Problem, Skills, ToolDetail, Usage,
     approvals::{self, Approvals},
     commands::{self, Sets},
-    hooks, instructions,
+    guidance, hooks, instructions,
     providers::{ModelInfo, Providers},
     rates,
     request::{self, Sending},
@@ -1490,16 +1490,24 @@ fn run_child(
             .chain(writable.iter().cloned())
             .chain(parent.given_to_read()),
     );
+    let instruction_hidden =
+        sandbox::Hidden::stores(parent.providers.credential_files(), &reads.without_reach());
     let instructions = instructions::child(
         &job.cwd,
         tools,
         &agent.prompt,
         parent.skills,
         parent.agent_directory,
-        &sandbox::Hidden::stores(parent.providers.credential_files(), &reads.without_reach()),
+        &instruction_hidden,
         network,
         writer,
     );
+    let directory = parent.agent_directory;
+    let mut loaded: Vec<PathBuf> =
+        (instructions::context_files(&job.cwd, directory, &instruction_hidden, &mut Vec::new()))
+            .into_iter()
+            .map(|(path, _)| guidance::real(&path))
+            .collect();
     let mut task = format!("Task: {}", job.task);
     if let Some(worktree) = &job.worktree {
         let whose = match job.shared {
@@ -1642,6 +1650,7 @@ uncommitted.",
         }
         let hidden =
             sandbox::Hidden::current(parent.providers.credential_files(), &reads).scratch(&scratch);
+        let mut touched = Vec::new();
         for item in calls {
             let output = match Call::parse(&item) {
                 Ok(call) => {
@@ -1656,6 +1665,11 @@ uncommitted.",
                         }
                         (true, None) => call.run_read_only(&job.cwd, &hidden, network, cancel),
                     };
+                    if let Ok(output) = &ran
+                        && !output.failed
+                    {
+                        touched.extend(guidance::touched(&call, &job.cwd));
+                    }
                     let ran = ran.map(|mut output| {
                         if call.name == "bash" && output.failed {
                             let mut bound = writer
@@ -1678,6 +1692,22 @@ uncommitted.",
             input.push(
                 json!({"type":"function_call_output","call_id":item["call_id"],"output":output}),
             );
+        }
+        let mut problems = Vec::new();
+        let brought = guidance::bring_in(
+            &job.cwd,
+            &touched,
+            &mut loaded,
+            &instruction_hidden,
+            &mut problems,
+        );
+        for problem in problems {
+            report(Event::Notice(problem.to_string()));
+        }
+        if let Some((files, note)) = brought {
+            let names = guidance::shown(&job.cwd, &files);
+            report(Event::Notice(format!("{} loaded {names}", agent.name)));
+            input.push(json!({"role": "user", "content": note}));
         }
     }
     run.error = Some((Some("error"), AgentError::TooManySteps.to_string()));
