@@ -2249,10 +2249,15 @@ impl Agent {
     /// The text of the conversation's last reply that has any, trimmed, as Scramjet's `/copy`
     /// copies it; reasoning and tool calls are not part of it.
     pub fn last_reply(&self) -> Option<String> {
+        self.replies().next()
+    }
+
+    /// The texts of the replies that have any, the latest first, as `/copy N` numbers them.
+    pub fn replies(&self) -> impl Iterator<Item = String> + '_ {
         (self.conversation.iter().rev())
-            .filter(|item| item["type"] == "message")
+            .filter(|item| item["type"] == "message" && item["role"] != "user")
             .map(|item| message_text(item).trim().to_owned())
-            .find(|text| !text.is_empty())
+            .filter(|text| !text.is_empty())
     }
 
     /// The sessions before this one in its chain, the first first, as they show above its

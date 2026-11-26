@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.374.0 — /copy N and code blocks
+
+### Added
+
+- `/copy N` copies the Nth-latest reply (of the last 20), as Claude Code's. On the full screen a reply with code blocks opens a list to copy the whole reply or one block (its language and lines shown); its last entry, "Always copy full response", turns on the new `copyFullResponse` setting (a row in `/settings`), which skips the list. "Copied to clipboard" now says how many characters and lines.
+
 ## 2.373.0 — /color
 
 ### Added

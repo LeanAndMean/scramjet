@@ -23,7 +23,8 @@ pub(super) enum Builtin<'a> {
     Settings,
     Export(&'a str),
     Import(&'a str),
-    Copy,
+    /// Claude Code's `/copy [N]`: the Nth-latest reply, or one of its code blocks.
+    Copy(&'a str),
     /// With the new session's name, if given.
     Clear(&'a str),
     Rename(&'a str),
@@ -95,7 +96,7 @@ impl<'a> Builtin<'a> {
             "settings" if argument.is_empty() => Self::Settings,
             "export" => Self::Export(argument),
             "import" => Self::Import(argument),
-            "copy" if argument.is_empty() => Self::Copy,
+            "copy" => Self::Copy(argument),
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
             "color" => Self::Color(argument),
@@ -151,7 +152,7 @@ impl<'a> Builtin<'a> {
             self,
             Self::Settings
                 | Self::Export(_)
-                | Self::Copy
+                | Self::Copy(_)
                 | Self::Rename(_)
                 | Self::Color(_)
                 | Self::Status
@@ -199,7 +200,7 @@ impl Interactive {
             Some(Builtin::Settings) => self.settings(),
             Some(Builtin::Export(path)) => self.export(path),
             Some(Builtin::Import(path)) => self.import(path),
-            Some(Builtin::Copy) => self.copy_reply(),
+            Some(Builtin::Copy(age)) => self.copy_reply(age),
             Some(Builtin::Clear(name)) => {
                 if drive::new_session(self) && !name.is_empty() {
                     self.name(name);
@@ -340,13 +341,66 @@ impl Interactive {
         drive::import(self, path);
     }
 
-    /// `/copy`, as Scramjet's: the last reply's text, as the model wrote it, to the clipboard.
-    fn copy_reply(&mut self) {
-        let Some(text) = self.session.agent.last_reply() else {
+    /// `/copy [N]`, as Claude Code's: the Nth-latest of the last 20 replies, as the model wrote
+    /// it; on the full screen a reply with code blocks offers each of them, unless
+    /// `copyFullResponse` is on.
+    fn copy_reply(&mut self, age: &str) {
+        let replies: Vec<String> = self.session.agent.replies().take(20).collect();
+        if replies.is_empty() {
             return self.say("No agent messages to copy yet.");
+        }
+        let index = match age {
+            "" => 0,
+            typed => match typed.parse::<usize>() {
+                Ok(age) if age >= 1 => age - 1,
+                _ => {
+                    return self.say(&format!(
+                        "Usage: /copy [N] where N is 1 (latest), 2, 3, \u{2026} Got: {typed}"
+                    ));
+                }
+            },
+        };
+        let Some(reply) = replies.get(index) else {
+            let count = replies.len();
+            let noun = if count == 1 { "message" } else { "messages" };
+            return self.say(&format!("Only {count} agent {noun} available to copy"));
+        };
+        let blocks = code_blocks(reply);
+        let chosen = match &self.screen {
+            Some(screen) if !blocks.is_empty() && !self.session.settings.copy_full_response => {
+                let mut choices = vec![choice("Full response", Some(sized(reply, "char")))];
+                choices.extend(blocks.iter().map(|(code, language)| {
+                    let lines = code.lines().count().max(1);
+                    let lines = (lines > 1).then(|| format!("{lines} lines"));
+                    let about = [language.clone(), lines].into_iter().flatten();
+                    let about = about.collect::<Vec<_>>().join(", ");
+                    let label = code.split_whitespace().collect::<Vec<_>>().join(" ");
+                    choice(
+                        &clip(&visible(&label), 60),
+                        Some(about).filter(|a| !a.is_empty()),
+                    )
+                }));
+                choices.push(choice(
+                    "Always copy full response",
+                    Some("Skip this list from now on (Copy full response in /settings)".to_owned()),
+                ));
+                let question =
+                    super::select::Picker::question("Select content to copy:", &choices, None);
+                match screen.pick(question) {
+                    None => return self.say_styled(style::MUTED, "Copy cancelled"),
+                    Some(0) => Copied::Full,
+                    Some(at) if at == choices.len() - 1 => Copied::Always,
+                    Some(at) => Copied::Block(at - 1),
+                }
+            }
+            _ => Copied::Full,
+        };
+        let text = match chosen {
+            Copied::Block(at) => blocks[at].0.as_str(),
+            Copied::Full | Copied::Always => reply.as_str(),
         };
         let terminal = self.screen.is_some() || std::io::stderr().is_terminal();
-        match clipboard::copy(&text, terminal) {
+        match clipboard::copy(text, terminal) {
             Ok(sequence) => {
                 if let Some(sequence) = sequence {
                     match &self.screen {
@@ -354,9 +408,19 @@ impl Interactive {
                         None => eprint!("{sequence}"),
                     }
                 }
-                self.say_styled(style::MUTED, "Copied last agent message to clipboard");
+                let copied = format!("Copied to clipboard ({})", sized(text, "character"));
+                self.say_styled(style::MUTED, &copied);
             }
             Err(error) => self.say(&format!("Error: {error}")),
+        }
+        if let Copied::Always = chosen {
+            match self.session.settings.copy_full_responses() {
+                Ok(()) => self.say_styled(
+                    style::MUTED,
+                    "Preference saved: /copy copies whole replies (Copy full response in /settings)",
+                ),
+                Err(error) => self.say(&format!("Error: the preference was not saved: {error}")),
+            }
         }
     }
 
@@ -1472,9 +1536,88 @@ fn task_output(task: &scramjet::agent::tasks::Task) -> ReportView {
     ReportView::new(&format!("Task {}", task.id), "", vec![tab], 0, false).at_end()
 }
 
+/// What `/copy`'s list chose.
+#[derive(Clone, Copy)]
+enum Copied {
+    Full,
+    Always,
+    Block(usize),
+}
+
+fn choice(label: &str, description: Option<String>) -> scramjet::agent::Choice {
+    scramjet::agent::Choice {
+        label: label.to_owned(),
+        description,
+        value: String::new(),
+    }
+}
+
+/// `12 characters, 2 lines`, with `unit` the first count's, singular.
+fn sized(text: &str, unit: &str) -> String {
+    let plural = |count: usize, unit: &str| match count {
+        1 => format!("1 {unit}"),
+        count => format!("{count} {unit}s"),
+    };
+    let lines = text.matches('\n').count() + 1;
+    format!(
+        "{}, {}",
+        plural(text.chars().count(), unit),
+        plural(lines, "line")
+    )
+}
+
+/// The code blocks of the Markdown `text`, each with its fence's language if it names one.
+fn code_blocks(text: &str) -> Vec<(String, Option<String>)> {
+    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
+    let mut blocks = Vec::new();
+    let mut open: Option<(String, Option<String>)> = None;
+    for event in Parser::new(text) {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let language = match kind {
+                    CodeBlockKind::Fenced(info) => {
+                        info.split_whitespace().next().map(str::to_owned)
+                    }
+                    CodeBlockKind::Indented => None,
+                };
+                open = Some((String::new(), language));
+            }
+            Event::Text(code) => {
+                if let Some((block, _)) = &mut open {
+                    block.push_str(&code);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some((block, language)) = open.take() {
+                    let block = block.strip_suffix('\n').unwrap_or(&block).to_owned();
+                    blocks.push((block, language));
+                }
+            }
+            _ => {}
+        }
+    }
+    blocks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_offers_the_code_blocks_with_their_languages() {
+        let reply = "Run:\n\n```bash title\ncargo test\ncargo fmt\n```\n\nThen\n\n    indented\n\n`inline` and\n\n~~~\nplain\n~~~";
+        assert_eq!(
+            code_blocks(reply),
+            [
+                ("cargo test\ncargo fmt".to_owned(), Some("bash".to_owned())),
+                ("indented".to_owned(), None),
+                ("plain".to_owned(), None),
+            ]
+        );
+        assert!(code_blocks("No **code** here, `inline` only.").is_empty());
+        assert_eq!(sized("one\ntwo", "char"), "7 chars, 2 lines");
+        assert_eq!(sized("é", "character"), "1 character, 1 line");
+    }
 
     #[test]
     fn token_counts_take_plain_grouped_and_k_forms() {
@@ -1549,7 +1692,6 @@ mod tests {
             "/context all",
             "/system-prompt all",
             "/hotkeys all",
-            "/copy all",
             "/scoped-models luna",
             "/login github",
             "/exit now",
@@ -1569,6 +1711,9 @@ mod tests {
         );
         assert_eq!(Builtin::parse("/color Blue"), Some(Builtin::Color("Blue")));
         assert_eq!(Builtin::parse("/color"), Some(Builtin::Color("")));
+        assert_eq!(Builtin::parse("/copy 2 "), Some(Builtin::Copy("2")));
+        assert_eq!(stops("/copy all"), Some(false));
+        assert_eq!(Builtin::parse("/copy"), Some(Builtin::Copy("")));
         // A new session's name, as Claude Code's `/clear [name]` and `/branch [name]` take one.
         assert_eq!(
             Builtin::parse("/clear  next "),

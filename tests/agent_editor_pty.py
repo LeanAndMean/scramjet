@@ -2957,7 +2957,7 @@ def settings_menu(read, until, send, output):
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B' * 13 + b'\r')
+    send(b'\x1b[B' * 14 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [x] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -2979,7 +2979,7 @@ def settings_menu(read, until, send, output):
     assert 'Command: ' not in '\n'.join(rows), rows
     # A list the user opened leaves the status row on what the turn does.
     assert any(' Running ' in row for row in rows), rows
-    send(b'\x1b[B' * 24 + b'\r')
+    send(b'\x1b[B' * 25 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find; swi…'))
@@ -5274,7 +5274,7 @@ def copy_command(read, until, send, output):
     ended(read, output, rows=40)
     # The reply as the model wrote it, not as shown.
     send(b'/copy\r')
-    on_screen('Copied last agent message to clipboard')
+    on_screen('Copied to clipboard (34 characters, 4 lines)')
     copied(markdown_reply)
     # Typed during a turn, it copies the latest reply at once, while the call runs.
     send(b'again\r')
@@ -5283,8 +5283,51 @@ def copy_command(read, until, send, output):
     copied('Checking.')
     rows = on_screen('Checked.')
     text = '\n'.join(rows)
-    assert text.count('Copied last agent message to clipboard') == 2, text
-    assert text.index('Checking.') < text.rindex('Copied last') < text.index('Checked.'), text
+    assert text.count('Copied to clipboard (') == 2, text
+    assert text.index('Checking.') < text.rindex('Copied to') < text.index('Checked.'), text
+    # The Nth-latest reply: the third is the first.
+    send(b'/copy 3\r')
+    copied(markdown_reply)
+    send(b'/copy 4\r')
+    on_screen('Only 3 agent messages available to copy')
+    send(b'/copy last\r')
+    on_screen('Usage: /copy [N] where N is 1 (latest), 2, 3, \u2026 Got: last')
+    send(b'\x04')
+
+
+blocks_reply = 'Either:\n\n```bash\ncargo test\ncargo fmt\n```\n\nor:\n\n```\nmake\n```'
+
+
+def copy_offers_code_blocks(read, until, send, output):
+    shown, on_screen = full_screen(rows=40)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('or:')
+    ended(read, output, rows=40)
+    send(b'/copy\r')
+    rows = on_screen('Always copy full response')
+    text = '\n'.join(rows)
+    for listed in ['Select content to copy:', 'Full response', '60 chars, 12 lines', 'cargo test cargo fmt',
+                   'bash, 2 lines', 'make', 'Skip this list from now on']:
+        assert listed in text, (listed, text)
+    send(b'\x1b[B\r')
+    copied('cargo test\ncargo fmt')
+    on_screen('Copied to clipboard (20 characters, 2 lines)')
+    send(b'/copy\r')
+    on_screen('Select content to copy:')
+    send(b'\x1b')
+    on_screen('Copy cancelled')
+    # The last choice copies the whole reply, and so does every /copy after it.
+    send(b'/copy\r')
+    on_screen('Select content to copy:')
+    send(b'\x1b[B\x1b[B\x1b[B\r')
+    copied(blocks_reply)
+    on_screen('Preference saved')
+    assert saved(blocks_home).get('copyFullResponse') is True, saved(blocks_home)
+    # No list opens: the copy is made at once.
+    os.remove(clipboard)
+    send(b'/copy\r')
+    copied(blocks_reply)
     send(b'\x04')
 
 
@@ -5296,7 +5339,7 @@ def copy_command_by_the_terminal(read, until, send, output):
     ended(read, output)
     send(b'/copy\r')
     until(b'\x1b]52;c;%s\x07' % base64.b64encode(markdown_reply.encode()))
-    on_screen('Copied last agent message to clipboard')
+    on_screen('Copied to clipboard (34 characters, 4 lines)')
     send(b'\x04')
 
 
@@ -5588,10 +5631,14 @@ run([], copy_command, serve_items([
     [message('Checked.')],
 ]), rows=40, variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
                         'DISPLAY': '', 'CLIPBOARD': clipboard})
+blocks_home = config_home('copy-blocks')
+run([], copy_offers_code_blocks, serve_items([[message(blocks_reply)]]), rows=40,
+    variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
+               'DISPLAY': '', 'CLIPBOARD': clipboard, 'XDG_CONFIG_HOME': blocks_home})
 run([], copy_command_by_the_terminal, serve_items([[message(markdown_reply)]]))
 # With piped input the clipboard tool copies; without one there is no terminal for OSC 52.
 for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
-                          'CLIPBOARD': clipboard}, 'Copied last agent message to clipboard'),
+                          'CLIPBOARD': clipboard}, 'Copied to clipboard (16 characters, 1 line)'),
                         ({}, 'Error: Failed to copy to clipboard')]:
     if os.path.exists(clipboard):
         os.remove(clipboard)

@@ -28,7 +28,10 @@ const SLASH_COMMANDS: [(&str, &str); 44] = [
         "Export session (HTML default, or specify path: .html/.jsonl)",
     ),
     ("import", "Import and resume a session from a JSONL file"),
-    ("copy", "Copy last agent message to clipboard"),
+    (
+        "copy",
+        "Copy the last agent message to the clipboard, or the Nth-latest: /copy [N]",
+    ),
     ("rename", "Set session display name"),
     (
         "color",
