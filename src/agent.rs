@@ -769,6 +769,14 @@ pub struct AgentFile {
     pub description: String,
     pub path: PathBuf,
     pub source: AgentSource,
+    /// The tools its file lists, as named here; `None` for the main agent's read-only ones.
+    pub tools: Option<Vec<String>>,
+    /// The tools its `disallowedTools` leaves out.
+    pub disallowed: Vec<String>,
+    /// The model its file names; `None` for the main agent's.
+    pub model: Option<String>,
+    /// Its `isolation: worktree`.
+    pub worktree: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1692,6 +1700,10 @@ impl Agent {
                 name: agent.name,
                 description: agent.description,
                 path: agent.path,
+                tools: agent.tools,
+                disallowed: agent.disallowed,
+                model: agent.model,
+                worktree: agent.worktree,
             })
             .collect();
         let (global, root) = (self.autonomy.as_deref(), &self.config.root);

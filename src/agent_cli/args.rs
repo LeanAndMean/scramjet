@@ -357,7 +357,9 @@ skills and context files again, and starts the MCP servers whose entries changed
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
 available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disable [SERVER|all]
 starts or stops them, saved in disabledMcpServers.
-Typed while a turn runs, /status, /diff, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+/agents lists the agents subagent calls can name, each with where it comes from, the tools and
+model its file asks for and any problem in agent files; on the full screen Enter opens one's file.
+Typed while a turn runs, /status, /diff, /agents, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

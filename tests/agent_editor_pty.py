@@ -2131,7 +2131,7 @@ def completes_paths_and_commands(read, until, send, output):
     # Commands are listed as soon as `/` starts the prompt, the built-in scramjet set's among
     # them; Escape closes the list.
     send(b'/')
-    on_screen('(1/36)')
+    on_screen('(1/37)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -3847,7 +3847,8 @@ def project_agent_approval(read, until, send, output):
     assert selected.split() == ['\u203a', 'helper', 'project', 'approved'], rows
     note = ' '.join(row.strip() for row in rows[rows.index('  ' + helper_agent) + 1:]).strip()
     assert note.endswith("You approved running this project's agents with this file as it is; Enter opens it or "
-                         'forgets the approval. Helps.'), rows
+                         "forgets the approval. Helps. Tools: the main agent's read-only ones. Model: the main "
+                         "agent's."), rows
     # Enter asks whether to open the file or forget; Escape does neither.
     send(b'\r')
     rows = on_screen('Open it, or forget the approval?')

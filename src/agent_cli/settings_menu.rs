@@ -958,6 +958,15 @@ impl Interactive {
     /// (`edit_installed`), the list then showing that file's row again, or, for a link that
     /// leads nowhere, offers to remove it (`remove_link`).
     fn show_installed(&mut self) {
+        self.show_listing("Installed", installed::listing);
+    }
+
+    /// `show_installed`'s list, titled `title`, with the rows `build` gives.
+    pub(super) fn show_listing(
+        &mut self,
+        title: &str,
+        build: fn(&installed::Loaded) -> installed::Listing,
+    ) {
         let mut at = 0;
         let mut edited: Option<PathBuf> = None;
         loop {
@@ -966,20 +975,19 @@ impl Interactive {
             };
             let found = self.session.agent.installed();
             let problems = self.problems(&found);
-            let listing = installed::listing(&self.loaded(&found, &problems));
+            let listing = build(&self.loaded(&found, &problems));
+            if listing.rows.is_empty() {
+                return;
+            }
             if let Some(file) = edited.take() {
                 at = listing.row_of(&file, at).unwrap_or(at);
             }
             let visible = (editor::terminal_size().1 / 2).max(select::VISIBLE);
             let rows = &listing.rows;
-            let picker = select::Picker::select(
-                "Installed",
-                visible,
-                rows.len(),
-                at,
-                None,
-                |index, width| clip(&rows[index], width),
-            );
+            let picker =
+                select::Picker::select(title, visible, rows.len(), at, None, |index, width| {
+                    clip(&rows[index], width)
+                });
             let picker = (picker.headed(listing.headings)).noting(back_keys("edit"), listing.notes);
             let Some(index) = screen.pick(picker.held()) else {
                 return;
@@ -1097,7 +1105,7 @@ impl Interactive {
         }
     }
 
-    fn loaded<'a>(
+    pub(super) fn loaded<'a>(
         &'a self,
         found: &'a Installed,
         problems: &'a [Problem],

@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 29] = [
+const SLASH_COMMANDS: [(&str, &str); 30] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -61,6 +61,10 @@ const SLASH_COMMANDS: [(&str, &str); 29] = [
     (
         "mcp",
         "Show the MCP servers and their tools: /mcp [reconnect|enable|disable [SERVER|all]]",
+    ),
+    (
+        "agents",
+        "Show the agents subagent calls can name, and open their files",
     ),
     (
         "sandbox",
@@ -533,6 +537,7 @@ mod tests {
                 "/reload",
                 "/autopilot",
                 "/mcp",
+                "/agents",
                 "/sandbox",
                 "/add-dir",
                 "/exit",
@@ -546,7 +551,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /export         Export session (HTML default, or specify…",
                 "  /import         Import and resume a session from a JSONL…",
-                "  (1/29)",
+                "  (1/30)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -562,10 +567,10 @@ mod tests {
                 "→ /diff",
                 "  /usage",
                 "  /context",
-                "  (9/29)"
+                "  (9/30)"
             ]
         );
-        for _ in 0..21 {
+        for _ in 0..22 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);

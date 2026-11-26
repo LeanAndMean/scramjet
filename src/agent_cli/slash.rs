@@ -7,7 +7,7 @@ use super::drive::{self, SandboxChange};
 use super::interactive::{Interactive, completions};
 use super::terminal;
 use super::text::{clip, visible};
-use super::{changelog, clipboard, completion, export, keymap, style};
+use super::{changelog, clipboard, completion, export, installed, keymap, style};
 use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode};
 use std::{
     io::IsTerminal,
@@ -27,6 +27,7 @@ pub(super) enum Builtin<'a> {
     Rename(&'a str),
     Status,
     Diff,
+    Agents,
     /// With whether the details come first.
     Usage(bool),
     Context,
@@ -72,6 +73,7 @@ impl<'a> Builtin<'a> {
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
             "diff" if argument.is_empty() => Self::Diff,
+            "agents" if argument.is_empty() => Self::Agents,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
@@ -112,6 +114,7 @@ impl<'a> Builtin<'a> {
                 | Self::Rename(_)
                 | Self::Status
                 | Self::Diff
+                | Self::Agents
                 | Self::Usage(_)
                 | Self::Context
                 | Self::SystemPrompt
@@ -151,6 +154,7 @@ impl Interactive {
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Diff) => self.diff(),
+            Some(Builtin::Agents) => self.agents(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
             Some(Builtin::SystemPrompt) => self.system_prompt(),
@@ -365,6 +369,30 @@ impl Interactive {
             },
             Err(error) => self.say(&format!("Error: {error}")),
         }
+    }
+
+    /// `/agents`, as Claude Code's: the agents a subagent call can name, each with where it
+    /// comes from and what its file asks for; on the full screen in a list whose Enter opens the
+    /// file, as `/settings`' Installed does.
+    fn agents(&mut self) {
+        let found = self.session.agent.installed();
+        let problems = self.problems(&found);
+        let listing = installed::agents(&self.loaded(&found, &problems));
+        if listing.rows.is_empty() {
+            let user = scramjet::agent::config_directory()
+                .map(|config| scramjet::os::tilde(&config.join("agents")))
+                .unwrap_or_else(|| "your agent directory".to_owned());
+            let note = format!(
+                "No agents: a markdown file in {user} or in this project's .scramjet/agents \
+                 adds one"
+            );
+            return self.say_styled(style::MUTED, &note);
+        }
+        if self.screen.is_some() {
+            return self.show_listing("Agents", installed::agents);
+        }
+        let text = installed::agents_text(&self.loaded(&found, &problems));
+        self.say(text.trim_end());
     }
 
     /// `/context`, as Claude Code's: how much of the window each part of the context takes; on
@@ -934,6 +962,7 @@ mod tests {
         for prompt in [
             "/status",
             "/diff",
+            "/agents",
             "/context",
             "/system-prompt",
             "/export",

@@ -2,8 +2,8 @@
 //! wrong there, so that the user can find and fix it. Launch says at most one line about it.
 use super::keymap::{self, Binding};
 use scramjet::agent::{
-    AgentSource, Command, Installed, Origin, Problem, ProblemFile, ProjectApproval, Skill,
-    shortened,
+    AgentFile, AgentSource, Command, Installed, Origin, Problem, ProblemFile, ProjectApproval,
+    Skill, shortened,
 };
 use std::path::{Path, PathBuf};
 use unicode_width::UnicodeWidthStr;
@@ -154,63 +154,7 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
         })
         .collect();
     listing.section("Commands", commands);
-    let agents = (installed.agents.iter())
-        .map(|agent| {
-            let mut columns = vec![agent.name.clone()];
-            let from = match &agent.source {
-                AgentSource::Set(name) => {
-                    columns.push(name.clone());
-                    format!("From the command set {name}.")
-                }
-                AgentSource::User => {
-                    columns.push("user".to_owned());
-                    "In your agent directory.".to_owned()
-                }
-                AgentSource::Project(approval) => {
-                    let enter = keymap::key(Binding::SelectConfirm);
-                    let opens = |key: &String| format!("{key} opens it or forgets the approval");
-                    let (state, from) = match approval {
-                        ProjectApproval::Approved => (
-                            "approved",
-                            format!(
-                                "In this project's .scramjet/agents. You approved running this \
-                                 project's agents with this file as it is{}.",
-                                enter.map_or_else(String::new, |key| format!("; {}", opens(&key)))
-                            ),
-                        ),
-                        ProjectApproval::Changed => (
-                            "changed since approved",
-                            format!(
-                                "In this project's .scramjet/agents, changed since you approved \
-                                 running this project's agents: a subagent call naming one asks \
-                                 again.{}",
-                                enter.map_or_else(String::new, |key| format!(" {}.", opens(&key)))
-                            ),
-                        ),
-                        ProjectApproval::NotApproved => (
-                            "not approved",
-                            "In this project's .scramjet/agents, not approved: a subagent call \
-                             naming one of this project's agents asks before it runs."
-                                .to_owned(),
-                        ),
-                    };
-                    columns.extend(["project".to_owned(), state.to_owned()]);
-                    from
-                }
-            };
-            let note = format!("{}\n{from} {}", shown(&agent.path), agent.description);
-            (columns, note, Some(agent.path.clone()))
-        })
-        .collect();
-    let first = listing.rows.len() + 1;
-    listing.section("Agents", agents);
-    for (at, agent) in installed.agents.iter().enumerate() {
-        if let AgentSource::Project(ProjectApproval::Approved | ProjectApproval::Changed) =
-            agent.source
-        {
-            listing.approved[first + at] = true;
-        }
-    }
+    agents_section(&mut listing, installed);
     let skills = (loaded.skills.iter())
         .map(|skill| {
             let offered = match skill.listed {
@@ -307,6 +251,135 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
     listing
 }
 
+/// The agents section of `installed`, marking the rows of project agents the approval covers.
+fn agents_section(listing: &mut Listing, installed: &Installed) {
+    let agents = (installed.agents.iter())
+        .map(|agent| {
+            let mut columns = vec![agent.name.clone()];
+            let from = match &agent.source {
+                AgentSource::Set(name) => {
+                    columns.push(name.clone());
+                    format!("From the command set {name}.")
+                }
+                AgentSource::User => {
+                    columns.push("user".to_owned());
+                    "In your agent directory.".to_owned()
+                }
+                AgentSource::Project(approval) => {
+                    let enter = keymap::key(Binding::SelectConfirm);
+                    let opens = |key: &String| format!("{key} opens it or forgets the approval");
+                    let (state, from) = match approval {
+                        ProjectApproval::Approved => (
+                            "approved",
+                            format!(
+                                "In this project's .scramjet/agents. You approved running this \
+                                 project's agents with this file as it is{}.",
+                                enter.map_or_else(String::new, |key| format!("; {}", opens(&key)))
+                            ),
+                        ),
+                        ProjectApproval::Changed => (
+                            "changed since approved",
+                            format!(
+                                "In this project's .scramjet/agents, changed since you approved \
+                                 running this project's agents: a subagent call naming one asks \
+                                 again.{}",
+                                enter.map_or_else(String::new, |key| format!(" {}.", opens(&key)))
+                            ),
+                        ),
+                        ProjectApproval::NotApproved => (
+                            "not approved",
+                            "In this project's .scramjet/agents, not approved: a subagent call \
+                             naming one of this project's agents asks before it runs."
+                                .to_owned(),
+                        ),
+                    };
+                    columns.extend(["project".to_owned(), state.to_owned()]);
+                    from
+                }
+            };
+            let note = format!(
+                "{}\n{from} {}\n{}",
+                shown(&agent.path),
+                agent.description,
+                asks(agent)
+            );
+            (columns, note, Some(agent.path.clone()))
+        })
+        .collect();
+    let first = listing.rows.len() + 1;
+    listing.section("Agents", agents);
+    for (at, agent) in installed.agents.iter().enumerate() {
+        if let AgentSource::Project(ProjectApproval::Approved | ProjectApproval::Changed) =
+            agent.source
+        {
+            listing.approved[first + at] = true;
+        }
+    }
+}
+
+/// `/agents`: the agents and what is wrong in agent files.
+pub(super) fn agents(loaded: &Loaded) -> Listing {
+    let mut listing = Listing::default();
+    let problems = (loaded.problems.iter())
+        .filter(|problem| problem.text.starts_with("agents: "))
+        .map(|problem| problem_row(problem, loaded.settings))
+        .collect();
+    listing.section("Needs attention", problems);
+    agents_section(&mut listing, loaded.installed);
+    listing
+}
+
+/// `/agents` without a full screen: the rows of `agents`, each agent's file, description and
+/// what it asks for under it.
+pub(super) fn agents_text(loaded: &Loaded) -> String {
+    let listing = agents(loaded);
+    let mut text = String::new();
+    let mut found = loaded.installed.agents.iter();
+    let mut in_agents = false;
+    for (at, row) in listing.rows.iter().enumerate() {
+        text.push_str(row);
+        text.push('\n');
+        if listing.headings[at] {
+            in_agents = row == "Agents";
+        } else if in_agents && let Some(agent) = found.next() {
+            let path = shown(&agent.path);
+            text.push_str(&format!("      {path}\n      {}\n", agent.description));
+            text.push_str(&format!("      {}\n", asks(agent)));
+        }
+    }
+    text
+}
+
+/// What an agent's file asks for: its tools, its model and a worktree of its own.
+fn asks(agent: &AgentFile) -> String {
+    let tools = match (&agent.tools, agent.disallowed.as_slice()) {
+        (Some(tools), disallowed) => {
+            let tools: Vec<&str> = (tools.iter())
+                .filter(|tool| !disallowed.contains(tool))
+                .map(String::as_str)
+                .collect();
+            match tools.is_empty() {
+                true => "Tools: none".to_owned(),
+                false => format!("Tools: {}", tools.join(", ")),
+            }
+        }
+        (None, []) => "Tools: the main agent's read-only ones".to_owned(),
+        (None, disallowed) => format!(
+            "Tools: the main agent's read-only ones but {}",
+            disallowed.join(", ")
+        ),
+    };
+    let model = match &agent.model {
+        Some(model) => format!("Model: {model}."),
+        None => "Model: the main agent's.".to_owned(),
+    };
+    let worktree = match agent.worktree {
+        true => " Each task runs in a git worktree of its own.",
+        false => "",
+    };
+    format!("{tools}. {model}{worktree}")
+}
+
 /// A problem's row, with its file when Enter can do something with it.
 fn problem_row(problem: &Problem, settings: Option<&Path>) -> Row {
     let text = home_shortened(&problem.text);
@@ -397,7 +470,7 @@ fn home_shortened(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use scramjet::agent::{AgentFile, Commands, Sets, Skills};
+    use scramjet::agent::{Commands, Sets, Skills};
     use std::{fs, path::PathBuf};
 
     struct Scratch(PathBuf);
@@ -442,15 +515,25 @@ mod tests {
             description: format!("Does {name}."),
             path,
             source,
+            tools: None,
+            disallowed: Vec::new(),
+            model: None,
+            worktree: false,
         };
         let found = Installed {
             sets: sets.list().to_vec(),
             agents: vec![
-                agent(
-                    "mine",
-                    scramjet::os::join(&base, "user/mine.md"),
-                    AgentSource::User,
-                ),
+                AgentFile {
+                    tools: Some(vec!["read".into(), "grep".into(), "bash".into()]),
+                    disallowed: vec!["bash".into()],
+                    model: Some("haiku".into()),
+                    worktree: true,
+                    ..agent(
+                        "mine",
+                        scramjet::os::join(&base, "user/mine.md"),
+                        AgentSource::User,
+                    )
+                },
                 agent(
                     "demo:helper",
                     scramjet::os::join(&set, "agents/helper.md"),
@@ -557,6 +640,21 @@ mod tests {
                 (19, &settings),
             ]
         );
+        assert_eq!(
+            list.notes[9..11],
+            [
+                format!(
+                    "{}\nIn your agent directory. Does mine.\nTools: read, grep. Model: haiku. \
+                     Each task runs in a git worktree of its own.",
+                    shown(&scramjet::os::join(&base, "user/mine.md"))
+                ),
+                format!(
+                    "{}\nFrom the command set demo. Does demo:helper.\nTools: the main agent's \
+                     read-only ones. Model: the main agent's.",
+                    shown(&scramjet::os::join(&set, "agents/helper.md"))
+                ),
+            ]
+        );
         assert!(list.notes[15].ends_with(
             "\nIn the instructions after their opening, as \
             --append-system-prompt does; /reload reads it again."
@@ -584,8 +682,6 @@ mod tests {
                 shown(&scramjet::os::join(&set, "commands/inner.md"))
             )
         );
-        assert!(list.notes[9].ends_with("\nIn your agent directory. Does mine."));
-        assert!(list.notes[10].ends_with("\nFrom the command set demo. Does demo:helper."));
         assert!(
             list.notes[12]
                 .ends_with("\nOffered to the model; /skill:pdf runs it. Fills PDF forms.")
@@ -634,6 +730,10 @@ mod tests {
             description: format!("Does {name}."),
             path: directory.join(format!("{name}.md")),
             source: AgentSource::Project(approval),
+            tools: None,
+            disallowed: vec!["bash".into()],
+            model: None,
+            worktree: false,
         };
         let found = Installed {
             sets: Vec::new(),
@@ -671,22 +771,79 @@ mod tests {
                 format!(
                     "{}\nIn this project's .scramjet/agents. You approved running this \
                      project's agents with this file as it is; Enter opens it or forgets the \
-                     approval. Does kept.",
+                     approval. Does kept.\nTools: the main agent's read-only ones but bash. Model: the main agent's.",
                     shown("kept.md")
                 ),
                 format!(
                     "{}\nIn this project's .scramjet/agents, changed since you approved running \
                      this project's agents: a subagent call naming one asks again. Enter opens it \
-                     or forgets the approval. Does edited.",
+                     or forgets the approval. Does edited.\nTools: the main agent's read-only ones but bash. Model: the main agent's.",
                     shown("edited.md")
                 ),
                 format!(
                     "{}\nIn this project's .scramjet/agents, not approved: a subagent call naming \
-                     one of this project's agents asks before it runs. Does added.",
+                     one of this project's agents asks before it runs. Does added.\nTools: the main agent's read-only ones but bash. Model: the main agent's.",
                     shown("added.md")
                 ),
             ]
         );
+        // `/agents` lists the agents alone, after the problems of agent files only.
+        let problems = [
+            Problem::new("agents: x.md: broken"),
+            Problem::new("skills: y"),
+        ];
+        let agents_only = agents(&Loaded {
+            problems: &problems,
+            ..loaded
+        });
+        assert_eq!(
+            agents_only.rows,
+            [
+                "Needs attention",
+                "  agents: x.md: broken",
+                "Agents",
+                "  kept    project  approved",
+                "  edited  project  changed since approved",
+                "  added   project  not approved",
+            ]
+        );
+        assert_eq!(
+            agents_only.approved,
+            [false, false, false, true, true, false]
+        );
+        let under = |name: &str| {
+            format!(
+                "      {}\n      Does {name}.\n      Tools: the main agent's read-only ones but \
+                 bash. Model: the main agent's.\n",
+                shown(&format!("{name}.md"))
+            )
+        };
+        assert_eq!(
+            agents_text(&Loaded {
+                problems: &problems,
+                ..loaded
+            }),
+            format!(
+                "Needs attention\n  agents: x.md: broken\nAgents\n  kept    project  approved\n{}  \
+                 edited  project  changed since approved\n{}  added   project  not approved\n{}",
+                under("kept"),
+                under("edited"),
+                under("added")
+            )
+        );
+        let empty = Installed {
+            sets: Vec::new(),
+            agents: Vec::new(),
+            context_files: Vec::new(),
+            prompt_files: Vec::new(),
+            autonomy: (PathBuf::from("/repo/.scramjet/autonomy.yaml"), None),
+            problems: Vec::new(),
+        };
+        let none = agents(&Loaded {
+            installed: &empty,
+            ..loaded
+        });
+        assert!(none.rows.is_empty());
     }
 
     #[cfg(unix)]

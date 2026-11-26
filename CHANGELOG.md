@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.353.0 — /agents
+
+### Added
+
+- `/agents` lists the agents subagent calls can name, as Claude Code's `/agents` does: the built-in ones, yours, the command sets' and the project's, each with where it comes from, whether you approved a project agent, the tools and model its file asks for and whether each task gets a worktree of its own, after any problem in agent files. On the full screen Enter opens an agent's file in your editor; without one it prints them.
+
 ## 2.352.0 — /review
 
 ### Added
