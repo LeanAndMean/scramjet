@@ -5,14 +5,15 @@
 //! `scope.rs`; `/login` and `/logout` in `login.rs`.
 use super::drive::{self, SandboxChange};
 use super::interactive::{Interactive, completions};
+use super::report::{ReportView, Tab};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, doctor, export, installed, keymap, style};
-use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode};
+use scramjet::agent::{Agent, AgentError, AgentUi, McpState, Reach, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
-    sync::atomic::Ordering,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 /// A built-in command as typed, with its argument.
@@ -47,6 +48,8 @@ pub(super) enum Builtin<'a> {
     Login,
     Logout,
     Compact(&'a str),
+    /// Claude Code's `/btw QUESTION`: a side question, answered apart from the conversation.
+    Btw(&'a str),
     Autopilot(&'a str),
     /// With its argument: `reconnect`, `enable` or `disable`, with a server's name or `all`.
     Mcp(&'a str),
@@ -95,6 +98,7 @@ impl<'a> Builtin<'a> {
             "login" if argument.is_empty() => Self::Login,
             "logout" if argument.is_empty() => Self::Logout,
             "compact" => Self::Compact(argument),
+            "btw" => Self::Btw(argument),
             "autopilot" => Self::Autopilot(argument),
             "mcp" => Self::Mcp(argument),
             "sandbox" => Self::Sandbox(argument),
@@ -121,6 +125,7 @@ impl<'a> Builtin<'a> {
                 | Self::Agents
                 | Self::Memory
                 | Self::Doctor
+                | Self::Btw(_)
                 | Self::Usage(_)
                 | Self::Context
                 | Self::SystemPrompt
@@ -180,6 +185,7 @@ impl Interactive {
             Some(Builtin::Login) => self.login(),
             Some(Builtin::Logout) => self.logout(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
+            Some(Builtin::Btw(question)) => self.btw(question),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Mcp(argument)) => self.mcp(argument),
             Some(Builtin::Sandbox("")) => self.sandbox_menu(),
@@ -698,6 +704,43 @@ tools into its page",
         }
     }
 
+    /// `/btw QUESTION`: the model's answer from the conversation so far, on the full screen in a
+    /// view of its own. Typed during a turn, it is asked at the turn's next pause, the turn's
+    /// reply and calls going on meanwhile, and kept once the turn has ended.
+    fn btw(&mut self, question: &str) {
+        if question.is_empty() {
+            return self.say("Usage: /btw <question>");
+        }
+        let ask = |agent: &mut Agent, ui: &mut dyn AgentUi, cancel: &AtomicBool| {
+            agent.side_question(question, ui, cancel)
+        };
+        // A paused turn's screen already shows a turn running, and goes on showing it.
+        let result = match self.in_turn {
+            true => {
+                let result = self.on_screen(ask);
+                if let Some(screen) = &self.screen {
+                    screen.aside_ended();
+                }
+                result
+            }
+            false => self.during_turn(ask),
+        };
+        let aside = match result {
+            Ok(aside) => aside,
+            Err(AgentError::Cancelled) => return self.say_styled(style::MUTED, "(cancelled)"),
+            Err(error) => return self.say(&format!("Error: {error}")),
+        };
+        match &self.screen {
+            Some(screen) => screen.show_report(aside_view(question, &aside.answer)),
+            None => self.say(&format!("btw: {question}\n\n{}", aside.answer)),
+        }
+        if self.in_turn {
+            self.asides.push(aside);
+        } else if let Err(error) = self.session.agent.keep_aside(aside) {
+            self.say(&format!("Error: {error}"));
+        }
+    }
+
     /// `!command` runs a command without a model turn; `!!command` keeps it out of the context.
     /// Returns whether there was a command to run.
     fn bang(&mut self, command: &str) -> bool {
@@ -717,6 +760,20 @@ tools into its page",
         }
         true
     }
+}
+
+/// `/btw`'s answer on the full screen, under its question.
+fn aside_view(question: &str, answer: &str) -> ReportView {
+    let summary = format!(
+        "**{}**\n\n{answer}\n\n*Not in the conversation: the model does not see this again.*",
+        question.trim()
+    );
+    let tab = Tab {
+        name: "Side question".into(),
+        summary,
+        details: String::new(),
+    };
+    ReportView::new("Side question", "answer", vec![tab], 0, false).markdown()
 }
 
 /// What `/mcp ARGUMENT` asks for, as Claude Code's `/mcp`; `None` for what it does not take.

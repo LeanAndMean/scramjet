@@ -27,7 +27,7 @@ use super::terminal::next_spin;
 use super::theme::Watched;
 use super::theme_editor::{self, ThemeEditor};
 use super::{external, job, style};
-use scramjet::agent::{self, EffortCycle, Shell, Tokens};
+use scramjet::agent::{self, EffortCycle, Purpose, Shell, Tokens};
 use std::{
     io::{self, PipeReader, PipeWriter, Write},
     path::PathBuf,
@@ -91,6 +91,9 @@ enum ToScreen {
     Ended {
         finished: bool,
     },
+    /// A side question asked at a turn's pause has its answer: the status line says again
+    /// what the turn does.
+    AsideEnded,
     /// The session waits for what the user enters next.
     Ready,
     SetText(String),
@@ -313,6 +316,8 @@ struct App {
     ready: bool,
     /// A turn runs, with what it does now.
     activity: Option<Activity>,
+    /// What the paused turn does, kept while the status line says a side question is asked.
+    aside_from: Option<Activity>,
     /// The session runs a `!` command of its own, typed while no turn ran.
     session_shell: bool,
     /// Since the last turn ended, until the user sends or types something: `Waiting for you`,
@@ -402,6 +407,7 @@ impl App {
             efforts: EffortCycle::default(),
             ready: false,
             activity: None,
+            aside_from: None,
             session_shell: false,
             handed: None,
             working: None,
@@ -655,7 +661,15 @@ impl App {
                 self.efforts = efforts;
                 self.handed = None;
             }
+            ToScreen::AsideEnded => {
+                if let Some(kept) = self.aside_from.take()
+                    && self.activity.is_some()
+                {
+                    self.activity = Some(kept);
+                }
+            }
             ToScreen::Ended { finished } => {
+                self.aside_from = None;
                 if let Some((started, true)) = self.working.take()
                     && finished
                 {
@@ -817,6 +831,17 @@ impl App {
         };
         let Some(next) = Activity::after(event) else {
             return;
+        };
+        if matches!(event, Event::Waiting(Purpose::SideQuestion)) {
+            let kept = std::mem::replace(activity, next);
+            self.aside_from.get_or_insert(kept);
+            return;
+        }
+        // The turn's own events meanwhile change what it is shown doing after the answer; a
+        // wait to retry shows at once, whichever request it is.
+        let activity = match &mut self.aside_from {
+            Some(kept) if !matches!(event, Event::Retrying(..) | Event::Cooling(..)) => kept,
+            _ => activity,
         };
         if activity.what != next.what || activity.countdown.is_some() || next.countdown.is_some() {
             *activity = next;
@@ -1338,6 +1363,24 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_side_question_at_a_pause_shows_and_then_what_the_turn_does_by_then() {
+        let (mut app, _from) = app();
+        let doing = |app: &App| app.activity.as_ref().map(|activity| activity.what.clone());
+        app.message(ToScreen::Turn(EffortCycle::default()));
+        app.message(ToScreen::Event(Event::ToolRunning(Instant::now())));
+        app.message(ToScreen::Event(Event::Waiting(Purpose::SideQuestion)));
+        assert_eq!(doing(&app).as_deref(), Some("Answering the side question"));
+        // The turn's call ends meanwhile.
+        let ended = Event::ToolResult("bash".into(), String::new(), None, false, Instant::now());
+        app.message(ToScreen::Event(ended));
+        assert_eq!(doing(&app).as_deref(), Some("Answering the side question"));
+        app.message(ToScreen::AsideEnded);
+        assert_eq!(doing(&app).as_deref(), Some("Working"));
+        app.message(ToScreen::Event(Event::Waiting(Purpose::Reply)));
+        assert_eq!(doing(&app).as_deref(), Some("Waiting for reply"));
     }
 
     #[test]

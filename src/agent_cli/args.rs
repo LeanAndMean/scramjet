@@ -366,7 +366,10 @@ its CLAUDE.local.md would go; on the full screen Enter opens one in your editor,
 /doctor checks, as scramjet doctor does, the program and the scramjet on PATH, a newer release,
 the disk, the settings and what they load, the models, the providers' servers on this machine,
 the sandbox, git and the shell, the terminal and how the MCP servers are.
-Typed while a turn runs, /status, /diff, /agents, /memory, /doctor, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+/btw QUESTION asks the model a side question with the conversation so far, as Claude Code's:
+no tool runs, the answer shows apart (on the full screen in a view of its own), and the model
+never sees the question or the answer again; what it spent is counted with the session.
+Typed while a turn runs, /status, /diff, /agents, /memory, /doctor, /btw, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

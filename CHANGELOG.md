@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.356.0 — /btw
+
+### Added
+
+- `/btw QUESTION` asks a side question, as in Claude Code: the model answers from the conversation so far without running any tool, the answer shows in a view of its own, and neither the question nor the answer goes to the model again. Typed while a turn runs, it is asked at once and the turn goes on meanwhile; a call still running is told to the model as still running. The request is the turn's own, so the provider's prompt cache serves it, and what it spent counts in the session and `/usage`.
+
 ## 2.355.0 — scramjet doctor
 
 ### Added

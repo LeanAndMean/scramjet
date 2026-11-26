@@ -280,7 +280,7 @@ pub(super) struct Spent {
 }
 
 impl Spent {
-    fn add(&mut self, model: &str, reply: &client::Reply) {
+    pub(super) fn add(&mut self, model: &str, reply: &client::Reply) {
         let Some(usage) = super::turn::saved_usage(reply) else {
             return;
         };

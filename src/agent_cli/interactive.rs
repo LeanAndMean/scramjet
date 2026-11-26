@@ -16,7 +16,8 @@ use super::{
     editor, footer, installed, keymap, scope, select, settings, style, terminal, tree, update,
 };
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Attached, Choice, Command, EarlierSession, Installed, Problem,
+    Agent, AgentError, AgentUi, Aside, Attached, Choice, Command, EarlierSession, Installed,
+    Problem,
 };
 use std::{
     collections::HashMap,
@@ -52,6 +53,8 @@ pub(super) struct Interactive {
     pub(super) keybindings: Vec<Problem>,
     /// A turn waits for the built-in commands typed during it (`typed_during_turn`).
     pub(super) in_turn: bool,
+    /// The side questions answered while a turn paused, kept once it has ended.
+    pub(super) asides: Vec<Aside>,
     /// The effort when what runs as a turn started, for `ended_on_screen`.
     effort_at_start: Option<String>,
     /// The packages' logins and the providers that list their models themselves, as the
@@ -134,6 +137,7 @@ impl Interactive {
             theme_options,
             keybindings,
             in_turn: false,
+            asides: Vec::new(),
             effort_at_start: None,
             kept,
             catalogs_tried: HashMap::new(),
@@ -269,6 +273,11 @@ impl Interactive {
             // Those that ended during the turn go before the next prompt, as Scramjet adds them
             // when the turn ends.
             add_shells(&mut self.session.agent, screen);
+            for aside in std::mem::take(&mut self.asides) {
+                if let Err(error) = self.session.agent.keep_aside(aside) {
+                    screen.say(&format!("Error: {error}"));
+                }
+            }
             if let Some(prompt) = dispatched {
                 return Ok(Read::Prompt(prompt));
             }
@@ -359,7 +368,7 @@ impl Interactive {
 
     /// Runs `run` with the full screen showing that a turn runs, Shift+Tab cycling the current
     /// model's levels; without it, printed.
-    fn on_screen<T>(
+    pub(super) fn on_screen<T>(
         &mut self,
         run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
     ) -> T {

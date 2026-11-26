@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 32] = [
+const SLASH_COMMANDS: [(&str, &str); 33] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -49,6 +49,10 @@ const SLASH_COMMANDS: [(&str, &str); 32] = [
     ("logout", "Remove a provider's saved login"),
     ("clear", "Start a new session"),
     ("compact", "Manually compact the session context"),
+    (
+        "btw",
+        "Ask a side question, answered apart from the conversation: /btw QUESTION",
+    ),
     ("resume", "Resume a different session"),
     (
         "reload",
@@ -541,6 +545,7 @@ mod tests {
                 "/logout",
                 "/clear",
                 "/compact",
+                "/btw",
                 "/resume",
                 "/reload",
                 "/autopilot",
@@ -561,7 +566,7 @@ mod tests {
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /export         Export session (HTML default, or specify…",
                 "  /import         Import and resume a session from a JSONL…",
-                "  (1/32)",
+                "  (1/33)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -577,10 +582,10 @@ mod tests {
                 "→ /diff",
                 "  /usage",
                 "  /context",
-                "  (9/32)"
+                "  (9/33)"
             ]
         );
-        for _ in 0..24 {
+        for _ in 0..25 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);

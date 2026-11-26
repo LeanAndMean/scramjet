@@ -115,6 +115,9 @@ impl Link {
     pub(in crate::agent_cli) fn turn(&self, efforts: EffortCycle) {
         self.send(ToScreen::Turn(efforts));
     }
+    pub(in crate::agent_cli) fn aside_ended(&self) {
+        self.send(ToScreen::AsideEnded);
+    }
     pub(in crate::agent_cli) fn ended(&self, finished: bool) {
         self.send(ToScreen::Ended { finished });
     }
