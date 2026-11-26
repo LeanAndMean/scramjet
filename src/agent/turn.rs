@@ -99,9 +99,12 @@ impl Agent {
             .then(|| self.claude_commands.named(prompt))
             .flatten()
             .map(|command| command.name.clone());
-        let skill = command
-            .is_none()
-            .then(|| (self.claude_commands.expand(prompt)).or_else(|| self.skills.expand(prompt)));
+        let skill = command.is_none().then(|| {
+            (self
+                .claude_commands
+                .expand(prompt, &self.claude_variables()))
+            .or_else(|| self.skills.expand(prompt))
+        });
         let skill = skill.flatten();
         self.lifecycle.prompted(match (&command, &skill) {
             (Some(name), _) => status::Prompt::Command(name),
@@ -1223,7 +1226,7 @@ mod tests {
         let (mut agent, scratch) = agent(endpoint, "claude-command");
         let directory = scratch.0.join(".claude").join("commands");
         std::fs::create_dir_all(&directory).unwrap();
-        let text = "---\ndescription: Fix an issue\n---\nFix issue $0, then $ARGUMENTS[1].";
+        let text = "---\ndescription: Fix an issue\n---\nFix issue $0, then $ARGUMENTS[1].\n!`echo \"${CLAUDE_PROJECT_DIR}\"` ${CLAUDE_SESSION_ID} ${CLAUDE_EFFORT}";
         std::fs::write(directory.join("fix.md"), text).unwrap();
         agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0);
         let mut ui = Recorder::default();
@@ -1231,7 +1234,12 @@ mod tests {
         agent.turn("/fix 42 test", &mut ui, &cancel).unwrap();
         // One request: no status check follows, as no command ran.
         let bodies = server.join().unwrap();
-        let sent = "Fix issue 42, then test.";
+        assert_eq!(agent.effort(), None);
+        let sent = &format!(
+            "Fix issue 42, then test.\n{} {} high",
+            scratch.0.display(),
+            agent.session_id()
+        );
         assert_eq!(bodies[0]["input"], json!([{"role":"user","content":sent}]));
         assert_eq!(agent.prompts(), ["/fix 42 test"]);
         let mut shown = Recorder::default();

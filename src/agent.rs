@@ -1822,7 +1822,10 @@ impl Agent {
         self.commands.refresh(prompt);
         (self.commands.expand(prompt))
             .or_else(|| {
-                let sent = self.claude_commands.expand(prompt)?.ok()?;
+                let sent = self
+                    .claude_commands
+                    .expand(prompt, &self.claude_variables())?
+                    .ok()?;
                 claude_commands::shell_commands(&sent)
                     .is_empty()
                     .then_some(sent)

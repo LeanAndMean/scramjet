@@ -120,9 +120,13 @@ impl ClaudeCommands {
     }
 
     /// The text `/<name> args` sends: the command's body as its file says now, the arguments
-    /// substituted. `None` when the prompt names no command; an error when its file cannot be
-    /// read.
-    pub(super) fn expand(&self, prompt: &str) -> Option<Result<String, String>> {
+    /// substituted, then `session`'s variables. `None` when the prompt names no command; an
+    /// error when its file cannot be read.
+    pub(super) fn expand(
+        &self,
+        prompt: &str,
+        session: &Variables,
+    ) -> Option<Result<String, String>> {
         let command = self.named(prompt)?;
         let args = (prompt[1..].split_once(char::is_whitespace)).map_or("", |(_, args)| args);
         Some(match fs::read_to_string(&command.path) {
@@ -132,7 +136,7 @@ impl ClaudeCommands {
                 let names = yaml::first(&frontmatter)
                     .map(|frontmatter| argument_names(&frontmatter["arguments"]))
                     .unwrap_or_default();
-                Ok(substitute(&body, args.trim(), &names))
+                Ok(session.substitute(&substitute(&body, args.trim(), &names)))
             }
             Err(error) => Err(format!(
                 "/{}: cannot read {} ({error}); the prompt was sent as typed",
@@ -143,7 +147,34 @@ impl ClaudeCommands {
     }
 }
 
+/// What Claude Code puts for `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_SESSION_ID}` and
+/// `${CLAUDE_EFFORT}` in a command, after its arguments.
+pub(super) struct Variables {
+    pub project: PathBuf,
+    pub session: String,
+    pub effort: String,
+}
+
+impl Variables {
+    fn substitute(&self, text: &str) -> String {
+        let project = self.project.display().to_string();
+        (text.replace("${CLAUDE_PROJECT_DIR}", &project))
+            .replace("${CLAUDE_SESSION_ID}", &self.session)
+            .replace("${CLAUDE_EFFORT}", &self.effort)
+    }
+}
+
 impl Agent {
+    /// The variables of a Claude Code command run now: the project's root, the session's id
+    /// and the effort requests ask for, `high` when none is set, as Claude Code's default.
+    pub(super) fn claude_variables(&self) -> Variables {
+        Variables {
+            project: self.config.root.clone(),
+            session: self.session_id(),
+            effort: self.effort().unwrap_or("high").to_owned(),
+        }
+    }
+
     /// `text`, the body `/<name>` sends, with each of its `shell_commands` replaced by what the
     /// command printed, as Claude Code runs them before sending: one after another, through
     /// the agent's bash as its calls run (its sandbox, its hidden stores, asked first under
@@ -453,6 +484,32 @@ mod tests {
         ScratchDir::new(path)
     }
 
+    fn none() -> Variables {
+        Variables {
+            project: PathBuf::from("/p"),
+            session: "s".to_owned(),
+            effort: "high".to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_sessions_variables_follow_the_arguments() {
+        let variables = Variables {
+            project: PathBuf::from("/work/repo"),
+            session: "1795-42".to_owned(),
+            effort: "low".to_owned(),
+        };
+        let body = substitute(
+            "In ${CLAUDE_PROJECT_DIR} (${CLAUDE_SESSION_ID}, ${CLAUDE_EFFORT}): $0; \\${CLAUDE_EFFORT} ${CLAUDE_OTHER} $CLAUDE_EFFORT",
+            "${CLAUDE_SESSION_ID}",
+            &[],
+        );
+        assert_eq!(
+            variables.substitute(&body),
+            "In /work/repo (1795-42, low): 1795-42; \\low ${CLAUDE_OTHER} $CLAUDE_EFFORT"
+        );
+    }
+
     #[test]
     fn arguments_are_substituted_as_claude_code_does() {
         let names = ["file".to_owned(), "mode".to_owned()];
@@ -546,19 +603,19 @@ mod tests {
         assert!(warnings[0].contains("name already loaded"), "{warnings:?}");
         assert!(warnings[1].contains("frontmatter ignored"), "{warnings:?}");
         assert_eq!(
-            found.expand("/review  42 now\n"),
+            found.expand("/review  42 now\n", &none()),
             Some(Ok("Review 42 now".to_owned()))
         );
         assert_eq!(
-            found.expand("/top 7"),
+            found.expand("/top 7", &none()),
             Some(Ok("From the top\n\nARGUMENTS: 7".to_owned()))
         );
-        assert_eq!(found.expand("/reviews"), None);
-        assert_eq!(found.expand("review"), None);
+        assert_eq!(found.expand("/reviews", &none()), None);
+        assert_eq!(found.expand("review", &none()), None);
         fs::remove_file(root.join(COMMANDS).join("review.md")).unwrap();
         assert!(
             found
-                .expand("/review")
+                .expand("/review", &none())
                 .unwrap()
                 .unwrap_err()
                 .contains("cannot read")
@@ -618,7 +675,7 @@ mod tests {
         fs::write(directory.join("fix.md"), text).unwrap();
         let found = ClaudeCommands::load(&[directory]);
         assert_eq!(
-            found.expand("/fix 12 main"),
+            found.expand("/fix 12 main", &none()),
             Some(Ok("Fix 12 on main".to_owned()))
         );
     }

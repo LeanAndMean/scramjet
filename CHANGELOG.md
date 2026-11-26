@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.397.0 — Claude Code's command variables
+
+### Added
+
+- A Claude Code command's `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_SESSION_ID}` and `${CLAUDE_EFFORT}` are now replaced, as in Claude Code, by the project's directory, the session's id and the reasoning effort (`high` when none is set), also within its `` !`command` `` lines.
+
 ## 2.396.0 — Claude Code's commands run their shell commands
 
 ### Added
