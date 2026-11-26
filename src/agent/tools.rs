@@ -2299,40 +2299,53 @@ fn command_line(args: &str) -> String {
 }
 
 /// The command lines of what the process `leader` started that still run, itself included,
-/// parents first; those ending with `shell`, the last argument the leader was started with (bash's
-/// `scramjet-bash-…` name, which its forks and the sandbox around it share), and a fork with its
-/// parent's command line are left out.
+/// parents first, then what else runs in its process group (orphans adopted by init); those ending
+/// with `shell`, the last argument the leader was started with (bash's `scramjet-bash-…` name,
+/// which its forks and the sandbox around it share), and a fork with its parent's command line
+/// are left out.
 #[cfg(unix)]
 fn still_running(leader: u32, shell: &str) -> Vec<String> {
     let listed = Command::new("ps")
-        .args(["-ww", "-A", "-o", "pid=", "-o", "ppid=", "-o", "args="])
+        .args([
+            "-ww", "-A", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "args=",
+        ])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
         .map(|listed| String::from_utf8_lossy(&listed.stdout).into_owned())
         .unwrap_or_default();
-    let processes: Vec<(u32, u32, &str)> = listed
+    let processes: Vec<(u32, u32, u32, &str)> = listed
         .lines()
         .filter_map(|line| {
             let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
-            let (ppid, args) = rest.trim_start().split_once(char::is_whitespace)?;
-            Some((pid.parse().ok()?, ppid.parse().ok()?, args.trim()))
+            let (ppid, rest) = rest.trim_start().split_once(char::is_whitespace)?;
+            let (pgid, args) = rest.trim_start().split_once(char::is_whitespace)?;
+            let pgid = pgid.parse().ok()?;
+            Some((pid.parse().ok()?, ppid.parse().ok()?, pgid, args.trim()))
         })
         .collect();
-    let args_of = |pid: u32| processes.iter().find(|p| p.0 == pid).map(|p| p.2);
+    let args_of = |pid: u32| processes.iter().find(|p| p.0 == pid).map(|p| p.3);
+    let the_shell = |args: &str| !shell.is_empty() && args.ends_with(shell);
     let mut running = Vec::new();
+    let mut seen = Vec::new();
     let mut next = vec![(leader, None)];
     while let Some((pid, parent_args)) = next.pop() {
         let Some(args) = args_of(pid) else {
             continue;
         };
-        let the_shell = !shell.is_empty() && args.ends_with(shell);
-        if !the_shell && Some(args) != parent_args {
+        seen.push(pid);
+        if !the_shell(args) && Some(args) != parent_args {
             running.push(command_line(args));
         }
         let children = processes.iter().filter(|p| p.1 == pid);
         next.extend(children.rev().map(|p| (p.0, Some(args))));
     }
+    let orphans = (processes.iter()).filter(|p| p.2 == leader && !seen.contains(&p.0));
+    running.extend(
+        orphans
+            .filter(|p| !the_shell(p.3))
+            .map(|p| command_line(p.3)),
+    );
     running
 }
 
@@ -3000,7 +3013,11 @@ inline image size limit.]",
             ways.push("sandboxed");
         }
         for way in ways {
-            for (command, expected) in [(piped, "sleep 31\ntail -3"), ("sleep 32", "sleep 32")] {
+            for (command, expected) in [
+                (piped, "sleep 31\ntail -3"),
+                ("sleep 32", "sleep 32"),
+                ("(sleep 33 &); sleep 34", "sleep 33\nsleep 34"),
+            ] {
                 let call = call("bash", json!({"command":command,"timeout":1}));
                 let output = match way {
                     "plain" => call.run(&root, None, &cancel, &mut |_| {}),
@@ -3008,9 +3025,13 @@ inline image size limit.]",
                     _ => call.run_in_sandbox(&root, &sandbox, &hidden, &cancel, &mut |_| {}),
                 }
                 .unwrap();
-                let ending = format!("; these still ran and were stopped:\n{expected}");
                 assert!(output.failed, "{way}: {}", output.text);
-                assert!(output.text.ends_with(&ending), "{way}: {}", output.text);
+                let (_, listed) = (output.text)
+                    .split_once("; these still ran and were stopped:\n")
+                    .unwrap_or_else(|| panic!("{way}: {}", output.text));
+                let mut listed: Vec<&str> = listed.lines().collect();
+                listed.sort_unstable();
+                assert_eq!(listed.join("\n"), expected, "{way}: {}", output.text);
             }
         }
     }

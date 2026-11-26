@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.349.1 — A timed-out command's orphans named
+
+### Fixed
+
+- A timed-out command's list of what was still running now also names programs it left in the background whose parent had ended, such as `(server &)`; they were stopped with the rest but not listed.
+
 ## 2.349.0 — What a timed-out command was still running
 
 ### Changed
