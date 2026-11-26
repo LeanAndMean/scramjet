@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.401.0 — Subagents read web pages
+
+### Added
+
+- A subagent whose agent lists `web_fetch` (or Claude Code's `WebFetch`, as feature-dev's agents do) can read web pages where `sandbox.subagents.network` is `true`; otherwise it is left out with a note, rather than said to be unavailable. One whose agent lists no tools has it too then.
+
 ## 2.400.0 — Claude Code's plugins
 
 ### Added

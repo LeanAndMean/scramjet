@@ -246,7 +246,8 @@ the output.",
         }
         definition
     });
-    Value::Array(tools.collect())
+    let web = (names.contains(&super::web::NAME)).then(super::web::definition);
+    Value::Array(tools.chain(web).collect())
 }
 
 /// What a subagent's shell tools say of how they are confined on Windows.

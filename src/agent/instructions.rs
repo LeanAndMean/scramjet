@@ -408,6 +408,7 @@ pub(super) fn child(
             "edit" => "- edit: Make precise file edits with exact text replacement".to_owned(),
             "powershell" => format!("- powershell: Execute PowerShell commands {sandboxed}"),
             "cmd" => format!("- cmd: Execute cmd.exe command lines {sandboxed}"),
+            web::NAME => format!("- {}: {}", web::NAME, web::SNIPPET),
             _ => format!("- bash: Execute bash commands (ls, grep, find, etc.) {sandboxed}"),
         })
         .collect();

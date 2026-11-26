@@ -108,7 +108,7 @@ What each of these confines, and what it does not, is in [the sandbox](configura
 | `blockReadsOutsideWorkingDirectories` | `true`, `false`, `"minimal"` | `false` | `true` keeps the agent to the project and what it needs (your tools' directories, git's configuration); `"minimal"` to the project and the system's directories only. Claude Code's key, read under `permissions` too (`permissions.blockReadsOutsideWorkingDirectories`). |
 | `sandbox.launcher` | a program | `bwrap` | Linux only: a program started with Bubblewrap's arguments in its place. A name alone is found on `PATH`. |
 | `sandbox.subagents.mode` | `"read-only"`, `"workspace-write"` | `"read-only"` | Whether subagents whose agent file lists `write` or `edit` can write in their working directory. Subagents always run in a sandbox. |
-| `sandbox.subagents.network` | `true`, `false` | `false` | Whether subagents' commands reach the network. |
+| `sandbox.subagents.network` | `true`, `false` | `false` | Whether subagents' commands reach the network, and whether a subagent whose agent lists `web_fetch` (Claude Code's `WebFetch`) has it. |
 | `sandbox.subagents.blockReadsOutsideWorkingDirectories` | `true`, `false`, `"minimal"` | the main agent's | Subagents' reach, apart from the main agent's. |
 | `sandbox.subagents.filesystem.allowWrite` | a list of directories | none | More directories writable to subagents that write (`writable_roots` is read too). |
 | `sandbox.subagents.filesystem.denyRead` | a list of paths | the main agent's | Replaces the main agent's list for subagents. |

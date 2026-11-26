@@ -3,7 +3,8 @@
 //! the children run in this process with the parent's endpoint, and get read-only tools:
 //! `read`, `grep`, `find` and `ls`, and bash in the read-only sandbox, none of which shows the
 //! user's credential stores; `write` and `edit` too, for an agent that lists them, where
-//! `sandbox.subagents` lets children write, bash then in a sandbox of their own.
+//! `sandbox.subagents` lets children write, bash then in a sandbox of their own; `web_fetch`
+//! where `sandbox.subagents.network` lets them reach the network.
 
 use super::yaml;
 use super::{
@@ -17,6 +18,7 @@ use super::{
     request::{self, Sending},
     sandbox,
     tools::{self, Call, Output},
+    web,
 };
 use serde_json::{Value, json};
 use std::{
@@ -131,6 +133,7 @@ pub(super) fn ours(tool: &str) -> &str {
         "Grep" => "grep",
         "Glob" => "find",
         "LS" => "ls",
+        "WebFetch" => web::NAME,
         other => other,
     }
 }
@@ -966,7 +969,9 @@ impl<'a> Job<'a> {
                         worktree.is_some(),
                     ),
                 };
-                let (tools, mut warnings) = child_tools(agent, parent.tools, sandbox, &writes);
+                let network = parent.subagents.network;
+                let (tools, mut warnings) =
+                    child_tools(agent, parent.tools, sandbox, &writes, network);
                 warnings.extend(said);
                 (tools, writes.ok(), warnings)
             }
@@ -1539,9 +1544,13 @@ fn child_tools(
     inherited: &[String],
     sandbox: &Result<(), String>,
     writes: &Result<sandbox::Sandbox, String>,
+    network: bool,
 ) -> (Vec<&'static str>, Vec<String>) {
+    // web_fetch is the harness's, so off the network it is refused: left out, said only when listed.
     let inherited: Vec<String> = (inherited.iter())
-        .filter(|tool| READ_ONLY.contains(&tool.as_str()))
+        .filter(|tool| {
+            READ_ONLY.contains(&tool.as_str()) || (network && tool.as_str() == web::NAME)
+        })
         .cloned()
         .collect();
     let listed = agent.tools.as_deref().unwrap_or(&inherited);
@@ -1550,6 +1559,7 @@ fn child_tools(
         .filter(|tool| !agent.disallowed.contains(tool));
     let mut tools = Vec::new();
     let (mut writers, mut unconfined, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+    let mut offline = false;
     for tool in listed {
         // Windows without Git Bash: PowerShell for an agent's shell.
         let tool = match tool.as_str() {
@@ -1570,6 +1580,12 @@ fn child_tools(
                 }
             }
             None if matches!(tool, "write" | "edit") => writers.push(tool),
+            None if tool == web::NAME && !network => offline = true,
+            None if tool == web::NAME => {
+                if !tools.contains(&web::NAME) {
+                    tools.push(web::NAME);
+                }
+            }
             None => missing.push(tool),
         }
     }
@@ -1585,6 +1601,12 @@ fn child_tools(
         warnings.push(format!(
             "{}: left out, as the read-only sandbox is unavailable ({error})",
             unconfined.join(", ")
+        ));
+    }
+    if offline {
+        warnings.push(format!(
+            "{}: left out, as subagents are off the network (sandbox.subagents.network)",
+            web::NAME
         ));
     }
     if !missing.is_empty() {
@@ -1803,6 +1825,9 @@ uncommitted.",
                     }));
                     let ran = match (tools.contains(&call.name), writer) {
                         (false, _) => Ok(Output::failure(tools::not_found(call.name, tools))),
+                        (true, _) if call.name == web::NAME => {
+                            Ok(web::run(&call.arguments, !network, cancel))
+                        }
                         (true, Some(writer)) => {
                             call.run_in_sandbox(&job.cwd, writer, &hidden, cancel, &mut |_| {})
                         }
@@ -1914,7 +1939,7 @@ disallowedTools: Write, MultiEdit\n---\n",
             "user",
         )
         .unwrap();
-        let tools = ["read", "grep", "find", "ls", "bash", "WebFetch"];
+        let tools = ["read", "grep", "find", "ls", "bash", "web_fetch"];
         assert_eq!(claude.tools, Some(tools.map(str::to_owned).to_vec()));
         assert_eq!(claude.disallowed, ["write", "edit"]);
         let listed = parse(
@@ -2282,13 +2307,19 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
         let read_only = Err("subagents run read-only here (sandbox.subagents.mode)".to_owned());
         let all = tools::DEFAULT_TOOLS.map(str::to_owned);
         // A file listing none takes the parent's read-only tools, without a word of the others.
-        let (tools, warnings) = child_tools(&agent(None, ""), &all, &sandbox, &read_only);
+        let (tools, warnings) = child_tools(&agent(None, ""), &all, &sandbox, &read_only, false);
         assert_eq!(tools, ["read", "bash", "grep", "find", "ls"]);
         assert_eq!(warnings, ["noted"]);
         let narrowed = ["read", "edit", "grep"].map(str::to_owned);
-        let (tools, _) = child_tools(&agent(None, ""), &narrowed, &sandbox, &read_only);
+        let (tools, _) = child_tools(&agent(None, ""), &narrowed, &sandbox, &read_only, false);
         assert_eq!(tools, ["read", "grep"]);
-        let (tools, warnings) = child_tools(&agent(None, "bash, grep"), &all, &sandbox, &read_only);
+        let (tools, warnings) = child_tools(
+            &agent(None, "bash, grep"),
+            &all,
+            &sandbox,
+            &read_only,
+            false,
+        );
         assert_eq!(
             (tools, warnings),
             (vec!["read", "find", "ls"], vec!["noted".into()])
@@ -2298,6 +2329,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             &narrowed,
             &sandbox,
             &read_only,
+            false,
         );
         assert_eq!(tools, ["read", "grep", "ls", "bash"]);
         assert_eq!(
@@ -2308,6 +2340,29 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
                 "web: not available to subagents here"
             ]
         );
+        // web_fetch, Claude Code's WebFetch, only where children reach the network; inherited
+        // without a word when they do not.
+        let mut with_web = all.to_vec();
+        with_web.push(web::NAME.to_owned());
+        let (tools, warnings) =
+            child_tools(&agent(None, ""), &with_web, &sandbox, &read_only, true);
+        assert_eq!(tools, ["read", "bash", "grep", "find", "ls", web::NAME]);
+        assert_eq!(warnings, ["noted"]);
+        let (tools, warnings) =
+            child_tools(&agent(None, ""), &with_web, &sandbox, &read_only, false);
+        assert_eq!((tools.len(), warnings), (5, vec!["noted".to_owned()]));
+        let listed = agent(Some(&format!("read, {}", ours("WebFetch"))), "");
+        let (tools, _) = child_tools(&listed, &[], &sandbox, &read_only, true);
+        assert_eq!(tools, ["read", web::NAME]);
+        let (tools, warnings) = child_tools(&listed, &[], &sandbox, &read_only, false);
+        assert_eq!(tools, ["read"]);
+        assert_eq!(
+            warnings,
+            [
+                "noted",
+                "web_fetch: left out, as subagents are off the network (sandbox.subagents.network)"
+            ]
+        );
         // Where children may write, an agent listing write or edit has them; one listing none
         // still has the read-only tools alone.
         let writes = Ok(sandbox::Sandbox {
@@ -2316,18 +2371,19 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             writable: Vec::new(),
         });
         let listed = agent(Some("read, edit, write, edit, bash"), "");
-        let (tools, warnings) = child_tools(&listed, &all, &sandbox, &writes);
+        let (tools, warnings) = child_tools(&listed, &all, &sandbox, &writes, false);
         assert_eq!(
             (tools, warnings),
             (vec!["read", "edit", "write", "bash"], vec!["noted".into()])
         );
-        let (tools, _) = child_tools(&agent(None, ""), &all, &sandbox, &writes);
+        let (tools, _) = child_tools(&agent(None, ""), &all, &sandbox, &writes, false);
         assert_eq!(tools, ["read", "bash", "grep", "find", "ls"]);
         let (tools, _) = child_tools(
             &agent(Some("read, write"), "write"),
             &all,
             &sandbox,
             &writes,
+            false,
         );
         assert_eq!(tools, ["read"]);
         let missing = Err("no bwrap".to_owned());
@@ -2336,6 +2392,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             &all,
             &missing,
             &read_only,
+            false,
         );
         assert_eq!(tools, ["read", "grep", "ls"]);
         assert_eq!(
@@ -2355,15 +2412,20 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
             false => "powershell",
         };
         let none = Err(WINDOWS.to_owned());
-        let (tools, warnings) =
-            child_tools(&agent(Some("read, bash, cmd"), ""), &[], &Ok(()), &none);
+        let (tools, warnings) = child_tools(
+            &agent(Some("read, bash, cmd"), ""),
+            &[],
+            &Ok(()),
+            &none,
+            false,
+        );
         assert_eq!(
             (tools, warnings),
             (vec!["read", shell, "cmd"], vec!["noted".into()])
         );
         let missing = Err("x".to_owned());
         let listed = agent(Some("read, powershell, cmd"), "");
-        let (tools, warnings) = child_tools(&listed, &[], &missing, &none);
+        let (tools, warnings) = child_tools(&listed, &[], &missing, &none, false);
         assert_eq!(tools, ["read"]);
         assert_eq!(
             warnings,

@@ -1428,6 +1428,74 @@ here (sandbox.subagents.mode)\n\nkept.txt says original";
     }
 
     #[test]
+    fn a_subagent_listing_webfetch_fetches_where_children_reach_the_network() {
+        use std::io::{BufRead, Write};
+        let pages = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/notes.txt", pages.local_addr().unwrap());
+        let page_server = std::thread::spawn(move || {
+            let (connection, _) = pages.accept().unwrap();
+            let mut reader = std::io::BufReader::new(connection);
+            let mut head = String::new();
+            while reader.read_line(&mut head).unwrap() > 2 && !head.ends_with("\r\n\r\n") {}
+            let answer =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\nnotes\n";
+            reader.get_mut().write_all(answer.as_bytes()).unwrap();
+        });
+        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
+        let task = json!({"agent":"fetcher","task":"Fetch"});
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", subagent::NAME, task.clone()),
+            tool_call("call_2", web::NAME, json!({ "url": url })),
+            reply("fetched"),
+            reply("done"),
+            tool_call("call_3", subagent::NAME, task),
+            reply("could not"),
+            reply("done"),
+        ]);
+        let (mut agent, scratch) = agent(endpoint, "subagent-web-fetch");
+        let agents = scratch.0.join("agents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("fetcher.md"),
+            "---\nname: fetcher\ndescription: Fetches\ntools: Read, WebFetch\n---\n\nFetch.\n",
+        )
+        .unwrap();
+        agent.agents_directories = vec![agents];
+        agent.set_subagents(sandbox::Subagents {
+            network: true,
+            ..Default::default()
+        });
+        let cancel = AtomicBool::new(false);
+        agent
+            .turn("fetch", &mut Recorder::default(), &cancel)
+            .unwrap();
+        agent.set_subagents(sandbox::Subagents::default());
+        agent
+            .turn("again", &mut Recorder::default(), &cancel)
+            .unwrap();
+        let bodies = server.join().unwrap();
+        page_server.join().unwrap();
+        let names = |body: &Value| -> Vec<String> {
+            (body["tools"].as_array().unwrap().iter())
+                .map(|tool| tool["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(names(&bodies[1]), ["read", web::NAME]);
+        let instructions = bodies[1]["instructions"].as_str().unwrap();
+        assert!(
+            instructions.contains(&format!("- {}: ", web::NAME)),
+            "{instructions}"
+        );
+        assert_eq!(last_output(&bodies[2]), "notes\n");
+        assert_eq!(names(&bodies[5]), ["read"]);
+        let result = last_output(&bodies[6]);
+        assert!(
+            result.contains("web_fetch: left out, as subagents are off the network"),
+            "{result}"
+        );
+    }
+
+    #[test]
     #[cfg(unix)]
     fn a_subagent_in_a_worktree_writes_there_and_an_unchanged_one_is_removed() {
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
