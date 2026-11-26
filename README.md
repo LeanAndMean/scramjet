@@ -104,7 +104,7 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 
 ## Coming from Claude Code, Codex or Scramjet 1
 
-- **Claude Code and Codex:** `CLAUDE.md` and `AGENTS.md` are both read, skills from `.agents/skills` as in Codex, `-c` and `-p` work as in Claude Code, MCP servers are listed as in Claude Code's `.mcp.json`, and `--sandbox workspace-write` is Codex's. A command set can stay loadable by Claude Code too.
+- **Claude Code and Codex:** `CLAUDE.md` and `AGENTS.md` are both read, skills from `.agents/skills` as in Codex and from `.claude/skills` as in Claude Code, `-c` and `-p` work as in Claude Code, MCP servers are listed as in Claude Code's `.mcp.json`, and `--sandbox workspace-write` is Codex's. A command set can stay loadable by Claude Code too.
 - **Scramjet 1** (the earlier, TypeScript Scramjet): `scramjet import` copies your settings, providers, logins, key bindings, themes and agents (the first start offers it), and Scramjet 1 keeps working beside it ([how](docs/guide/install.md#beside-scramjet-1)).
 
 [The migration guide](docs/guide/migration.md) has what carries over and what differs.

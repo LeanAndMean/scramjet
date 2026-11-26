@@ -210,7 +210,7 @@ static BARE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(
 /// For `--bare`: nothing is looked for in the user's own directories, but the settings, models
 /// and credentials: no context files, `SYSTEM.md` or `APPEND_SYSTEM.md` of the configuration
 /// directory or the home directory, no skills of the configuration directory or
-/// `~/.agents/skills`, no loose agents of the user's. What the settings list still loads.
+/// `~/.agents/skills` or `~/.claude/skills`, no loose agents of the user's. What the settings list still loads.
 pub fn set_bare() {
     BARE.store(true, std::sync::atomic::Ordering::Relaxed);
 }

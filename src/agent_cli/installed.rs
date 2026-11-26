@@ -358,21 +358,26 @@ fn skill_source(skill: &Skill, installed: &Installed, places: &Places) -> (Strin
         return (set.name.clone(), from);
     }
     let user = places.user.map(|user| user.join("skills"));
-    let agents = std::env::home_dir().map(|home| scramjet::os::join(&home, ".agents/skills"));
     if let Some(user) = user.filter(|user| path.starts_with(user)) {
         let from = format!("In your skills, {}.", shown(&user));
         return ("user".to_owned(), from);
     }
-    if agents
-        .as_ref()
-        .is_some_and(|agents| path.starts_with(agents))
-    {
-        let from = "In your ~/.agents/skills, which other agents read too.";
-        return ("user".to_owned(), from.to_owned());
+    let home = std::env::home_dir();
+    for (shared, readers) in [
+        (".agents/skills", "other agents read too"),
+        (".claude/skills", "Claude Code's"),
+    ] {
+        if (home.as_ref()).is_some_and(|home| path.starts_with(scramjet::os::join(home, shared))) {
+            let from = format!("In your ~/{shared}, {readers}.");
+            return ("user".to_owned(), from);
+        }
     }
     let project = path.starts_with(places.root)
-        || (places.root.ancestors())
-            .any(|above| path.starts_with(scramjet::os::join(above, ".agents/skills")));
+        || (places.root.ancestors()).any(|above| {
+            [".agents/skills", ".claude/skills"]
+                .iter()
+                .any(|shared| path.starts_with(scramjet::os::join(above, shared)))
+        });
     match project {
         true => ("project".to_owned(), "In this project.".to_owned()),
         false => (
@@ -1318,6 +1323,11 @@ mod tests {
                 true,
             ),
             skill(
+                "film",
+                scramjet::os::join(&base, "work/.claude/skills/film/SKILL.md"),
+                true,
+            ),
+            skill(
                 "draw",
                 scramjet::os::join(&set, "skills/draw/SKILL.md"),
                 true,
@@ -1357,6 +1367,7 @@ mod tests {
                 "Skills",
                 "  pdf    project",
                 "  above  project",
+                "  film   project",
                 "  draw   demo",
                 "  notes  user     not offered",
                 "  extra  listed",
@@ -1382,14 +1393,14 @@ mod tests {
         assert!(note("extra").contains("\nListed in the settings (skills) or given with --skill."));
         assert_eq!(
             list.files[at("draw").unwrap()],
-            Some(found_skills[2].path.clone())
+            Some(found_skills[3].path.clone())
         );
         let text = skills_text(&loaded, &places);
         assert!(
             text.contains(&format!(
                 "  notes  user     not offered\n      {}\n      Does notes.\n      Not offered to \
                  the model (disable-model-invocation); /skill:notes runs it.\n  extra",
-                shown(&found_skills[3].path)
+                shown(&found_skills[4].path)
             )),
             "{text}"
         );

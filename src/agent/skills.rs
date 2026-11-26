@@ -52,12 +52,16 @@ enum Place {
     Given,
 }
 
-/// Where Pi looks, first wins: the project's `.scramjet/skills` and the `.agents/skills` of the
-/// project and the directories above it up to its Git root, the settings' `listed` paths, the
-/// `skills` directories of the command sets (as a Claude Code plugin's), then the user's
-/// `skills` in Scramjet's agent directory and `~/.agents/skills` (with `--bare`, neither, and
-/// never as a project's); then, as Scramjet's, the paths `--skill` gives, which are all with
-/// `--no-skills`.
+/// The directories other agents read skills from, in a project and its parents and in the home
+/// directory: the Agent Skills standard's (Pi's and Codex's) and Claude Code's.
+const SHARED: [&str; 2] = [".agents/skills", ".claude/skills"];
+
+/// Where Pi looks, first wins: the project's `.scramjet/skills`, then the `.agents/skills` and
+/// Claude Code's `.claude/skills` of the project and the directories above it up to its Git
+/// root, the settings' `listed` paths, the `skills` directories of the command sets (as a Claude
+/// Code plugin's), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
+/// and `~/.claude/skills` (with `--bare`, none of them, and never as a project's); then, as
+/// Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
 fn places(
     listed: &[PathBuf],
     sets: &[PathBuf],
@@ -70,38 +74,44 @@ fn places(
     if options.no_skills {
         return given.collect();
     }
-    let user_agents = home.map(|home| crate::os::join(home, ".agents/skills"));
+    let nested = |path| (path, Place::Directory { top_files: false });
+    let users: Vec<PathBuf> = (SHARED.iter())
+        .filter_map(|shared| home.map(|home| crate::os::join(home, shared)))
+        .collect();
     // The project's path is the real one, which a home reached through a symlink is not.
     let real_home = home.and_then(|home| crate::os::canonicalize(home).ok());
-    let real_agents = real_home.map(|home| crate::os::join(&home, ".agents/skills"));
+    let reals: Vec<PathBuf> = (SHARED.iter())
+        .filter_map(|shared| real_home.as_ref().map(|home| crate::os::join(home, shared)))
+        .collect();
     let mut places = vec![(
         crate::os::join(root, ".scramjet/skills"),
         Place::Directory { top_files: true },
     )];
     for directory in root.ancestors() {
-        let skills = crate::os::join(directory, ".agents/skills");
-        if user_agents.as_ref() != Some(&skills) && real_agents.as_ref() != Some(&skills) {
-            places.push((skills, Place::Directory { top_files: false }));
+        for shared in SHARED {
+            let skills = crate::os::join(directory, shared);
+            if !users.contains(&skills) && !reals.contains(&skills) {
+                places.push(nested(skills));
+            }
         }
         if directory.join(".git").exists() {
             break;
         }
     }
     places.extend(listed.iter().map(|path| (path.clone(), Place::Listed)));
-    places.extend(sets.iter().map(|set| {
-        (
-            crate::os::join(set, "skills"),
-            Place::Directory { top_files: false },
-        )
-    }));
+    places.extend(
+        sets.iter()
+            .map(|set| nested(crate::os::join(set, "skills"))),
+    );
     if let Some(directory) = agent_directory {
         places.push((
             directory.join("skills"),
             Place::Directory { top_files: true },
         ));
     }
-    let user_agents = user_agents.filter(|_| !super::bare());
-    places.extend(user_agents.map(|skills| (skills, Place::Directory { top_files: false })));
+    if !super::bare() {
+        places.extend(users.into_iter().map(nested));
+    }
     places.extend(given);
     places
 }
@@ -166,6 +176,9 @@ impl Skills {
                     continue;
                 };
                 match found.list.iter().find(|known| known.name == skill.name) {
+                    // A copy, as a project keeps for Codex in `.agents` and Claude Code in
+                    // `.claude`, is no collision either.
+                    Some(known) if same_content(&known.path, &file) => {}
                     Some(known) => found.warnings.push(Problem::in_file(
                         format!(
                             "skipping skill {} at {}: name already loaded from {}",
@@ -264,6 +277,10 @@ SKILL.md / dirname of the path) and use that absolute path in tool commands.
             args => format!("{block}\n\n{args}"),
         }))
     }
+}
+
+fn same_content(one: &Path, other: &Path) -> bool {
+    matches!((fs::read(one), fs::read(other)), (Ok(one), Ok(other)) if one == other)
 }
 
 /// The skill files under `directory`, as Pi finds them: its `SKILL.md`, which ends the search
@@ -481,9 +498,16 @@ mod tests {
                     PathBuf::from("/nonexistent/repo/sub/.agents/skills"),
                     nested()
                 ),
+                (
+                    PathBuf::from("/nonexistent/repo/sub/.claude/skills"),
+                    nested()
+                ),
                 (PathBuf::from("/nonexistent/repo/.agents/skills"), nested()),
+                (PathBuf::from("/nonexistent/repo/.claude/skills"), nested()),
                 (PathBuf::from("/nonexistent/.agents/skills"), nested()),
+                (PathBuf::from("/nonexistent/.claude/skills"), nested()),
                 (PathBuf::from("/.agents/skills"), nested()),
+                (PathBuf::from("/.claude/skills"), nested()),
                 (PathBuf::from("/listed"), Place::Listed),
                 (PathBuf::from("/sets/mach12/skills"), nested()),
                 (
@@ -491,6 +515,7 @@ mod tests {
                     Place::Directory { top_files: true }
                 ),
                 (PathBuf::from("/home/u/.agents/skills"), nested()),
+                (PathBuf::from("/home/u/.claude/skills"), nested()),
             ]
         );
 
@@ -513,15 +538,20 @@ mod tests {
             [
                 project.join(".scramjet/skills"),
                 project.join(".agents/skills"),
+                project.join(".claude/skills"),
                 home.join("repo/.agents/skills"),
+                home.join("repo/.claude/skills"),
                 home.join(".agents/skills"),
+                home.join(".claude/skills"),
             ]
         );
-        // The user's `~/.agents/skills` is never also a project's.
+        // The user's `~/.agents/skills` and `~/.claude/skills` are never also a project's.
         let found = places(&[], &[], &SkillOptions::default(), &home, None, Some(&home));
-        let user = home.join(".agents/skills");
-        assert_eq!(found.iter().filter(|(path, _)| path == &user).count(), 1);
-        assert_eq!(found.last().unwrap().0, user);
+        for shared in SHARED {
+            let user = home.join(shared);
+            assert_eq!(found.iter().filter(|(path, _)| path == &user).count(), 1);
+        }
+        assert_eq!(found.last().unwrap().0, home.join(".claude/skills"));
         // Nor when the home directory is reached through a symlink, as macOS's `/var`.
         #[cfg(unix)]
         {
@@ -539,7 +569,8 @@ mod tests {
             );
             let paths: Vec<_> = found.iter().map(|(path, _)| path.clone()).collect();
             assert!(!paths.contains(&real.join(".agents/skills")), "{paths:?}");
-            assert_eq!(found.last().unwrap().0, linked.join(".agents/skills"));
+            assert!(!paths.contains(&real.join(".claude/skills")), "{paths:?}");
+            assert_eq!(found.last().unwrap().0, linked.join(".claude/skills"));
         }
     }
 
@@ -583,6 +614,8 @@ mod tests {
             &agents.join("pdf/SKILL.md"),
             &skill("pdf", "The user's PDFs."),
         );
+        // A copy of one loaded, as a project keeps in `.agents` and `.claude`, is no collision.
+        write(&agents.join("deep/SKILL.md"), &skill("deep", "Nested."));
         write(
             &agents.join("bare/SKILL.md"),
             "---\ndescription: Named after its directory.\n---\nBody",
@@ -693,7 +726,7 @@ hyphens only)",
             last,
             [
                 &(
-                    PathBuf::from("/home/u/.agents/skills"),
+                    PathBuf::from("/home/u/.claude/skills"),
                     Place::Directory { top_files: false }
                 ),
                 &(PathBuf::from("/given"), Place::Given),

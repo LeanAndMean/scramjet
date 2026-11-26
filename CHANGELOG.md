@@ -4,6 +4,16 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.389.0 — Claude Code's skills
+
+### Added
+
+- Skills are also read from Claude Code's places: the project's `.claude/skills` (and those of the directories above it up to the Git root) and your `~/.claude/skills`, after `.agents/skills` at each level. `/skills` says where each comes from; `--bare` leaves out `~/.claude/skills`.
+
+### Fixed
+
+- A skill kept twice with the same `SKILL.md`, as a project keeping copies for both Codex and Claude Code does, is no longer reported as a name already loaded.
+
 ## 2.388.0 — The agent reads web pages
 
 ### Added
