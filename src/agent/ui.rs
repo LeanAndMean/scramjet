@@ -650,9 +650,14 @@ pub fn show_entries(
                     ui.branch_summary(summary);
                 } else if let Some(command) = command {
                     ui.command_result(&UserCommand::included(command, content, failed));
-                } else if let Some(typed) = item[TYPED].as_str() {
+                } else if let Some(typed) = item[TYPED].as_str()
+                    && !reminded(typed, content)
+                {
                     images(&item["content"], ui);
                     ui.command_prompt(typed, content);
+                } else if let Some(typed) = item[TYPED].as_str() {
+                    images(&item["content"], ui);
+                    ui.user_prompt(typed);
                 } else {
                     images(&item["content"], ui);
                     ui.user_prompt(content);
@@ -668,6 +673,14 @@ pub fn show_entries(
         }
     }
     unanswered(&mut calls, ui);
+}
+
+/// Whether `sent` is the prompt `typed` after plan mode's reminder alone (`plan`), shown as
+/// typed, as it showed when sent.
+fn reminded(typed: &str, sent: &str) -> bool {
+    (sent.strip_suffix(typed))
+        .and_then(|before| before.strip_prefix("<system-reminder>Plan mode "))
+        .is_some_and(|note| note.ends_with("</system-reminder>\n\n"))
 }
 
 #[cfg(test)]

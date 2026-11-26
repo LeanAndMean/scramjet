@@ -369,12 +369,14 @@ impl Interactive {
     }
 
     /// Runs a turn; then its next step, or, without one, the prompt that goes on toward the
-    /// goal if a check finds it not met.
+    /// goal if a check finds it not met, or, in plan mode, the one that implements the plan if
+    /// the user chooses to.
     fn run_turn(&mut self, prompt: Option<&str>, start: Start) -> Option<(String, Start)> {
         let next = drive::run_turn(self, prompt, start);
         match (next, self.finished) {
             (Some(next), _) => Some(next),
-            (None, true) => self.check_goal(),
+            (None, true) if self.goal.is_some() => self.check_goal(),
+            (None, true) => self.offer_plan(),
             (None, false) => None,
         }
     }

@@ -375,11 +375,15 @@ never sees the question or the answer again; what it spent is counted with the s
 that ends by itself the model is asked, as /btw asks, whether the conversation shows it met; until
 it does, the reason goes back to the agent and the work goes on. Escape stops it; /goal says the
 goal, /goal clear clears it, and a new or resumed session has none.
+/plan starts plan mode, as Claude Code's and Codex's: the agent explores and proposes a plan
+without changing files (write and edit are refused, and in a sandbox commands and subagents run
+read-only), then the full screen asks whether to implement it, which ends plan mode. /plan PROMPT
+starts it with that prompt, /plan off ends it.
 /effort LEVEL sets the thinking level, as Shift+Tab does, saved as defaultThinkingLevel; /effort
 alone lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /goal, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /goal, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /autocompact, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

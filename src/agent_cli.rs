@@ -53,6 +53,7 @@ mod login;
 mod markdown;
 mod packages;
 mod palette;
+mod plan;
 mod programs;
 mod pull_request;
 mod record;

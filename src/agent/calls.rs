@@ -4,7 +4,7 @@
 use super::batch::{self, Batch, Ran, Waited};
 use super::commands::Sets;
 use super::providers::{ModelInfo, Providers};
-use super::sandbox::Sandbox;
+use super::sandbox::{Sandbox, SandboxMode};
 use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
@@ -126,18 +126,37 @@ impl Agent {
                 None => self.config.tools.clone(),
             },
             hide_credentials: self.hide_credentials,
-            asks_for_writes: self.config.sandbox.is_some() && self.offers(permissions::NAME),
+            planning: self.planning,
+            asks_for_writes: self.config.sandbox.is_some()
+                && self.offers(permissions::NAME)
+                && !self.planning,
             offline: self.offline && self.config.sandbox.is_none(),
             reads: self.reads.clone(),
-            writable: match &self.config.sandbox {
-                Some(sandbox) => sandbox.writable_roots(&self.config.root),
-                None => (self.writable.iter())
+            writable: match (&self.config.sandbox, self.planning) {
+                (_, true) => Vec::new(),
+                (Some(sandbox), false) => sandbox.writable_roots(&self.config.root),
+                (None, false) => (self.writable.iter())
                     .filter(|path| path.is_dir())
                     .cloned()
                     .collect(),
             },
-            subagents: self.subagents.clone(),
-            sandbox: self.config.sandbox.clone(),
+            // In plan mode the sandbox, and subagents, write nowhere.
+            subagents: match self.planning {
+                true => sandbox::Subagents {
+                    mode: SandboxMode::ReadOnly,
+                    writable: Vec::new(),
+                    ..self.subagents.clone()
+                },
+                false => self.subagents.clone(),
+            },
+            sandbox: (self.config.sandbox.clone()).map(|sandbox| match self.planning {
+                true => Sandbox {
+                    mode: SandboxMode::ReadOnly,
+                    writable: Vec::new(),
+                    ..sandbox
+                },
+                false => sandbox,
+            }),
             mcp: self.mcp.clone(),
             scratch: self.scratch.clone(),
         }
@@ -557,6 +576,8 @@ struct Kit {
     /// The coding tools of this run, which children take by default.
     coding_tools: Vec<String>,
     hide_credentials: bool,
+    /// Whether plan mode refuses `write` and `edit` (`Agent::set_planning`).
+    planning: bool,
     /// Whether the agent can ask for more of the sandbox's reach (`request_permissions`).
     asks_for_writes: bool,
     /// Whether commands are kept off the network with no sandbox (`Agent::set_offline`).
@@ -599,6 +620,7 @@ impl Kit {
                 sandbox: self.sandbox.as_ref(),
             },
             hide_credentials: self.hide_credentials,
+            planning: self.planning,
             asks_for_writes: self.asks_for_writes,
             offline: self.offline,
             sandbox: self.sandbox.as_ref(),
@@ -612,6 +634,7 @@ impl Kit {
 pub(super) struct Tools<'a> {
     parent: subagent::Parent<'a>,
     hide_credentials: bool,
+    planning: bool,
     asks_for_writes: bool,
     offline: bool,
     sandbox: Option<&'a Sandbox>,
@@ -635,6 +658,9 @@ impl Tools<'_> {
             images: Vec::new(),
         };
         let (output, usage) = match call.name {
+            "write" | "edit" if self.planning => {
+                (super::plan::refused(call.name), Usage::default())
+            }
             subagent::NAME => subagent::run(&call.arguments, &self.parent, ui, cancel),
             mcp::SEARCH | mcp::CALL => {
                 ui.tool_running(std::time::Instant::now());

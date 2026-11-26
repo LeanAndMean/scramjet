@@ -1,0 +1,85 @@
+{
+  "size": "100x40",
+  "files": {
+    "notes.txt": "one\n"
+  },
+  "replies": [
+    [
+      {
+        "call": "write",
+        "arguments": {
+          "path": "notes.txt",
+          "content": "one\ntwo\n"
+        }
+      }
+    ],
+    [
+      {
+        "text": "Plan mode refused the write, so here is the plan:\n\n1. Add the line `two` to notes.txt with `edit`.\n2. Check it with `cat notes.txt`."
+      }
+    ],
+    [
+      {
+        "call": "edit",
+        "arguments": {
+          "path": "notes.txt",
+          "edits": [
+            {
+              "oldText": "one\n",
+              "newText": "one\ntwo\n"
+            }
+          ]
+        }
+      }
+    ],
+    [
+      {
+        "text": "notes.txt now holds one and two."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "[Skills]"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "/plan add the line two to notes.txt\r"
+    },
+    {
+      "until": "Implement this plan?"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "offer"
+    },
+    {
+      "type": "\r"
+    },
+    {
+      "until": "now holds one and two"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "implemented"
+    },
+    {
+      "type": "!cat notes.txt\r"
+    },
+    {
+      "until": "two"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "after"
+    }
+  ]
+}

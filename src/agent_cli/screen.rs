@@ -1456,6 +1456,7 @@ mod tests {
             effort: Some("medium".into()),
             sandbox: Some("read-only"),
             autopilot: true,
+            plan: false,
         });
         app.queue()
             .messages

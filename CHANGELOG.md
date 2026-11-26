@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.363.0 — /plan
+
+### Added
+
+- `/plan` starts plan mode, as in Claude Code and Codex: the agent explores and proposes a plan without changing files (`write` and `edit` refused, and in a sandbox commands and subagents read-only), then the full screen asks whether to implement it. `/plan PROMPT` starts it with a prompt, `/plan off` ends it; the footer says `plan mode`.
+
 ## 2.362.0 — /goal
 
 ### Added
