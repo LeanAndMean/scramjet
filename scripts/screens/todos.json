@@ -36,7 +36,8 @@
     ],
     [
       {
-        "text": "Reading done; adding the line next."
+        "text": "Reading done; adding the line next.",
+        "pace": 0.4
       }
     ]
   ],
@@ -44,6 +45,8 @@
     {"until": "[Skills]"},
     {"sleep": 0.5},
     {"type": "add the line two to notes.txt\r"},
+    {"until": "Reading done"},
+    {"shot": "working"},
     {"until": "adding the line next"},
     {"sleep": 0.5},
     {"shot": "updates"},

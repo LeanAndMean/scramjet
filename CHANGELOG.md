@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.403.0 — The todo item in progress on the status line
+
+### Added
+
+- While a turn runs, the full screen's status line names the agent's todo item in progress (`☐ Run the tests`), as Claude Code's spinner does; it goes with a list that has none in progress, and with `/clear`.
+
 ## 2.402.3 — Protected names under a grant above the project
 
 ### Fixed

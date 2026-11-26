@@ -251,11 +251,14 @@ fn status_rows(
 impl App {
     /// The status line: what a running turn does and the note, and how far the view is from
     /// the end.
-    fn status(&self, width: usize) -> Vec<String> {
+    pub(super) fn status(&self, width: usize) -> Vec<String> {
         // Escape goes back to the end, lets a selection go or closes completion first.
         let escape = self.top.is_none() && self.selection.is_none() && !self.draft.completing();
         let handed = self.handed.as_ref().map(|(waiting, _)| waiting);
-        let activity = (self.activity.as_ref().or(handed)).map(|activity| activity.shown(escape));
+        let activity = (self.activity.as_ref().or(handed)).map(|activity| {
+            let task = (self.task.as_deref()).map(|task| format!(" · ☐ {task}"));
+            activity.shown(escape) + &task.unwrap_or_default()
+        });
         let below = self.last.saturating_sub(self.shown_top());
         // A list takes PgDn, and a dialog or the completion list Escape, but not from a selection.
         let page = !matches!(
