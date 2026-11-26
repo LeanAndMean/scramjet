@@ -37,6 +37,8 @@ pub(super) enum Builtin<'a> {
     Agents,
     Skills,
     Memory,
+    /// Claude Code's `/hooks`: the hooks the settings run.
+    Hooks,
     Doctor,
     /// With whether the details come first.
     Usage(bool),
@@ -106,6 +108,7 @@ impl<'a> Builtin<'a> {
             "agents" if argument.is_empty() => Self::Agents,
             "skills" if argument.is_empty() => Self::Skills,
             "memory" if argument.is_empty() => Self::Memory,
+            "hooks" if argument.is_empty() => Self::Hooks,
             "doctor" if argument.is_empty() => Self::Doctor,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
@@ -161,6 +164,7 @@ impl<'a> Builtin<'a> {
                 | Self::Agents
                 | Self::Skills
                 | Self::Memory
+                | Self::Hooks
                 | Self::Doctor
                 | Self::Btw(_)
                 | Self::Recap
@@ -214,6 +218,7 @@ impl Interactive {
             Some(Builtin::Agents) => self.agents(),
             Some(Builtin::Skills) => self.skills(),
             Some(Builtin::Memory) => self.memory(),
+            Some(Builtin::Hooks) => self.hooks(),
             Some(Builtin::Doctor) => self.doctor(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
@@ -763,6 +768,63 @@ impl Interactive {
         let problems = self.problems(&found);
         let text = installed::memory_text(&self.loaded(&found, &problems), &places);
         self.say(text.trim_end());
+    }
+
+    /// `/hooks`, as Claude Code's: the hooks the settings run, by event, after what is wrong in
+    /// them; on the full screen in a list whose Enter opens the settings file.
+    fn hooks(&mut self) {
+        let Some(file) = self.session.settings.path().map(Path::to_path_buf) else {
+            return self.say_styled(style::MUTED, "No hooks: there is no settings file");
+        };
+        let listing = |settings: &super::settings::Settings| {
+            let warnings: Vec<String> = (settings.warnings.iter())
+                .filter(|warning| {
+                    (warning.split_once(": ")).is_some_and(|(_, rest)| rest.starts_with("hooks"))
+                })
+                .cloned()
+                .collect();
+            installed::hooks(&settings.hooks.listed(), &warnings, &file)
+        };
+        if listing(&self.session.settings).rows.is_empty() {
+            let note = format!(
+                "No hooks: Claude Code's hooks setting in {} adds them",
+                scramjet::os::tilde(&file)
+            );
+            return self.say_styled(style::MUTED, &note);
+        }
+        if self.screen.is_none() {
+            let text = installed::hooks_text(&listing(&self.session.settings), &file);
+            return self.say(text.trim_end());
+        }
+        let mut at = None;
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let listing = listing(&self.session.settings);
+            if listing.rows.is_empty() {
+                return;
+            }
+            let first = listing.headings.iter().position(|heading| !heading);
+            let at_row = at.unwrap_or(first.unwrap_or(0)).min(listing.rows.len() - 1);
+            let visible = (super::editor::terminal_size().1 / 2).max(super::select::VISIBLE);
+            let rows = &listing.rows;
+            let picker = super::select::Picker::select(
+                "Hooks",
+                visible,
+                rows.len(),
+                at_row,
+                None,
+                |index, width| clip(&rows[index], width),
+            );
+            let keys = super::select::hint("edit", &[], "back");
+            let picker = (picker.headed(listing.headings)).noting(keys, listing.notes);
+            let Some(index) = screen.pick(picker.held()) else {
+                return;
+            };
+            at = Some(index);
+            self.edit_installed(&file);
+        }
     }
 
     /// `/doctor`, as Claude Code's: `scramjet doctor`'s checks, with what this session loaded,

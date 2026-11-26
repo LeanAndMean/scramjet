@@ -570,6 +570,72 @@ pub(super) fn memory_text(loaded: &Loaded, places: &Places) -> String {
     text
 }
 
+/// `/hooks`' rows: what is wrong in the settings' hooks, then each hook under its event, with
+/// its matcher and command; every row's Enter opens the settings file that gives them.
+pub(super) fn hooks(
+    listed: &[scramjet::agent::ListedHook],
+    warnings: &[String],
+    settings: &Path,
+) -> Listing {
+    let mut listing = Listing::default();
+    let file = Some(settings.to_path_buf());
+    let opens = match keymap::key(Binding::SelectConfirm) {
+        Some(key) => format!("\n{key} opens {}.", shown(settings)),
+        None => String::new(),
+    };
+    let problems = (warnings.iter())
+        .map(|warning| {
+            let text = home_shortened(warning);
+            (vec![text.clone()], format!("{text}{opens}"), file.clone())
+        })
+        .collect();
+    listing.section("Needs attention", problems);
+    for event in scramjet::agent::HOOK_EVENTS {
+        let rows = (listed.iter())
+            .filter(|hook| hook.event == event)
+            .map(|hook| {
+                let matcher = match (hook.matcher.as_str(), hook.matched()) {
+                    (_, false) => "",
+                    ("", true) => "*",
+                    (matcher, true) => matcher,
+                };
+                let unread = match (hook.matcher.is_empty(), hook.matched()) {
+                    (false, false) => format!(" Its matcher is not read for {event} hooks."),
+                    _ => String::new(),
+                };
+                let note = format!("Runs for at most {}.{unread}{opens}", seconds(hook.limit()));
+                let columns = match matcher {
+                    "" => vec![hook.command.command.clone()],
+                    matcher => vec![matcher.to_owned(), hook.command.command.clone()],
+                };
+                (columns, note, file.clone())
+            })
+            .collect();
+        listing.section(event, rows);
+    }
+    listing
+}
+
+/// `/hooks` without a full screen: its rows, then the file they come from.
+pub(super) fn hooks_text(listing: &Listing, settings: &Path) -> String {
+    let mut text = String::new();
+    for row in &listing.rows {
+        text.push_str(row);
+        text.push('\n');
+    }
+    text.push_str(&format!("From {}.\n", shown(settings)));
+    text
+}
+
+/// `600 s`, `1.5 s`.
+fn seconds(limit: std::time::Duration) -> String {
+    let seconds = limit.as_secs_f64();
+    match seconds.fract() == 0.0 {
+        true => format!("{seconds:.0} s"),
+        false => format!("{seconds} s"),
+    }
+}
+
 /// What an agent's file asks for: its tools, its model and a worktree of its own.
 fn asks(agent: &AgentFile) -> String {
     let tools = match (&agent.tools, agent.disallowed.as_slice()) {
@@ -1165,6 +1231,67 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn hooks_are_listed_by_event_with_their_matchers_after_what_is_wrong_in_them() {
+        let settings = PathBuf::from("/home/me/.config/scramjet/settings.json");
+        let mut warnings = Vec::new();
+        let value = serde_json::json!({
+            "Stop": [{"matcher": "x", "hooks": [{"type": "command", "command": "say done"}]}],
+            "PreToolUse": [
+                {"matcher": "Write|Edit", "hooks": [
+                    {"type": "command", "command": "fmt", "timeout": 30},
+                    {"type": "prompt", "prompt": "check"}
+                ]},
+                {"hooks": [{"type": "command", "command": "log-all"}]}
+            ],
+            "SessionEnd": [{"hooks": [{"type": "command", "command": "bye"}]}],
+            "PermissionRequest": []
+        });
+        let hooks = scramjet::agent::Hooks::read(&value, "~/settings.json", &mut warnings);
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        let listing = super::hooks(&hooks.listed(), &warnings, &settings);
+        let at = |row: &str| listing.rows.iter().position(|shown| shown == row);
+        let rows: Vec<&str> = listing.rows.iter().map(String::as_str).collect();
+        assert_eq!(rows[0], "Needs attention", "{rows:?}");
+        assert!(
+            rows[1].contains("hooks.PermissionRequest is not run"),
+            "{rows:?}"
+        );
+        assert!(rows[2].contains("hooks.PreToolUse[0].hooks[1]"), "{rows:?}");
+        let pre = at("PreToolUse").unwrap();
+        assert_eq!(
+            &rows[pre + 1..pre + 3],
+            ["  Write|Edit  fmt", "  *           log-all"],
+            "{rows:?}"
+        );
+        let stop = at("Stop").unwrap();
+        assert!(pre < stop && stop < at("SessionEnd").unwrap(), "{rows:?}");
+        assert_eq!(rows[stop + 1], "  say done");
+        let note = |row: usize| listing.notes[row].lines().next().unwrap().to_owned();
+        assert_eq!(note(pre + 1), "Runs for at most 30 s.");
+        assert_eq!(note(pre + 2), "Runs for at most 600 s.");
+        assert_eq!(
+            note(stop + 1),
+            "Runs for at most 600 s. Its matcher is not read for Stop hooks."
+        );
+        assert_eq!(
+            note(at("SessionEnd").unwrap() + 1),
+            "Runs for at most 1.5 s."
+        );
+        let headings = listing.headings.iter().filter(|heading| **heading).count();
+        assert_eq!(headings, 4);
+        assert!(
+            (listing.files.iter().enumerate())
+                .all(|(row, file)| listing.headings[row] || file.as_deref() == Some(&*settings))
+        );
+        let text = hooks_text(&listing, &settings);
+        assert!(
+            text.ends_with("From /home/me/.config/scramjet/settings.json.\n"),
+            "{text}"
+        );
+        assert!(super::hooks(&[], &[], &settings).rows.is_empty());
+    }
+
     #[test]
     fn skills_say_where_each_comes_from_and_whether_the_model_is_offered_it() {
         let base = std::env::temp_dir().join(format!("scramjet-skills-{}", std::process::id()));

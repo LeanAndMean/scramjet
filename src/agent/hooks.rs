@@ -125,7 +125,33 @@ impl Matcher {
 struct Group {
     event: Event,
     matcher: Matcher,
+    /// The matcher as the file gives it, empty for none.
+    given: String,
     commands: Vec<Command>,
+}
+
+/// A hook as `/hooks` lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    pub event: &'static str,
+    /// As the file gives it, empty for none.
+    pub matcher: String,
+    pub command: Command,
+}
+
+impl Listed {
+    /// How long its command may run.
+    pub fn limit(&self) -> Duration {
+        match self.event {
+            "SessionEnd" => self.command.timeout.unwrap_or(SESSION_END_TIMEOUT),
+            _ => self.command.timeout.unwrap_or(TIMEOUT),
+        }
+    }
+
+    /// Whether its matcher is read: Claude Code reads none for `UserPromptSubmit` and `Stop`.
+    pub fn matched(&self) -> bool {
+        !matches!(self.event, "UserPromptSubmit" | "Stop")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -189,6 +215,21 @@ impl Hooks {
         self.groups.is_empty()
     }
 
+    /// Every hook, by event in `EVENTS`' order, each event's in the file's order.
+    pub fn listed(&self) -> Vec<Listed> {
+        let mut groups: Vec<&Group> = self.groups.iter().collect();
+        groups.sort_by_key(|group| group.event as usize);
+        (groups.into_iter())
+            .flat_map(|group| {
+                (group.commands.iter()).map(|command| Listed {
+                    event: group.event.name(),
+                    matcher: group.given.clone(),
+                    command: command.clone(),
+                })
+            })
+            .collect()
+    }
+
     fn has(&self, event: Event) -> bool {
         self.groups.iter().any(|group| group.event == event)
     }
@@ -223,6 +264,7 @@ fn read_group(
         ));
         return None;
     };
+    let given = (group.get("matcher").and_then(Value::as_str)).unwrap_or_default();
     let matcher = match group.get("matcher") {
         None | Some(Value::Null) => Matcher::All,
         Some(Value::String(matcher)) => match Matcher::read(matcher) {
@@ -249,6 +291,7 @@ fn read_group(
     (!commands.is_empty()).then_some(Group {
         event,
         matcher,
+        given: given.trim().to_owned(),
         commands,
     })
 }

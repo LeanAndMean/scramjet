@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.384.0 — `/hooks`
+
+### Added
+
+- `/hooks`, as Claude Code's: the hooks your settings run, by event with their matchers and commands, after any problem in them; on the full screen each row's note says how long it may run, and Enter opens the settings file, read again once you save it.
+
 ## 2.383.0 — Hooks around subagents, after compactions and as turns fail
 
 ### Added

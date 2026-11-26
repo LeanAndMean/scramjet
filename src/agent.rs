@@ -72,7 +72,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, s
 pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use goal::{GoalCheck, Verdict};
-pub use hooks::{Hooks, Notifier};
+pub use hooks::{EVENTS as HOOK_EVENTS, Hooks, Listed as ListedHook, Notifier};
 pub use image::{decode_base64, mime as image_type, set_images};
 pub use instructions::{Part, Section};
 pub use lint::{Diagnostic, Severity, lint};
