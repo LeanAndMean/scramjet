@@ -76,6 +76,8 @@ const TYPING: Duration = Duration::from_millis(500);
 const BUSY: &str = "Busy: the session is not ready for a prompt yet";
 const RELOAD_BUSY: &str = "Wait for the current response to finish before reloading.";
 const MCP_BUSY: &str = "Wait for the current response to finish before changing MCP servers.";
+const SEARCH_BUSY: &str =
+    "Wait for the current response to finish before searching earlier prompts.";
 const MODEL_NEXT: &str = "The model changes before the next request";
 const NOTHING_QUEUED: &str = "No queued messages to restore";
 
@@ -210,6 +212,8 @@ pub(super) enum Input {
     Prompt(String),
     /// Escape twice on an empty prompt.
     DoubleEscape,
+    /// Ctrl+R: the earlier prompts to search, the draft kept.
+    SearchPrompts,
     /// Shift+Tab.
     CycleEffort,
     /// Ctrl+P presses, or Shift+Ctrl+P (negative), each a model further (`scope::cycle`).

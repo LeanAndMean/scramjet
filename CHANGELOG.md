@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.386.0 — Ctrl+R searches earlier prompts
+
+### Added
+
+- Ctrl+R, as in Claude Code and Codex: a list of the prompts you typed earlier, in this session and this folder's others (Tab: every folder's), newest first; typed words narrow it, and Enter puts the one chosen in the prompt.
+
 ## 2.385.0 — Claude Code's alwaysThinkingEnabled
 
 ### Added

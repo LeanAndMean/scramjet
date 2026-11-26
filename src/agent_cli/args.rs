@@ -280,7 +280,9 @@ prompt, and under it the project's directory and Git branch, the session's token
 context is and the model. Page Up/Down and the mouse wheel scroll the
 conversation; Escape goes back to its end.
 In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
-line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G edits the
+line; pasted text is inserted without sending. Up/Down recall earlier prompts; Ctrl+R lists
+them, this folder's other sessions' too (Tab: every folder's), newest first, typed words
+narrowing them, and Enter puts the one chosen in the prompt. Ctrl-G edits the
 prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.
 `!command` runs a bash command in the project directory without a model turn and adds its output
 to the conversation for the next prompt; `!!command` runs it without adding it.

@@ -82,6 +82,8 @@ enum Read {
     Prompt(String),
     /// A double Escape erased the prompt for `/tree` or `/fork`, which then takes its place.
     DoubleEscape,
+    /// Ctrl+R, to search earlier prompts.
+    SearchPrompts,
     /// Nothing to run; the prompt is read again.
     Again,
     /// The input ended.
@@ -254,6 +256,14 @@ impl Interactive {
                     DoubleEscape::Fork => "/fork".to_owned(),
                     DoubleEscape::Tree | DoubleEscape::Nothing => "/tree".to_owned(),
                 },
+                Read::SearchPrompts => {
+                    if let Some(prompt) = self.search_prompts()
+                        && let Some(screen) = &self.screen
+                    {
+                        screen.set_text(prompt);
+                    }
+                    continue;
+                }
                 Read::Again => continue,
                 Read::End => return Ok(Ended::Quit),
             };
@@ -336,6 +346,7 @@ impl Interactive {
                 match input {
                     screen::Input::Prompt(prompt) => return Ok(Read::Prompt(prompt)),
                     screen::Input::DoubleEscape => return Ok(Read::DoubleEscape),
+                    screen::Input::SearchPrompts => return Ok(Read::SearchPrompts),
                     screen::Input::CycleEffort => {
                         if let Some(note) =
                             cycle_effort(&mut self.session.agent, &mut self.session.settings)
