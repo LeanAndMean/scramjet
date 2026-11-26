@@ -62,6 +62,8 @@ pub(super) enum Builtin<'a> {
     AutoCompact(&'a str),
     /// Claude Code's `/btw QUESTION`: a side question, answered apart from the conversation.
     Btw(&'a str),
+    /// Claude Code's `/recap`: where the session stands, asked as a side question.
+    Recap,
     /// Claude Code's `/goal [CONDITION|clear]`: a condition checked after each turn.
     Goal(&'a str),
     /// Claude Code's and Codex's `/plan [PROMPT|off]`: plan mode.
@@ -121,6 +123,7 @@ impl<'a> Builtin<'a> {
             "compact" => Self::Compact(argument),
             "autocompact" => Self::AutoCompact(argument),
             "btw" => Self::Btw(argument),
+            "recap" if argument.is_empty() => Self::Recap,
             "goal" => Self::Goal(argument),
             "plan" => Self::Plan(argument),
             "autopilot" => Self::Autopilot(argument),
@@ -152,6 +155,7 @@ impl<'a> Builtin<'a> {
                 | Self::Memory
                 | Self::Doctor
                 | Self::Btw(_)
+                | Self::Recap
                 | Self::Goal(_)
                 | Self::Plan(_)
                 | Self::Usage(_)
@@ -223,6 +227,7 @@ impl Interactive {
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::AutoCompact(wanted)) => self.auto_compact(wanted),
             Some(Builtin::Btw(question)) => self.btw(question),
+            Some(Builtin::Recap) => self.recap(),
             Some(Builtin::Goal(condition)) => self.goal(condition),
             Some(Builtin::Plan(argument)) => self.plan(argument),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
@@ -1033,6 +1038,37 @@ tools into its page",
             Some(screen) => screen.show_report(aside_view(question, &aside.answer)),
             None => self.say(&format!("btw: {question}\n\n{}", aside.answer)),
         }
+        if self.in_turn {
+            self.asides.push(aside);
+        } else if let Err(error) = self.session.agent.keep_aside(aside) {
+            self.say(&format!("Error: {error}"));
+        }
+    }
+
+    /// `/recap`: where the session stands, from the model as `/btw` asks, shown as a note. Typed
+    /// during a turn, it is asked at the turn's next pause and kept once the turn has ended.
+    fn recap(&mut self) {
+        if self.session.agent.prompts().is_empty() {
+            return self.say_styled(style::MUTED, "Nothing to recap yet");
+        }
+        let ask =
+            |agent: &mut Agent, ui: &mut dyn AgentUi, cancel: &AtomicBool| agent.recap(ui, cancel);
+        let result = match self.in_turn {
+            true => {
+                let result = self.on_screen(ask);
+                if let Some(screen) = &self.screen {
+                    screen.aside_ended();
+                }
+                result
+            }
+            false => self.during_turn(ask),
+        };
+        let aside = match result {
+            Ok(aside) => aside,
+            Err(AgentError::Cancelled) => return self.say_styled(style::MUTED, "(cancelled)"),
+            Err(error) => return self.say(&format!("Error: {error}")),
+        };
+        self.say_styled(style::MUTED, &format!("Recap: {}", aside.answer));
         if self.in_turn {
             self.asides.push(aside);
         } else if let Err(error) = self.session.agent.keep_aside(aside) {

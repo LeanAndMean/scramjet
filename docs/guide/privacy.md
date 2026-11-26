@@ -13,7 +13,7 @@ Each request to a model carries the conversation so far:
 - **What the tools returned:** the files the agent read, the output of the commands it ran, search results and MCP servers' answers, so whatever those held, secrets included. `/context` shows what fills the window.
 - **The session's id,** a random one, as the cache key some providers take (`prompt_cache_key`, `session_id`).
 
-A compaction (`/compact`, or by itself near the window's end) and a branch summary (`/tree`) send the conversation to the session's model to be summarized, and `/btw` sends it with the side question, as `/goal` sends it with the goal after each turn. A subagent sends its task and what it reads to its own model, which may be another provider's.
+A compaction (`/compact`, or by itself near the window's end) and a branch summary (`/tree`) send the conversation to the session's model to be summarized, and `/btw` sends it with the side question (`/recap` with its question), as `/goal` sends it with the goal after each turn. A subagent sends its task and what it reads to its own model, which may be another provider's.
 
 Where each provider is reached:
 

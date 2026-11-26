@@ -2,7 +2,7 @@
 //! it. The request is the turn's own, so the prompt cache holds, with the question after it; no
 //! call it makes runs, and the model never sees the question or the answer again. Both are saved
 //! in a `side_question` line with what the request spent, as `!!` output is kept: not sent, but
-//! counted.
+//! counted. `/recap` asks the same way for where the session stands.
 use super::compaction::Spent;
 use super::{Agent, AgentError, AgentUi, Purpose, message_text};
 use serde_json::{Value, json};
@@ -14,6 +14,12 @@ const ASIDE: &str = "<system-reminder>The user asks a side question while you wo
 directly and briefly from what this conversation already shows. Do not call any tool: no call \
 runs now, and neither this question nor your answer stays in the conversation. Your work goes on \
 afterwards as it was.</system-reminder>\n\n";
+
+/// What `/recap` asks, after `ASIDE`.
+pub const RECAP: &str = "Recap this session for the user, who is coming back to it: in under 40 \
+words, one or two plain sentences without markdown, say the overall goal and where the work \
+stands now, then the one next action. Leave out how problems were found and fixed, and \
+side issues.";
 
 /// What a call still running when the question is asked gives the model in place of its result.
 const RUNNING: &str = "(Still running: its result is not in yet.)";
@@ -34,6 +40,27 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<Aside, AgentError> {
+        self.aside(question, question, Purpose::SideQuestion, ui, cancel)
+    }
+
+    /// `/recap`: where the session stands, in a sentence or two, asked as a side question;
+    /// its record names `/recap` as the question.
+    pub fn recap(
+        &mut self,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<Aside, AgentError> {
+        self.aside(RECAP, "/recap", Purpose::Recap, ui, cancel)
+    }
+
+    fn aside(
+        &mut self,
+        question: &str,
+        recorded: &str,
+        purpose: Purpose,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<Aside, AgentError> {
         let mut request = self.request_with(&self.instruction_parts());
         let input = request["input"].as_array_mut().unwrap();
         // A turn paused while its calls run has sent calls with no results yet.
@@ -49,7 +76,7 @@ impl Agent {
             .collect();
         input.extend(running);
         input.push(json!({"role":"user","content":format!("{ASIDE}{question}")}));
-        let reply = self.respond(&request, Purpose::SideQuestion, ui, cancel)?;
+        let reply = self.respond(&request, purpose, ui, cancel)?;
         let mut spent = Spent::default();
         spent.add(&self.config.model, &reply);
         let answer = (reply.items.iter())
@@ -63,7 +90,7 @@ impl Agent {
             )),
             answer => {
                 let mut record =
-                    json!({"type":"side_question","question":question,"answer":answer});
+                    json!({"type":"side_question","question":recorded,"answer":answer});
                 spent.save(&mut record);
                 Ok(Aside {
                     answer: answer.to_owned(),
@@ -150,5 +177,35 @@ mod tests {
             question.starts_with("<system-reminder>") && question.ends_with("\n\nwhat is 2+2?")
         );
         assert_eq!(input.len(), 4);
+    }
+
+    #[test]
+    fn a_recap_is_a_side_question_recorded_as_recap() {
+        let (endpoint, server) = serve(vec![stream(&fixture::text_events(
+            "Fixing the build; next, rerun the tests.",
+            fixture::known_usage(),
+        ))]);
+        let (mut agent, _scratch) = agent(endpoint, "recap");
+        agent
+            .add(json!({"role":"user","content":"fix the build"}))
+            .unwrap();
+        let turn = agent.request();
+        let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+
+        let aside = agent.recap(&mut ui, &cancel).unwrap();
+        assert_eq!(aside.answer, "Fixing the build; next, rerun the tests.");
+        agent.keep_aside(aside).unwrap();
+        let kept = agent.conversation().last().unwrap();
+        assert_eq!(
+            (&kept["type"], &kept["question"]),
+            (&json!("side_question"), &json!("/recap"))
+        );
+        assert_eq!(agent.request()["input"], turn["input"]);
+
+        let requests = server.join().unwrap();
+        let input = requests[0]["input"].as_array().unwrap();
+        assert_eq!(input[..1], turn["input"].as_array().unwrap()[..]);
+        assert_eq!(input[1]["content"], json!(format!("{ASIDE}{RECAP}")));
+        assert_eq!(input.len(), 2);
     }
 }

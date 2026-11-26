@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.370.0 — /recap
+
+### Added
+
+- `/recap` asks the model where the session stands, as Claude Code's does: the goal, where the work is and the next action, in a sentence or two shown as a note. Like `/btw`, it runs also during a turn, and the model never sees the question or the answer again.
+
 ## 2.369.0 — /tasks is a list on the full screen
 
 ### Added

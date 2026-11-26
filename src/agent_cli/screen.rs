@@ -834,7 +834,10 @@ impl App {
         let Some(next) = Activity::after(event) else {
             return;
         };
-        if matches!(event, Event::Waiting(Purpose::SideQuestion)) {
+        if matches!(
+            event,
+            Event::Waiting(Purpose::SideQuestion | Purpose::Recap)
+        ) {
             let kept = std::mem::replace(activity, next);
             self.aside_from.get_or_insert(kept);
             return;
