@@ -339,6 +339,8 @@ under each part, and s the system prompt as /system-prompt does.
 /system-prompt shows, on the full screen, the instructions the last request sent, each part under
 a heading, then its tool definitions; before any request, those the next sends. Up and Down,
 PgUp and PgDn, Home and End scroll it, the mouse or Shift and the arrows select, Escape closes it.
+/diff shows the Git repository's uncommitted changes against HEAD, untracked files as new ones
+(ignored files left out), without a model turn; on the full screen d lists the files changed.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
@@ -355,7 +357,7 @@ skills and context files again, and starts the MCP servers whose entries changed
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
 available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disable [SERVER|all]
 starts or stops them, saved in disabledMcpServers.
-Typed while a turn runs, /status, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /diff, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

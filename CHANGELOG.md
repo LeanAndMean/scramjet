@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.351.0 — /diff
+
+### Added
+
+- `/diff` shows the project's uncommitted changes against `HEAD`, untracked files as new ones, without a model turn, as Codex's and Claude Code's `/diff` do: the whole diff in a view of its own, `d` listing the files changed with their lines added and removed. Without a full screen it prints them.
+
 ## 2.350.0 — /init
 
 ### Added

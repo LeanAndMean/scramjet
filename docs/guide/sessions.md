@@ -30,7 +30,7 @@ The prompt you are typing is kept with the session, a few seconds after each cha
 
 Misspelled words in the prompt are underlined (American English, with common developer words such as `repo` and `config`), leaving paths, identifiers, short capitals and `!` commands alone; your own words go one a line in `words.txt` beside the settings file, and Spelling in `/settings` turns it off.
 
-`/context` shows how much of the model's window each part of the context takes, and `/system-prompt` the instructions the last request sent, with each tool's definition. `/usage` shows what is left of each provider's quota where it says, and what the saved sessions spent.
+`/context` shows how much of the model's window each part of the context takes, and `/system-prompt` the instructions the last request sent, with each tool's definition. `/diff` shows the repository's uncommitted changes against `HEAD`, untracked files as new ones, without a model turn; `d` lists the files changed. `/usage` shows what is left of each provider's quota where it says, and what the saved sessions spent.
 
 ## Sessions are trees
 

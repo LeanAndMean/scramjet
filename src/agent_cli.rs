@@ -19,6 +19,7 @@ mod banner;
 mod bottom;
 mod catalog;
 mod changelog;
+mod changes;
 mod children;
 mod clipboard;
 mod completion;

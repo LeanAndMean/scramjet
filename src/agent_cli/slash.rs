@@ -26,6 +26,7 @@ pub(super) enum Builtin<'a> {
     Clear(&'a str),
     Rename(&'a str),
     Status,
+    Diff,
     /// With whether the details come first.
     Usage(bool),
     Context,
@@ -70,6 +71,7 @@ impl<'a> Builtin<'a> {
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
+            "diff" if argument.is_empty() => Self::Diff,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
@@ -109,6 +111,7 @@ impl<'a> Builtin<'a> {
                 | Self::Copy
                 | Self::Rename(_)
                 | Self::Status
+                | Self::Diff
                 | Self::Usage(_)
                 | Self::Context
                 | Self::SystemPrompt
@@ -147,6 +150,7 @@ impl Interactive {
             }
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
+            Some(Builtin::Diff) => self.diff(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
             Some(Builtin::SystemPrompt) => self.system_prompt(),
@@ -344,6 +348,23 @@ impl Interactive {
             false => super::usage::summary(&history, current, model, now, None),
         };
         self.say(report.trim_end());
+    }
+
+    /// `/diff`, as Codex's and Claude Code's: the uncommitted changes, untracked files included;
+    /// on the full screen in a view of its own, the files changed a key away.
+    fn diff(&mut self) {
+        let root = self.session.agent.root().to_owned();
+        match super::changes::uncommitted(&root) {
+            Ok(None) => self.say("Not in a Git repository"),
+            Ok(Some(changes)) if changes.diff.is_empty() => {
+                self.say_styled(style::MUTED, "No uncommitted changes")
+            }
+            Ok(Some(changes)) => match &self.screen {
+                Some(screen) => screen.show_report(super::changes::view(&changes)),
+                None => self.say(super::changes::text(&changes).trim_end()),
+            },
+            Err(error) => self.say(&format!("Error: {error}")),
+        }
     }
 
     /// `/context`, as Claude Code's: how much of the window each part of the context takes; on
@@ -912,6 +933,7 @@ mod tests {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
             "/status",
+            "/diff",
             "/context",
             "/system-prompt",
             "/export",
