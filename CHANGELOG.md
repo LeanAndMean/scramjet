@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.375.0 — /export as text
+
+### Added
+
+- `/export` writes the conversation as text, as it prints in a terminal without colors or thinking, to a path ending in `.txt` (`--export FILE OUT.txt` too). On the full screen `/export` without a path asks, as Claude Code's does: save the web page (first, as before), copy the text to the clipboard, or save it as `scramjet-session-<id>.txt`.
+
 ## 2.374.0 — /copy N and code blocks
 
 ### Added

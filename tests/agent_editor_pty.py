@@ -5331,6 +5331,41 @@ def copy_offers_code_blocks(read, until, send, output):
     send(b'\x04')
 
 
+def export_offers_text(read, until, send, output):
+    shown, on_screen = full_screen(rows=40)(read, output)
+    on_screen('\u2500' * 20)
+    send(b'go\r')
+    on_screen('or:')
+    ended(read, output, rows=40)
+    # As Claude Code's, /export without a path asks; the page comes first, as Scramjet writes it.
+    send(b'/export\r')
+    rows = on_screen('Save as text')
+    text = '\n'.join(rows)
+    for listed in ['Export conversation', 'Save as a web page', 'scramjet-session-', 'Copy to clipboard',
+                   'The conversation as text']:
+        assert listed in text, (listed, text)
+    send(b'\x1b[B\r')
+    end = time.monotonic() + 10
+    while not os.path.exists(clipboard) or 'cargo fmt' not in open(clipboard).read():
+        assert time.monotonic() < end
+        time.sleep(.05)
+    pasted = open(clipboard).read()
+    assert pasted.startswith('Model: test/gpt-6-luna\n\n> go\n\nEither:\n') and '\x1b' not in pasted, pasted
+    on_screen('Conversation copied to clipboard (')
+    send(b'/export\r')
+    on_screen('Save as text')
+    send(b'\x1b[B\x1b[B\r')
+    on_screen('Session exported to:')
+    [written] = glob.glob(os.path.join(project, 'scramjet-session-*.txt'))
+    assert open(written).read() == pasted, written
+    os.remove(written)
+    send(b'/export\r')
+    on_screen('Save as text')
+    send(b'\x1b')
+    on_screen('Export cancelled')
+    send(b'\x04')
+
+
 def copy_command_by_the_terminal(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -5635,6 +5670,11 @@ blocks_home = config_home('copy-blocks')
 run([], copy_offers_code_blocks, serve_items([[message(blocks_reply)]]), rows=40,
     variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
                'DISPLAY': '', 'CLIPBOARD': clipboard, 'XDG_CONFIG_HOME': blocks_home})
+if os.path.exists(clipboard):
+    os.remove(clipboard)
+run([], export_offers_text, serve_items([[message(blocks_reply)]]), rows=40,
+    variables={'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',
+               'DISPLAY': '', 'CLIPBOARD': clipboard})
 run([], copy_command_by_the_terminal, serve_items([[message(markdown_reply)]]))
 # With piped input the clipboard tool copies; without one there is no terminal for OSC 52.
 for variables, said in [({'PATH': clipboard_bin + os.pathsep + env['PATH'], 'WAYLAND_DISPLAY': 'wayland-test',

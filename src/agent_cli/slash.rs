@@ -311,10 +311,35 @@ impl Interactive {
     }
 
     /// `/export [path]`, as Scramjet's: the current branch as a web page, or, to a path ending in
-    /// `.jsonl`, as a session file of its own.
+    /// `.jsonl`, as a session file of its own, in `.txt` as text. Without a path the full screen
+    /// asks, as Claude Code's does, whether to save the page, copy the text or save it.
     fn export(&mut self, argument: &str) {
-        let path = path_argument(argument);
-        match export_branch(&self.session.agent, path, Path::new("")) {
+        let mut path = path_argument(argument).map(str::to_owned);
+        if path.is_none()
+            && let Some(screen) = &self.screen
+            && !self.session.agent.conversation().is_empty()
+        {
+            let id = self.session.agent.session_id();
+            let choices = [
+                choice(
+                    "Save as a web page",
+                    Some(format!("scramjet-session-{id}.html")),
+                ),
+                choice(
+                    "Copy to clipboard",
+                    Some("The conversation as text".to_owned()),
+                ),
+                choice("Save as text", Some(format!("scramjet-session-{id}.txt"))),
+            ];
+            let question = super::select::Picker::question("Export conversation", &choices, None);
+            match screen.pick(question) {
+                None => return self.say_styled(style::MUTED, "Export cancelled"),
+                Some(0) => {}
+                Some(1) => return self.copy_conversation(),
+                Some(_) => path = Some(format!("scramjet-session-{id}.txt")),
+            }
+        }
+        match export_branch(&self.session.agent, path.as_deref(), Path::new("")) {
             Ok(Some(path)) => {
                 let said = format!("Session exported to: {}", path.display());
                 self.say_styled(style::MUTED, &said)
@@ -322,6 +347,17 @@ impl Interactive {
             Ok(None) => self.say("Nothing to export yet"),
             Err(error) => self.say(&format!("Error: failed to export the session: {error}")),
         }
+    }
+
+    /// The current branch as `/export` writes it in text, copied to the clipboard.
+    fn copy_conversation(&mut self) {
+        let text = match self.session.agent.branch() {
+            Ok(branch) => export::text(&branch, super::editor::terminal_size().0),
+            Err(error) => {
+                return self.say(&format!("Error: failed to export the session: {error}"));
+            }
+        };
+        self.copy_text(&text, "Conversation copied to clipboard");
     }
 
     /// `/import <path.jsonl>`, as Scramjet's: continues in a copy of a session file, once the user
@@ -399,6 +435,20 @@ impl Interactive {
             Copied::Block(at) => blocks[at].0.as_str(),
             Copied::Full | Copied::Always => reply.as_str(),
         };
+        self.copy_text(text, "Copied to clipboard");
+        if let Copied::Always = chosen {
+            match self.session.settings.copy_full_responses() {
+                Ok(()) => self.say_styled(
+                    style::MUTED,
+                    "Preference saved: /copy copies whole replies (Copy full response in /settings)",
+                ),
+                Err(error) => self.say(&format!("Error: the preference was not saved: {error}")),
+            }
+        }
+    }
+
+    /// Puts `text` on the clipboard, saying `copied` and how much it was.
+    fn copy_text(&mut self, text: &str, copied: &str) {
         let terminal = self.screen.is_some() || std::io::stderr().is_terminal();
         match clipboard::copy(text, terminal) {
             Ok(sequence) => {
@@ -408,19 +458,10 @@ impl Interactive {
                         None => eprint!("{sequence}"),
                     }
                 }
-                let copied = format!("Copied to clipboard ({})", sized(text, "character"));
+                let copied = format!("{copied} ({})", sized(text, "character"));
                 self.say_styled(style::MUTED, &copied);
             }
             Err(error) => self.say(&format!("Error: {error}")),
-        }
-        if let Copied::Always = chosen {
-            match self.session.settings.copy_full_responses() {
-                Ok(()) => self.say_styled(
-                    style::MUTED,
-                    "Preference saved: /copy copies whole replies (Copy full response in /settings)",
-                ),
-                Err(error) => self.say(&format!("Error: the preference was not saved: {error}")),
-            }
         }
     }
 
@@ -1448,7 +1489,7 @@ fn path_argument(argument: &str) -> Option<&str> {
 }
 
 /// Writes `agent`'s current branch to `path`, relative to `directory`: to a path ending in
-/// `.jsonl` as a session file of its own, else as a web page, by default named for the session,
+/// `.jsonl` as a session file of its own, to one in `.txt` as text, else as a web page, by default named for the session,
 /// as Scramjet names it. Returns where, or none before any conversation.
 pub(super) fn export_branch(
     agent: &Agent,
@@ -1466,6 +1507,9 @@ pub(super) fn export_branch(
     let path = std::path::absolute(path)?;
     if path.to_string_lossy().ends_with(".jsonl") {
         agent.export_session(&path)?;
+    } else if export::is_text(&path) {
+        let width = super::editor::terminal_size().0;
+        std::fs::write(&path, export::text(&agent.branch()?, width))?;
     } else {
         let tools = agent.tool_definitions();
         let setup = export::Setup {

@@ -592,7 +592,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     }
     /// Renders into a buffer `width` columns wide, styled, with every tool result in full.
     fn capture(width: usize, hide_thinking: Arc<AtomicBool>) -> Self {
-        let mut terminal = Self::new(hide_thinking, false);
+        let mut terminal = Self::unregistered(hide_thinking);
         terminal.color = true;
         terminal.capture = Some((String::new(), width));
         terminal.full = true;
@@ -723,9 +723,18 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         self.color && self.capture.is_none()
     }
     /// With `status_thread`, on a terminal, a thread draws the status line.
+    /// As `-p` prints a session's conversation, without its styles and with tool results cut,
+    /// at `width`.
+    pub(super) fn transcript(width: usize) -> Self {
+        let mut terminal = Self::capture(width, Arc::new(AtomicBool::new(true)));
+        terminal.full = false;
+        terminal
+    }
     pub(super) fn new(hide_thinking: Arc<AtomicBool>, status_thread: bool) -> Self {
+        let mut terminal = Self::unregistered(hide_thinking.clone());
         let color = std::io::stderr().is_terminal();
-        let status = Arc::new(Mutex::<Status>::default());
+        terminal.color = color;
+        let status = terminal.status.clone();
         if color {
             *STATUS.lock().unwrap_or_else(PoisonError::into_inner) = Some(status.clone());
         }
@@ -753,9 +762,13 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 }
             });
         }
+        terminal
+    }
+    /// A terminal that an exit does not clear, as a capture.
+    fn unregistered(hide_thinking: Arc<AtomicBool>) -> Self {
         Self {
-            color,
-            status,
+            color: false,
+            status: Arc::new(Mutex::<Status>::default()),
             streaming: Streaming::None,
             streamed: String::new(),
             consumed: 0,

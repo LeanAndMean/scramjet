@@ -6,8 +6,9 @@
 
 use super::children::{call, icon, usage_line};
 use super::slash::grouped;
-use super::terminal::{command_body, framed, lines as lines_count};
-use super::text::visible;
+use super::style;
+use super::terminal::{Terminal, command_body, framed, lines as lines_count};
+use super::text::{RULE, plain, visible};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use scramjet::agent::{
     AgentError, AgentUi, Answer, AutoCompaction, Branch, ChildItem, ChildRun, ChildState, Children,
@@ -35,8 +36,8 @@ pub(super) struct Setup<'a> {
 }
 
 /// `--export FILE [OUTPUT]`, as Scramjet's: the page of the session saved in `file`, where a
-/// resume would continue it, written to `output`, by default `scramjet-session-<its id>.html`
-/// in the current directory. Returns where it went.
+/// resume would continue it, written to `output` (as text if it ends in `.txt`), by default
+/// `scramjet-session-<its id>.html` in the current directory. Returns where it went.
 pub(super) fn file(file: &Path, output: Option<PathBuf>) -> Result<PathBuf, String> {
     let branch = read_branch(file).map_err(|error| match error.kind() {
         std::io::ErrorKind::InvalidData => error.to_string(),
@@ -44,9 +45,55 @@ pub(super) fn file(file: &Path, output: Option<PathBuf>) -> Result<PathBuf, Stri
     })?;
     let id = file.file_stem().unwrap_or_default().to_string_lossy();
     let output = output.unwrap_or_else(|| format!("scramjet-session-{id}.html").into());
-    let page = page(&branch, &id, None);
-    std::fs::write(&output, page).map_err(|error| format!("{}: {error}", output.display()))?;
+    let written = match is_text(&output) {
+        true => text(&branch, super::editor::terminal_size().0),
+        false => page(&branch, &id, None),
+    };
+    std::fs::write(&output, written).map_err(|error| format!("{}: {error}", output.display()))?;
     Ok(output)
+}
+
+/// Whether an export to `path` is text: a `.txt` file, as Claude Code's `/export` writes.
+pub(super) fn is_text(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("txt"))
+}
+
+/// `branch` as text, as `-p` prints a conversation at `width`, without its styles.
+pub(super) fn text(branch: &Branch, width: usize) -> String {
+    let mut terminal = Terminal::transcript(width);
+    let mut start = 0;
+    for (index, entry) in branch.entries.iter().enumerate() {
+        let kind = entry["type"].as_str();
+        if !matches!(kind, Some("compaction" | "branch_summary" | "model_change")) {
+            continue;
+        }
+        show_items(&branch.entries[start..index], None, &mut terminal);
+        start = index + 1;
+        let summary = entry["summary"].as_str().unwrap_or_default();
+        match kind {
+            Some("compaction") => terminal.compaction_summary(summary),
+            Some("branch_summary") => terminal.branch_summary(summary),
+            _ => {
+                let model = entry["model"].as_str().unwrap_or_default();
+                terminal.clear();
+                terminal.said(&format!("Model: {}", visible(model)));
+                terminal.blank_line();
+            }
+        }
+    }
+    show_items(&branch.entries[start..], None, &mut terminal);
+    // Reasoning is hidden, and its marker is left out too.
+    let marker = format!("{}Thinking...{}\n\n", style::THINKING_HIDDEN, style::RESET);
+    let lines = plain(&terminal.captured().replace(&marker, "")).replace(RULE, "");
+    let mut text = String::new();
+    for line in lines.lines().map(str::trim_end) {
+        if !(line.is_empty() && (text.is_empty() || text.ends_with("\n\n"))) {
+            text += line;
+            text.push('\n');
+        }
+    }
+    text.trim_end().to_owned() + "\n"
 }
 
 /// The page showing `branch` of the session `id`.
@@ -665,6 +712,44 @@ mod tests {
 
     fn output_item(id: &str, output: &str) -> Value {
         json!({"type":"function_call_output","call_id":id,"output":output})
+    }
+
+    #[test]
+    fn text_shows_the_branch_as_print_mode_prints_it_without_styles_or_thinking() {
+        let reply = json!({"type":"message","role":"assistant",
+            "content":[{"type":"output_text","text":"Found **two** files.\n\nThinking..."}]});
+        let bash_output = (1..=8).map(|n| format!("line {n}")).collect::<Vec<_>>();
+        let text = text(
+            &branch(vec![
+                json!({"type":"model_change","model":"gpt-6-luna"}),
+                json!({"role":"user","content":"list files"}),
+                json!({"type":"reasoning","summary":[{"type":"summary_text","text":"Look first."}]}),
+                call_item("c1", "bash", json!({"command":"ls"})),
+                output_item("c1", &bash_output.join("\n")),
+                reply,
+                json!({"type":"compaction","summary":"Listed the files.","first_kept":0}),
+                json!({"role":"user","content":"thanks"}),
+            ]),
+            60,
+        );
+        assert!(
+            !text.contains('\x1b') && !text.contains("Look first"),
+            "{text}"
+        );
+        assert!(!text.contains("\n\n\n") && !text.contains(" \n"), "{text}");
+        let at = |part: &str| {
+            text.find(part)
+                .unwrap_or_else(|| panic!("{part:?} not in the text:\n{text}"))
+        };
+        let order = [
+            at("Model: gpt-6-luna\n\n> list files\n\n● bash ls\n"),
+            at("  line 8\n"),
+            at("Found two files.\n\nThinking...\n"),
+            at("Listed the files."),
+            at("> thanks\n"),
+        ];
+        assert!(order.is_sorted(), "{text}");
+        assert!(text.ends_with("> thanks\n"), "{text}");
     }
 
     #[test]

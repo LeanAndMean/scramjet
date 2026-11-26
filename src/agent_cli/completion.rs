@@ -25,7 +25,7 @@ const SLASH_COMMANDS: [(&str, &str); 44] = [
     ),
     (
         "export",
-        "Export session (HTML default, or specify path: .html/.jsonl)",
+        "Export session (HTML default, or specify path: .html/.jsonl/.txt)",
     ),
     ("import", "Import and resume a session from a JSONL file"),
     (

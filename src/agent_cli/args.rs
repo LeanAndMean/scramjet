@@ -73,7 +73,7 @@ What the agent may do:
   --offline                no network at start: nothing cloned, no newer release looked for
 
 Other:
-  --export FILE [OUTPUT]   write a session file as a web page and exit
+  --export FILE [OUTPUT]   write a session file as a web page, or text, and exit
   -v, --version            print the version and exit
   -h, --help               print this help
   --help-all               print each option in full, the keys, the built-in commands and
@@ -263,7 +263,8 @@ but to NO_PROXY's hosts and this machine.
                          as read scales it; a relative path is from the current directory
   MESSAGE                prompts sent one after another when the session starts
   --export FILE [OUTPUT] write the session file FILE as a web page to OUTPUT (default:
-                         scramjet-session-<its name>.html here), as /export does, and exit
+                         scramjet-session-<its name>.html here), as text to an OUTPUT
+                         ending in .txt, as /export does, and exit
   --list-models [SEARCH] list the providers' models (those SEARCH matches) by provider, with
                          their context window, output limit, and whether they reason and
                          take images, and exit
@@ -353,7 +354,8 @@ end first, or, while it runs, asks whether to show it or stop the task. They run
 task_stop) or Scramjet exits; the first prompt after one ends tells the agent how it ended.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,
-as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
+as a session file of its own, in .txt as text, as -p prints it; without a PATH the full
+screen asks whether to save the page, copy the text to the clipboard or save it; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
 clipboard. /release-notes (or /changelog) shows what changed in each version, the newest
 first; the first start after an update shows What's new since the version run before. The keys named here are the defaults: keybindings.json beside the settings file
