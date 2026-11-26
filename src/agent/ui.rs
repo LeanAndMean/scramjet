@@ -25,6 +25,8 @@ pub enum Purpose {
     BranchSummary,
     /// The answer to a `/btw` side question.
     SideQuestion,
+    /// Whether the `/goal` is met.
+    GoalCheck,
 }
 
 /// What a turn wrote to its session file, of what it showed.

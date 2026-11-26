@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.362.0 — /goal
+
+### Added
+
+- `/goal CONDITION` gives the agent a goal, as Claude Code's does: after each turn that ends by itself, the model is asked whether the conversation shows it met, and until it is, the reason goes back to the agent and the work goes on. `/goal` says the goal, `/goal clear` clears it, and Escape stops the work.
+
 ## 2.361.0 — /autocompact
 
 ### Added

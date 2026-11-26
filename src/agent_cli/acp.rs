@@ -3838,6 +3838,7 @@ impl AgentUi for Updates {
             Purpose::Compaction(_) => "compacting",
             Purpose::BranchSummary => "summarizing",
             Purpose::SideQuestion => "answering",
+            Purpose::GoalCheck => "checking",
         };
         self.status(state, super::terminal::waiting_for(purpose), None);
         match purpose {

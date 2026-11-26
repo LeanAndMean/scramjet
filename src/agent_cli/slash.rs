@@ -58,6 +58,8 @@ pub(super) enum Builtin<'a> {
     AutoCompact(&'a str),
     /// Claude Code's `/btw QUESTION`: a side question, answered apart from the conversation.
     Btw(&'a str),
+    /// Claude Code's `/goal [CONDITION|clear]`: a condition checked after each turn.
+    Goal(&'a str),
     Autopilot(&'a str),
     /// With its argument: `reconnect`, `enable` or `disable`, with a server's name or `all`.
     Mcp(&'a str),
@@ -111,6 +113,7 @@ impl<'a> Builtin<'a> {
             "compact" => Self::Compact(argument),
             "autocompact" => Self::AutoCompact(argument),
             "btw" => Self::Btw(argument),
+            "goal" => Self::Goal(argument),
             "autopilot" => Self::Autopilot(argument),
             "mcp" => Self::Mcp(argument),
             "sandbox" => Self::Sandbox(argument),
@@ -139,6 +142,7 @@ impl<'a> Builtin<'a> {
                 | Self::Memory
                 | Self::Doctor
                 | Self::Btw(_)
+                | Self::Goal(_)
                 | Self::Usage(_)
                 | Self::Context
                 | Self::SystemPrompt
@@ -206,6 +210,7 @@ impl Interactive {
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::AutoCompact(wanted)) => self.auto_compact(wanted),
             Some(Builtin::Btw(question)) => self.btw(question),
+            Some(Builtin::Goal(condition)) => self.goal(condition),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Mcp(argument)) => self.mcp(argument),
             Some(Builtin::Sandbox("")) => self.sandbox_menu(),

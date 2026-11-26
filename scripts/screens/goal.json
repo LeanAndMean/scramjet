@@ -1,0 +1,65 @@
+{
+  "size": "100x40",
+  "replies": [
+    [
+      {
+        "text": "I have the goal: done.txt holding \"done\". Let me look first."
+      }
+    ],
+    [
+      {
+        "text": "{\"ok\": false, \"reason\": \"done.txt was never written: nothing in the conversation creates it\"}"
+      }
+    ],
+    [
+      {
+        "call": "bash",
+        "arguments": {
+          "command": "echo done > done.txt && cat done.txt"
+        }
+      }
+    ],
+    [
+      {
+        "text": "done.txt now holds \"done\"."
+      }
+    ],
+    [
+      {
+        "text": "```json\n{\"ok\": true, \"reason\": \"the bash call wrote done.txt and cat printed: done\"}\n```"
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "[Skills]"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "/goal done.txt holds the word done\r"
+    },
+    {
+      "until": "Goal met"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "met"
+    },
+    {
+      "type": "/goal\r"
+    },
+    {
+      "until": "No goal set"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "after"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ mod cooldown;
 pub mod copilot;
 mod delegate;
 mod forge;
+mod goal;
 mod image;
 mod instructions;
 mod leftovers;
@@ -65,6 +66,7 @@ pub use client::{StreamProgress, download};
 pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, sets_in};
 pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
+pub use goal::{GoalCheck, Verdict};
 pub use image::{decode_base64, mime as image_type, set_images};
 pub use instructions::{Part, Section};
 pub use lint::{Diagnostic, Severity, lint};
@@ -176,8 +178,9 @@ pub(super) const PROBE: &str = "_scramjet_probe";
 /// The response items a model is sent, besides user messages; replies hold only these. Other
 /// items of the conversation are only shown, as Scramjet keeps its failed replies and `!!` output
 /// out of the context: how a turn stopped (`turn_stopped`, with the `error` unless it was
-/// cancelled), a `!!` command (`bang_excluded`, with its `command` and the `output` shown) and a
-/// `/btw` side question (`side_question`, with its `question` and `answer`).
+/// cancelled), a `!!` command (`bang_excluded`, with its `command` and the `output` shown), a
+/// `/btw` side question (`side_question`, with its `question` and `answer`) and a `/goal` check
+/// (`goal_check`, with its `condition`, whether it was `met` and the `reason`).
 /// So is an entry of a type this build does not know, as Scramjet's `convertToLlm` drops one.
 const SENT: [&str; 4] = [
     "message",

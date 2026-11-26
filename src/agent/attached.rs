@@ -97,6 +97,15 @@ image size limit.]\n"
         Ok(attached)
     }
 
+    /// `text` sent before the next prompt, which shows as typed.
+    pub(super) fn before(text: &str) -> Self {
+        Self {
+            shown: Vec::new(),
+            text: text.to_owned(),
+            images: Vec::new(),
+        }
+    }
+
     /// `prompt` as shown and recalled: the files and images, then the prompt.
     pub(super) fn typed(&self, prompt: &str) -> String {
         let mut words = self.shown.clone();

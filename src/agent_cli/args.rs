@@ -371,11 +371,15 @@ the sandbox, git and the shell, the terminal and how the MCP servers are.
 /btw QUESTION asks the model a side question with the conversation so far, as Claude Code's:
 no tool runs, the answer shows apart (on the full screen in a view of its own), and the model
 never sees the question or the answer again; what it spent is counted with the session.
+/goal CONDITION sets a goal, as Claude Code's: the agent works toward it, and after each turn
+that ends by itself the model is asked, as /btw asks, whether the conversation shows it met; until
+it does, the reason goes back to the agent and the work goes on. Escape stops it; /goal says the
+goal, /goal clear clears it, and a new or resumed session has none.
 /effort LEVEL sets the thinking level, as Shift+Tab does, saved as defaultThinkingLevel; /effort
 alone lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /goal, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /autocompact, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

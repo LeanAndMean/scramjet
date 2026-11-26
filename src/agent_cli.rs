@@ -36,6 +36,7 @@ mod external;
 mod file_search;
 mod footer;
 mod fuzzy;
+mod goal;
 mod highlight;
 mod hotkeys;
 mod import;

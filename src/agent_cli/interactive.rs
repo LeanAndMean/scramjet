@@ -55,6 +55,10 @@ pub(super) struct Interactive {
     pub(super) in_turn: bool,
     /// The side questions answered while a turn paused, kept once it has ended.
     pub(super) asides: Vec<Aside>,
+    /// The `/goal`, checked after each turn that ends by itself.
+    pub(super) goal: Option<super::goal::Goal>,
+    /// Whether the last turn ended by itself, neither cancelled nor failed.
+    finished: bool,
     /// The effort when what runs as a turn started, for `ended_on_screen`.
     effort_at_start: Option<String>,
     /// The packages' logins and the providers that list their models themselves, as the
@@ -138,6 +142,8 @@ impl Interactive {
             keybindings,
             in_turn: false,
             asides: Vec::new(),
+            goal: None,
+            finished: false,
             effort_at_start: None,
             kept,
             catalogs_tried: HashMap::new(),
@@ -362,8 +368,15 @@ impl Interactive {
         self.run_turn(Some(prompt), start)
     }
 
+    /// Runs a turn; then its next step, or, without one, the prompt that goes on toward the
+    /// goal if a check finds it not met.
     fn run_turn(&mut self, prompt: Option<&str>, start: Start) -> Option<(String, Start)> {
-        drive::run_turn(self, prompt, start)
+        let next = drive::run_turn(self, prompt, start);
+        match (next, self.finished) {
+            (Some(next), _) => Some(next),
+            (None, true) => self.check_goal(),
+            (None, false) => None,
+        }
     }
 
     /// Runs `run` with the full screen showing that a turn runs, Shift+Tab cycling the current
@@ -759,6 +772,7 @@ impl Front for Interactive {
     }
 
     fn turn_stops(&mut self, finished: bool) {
+        self.finished = finished && !self.cancel.load(Ordering::Relaxed);
         match self.screen.is_some() {
             true => self.ended_on_screen(finished),
             false => {
@@ -839,6 +853,9 @@ impl Front for Interactive {
     /// The conversation shown again; a resumed or imported session's prompts are those Up
     /// recalls, and one in another folder brings its themes, completions and problems.
     fn session_changed(&mut self, message: &str, change: Change) {
+        if change != Change::Kept {
+            self.goal = None;
+        }
         self.drafting();
         if change == Change::New {
             return self.started_again();
