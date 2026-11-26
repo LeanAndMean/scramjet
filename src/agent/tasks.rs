@@ -472,9 +472,13 @@ mod tests {
     #[cfg_attr(windows, ignore = "runs bash")]
     fn a_task_that_ends_within_a_turn_is_told_before_the_next_request() {
         let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
-        let background = json!({"command": "echo built; exit 4", "run_in_background": true});
-        // Waits until the test has seen the background command's end recorded.
-        let wait = "for _ in $(seq 1200); do [ -e recorded ] && break; sleep 0.05; done";
+        // It ends once the second call runs, so after the second request, however slow the
+        // machine; that call waits until the test has seen its end recorded.
+        let hold = "for _ in $(seq 1200); do [ -e started ] && break; sleep 0.05; done";
+        let background =
+            json!({"command": format!("{hold}; echo built; exit 4"), "run_in_background": true});
+        let wait =
+            "touch started; for _ in $(seq 1200); do [ -e recorded ] && break; sleep 0.05; done";
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", background),
             tool_call("call_2", "bash", json!({"command": wait})),
@@ -504,7 +508,7 @@ mod tests {
         assert_eq!(told["role"], "user", "{told}");
         let told = told["content"].as_str().unwrap();
         assert!(told.starts_with("<system-reminder>Background commands ended:"));
-        assert!(told.contains("<status>exited with code 4 after 0s</status>"));
+        assert!(told.contains("<status>exited with code 4 after "), "{told}");
         assert!(
             told.contains("<output-tail>\nbuilt\n</output-tail>"),
             "{told}"
