@@ -1270,7 +1270,9 @@ def calls_running_together_show_at_once(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     # As in Scramjet, each call's rows show in its place while both run.
-    rows = on_screen('\n two-1')
+    # The two run at once, so either's first line may show first.
+    on_screen('\n two-1')
+    rows = on_screen('\n one-1')
     text = '\n'.join(rows)
     call = ' bash  echo %s-\\$\\(\\(0\\+1\\)\\); sleep \\d; echo[ \u25cb\n]+%s-\\$\\(\\(1\\+1\\)\\)[ \u25cb]*\n\n %s-1\n'
     assert re.search(call % (('one',) * 3) + '\n+' + call % (('two',) * 3), text), text

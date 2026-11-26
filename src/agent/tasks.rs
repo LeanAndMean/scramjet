@@ -472,20 +472,29 @@ mod tests {
     #[cfg_attr(windows, ignore = "runs bash")]
     fn a_task_that_ends_within_a_turn_is_told_before_the_next_request() {
         let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
-        let background =
-            json!({"command": "echo built; : > built; exit 4", "run_in_background": true});
-        // Waits for the background command, however loaded the machine, and then for its end
-        // to be recorded.
-        let wait = "for _ in $(seq 200); do [ -e built ] && break; sleep 0.05; done; sleep 2";
+        let background = json!({"command": "echo built; exit 4", "run_in_background": true});
+        // Waits until the test has seen the background command's end recorded.
+        let wait = "for _ in $(seq 1200); do [ -e recorded ] && break; sleep 0.05; done";
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", background),
             tool_call("call_2", "bash", json!({"command": wait})),
             text("Seen."),
             text("Nothing more."),
         ]);
-        let (mut agent, _scratch) = agent(endpoint, "task-within");
+        let (mut agent, scratch) = agent(endpoint, "task-within");
+        let (tasks, recorded) = (agent.tasks().clone(), scratch.0.join("recorded"));
+        let watcher = std::thread::spawn(move || {
+            until(|| {
+                tasks
+                    .list()
+                    .first()
+                    .is_some_and(|task| task.ended.is_some())
+            });
+            std::fs::write(recorded, "").unwrap();
+        });
         let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
         agent.turn("build it", &mut ui, &cancel).unwrap();
+        watcher.join().unwrap();
         // Told within the turn, so it neither wakes the agent nor goes with the next prompt.
         assert!(agent.tasks().woken().is_none());
         agent.turn("and?", &mut ui, &cancel).unwrap();

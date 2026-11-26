@@ -707,10 +707,8 @@ mod tests {
     fn a_server_on_this_machine_answers_or_is_named_with_why_not() {
         let listening = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let open = listening.local_addr().unwrap().port();
-        let closed = {
-            let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            gone.local_addr().unwrap().port()
-        };
+        // The discard port, which nothing here listens on, as in the other tests.
+        let closed = 9;
         let directory = std::env::temp_dir().join(format!("doctor-servers-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let read = |name: &str, providers: serde_json::Value| {
