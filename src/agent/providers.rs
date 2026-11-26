@@ -2874,23 +2874,36 @@ mod tests {
         let again = Providers::read(sources(), Some(logins.clone()));
         assert_eq!(references(&again), offered);
         assert_eq!(again.catalogs()[0].offered(), Ok(2));
-        // One never read is not offered, and why is said once.
+        // One never read is not offered, and why is said once. The freed port may be another
+        // test's by now, so what failed is checked on the closed port 9.
         catalogs[0].forget();
-        let mut gone = Providers::read(sources(), Some(logins));
+        let mut gone = Providers::read(sources(), Some(logins.clone()));
         assert_eq!(references(&gone), ["named/own"]);
         let problems = gone.problems().to_vec();
         assert!(
             problems[0].starts_with(&format!("model catalog {url}: ")),
             "{problems:?}"
         );
-        assert!(
-            problems[0].contains("cannot connect to 127.0.0.1:"),
-            "{problems:?}"
-        );
         assert!(!problems[0].contains("(provider"), "{problems:?}");
         gone.reload();
-        assert_eq!(gone.problems(), problems);
+        assert_eq!(gone.problems().len(), 1);
         assert!(gone.catalogs()[0].offered().is_err());
+        let closed = "http://127.0.0.1:9/api/model-catalog";
+        let refused = Providers::read(
+            Sources {
+                files: Vec::new(),
+                catalogs: vec![closed.into()],
+            },
+            Some(logins),
+        );
+        assert_eq!(refused.problems().len(), 1, "{:?}", refused.problems());
+        assert!(
+            refused.problems()[0].starts_with(&format!(
+                "model catalog {closed}: cannot connect to 127.0.0.1:9"
+            )),
+            "{:?}",
+            refused.problems()
+        );
         let bad = Providers::read(
             Sources {
                 files: Vec::new(),
