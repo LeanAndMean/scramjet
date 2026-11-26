@@ -70,6 +70,7 @@ mod settings;
 mod settings_menu;
 mod slash;
 mod spelling;
+mod status_line;
 mod style;
 mod system_prompt;
 mod terminal;

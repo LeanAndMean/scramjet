@@ -38,6 +38,10 @@ There is no project settings file: what `/sandbox` changes for one project is ke
 | `look` | `"tinted"`, `"panels"`, `"classic"`, `"rails"`, `"margin"`, `"cards"`, `"ribbons"`, `"outline"`, `"timeline"`, `"mono"` | `"tinted"` | How the conversation shows prompts, reasoning, tool calls and replies. |
 | `banner` | `"header"`, `"plain"`, `"card"`, `"logo"` | `"header"` | What a session shows as it starts; `logo` draws Scramjet's logo. |
 | `bottom` | `"bar"`, `"pi"`, `"boxed"`, `"composer"` | `"bar"` | How the status row, the prompt and the footer look. |
+| `statusLine.command` | a bash command | none | Claude Code's status line: run with the session's state as JSON on its input, in Claude Code's fields (`model.display_name`, `workspace.current_dir`, `context_window.used_percentage`, `cost.total_cost_usd`, …), its output shows under the footer, a row a line, with its colors. It runs again 300 ms after the state changes, for at most 5 s; a failure shows why. Claude Code's `statusLine` setting can be copied as it is. |
+| `statusLine.type` | `"command"` | `"command"` | The only kind there is, as in Claude Code. |
+| `statusLine.padding` | 0 to 40 | 0 | Columns left blank before each row. |
+| `statusLine.refreshInterval` | seconds | none | Runs the command again this often when nothing changes, for a clock or a remote state. |
 | `retainTranscriptOnExit` | `true`, `false` | `false` | On exit, the conversation, the prompt and the footer stay in the terminal's scrollback. |
 | `collapseChangelog` | `true`, `false` | `false` | What's new and `/changelog` show each version's title line only. |
 | `lastChangelogVersion` | a version | none | Written by Scramjet: the version What's new last showed. |

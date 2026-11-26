@@ -7,6 +7,7 @@ use super::design::Design;
 use super::keymap::{self, Binding};
 use super::packages::{self, Source};
 use super::sessions::Chains;
+use super::status_line;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet::agent::{
@@ -511,6 +512,8 @@ pub(super) struct Settings {
     pub(super) banner: Banner,
     /// `bottom`: how the status row, the prompt and the footer look.
     pub(super) bottom: Bottom,
+    /// `statusLine`: the command whose output shows under the footer, as Claude Code's.
+    pub(super) status_line: Option<status_line::Config>,
     /// `defaultThinkingLevel`, named as requests send levels.
     pub(super) default_thinking_level: Option<String>,
     /// `defaultProvider` and `defaultModel`: the model last chosen in any project, as Scramjet
@@ -690,6 +693,7 @@ impl Settings {
             look: Design::Tinted,
             banner: Banner::Header,
             bottom: Bottom::Bar,
+            status_line: None,
             default_thinking_level: None,
             default_provider: None,
             default_model: None,
@@ -1102,6 +1106,7 @@ impl Settings {
             )),
         }
         self.apply_sandbox(&path, object);
+        self.apply_status_line(&path, object);
     }
 
     /// `sandbox`, an object of Claude Code's shape with Codex's modes, or as before a mode's name
@@ -1260,6 +1265,56 @@ impl Settings {
                 Err(()) => wrong(&format!("filesystem.{key}"), "must be a list of paths"),
             }
         }
+    }
+
+    /// `statusLine`, Claude Code's: `{"type": "command", "command": …}`, with `padding` and
+    /// `refreshInterval` in seconds; each wrong key is named, and a wrong `type` or `command`
+    /// leaves the status line off.
+    fn apply_status_line(&mut self, path: &str, object: &Map<String, Value>) {
+        let Some(value) = object.get("statusLine") else {
+            return;
+        };
+        let line = match value {
+            Value::Object(line) => line,
+            Value::Null => return,
+            _ => {
+                (self.warnings).push(format!("{path}: statusLine must be an object; ignored"));
+                return;
+            }
+        };
+        let mut wrong = |key: &str, expected: &str| {
+            (self.warnings).push(format!(
+                "{path}: statusLine.{key} must be {expected}; ignored"
+            ))
+        };
+        let mut usable = true;
+        match line.get("type") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(kind)) if kind == "command" => {}
+            Some(_) => (usable, _) = (false, wrong("type", r#""command""#)),
+        }
+        let command = match line.get("command") {
+            Some(Value::String(command)) if !command.trim().is_empty() => Some(command.clone()),
+            None if line.is_empty() => None,
+            _ => {
+                wrong("command", "a command");
+                None
+            }
+        };
+        let mut config = status_line::Config::new(command.unwrap_or_default());
+        match line.get("padding").map(Value::as_u64) {
+            None => {}
+            Some(Some(padding)) if padding <= 40 => config.padding = padding as usize,
+            Some(_) => wrong("padding", "a whole number from 0 to 40"),
+        }
+        match line.get("refreshInterval").map(Value::as_u64) {
+            None => {}
+            Some(Some(seconds @ 1..=86_400)) => {
+                config.refresh = Some(Duration::from_secs(seconds));
+            }
+            Some(_) => wrong("refreshInterval", "seconds, from 1 to 86400"),
+        }
+        self.status_line = (usable && !config.command.is_empty()).then_some(config);
     }
 
     /// `sandbox.filesystem.allowWrite`'s directories, with `~` and relative paths resolved as
@@ -2750,6 +2805,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "sandboxNetwork",
             "directives",
             "sandbox",
+            "statusLine",
             // Scramjet 1's, not read here.
             "anthropicExtraUsage",
             "dockEditor",
@@ -2801,6 +2857,10 @@ const KEYS: &[(&str, &[&str])] = &[
         &["mode", "network", BLOCK_READS, "filesystem"],
     ),
     ("sandbox.subagents.filesystem", FILESYSTEM_KEYS),
+    (
+        "statusLine",
+        &["type", "command", "padding", "refreshInterval"],
+    ),
 ];
 const FILESYSTEM_KEYS: &[&str] = &["allowWrite", "writable_roots", "denyRead", "allowRead"];
 
@@ -3146,6 +3206,33 @@ mod tests {
             missing.is_empty(),
             "not in the settings reference: {missing:?}"
         );
+    }
+
+    #[test]
+    fn claude_codes_status_line_is_read_as_it_is() {
+        let scratch = Scratch::new("status-line");
+        let settings = settings_with(
+            &scratch,
+            r#"{"statusLine": {"type": "command", "command": "~/.claude/statusline-command.sh",
+                "padding": 0, "refreshInterval": 10}}"#,
+        );
+        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
+        assert_eq!(
+            settings.status_line,
+            Some(status_line::Config {
+                refresh: Some(Duration::from_secs(10)),
+                ..status_line::Config::new("~/.claude/statusline-command.sh".into())
+            })
+        );
+        let wrong = settings_with(
+            &scratch,
+            r#"{"statusLine": {"type": "static", "command": "x", "padding": -1}}"#,
+        );
+        assert_eq!(wrong.status_line, None);
+        assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);
+        let off = settings_with(&scratch, r#"{"statusLine": {"command": "  "}}"#);
+        assert_eq!(off.status_line, None);
+        assert!(off.warnings[0].ends_with("statusLine.command must be a command; ignored"));
     }
 
     #[test]

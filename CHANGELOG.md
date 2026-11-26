@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.372.0 — The status line
+
+### Added
+
+- The `statusLine` setting, Claude Code's: a command run with the session's state as JSON on its input (the model, the directory, the session, how full the context is, the cost), whose output shows under the footer with its colors, a row a line. It runs again 300 ms after the state changes and every `refreshInterval` seconds if set, for at most 5 s; a failure shows why. Claude Code's setting and script can be copied as they are.
+
 ## 2.371.0 — /loop
 
 ### Added

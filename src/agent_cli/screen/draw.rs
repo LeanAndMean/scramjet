@@ -440,12 +440,16 @@ impl App {
         rows.extend(selection::rows(
             &self.queued(width, self.bottom != Bottom::Pi),
         ));
-        match self.bottom {
+        let under = self.status_line.rows(width, height / 3);
+        let height = height.saturating_sub(under.len());
+        let (mut rows, cursor) = match self.bottom {
             Bottom::Pi => self.pi(rows, (width, height)),
             Bottom::Boxed => self.boxed(rows, (width, height)),
             Bottom::Composer => self.composer(rows, (width, height)),
             Bottom::Bar => self.bar(rows, (width, height)),
-        }
+        };
+        rows.extend(selection::rows(&under));
+        (rows, cursor)
     }
 
     /// Scramjet's dock: the prompt between rules, or a dialog over a rule, then the footer.

@@ -2072,6 +2072,83 @@ pub(super) fn run_user_command(
     }
 }
 
+/// The most of a `run_with_input` command's output that is kept.
+const WITH_INPUT_BYTES: u64 = 64 * 1024;
+
+/// Runs `command` in bash in `root` with `input` on its standard input, as Claude Code runs its
+/// `statusLine` command: its standard output once it exits 0 within `timeout`, else why not.
+/// What it started is killed with it when the time runs out or `cancel` is set.
+pub fn run_with_input(
+    root: &Path,
+    command: &str,
+    input: &[u8],
+    timeout: Duration,
+    cancel: &AtomicBool,
+) -> Result<String, String> {
+    let mut process = Command::new(shell_program()?);
+    bash_runs(&mut process, command);
+    process
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    crate::os::own_group(&mut process);
+    let mut child = process
+        .spawn()
+        .map_err(|e| format!("cannot start bash: {e}"))?;
+    crate::os::hold_group(&child);
+    let id = child.id();
+    let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        crate::os::kill_group(id);
+        let _ = child.wait();
+        return Err("cannot reach the command".to_owned());
+    };
+    let input = input.to_vec();
+    // A command that never reads its input must not hold it up.
+    std::thread::spawn(move || {
+        let _ = io::Write::write_all(&mut stdin, &input);
+    });
+    let (sent, read) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = stdout.take(WITH_INPUT_BYTES).read_to_end(&mut output);
+        let _ = sent.send(output);
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if cancel.load(Ordering::Relaxed) => break Err("cancelled".to_owned()),
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => break Err(format!("timed out after {} s", timeout.as_secs())),
+            Err(error) => break Err(error.to_string()),
+        }
+    };
+    let status = match status {
+        Ok(status) => status,
+        Err(why) => {
+            crate::os::kill_group(id);
+            let _ = child.wait();
+            crate::os::release_group(id);
+            return Err(why);
+        }
+    };
+    crate::os::release_group(id);
+    // What it left running may still hold the output open.
+    let output = read
+        .recv_timeout(timeout.saturating_sub(started.elapsed()))
+        .map_err(|_| "its output did not end".to_owned())?;
+    match status.success() {
+        true => Ok(String::from_utf8_lossy(&output).into_owned()),
+        false => Err(match status.code() {
+            Some(code) => format!("exited with {code}"),
+            None => "was killed".to_owned(),
+        }),
+    }
+}
+
 /// The settings' `shellPath` and `shellCommandPrefix`, as Scramjet's: the shell that runs the
 /// agent's and the user's commands, and lines run before each. Process-wide, as the settings are.
 static SHELL: RwLock<(Option<PathBuf>, Option<String>)> = RwLock::new((None, None));

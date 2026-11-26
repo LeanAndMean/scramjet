@@ -329,7 +329,7 @@ pub(super) fn visible(text: &str) -> String {
 /// Unicode's default-ignorable characters, but the variation selectors that pick an emoji's or
 /// a Mongolian letter's form, and the line and paragraph separators. The tag characters
 /// (U+E0000 on) can spell out text that shows as nothing.
-fn hidden(c: char) -> bool {
+pub(super) fn hidden(c: char) -> bool {
     matches!(
         c,
         '\u{ad}'

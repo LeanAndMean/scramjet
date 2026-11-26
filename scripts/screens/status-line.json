@@ -1,0 +1,25 @@
+{
+  "size": "100x24",
+  "project": "words",
+  "window": 200000,
+  "total": 52000,
+  "settings": {
+    "statusLine": {"type": "command", "command": "bash \"$XDG_CONFIG_HOME/scramjet/statusline.sh\"", "padding": 1}
+  },
+  "config": {
+    "statusline.sh": "#!/bin/bash\ninput=$(cat)\nmodel=$(echo \"$input\" | jq -r '.model.display_name')\ncwd=$(echo \"$input\" | jq -r '.workspace.current_dir')\nused=$(echo \"$input\" | jq -r '.context_window.used_percentage // 0 | floor')\ncost=$(echo \"$input\" | jq -r '.cost.total_cost_usd')\nbranch=$(git -C \"$cwd\" --no-optional-locks branch --show-current 2>/dev/null)\nprintf '\\033[36m%s\\033[0m:\\033[34m%s\\033[0m (%s) | \\033[35m%s\\033[0m | ctx %s%% | $%s\\n' \"$(basename \"$cwd\")\" \"$cwd\" \"$branch\" \"$model\" \"$used\" \"$cost\"\nprintf 'session %s\\n' \"$(echo \"$input\" | jq -r '.session_id')\"\n"
+  },
+  "replies": [
+    [{"text": "Hello there."}]
+  ],
+  "steps": [
+    {"until": "ctx 0%"},
+    {"sleep": 0.3},
+    {"shot": "idle"},
+    {"type": "hi\r"},
+    {"until": "Hello there."},
+    {"until": "ctx 26%"},
+    {"sleep": 0.3},
+    {"shot": "after"}
+  ]
+}

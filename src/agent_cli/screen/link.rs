@@ -185,6 +185,7 @@ impl Link {
             design: settings.look,
             banner: settings.banner,
             bottom: settings.bottom,
+            status_line: settings.status_line.clone(),
         });
     }
     /// The prompt being typed is kept with the session saved at `session`, if any.
@@ -380,6 +381,7 @@ impl Handle {
         let (layout, terminal_progress) = (settings.layout, settings.terminal_progress);
         let retain_transcript = settings.retain_transcript;
         let (design, banner, bottom) = (settings.look, settings.banner, settings.bottom);
+        let status_line = settings.status_line.clone();
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
         let (woken, wake) = io::pipe()?;
@@ -401,7 +403,7 @@ impl Handle {
                     started: 0,
                 };
                 let app = App::new(editor, hide_thinking, cancel, inputs, queue, sides);
-                let app = App {
+                let mut app = App {
                     markdown_reads,
                     copy_on_select,
                     layout,
@@ -412,6 +414,7 @@ impl Handle {
                     bottom,
                     ..app
                 };
+                app.status_line.configure(status_line);
                 app.run(raw, &messages, woken)
             }
         })?;

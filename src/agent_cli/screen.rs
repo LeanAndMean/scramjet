@@ -23,6 +23,7 @@ use super::select::{Act, Picker, Routed, Spot, Toggle};
 use super::selection::Line;
 use super::settings::{Layout, MarkdownReads};
 use super::slash::{self, Builtin};
+use super::status_line::{self, StatusLine};
 use super::terminal::next_spin;
 use super::theme::Watched;
 use super::theme_editor::{self, ThemeEditor};
@@ -113,6 +114,7 @@ enum ToScreen {
         design: Design,
         banner: Banner,
         bottom: Bottom,
+        status_line: Option<status_line::Config>,
     },
     /// `/resume` moved to another project's session: the project's directory, where `@`
     /// completes paths and `!` commands run, and whose branch the footer shows.
@@ -346,6 +348,8 @@ struct App {
     banner: Banner,
     /// How the status row, the prompt and the footer look (`bottom`).
     bottom: Bottom,
+    /// The `statusLine` command's rows under the footer.
+    status_line: StatusLine,
     /// A completed mouse selection is copied (`copyOnSelect`).
     copy_on_select: bool,
     /// The wheel's step, the prompt's height and the completion list's rows.
@@ -422,6 +426,7 @@ impl App {
             design: Design::Classic,
             banner: Banner::Plain,
             bottom: Bottom::Pi,
+            status_line: StatusLine::new(),
             copy_on_select: false,
             layout: Layout::default(),
             retain_transcript: false,
@@ -464,6 +469,7 @@ impl App {
                     Ok(ToScreen::Quit) | Err(TryRecvError::Disconnected) => {
                         self.keep_draft();
                         self.stop_shells();
+                        self.status_line.stop();
                         let retained = self.retain_transcript.then(|| self.retained());
                         drop(screen);
                         drop(raw);
@@ -545,6 +551,10 @@ impl App {
                 wait = wait.min(theme.due(Instant::now()));
             }
             if let Some(due) = self.draft_due() {
+                wait = wait.min(due);
+            }
+            let (shown, sides) = (&self.footer.shown, &self.sides);
+            if let Some(due) = self.status_line.poll(shown, &sides.root, &sides.wake) {
                 wait = wait.min(due);
             }
             if self.copying.is_some() || self.pasting.is_some() {
@@ -709,7 +719,9 @@ impl App {
                 design,
                 banner,
                 bottom,
+                status_line,
             } => {
+                self.status_line.configure(status_line);
                 self.editor.reloaded(completions, double_escape);
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
@@ -1465,6 +1477,7 @@ mod tests {
             plan: false,
             looping: None,
             tasks: Default::default(),
+            ..Default::default()
         });
         app.queue()
             .messages
