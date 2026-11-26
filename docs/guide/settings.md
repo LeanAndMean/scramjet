@@ -46,6 +46,7 @@ There is no project settings file: what `/sandbox` changes for one project is ke
 | `collapseChangelog` | `true`, `false` | `false` | What's new and `/changelog` show each version's title line only. |
 | `lastChangelogVersion` | a version | none | Written by Scramjet: the version What's new last showed. |
 | `terminal.showTerminalProgress` | `true`, `false` | on in Windows Terminal, ConEmu, Ghostty 1.2+ and iTerm2 3.6.6+ | The terminal's tab shows the agent busy while it works (OSC 9;4). Claude Code's `terminalProgressBarEnabled` is read too; this key wins over it. |
+| `preferredNotifChannel` | `"auto"`, `"terminal_bell"`, `"iterm2"`, `"iterm2_with_bell"`, `"kitty"`, `"ghostty"`, `"notifications_disabled"` | `"auto"` | Claude Code's: how the terminal is told that the agent waits for you, a minute after a reply if you have not touched a key since, or 6 seconds after a question you have not answered. iTerm2 (OSC 9), kitty (OSC 99) and Ghostty (OSC 777) show a desktop notification, passed through tmux and screen (tmux needs `allow-passthrough on`); `terminal_bell` rings the bell in any terminal. `auto` picks the notification of the terminal it runs in and sends nothing in others, Windows Terminal among them. The terminal's title starts with ● while the agent works and ○ while it waits. |
 
 ## Input
 

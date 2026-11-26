@@ -5,6 +5,7 @@ use super::banner::Banner;
 use super::bottom::Bottom;
 use super::design::Design;
 use super::keymap::{self, Binding};
+use super::notify::Channel;
 use super::packages::{self, Source};
 use super::sessions::Chains;
 use super::status_line;
@@ -174,6 +175,7 @@ pub(super) enum Row {
     PromptHeight,
     CompletionRows,
     TerminalProgress,
+    Notifications,
     SpellCheck,
     AutoCompact,
     ResizeImages,
@@ -214,6 +216,7 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::RetainTranscript,
             Row::Changelog,
             Row::TerminalProgress,
+            Row::Notifications,
         ],
     ),
     (
@@ -291,6 +294,7 @@ impl Row {
             Self::PromptHeight => "Prompt height",
             Self::CompletionRows => "Completion rows",
             Self::TerminalProgress => "Terminal progress",
+            Self::Notifications => "Notifications",
             Self::SpellCheck => "Spelling",
             Self::AutoCompact => "Auto-compact",
             Self::ResizeImages => "Resize images",
@@ -408,6 +412,13 @@ impl Row {
                  stops while the agent waits for you. On by default in Windows Terminal, ConEmu, \
                  Ghostty 1.2+ and iTerm2 3.6.6+."
             }
+            Self::Notifications => {
+                "The terminal is told when the agent waits for you: a minute after a reply you \
+                 have not touched the prompt since, or 6 seconds after a question you have not \
+                 answered. iTerm2, kitty and Ghostty show a desktop notification, the bell \
+                 rings in any terminal; auto picks the terminal's own notification, none where \
+                 it has none."
+            }
             Self::SpellCheck => {
                 return format!(
                     "Words in the prompt the dictionary lacks are underlined. Words of your own, \
@@ -505,6 +516,9 @@ pub(super) struct Settings {
     /// screen tells the terminal it is busy while the agent works (OSC 9;4); by default only in
     /// terminals known to show it (`shows_progress`).
     pub(super) terminal_progress: bool,
+    /// `preferredNotifChannel`, Claude Code's: how the full screen tells the terminal that the
+    /// agent waits for the user.
+    pub(super) notifications: Channel,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
@@ -695,6 +709,7 @@ impl Settings {
             collapse_changelog: false,
             last_changelog_version: None,
             terminal_progress: shows_progress(|name| std::env::var(name).ok()),
+            notifications: Channel::Auto,
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             resume_chains: Chains::Flat,
@@ -819,6 +834,15 @@ impl Settings {
             None => {}
             Some(Value::Bool(on)) => self.terminal_progress = *on,
             Some(_) => wrong("terminalProgressBarEnabled", "true or false"),
+        }
+        let channel = object.get("preferredNotifChannel");
+        match channel.map(|name| name.as_str().and_then(Channel::named)) {
+            None => {}
+            Some(Some(channel)) => self.notifications = channel,
+            Some(None) => wrong(
+                "preferredNotifChannel",
+                r#""auto", "terminal_bell", "iterm2", "iterm2_with_bell", "kitty", "ghostty" or "notifications_disabled""#,
+            ),
         }
         // Scramjet's other `terminal` keys are for images, which are not shown here.
         match object.get("terminal") {
@@ -2214,6 +2238,14 @@ impl Settings {
             Row::Changelog => "whole".into(),
             Row::TerminalProgress if self.terminal_progress => "on".into(),
             Row::TerminalProgress => "off".into(),
+            Row::Notifications => match self.notifications {
+                Channel::Auto => match self.notifications.resolved(|name| std::env::var(name).ok())
+                {
+                    Some(channel) => format!("auto ({})", channel.shown()),
+                    None => "auto (none here)".into(),
+                },
+                channel => channel.shown().into(),
+            },
             Row::SpellCheck if self.spell_check => "on".into(),
             Row::SpellCheck => "off".into(),
             Row::AutoCompact if self.compacting.automatic => "on".into(),
@@ -2358,6 +2390,10 @@ impl Settings {
                     "showTerminalProgress",
                     json!(self.terminal_progress),
                 )
+            }
+            Row::Notifications => {
+                self.notifications = self.notifications.next();
+                self.save("preferredNotifChannel", json!(self.notifications.name()))
             }
             Row::SpellCheck => {
                 self.spell_check = !self.spell_check;
@@ -2834,6 +2870,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "directives",
             "sandbox",
             "statusLine",
+            "preferredNotifChannel",
             // Scramjet 1's, not read here.
             "anthropicExtraUsage",
             "dockEditor",
@@ -3048,7 +3085,7 @@ mod tests {
         let count = rows.len();
         rows.sort_by_key(|row| format!("{row:?}"));
         rows.dedup();
-        assert_eq!((rows.len(), count), (33, 33));
+        assert_eq!((rows.len(), count), (34, 34));
     }
 
     struct Scratch(PathBuf);
@@ -3226,6 +3263,7 @@ mod tests {
         taken.extend(Bottom::ALL.map(Bottom::name));
         taken.extend(Filter::CYCLE.map(Filter::setting));
         taken.extend(Chains::CYCLE.map(Chains::setting));
+        taken.extend(Channel::ALL.map(Channel::name));
         taken.extend(LEVELS.into_iter().chain(CODING_TOOLS).chain(HARNESS_TOOLS));
         let missing: Vec<_> = (taken.iter())
             .filter(|name| !shown.contains(*name))
@@ -3233,6 +3271,22 @@ mod tests {
         assert!(
             missing.is_empty(),
             "not in the settings reference: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn claude_codes_notification_channel_is_read() {
+        let scratch = Scratch::new("notifications");
+        assert_eq!(settings_with(&scratch, "{}").notifications, Channel::Auto);
+        let kitty = settings_with(&scratch, r#"{"preferredNotifChannel": "kitty"}"#);
+        assert!(kitty.warnings.is_empty(), "{:?}", kitty.warnings);
+        assert_eq!(kitty.notifications, Channel::Kitty);
+        let wrong = settings_with(&scratch, r#"{"preferredNotifChannel": "desktop"}"#);
+        assert_eq!(wrong.notifications, Channel::Auto);
+        assert!(
+            wrong.warnings[0].contains("preferredNotifChannel must be \"auto\""),
+            "{:?}",
+            wrong.warnings
         );
     }
 
@@ -4537,6 +4591,11 @@ or false; ignored"
             seen(Row::TerminalProgress, &mut settings),
             ["off", "on", "off", "on"]
         );
+        settings.notifications = Channel::Bell;
+        assert_eq!(
+            seen(Row::Notifications, &mut settings),
+            ["terminal bell", "iTerm2", "iTerm2 with bell", "kitty"]
+        );
         assert_eq!(
             seen(Row::Changelog, &mut settings),
             ["whole", "titles", "whole", "titles"]
@@ -4597,6 +4656,7 @@ or false; ignored"
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,
                 "autocompleteMaxVisible": 3,
+                "preferredNotifChannel": "kitty",
                 "retainTranscriptOnExit": true,
                 "collapseChangelog": true,
                 "lastChangelogVersion": "1.2.3",

@@ -52,6 +52,7 @@ mod local_login;
 mod login;
 mod looping;
 mod markdown;
+mod notify;
 mod packages;
 mod palette;
 mod plan;

@@ -17,6 +17,7 @@ use super::editor::{Draft, Editor, Note, RESIZE_CHECK};
 use super::footer::{self, Footer};
 use super::keymap::{self, Binding};
 use super::keys::{self, Key, Press, RawMode, read_key};
+use super::notify::{self, Channel};
 use super::record::{self, Event};
 use super::report::ReportView;
 use super::select::{Act, Picker, Routed, Spot, Toggle};
@@ -111,6 +112,7 @@ enum ToScreen {
         layout: Layout,
         retain_transcript: bool,
         terminal_progress: bool,
+        notify: Option<Channel>,
         design: Design,
         banner: Banner,
         bottom: Bottom,
@@ -361,6 +363,14 @@ struct App {
     terminal_progress: bool,
     /// When the terminal was last told so.
     busy_told: Option<Instant>,
+    /// How the terminal is told that the agent waits for the user (`preferredNotifChannel`).
+    notify: Option<Channel>,
+    /// What the agent waits for the user to do, since when, and whether the terminal was told.
+    waiting: Option<(Waits, Instant, bool)>,
+    /// When the user last pressed a key or used the mouse.
+    touched: Instant,
+    /// A turn ended since the screen opened.
+    turned: bool,
     selection: Option<Selection>,
     /// The selections made so far, which tells a copy's from those made after it.
     selections: u64,
@@ -432,6 +442,10 @@ impl App {
             retain_transcript: false,
             terminal_progress: false,
             busy_told: None,
+            notify: None,
+            waiting: None,
+            touched: Instant::now(),
+            turned: false,
             selection: None,
             selections: 0,
             edge: None,
@@ -531,6 +545,7 @@ impl App {
             self.footer.check_branch();
             self.check_theme();
             self.tell_progress()?;
+            self.tell_waiting()?;
             if self
                 .edge
                 .as_ref()
@@ -690,6 +705,7 @@ impl App {
                 }
                 self.conversation_mut().split();
                 self.activity = None;
+                self.turned = true;
                 self.conversation_mut().turn_ended();
                 // Those a finished turn did not take, sent as it ended, go once the session
                 // waits; those of a stopped turn are not sent unasked.
@@ -716,6 +732,7 @@ impl App {
                 layout,
                 retain_transcript,
                 terminal_progress,
+                notify,
                 design,
                 banner,
                 bottom,
@@ -728,6 +745,7 @@ impl App {
                 self.layout = layout;
                 self.retain_transcript = retain_transcript;
                 self.terminal_progress = terminal_progress;
+                self.notify = notify;
                 self.design = design;
                 self.banner = banner;
                 self.bottom = bottom;
@@ -1201,6 +1219,51 @@ impl App {
         Ok(())
     }
 
+    /// Tells the terminal that the agent waits for the user, when `waited` says it is time.
+    fn tell_waiting(&mut self) -> io::Result<()> {
+        let (Some(waits), Some(channel)) = (self.waited(Instant::now()), self.notify) else {
+            return Ok(());
+        };
+        let var = |name: &str| std::env::var(name).ok();
+        to_terminal(&notify::sequence(
+            channel,
+            &self.footer.title(),
+            waits.message(),
+            var,
+        ))
+    }
+
+    /// What the agent waits for, once at `now` for each wait, when the user is to be told, as
+    /// Claude Code tells: a question unanswered for `Waits::Answer`'s time since the user last
+    /// touched a key, or the prompt untouched for `Waits::Input`'s since a turn ended, unless
+    /// `/loop` sends it again.
+    fn waited(&mut self, now: Instant) -> Option<Waits> {
+        let waits = match &self.activity {
+            Some(activity) if activity.asks() => Some(Waits::Answer),
+            Some(_) => None,
+            None if self.turned && self.footer.shown.looping.is_none() => Some(Waits::Input),
+            None => None,
+        };
+        let Some(waits) = waits else {
+            self.waiting = None;
+            return None;
+        };
+        let (_, since, told) = match &mut self.waiting {
+            Some(waiting) if waiting.0 == waits => waiting,
+            slot => slot.insert((waits, now, false)),
+        };
+        let quiet = match waits {
+            Waits::Answer => now.saturating_duration_since((*since).max(self.touched)),
+            Waits::Input if self.touched > *since => return None,
+            Waits::Input => now.saturating_duration_since(*since),
+        };
+        if *told || quiet < waits.after() {
+            return None;
+        }
+        *told = true;
+        Some(waits)
+    }
+
     /// Stops the `!` commands that still run, and waits for them to end.
     fn stop_shells(&mut self) {
         for side in &self.queue().shells {
@@ -1208,6 +1271,32 @@ impl App {
         }
         for thread in self.sides.threads.drain(..) {
             let _ = thread.join();
+        }
+    }
+}
+
+/// What the agent waits for the user to do, which the terminal is told of after a while.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Waits {
+    /// An answer to a question of the turn's.
+    Answer,
+    /// A prompt, the turn having ended.
+    Input,
+}
+
+impl Waits {
+    /// How long the user is left before the terminal is told: Claude Code's times.
+    fn after(self) -> Duration {
+        match self {
+            Self::Answer => Duration::from_secs(6),
+            Self::Input => Duration::from_secs(60),
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::Answer => "Scramjet needs your answer",
+            Self::Input => "Scramjet is waiting for your input",
         }
     }
 }
@@ -1557,6 +1646,41 @@ mod tests {
         assert_eq!(worked(&mut app), 1);
         turn(&mut app, true, true);
         assert_eq!(worked(&mut app), 2);
+    }
+
+    #[test]
+    fn the_terminal_is_told_once_when_a_reply_or_a_question_has_waited_untouched() {
+        let (mut app, _from) = app();
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        assert_eq!(app.waited(at(600)), None, "no turn has ended yet");
+        app.message(ToScreen::Turn(EffortCycle::default()));
+        assert_eq!(app.waited(at(600)), None, "the agent works");
+        app.message(ToScreen::Ended { finished: true });
+        let ended = Instant::now();
+        let after = |seconds| ended + Duration::from_secs(seconds);
+        assert_eq!(app.waited(ended), None);
+        assert_eq!(app.waited(after(59)), None);
+        assert_eq!(app.waited(after(60)), Some(Waits::Input));
+        assert_eq!(app.waited(after(120)), None, "told once");
+
+        app.message(ToScreen::Turn(EffortCycle::default()));
+        app.activity = Some(Activity::asking());
+        assert_eq!(app.waited(at(0)), None);
+        let asked = at(0);
+        app.touched = asked + Duration::from_secs(4);
+        assert_eq!(app.waited(asked + Duration::from_secs(9)), None);
+        let answer = app.waited(asked + Duration::from_secs(10));
+        assert_eq!(answer, Some(Waits::Answer), "6 s after the last key");
+
+        app.activity = None;
+        assert_eq!(app.waited(at(1)), None);
+        app.touched = at(2);
+        assert_eq!(app.waited(at(300)), None, "touched since the turn ended");
+        app.waiting = None;
+        app.footer.shown.looping = Some("5m".into());
+        assert_eq!(app.waited(at(3)), None);
+        assert_eq!(app.waited(at(300)), None, "/loop sends it again");
     }
 
     #[test]

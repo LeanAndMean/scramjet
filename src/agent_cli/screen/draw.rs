@@ -689,7 +689,12 @@ impl App {
             self.drawn.clear();
         }
         // Given again with a whole frame, as after the screen was left, which clears it.
-        let title = self.footer.title();
+        // Scramjet's mark: whether the agent works or waits for the user.
+        let mark = match &self.activity {
+            Some(activity) if !activity.asks() => '●',
+            _ => '○',
+        };
+        let title = format!("{mark} {}", self.footer.title());
         let titled = self.drawn.is_empty() || title != self.title;
         if titled {
             write!(out, "\x1b]0;{title}\x07").unwrap();

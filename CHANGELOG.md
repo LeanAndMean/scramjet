@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.376.0 — Told when the agent waits for you
+
+### Added
+
+- The full screen tells the terminal when the agent waits for you, as Claude Code's `preferredNotifChannel` setting says: a minute after a reply you have not touched a key since, or 6 seconds after an unanswered question. iTerm2, kitty and Ghostty show a desktop notification (`auto`, the default, picks theirs and sends nothing in other terminals, Windows Terminal among them); `terminal_bell` rings the bell anywhere. `/settings` has it under Display as Notifications.
+- The terminal's title starts with ● while the agent works and ○ while it waits for you, as Scramjet 1's.
+
 ## 2.375.0 — /export as text
 
 ### Added
