@@ -10,7 +10,7 @@ use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, delegate,
     forge, hooks, mcp, permissions, publish, question, sandbox, status, subagent, suggest, switch,
-    tasks,
+    tasks, todo,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -498,6 +498,17 @@ impl Agent {
                 before: None,
             };
             return Called::Done(output, false);
+        }
+        if call.name == todo::NAME {
+            let (text, failed) = todo::run(&call.arguments);
+            ui.tool_result(call.name, &text, None, failed);
+            return Called::Done(
+                Output {
+                    failed,
+                    ..Output::failure(text)
+                },
+                false,
+            );
         }
         if call.name == tasks::STOP {
             let output = self.tasks.stop_call(&call.arguments);
@@ -2548,6 +2559,7 @@ files is added or changed.",
                 question::NAME,
                 delegate::NAME,
                 subagent::NAME,
+                todo::NAME,
                 switch::NAME,
                 suggest::NAME
             ]
@@ -2573,7 +2585,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
                 "a.txt",
                 "Tool write not found. Available tools: read, grep, ls, \
 report_scramjet_command_status, create_issue, create_pr, add_issue_comment, add_pr_comment, \
-get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scramjet_next_steps"
+get_scramjet_user_input, delegate, subagent, todo_write, switch_scramjet_model, suggest_scramjet_next_steps"
             ]
         );
         assert!(!agent.root().join("x.txt").exists());

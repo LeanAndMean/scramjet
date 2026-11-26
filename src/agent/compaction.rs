@@ -4,7 +4,7 @@
 use super::client::Protocol;
 use super::{
     Agent, AgentError, AgentUi, Compacting, PRODUCER, Purpose, Saved, TIMING, USAGE, client,
-    message_text, tools,
+    message_text, todo, tools,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashSet};
@@ -789,7 +789,8 @@ impl Agent {
         cancel: &AtomicBool,
     ) -> Result<Option<Compaction>, AgentError> {
         let purpose = Purpose::Compaction(automatic);
-        let previous = previous_summary(&self.conversation).map(str::to_owned);
+        let previous = previous_summary(&self.conversation)
+            .map(|previous| todo::without_kept(previous).to_owned());
         let start = usize::from(previous.is_some());
         let (reserve, keep_recent) = self.reserve_and_kept();
         let cut = cut_point(&self.conversation, start, keep_recent);
@@ -822,6 +823,9 @@ impl Agent {
             summary = split_turn_summary(&summary, &prefix);
         }
         summary.push_str(&files.format());
+        summary.push_str(&todo::kept(
+            todo::latest(&self.conversation[..cut]).as_deref(),
+        ));
         let tokens_before = self
             .context_size()
             .unwrap_or_else(|| estimate(&self.conversation));
@@ -1761,6 +1765,50 @@ mod tests {
         agent
             .add(json!({"role":"user", "content":"recent work ".repeat(7000)}))
             .unwrap();
+    }
+
+    #[test]
+    fn a_compaction_keeps_the_todo_list_in_its_summary_and_a_resumed_session_reads_it() {
+        let (endpoint, server) = serve(vec![
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+            stream(&fixture::text_events("again", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "todos-kept");
+        let todos = json!({"todos":[{"content":"Read","status":"completed"},
+            {"content":"Write","status":"in_progress"}]});
+        agent
+            .add(json!({"role":"user", "content":"plan the work"}))
+            .unwrap();
+        agent
+            .add(
+                json!({"type":"function_call","call_id":"t1","name":todo::NAME,
+                "arguments":todos.to_string()}),
+            )
+            .unwrap();
+        agent
+            .add(json!({"type":"function_call_output","call_id":"t1","output":"ok"}))
+            .unwrap();
+        seed_long_conversation(&mut agent);
+        let before = agent.todos().expect("the call's list");
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let compaction = agent.compact("", None, &mut ui, &cancel).unwrap().unwrap();
+        assert!(
+            (compaction.summary)
+                .ends_with("\n\n<todo-list>\n[completed] Read\n[in_progress] Write\n</todo-list>"),
+            "{}",
+            compaction.summary
+        );
+        assert_eq!(agent.todos().as_ref(), Some(&before));
+        // Compacted again, the summary keeps one list, the current one.
+        seed_long_conversation(&mut agent);
+        let again = agent.compact("", None, &mut ui, &cancel).unwrap().unwrap();
+        assert_eq!(again.summary.matches("<todo-list>").count(), 1);
+        let requests = server.join().unwrap();
+        let prompt = requests[1]["input"].to_string();
+        assert!(!prompt.contains("todo-list"), "{prompt}");
+        let (_, resumed, _) = Session::open(agent.session_path()).unwrap();
+        assert_eq!(todo::latest(&resumed), Some(before));
     }
 
     #[test]

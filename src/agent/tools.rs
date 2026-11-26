@@ -134,7 +134,7 @@ pub fn missing_shells(tools: &[String]) -> Vec<String> {
 }
 
 /// The harness's own tools, which the model sees after the coding tools, in this order.
-pub const HARNESS_TOOLS: [&str; 13] = [
+pub const HARNESS_TOOLS: [&str; 14] = [
     super::status::NAME,
     super::publish::TOOLS[0],
     super::publish::TOOLS[1],
@@ -143,6 +143,7 @@ pub const HARNESS_TOOLS: [&str; 13] = [
     super::question::NAME,
     super::delegate::NAME,
     super::subagent::NAME,
+    super::todo::NAME,
     super::switch::NAME,
     super::suggest::NAME,
     super::permissions::NAME,
@@ -200,6 +201,7 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     tools.push(super::question::definition());
     tools.push(super::delegate::definition());
     tools.push(super::subagent::definition());
+    tools.push(super::todo::definition());
     tools.push(super::switch::definition());
     tools.push(super::suggest::definition());
     tools.push(super::permissions::definition());
@@ -399,6 +401,7 @@ impl<'a> Call<'a> {
             super::delegate::NAME => super::delegate::summary(&self.arguments),
             super::suggest::NAME => super::suggest::summary(&self.arguments),
             super::switch::NAME => super::switch::summary(&self.arguments),
+            super::todo::NAME => super::todo::summary(&self.arguments),
             super::permissions::NAME => super::permissions::summary(&self.arguments),
             name if super::publish::TOOLS.contains(&name) => {
                 super::publish::summary(name, &self.arguments)

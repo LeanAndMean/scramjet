@@ -654,7 +654,9 @@ impl Design {
         }
         match style {
             style::OUTCOME_FAILED | style::SUBAGENT_FAILED => style::MONO_FAILED,
-            style::OUTCOME_RUNNING | style::SUBAGENT_RUNNING => style::MONO_MARK,
+            style::OUTCOME_RUNNING | style::SUBAGENT_RUNNING | style::TODO_ACTIVE => {
+                style::MONO_MARK
+            }
             style::OUTCOME_DONE | style::SUBAGENT_DONE | style::TOOL_PATH => style::MONO_TEXT,
             style::TOOL_RANGE => style::MUTED,
             style::WARNING | style::NOTICE | style::PROMPT_MARK | style::MESSAGE_LABEL => {

@@ -2,7 +2,7 @@
 use super::{
     Commands, Problem, Skills, SystemPrompt, mcp, publish, question,
     sandbox::{Hidden, Sandbox},
-    status, subagent, suggest, switch,
+    status, subagent, suggest, switch, todo,
 };
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -87,6 +87,7 @@ disjoint edits in one call"
         .chain([
             (question::NAME, question::SNIPPET.to_owned()),
             (subagent::NAME, subagent::SNIPPET.to_owned()),
+            (todo::NAME, todo::SNIPPET.to_owned()),
             (switch::NAME, switch::SNIPPET.to_owned()),
             (suggest::NAME, suggest::SNIPPET.to_owned()),
             (mcp::SEARCH, mcp::SEARCH_SNIPPET.to_owned()),

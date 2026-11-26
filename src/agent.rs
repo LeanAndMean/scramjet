@@ -54,6 +54,7 @@ mod subagent;
 mod suggest;
 mod switch;
 pub mod tasks;
+pub mod todo;
 mod tools;
 mod tree;
 mod turn;
@@ -2277,6 +2278,11 @@ impl Agent {
 
     pub fn conversation(&self) -> &[Value] {
         &self.conversation
+    }
+
+    /// The agent's checklist as its latest `todo_write` call left it, if any.
+    pub fn todos(&self) -> Option<Vec<todo::Todo>> {
+        todo::latest(&self.conversation)
     }
 
     /// The text of the conversation's last reply that has any, trimmed, as Scramjet's `/copy`

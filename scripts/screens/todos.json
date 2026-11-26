@@ -1,0 +1,55 @@
+{
+  "size": "90x36",
+  "files": {
+    "notes.txt": "one\n"
+  },
+  "replies": [
+    [
+      {
+        "call": "todo_write",
+        "arguments": {
+          "todos": [
+            {"content": "Read notes.txt", "status": "in_progress"},
+            {"content": "Add the line two", "status": "pending"},
+            {"content": "Check the file with cat, then say what it holds now that both lines are in", "status": "pending"}
+          ]
+        }
+      }
+    ],
+    [
+      {
+        "call": "read",
+        "arguments": {"path": "notes.txt"}
+      }
+    ],
+    [
+      {
+        "call": "todo_write",
+        "arguments": {
+          "todos": [
+            {"content": "Read notes.txt", "status": "completed"},
+            {"content": "Add the line two", "status": "in_progress"},
+            {"content": "Check the file with cat, then say what it holds now that both lines are in", "status": "pending"}
+          ]
+        }
+      }
+    ],
+    [
+      {
+        "text": "Reading done; adding the line next."
+      }
+    ]
+  ],
+  "steps": [
+    {"until": "[Skills]"},
+    {"sleep": 0.5},
+    {"type": "add the line two to notes.txt\r"},
+    {"until": "adding the line next"},
+    {"sleep": 0.5},
+    {"shot": "updates"},
+    {"type": "/todos\r"},
+    {"until": "(in progress)"},
+    {"sleep": 0.5},
+    {"shot": "todos"}
+  ]
+}

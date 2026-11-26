@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.387.0 — The agent's todo list
+
+### Added
+
+- The agent keeps a checklist for work of several steps, as Claude Code's `TodoWrite` and Codex's plan: its `todo_write` tool shows each change as a list of boxes, the item being worked on in bold and those done struck through, and `/todos` shows the list as it stands. A compaction keeps it, and over ACP it is the session's plan. `"tools": {"todo_write": false}` turns it off.
+
 ## 2.386.0 — Ctrl+R searches earlier prompts
 
 ### Added
