@@ -31,7 +31,7 @@ Tool calls run without asking; there is no permission mode, and by default the m
 `--sandbox read-only` or `--sandbox workspace-write` (`-s`, or the `sandbox` setting), as Codex names them, runs the main agent's shell under Bubblewrap on Linux and Seatbelt on macOS, as subagents' is. On Windows `--sandbox` is refused.
 
 - `read-only`: commands can change nothing.
-- `workspace-write`: the project is writable but for its own `.git`, `.scramjet` and `.agents` (repositories nested in it stay writable, as in Codex).
+- `workspace-write`: the project is writable but for its own `.git`, `.scramjet`, `.agents` and `.claude` (repositories nested in it stay writable, as in Codex).
 
 The `write` and `edit` tools refuse what the mode does not allow.
 
@@ -111,7 +111,7 @@ A change applies at once, the reach too, and is remembered for this project: the
 - Ctrl+R resets the project to the defaults, once confirmed, forgetting its rows, the directories made writable here included.
 - Ctrl+S saves the sandbox as it is then as every project's default in your settings, and the project then follows it (the directories granted only for the session stay out of `allowWrite`; those made writable here go in).
 
-Without the screen, `/sandbox MODE`, `/sandbox network on|off` and `/sandbox remove DIR` change it at once, remembered as the screen's changes are, and `/sandbox add DIR` for the session only. `/add-dir DIR` (or `--add-dir DIR` at start, as in Claude Code) makes another directory writable too, its own `.git`, `.scramjet` and `.agents` kept read-only unless granted by name; with no sandbox it only re-opens a directory Can read hides.
+Without the screen, `/sandbox MODE`, `/sandbox network on|off` and `/sandbox remove DIR` change it at once, remembered as the screen's changes are, and `/sandbox add DIR` for the session only. `/add-dir DIR` (or `--add-dir DIR` at start, as in Claude Code) makes another directory writable too, its own `.git`, `.scramjet`, `.agents` and `.claude` kept read-only unless granted by name; with no sandbox it only re-opens a directory Can read hides.
 
 The agent is told what is writable, and asks for more with `request_permissions`, naming the directories and why; when a command fails on a write the sandbox refused ("Read-only file system", on macOS "Operation not permitted"; also in a command that still ends well, as through a pipe, when an error message gives it), it is reminded that it can ask. You allow it for the session, always for this project (added to its Also writable row, as the screen's changes are, and forgotten by `/sandbox remove DIR`), or deny it. Those kept in `sandbox-grants.json` before 2.344.0 move into each project's row at its next start there. In `-p` and in the steps autopilot runs no one answers, so it is refused.
 
@@ -132,7 +132,7 @@ Subagents run inside this process, read-only and off the network whatever the ma
 
 - `{"network": true}` lets their commands reach the network.
 - `"filesystem": {"denyRead": [...], "allowRead": [...]}`: each list given replaces the main agent's for them; without one they take the main agent's.
-- `{"mode": "workspace-write"}` lets a subagent whose agent file lists `write` or `edit` write in its working directory (the project, or the task's `cwd`), its `.git`, `.scramjet` and `.agents` kept read-only; its commands then run in a sandbox where only that directory is writable. An agent file that lists no tools keeps the read-only ones.
+- `{"mode": "workspace-write"}` lets a subagent whose agent file lists `write` or `edit` write in its working directory (the project, or the task's `cwd`), its `.git`, `.scramjet`, `.agents` and `.claude` kept read-only; its commands then run in a sandbox where only that directory is writable. An agent file that lists no tools keeps the read-only ones.
 - `"filesystem": {"allowWrite": [...]}` adds directories writable to such subagents (with `"mode": "read-only"`, only those).
 
 With the main agent's own sandbox on, a subagent writes only where the main agent may as well, so `--sandbox read-only` keeps every subagent read-only too. On Windows subagents cannot write.

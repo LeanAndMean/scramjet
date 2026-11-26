@@ -236,7 +236,7 @@ pub(super) fn child_definitions(names: &[&str], network: bool, writable: &[PathB
                 .collect();
             definition["description"] = json!(format!(
                 "Run a bash command in the working directory, in a sandbox {}: files can be \
-changed only in {} (but their .git, .scramjet and .agents) and in {}. Returns combined \
+changed only in {} (but their .git, .scramjet, .agents and .claude) and in {}. Returns combined \
 stdout/stderr, truncated to the last 2000 lines or 50KB, the whole output then saved to a file it names for read; a non-zero exit code is reported after \
 the output.",
                 super::sandbox::network_said(network),

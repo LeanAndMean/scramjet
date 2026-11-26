@@ -148,8 +148,9 @@ const CREDENTIAL_WORDS: [&str; 6] = [
 
 /// What stays read-only inside a writable project, as in Codex's `workspace-write`
 /// (`default_read_only_subpaths_for_writable_root`): Git's history and hooks, and the agents'
-/// own settings and commands, through which a command would act beyond the sandbox's next turn.
-const PROTECTED: [&str; 3] = [".git", ".scramjet", ".agents"];
+/// own settings and commands, through which a command would act beyond the sandbox's next turn;
+/// `.claude` too, whose commands, agents, skills, rules and settings are read as Claude Code's.
+const PROTECTED: [&str; 4] = [".git", ".scramjet", ".agents", ".claude"];
 
 /// What the sandbox has of its own, which a grant may neither be nor hold: binding the host's
 /// would bring back its sockets (the session bus, agents in `/tmp`), which lead out of the
@@ -2134,7 +2135,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         let home = std::env::temp_dir().join(format!("scramjet-workspace-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
         let root = home.join("project");
-        for directory in [".git/hooks", ".scramjet", "src"] {
+        for directory in [".git/hooks", ".scramjet", ".claude/commands", "src"] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -2145,7 +2146,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         let probe = windows.join(format!("scramjet-sandbox-{}", std::process::id()));
         let script = format!(
             "echo made > src/made.txt && echo wrote; rm -rf .git && echo removed; \
-rm .git/HEAD; touch .git/hooks/pre-commit .scramjet/autonomy.yaml ../outside {probe}; \
+rm .git/HEAD; touch .git/hooks/pre-commit .scramjet/autonomy.yaml .claude/commands/x.md ../outside {probe}; \
 cat ../.netrc; echo private > /tmp/x && cat /tmp/x; \
 (exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo connected || echo no network; \
 echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; true",
@@ -2179,9 +2180,13 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
             );
             // macOS's temporary directory, which holds this project, stays writable, as Codex's.
             let outside = cfg!(not(target_os = "macos")).then_some("../outside");
-            for left in [".git/hooks/pre-commit", ".scramjet/autonomy.yaml"]
-                .into_iter()
-                .chain(outside)
+            for left in [
+                ".git/hooks/pre-commit",
+                ".scramjet/autonomy.yaml",
+                ".claude/commands/x.md",
+            ]
+            .into_iter()
+            .chain(outside)
             {
                 assert!(!root.join(left).exists(), "{mode:?}: {left}");
             }
