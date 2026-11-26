@@ -481,8 +481,10 @@ to a larger-context model)"
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<bool, AgentError> {
+        let items = calls.items().to_vec();
         let ends = self.run_calls(calls, ui, cancel)?;
         // After the results, so one reply's results stay a chain (see `destination`).
+        self.add_guidance(&items, ui)?;
         self.save_command()?;
         if ends {
             self.compact_when_full(ui, cancel)?;

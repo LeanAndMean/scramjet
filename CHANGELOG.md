@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.393.0 — Claude Code's rules for the files worked on
+
+### Added
+
+- Claude Code's rules whose frontmatter gives `paths` are no longer left out: once the agent reads, writes or edits a file they match, they are added to the conversation, as Claude Code adds them. So are the `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` and rules of the directories between the project and that file. Each comes once in a conversation, and a notice says which were loaded.
+
 ## 2.392.0 — Claude Code's imports and comments
 
 ### Added

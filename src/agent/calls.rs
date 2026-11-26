@@ -36,6 +36,13 @@ pub(super) struct Calls {
     again: Again,
 }
 
+impl Calls {
+    /// The reply's calls.
+    pub(super) fn items(&self) -> &[Value] {
+        &self.items
+    }
+}
+
 /// What going back to a question asked among a reply's calls keeps of them (`Agent::navigate`).
 #[derive(Default)]
 pub(super) struct Again {

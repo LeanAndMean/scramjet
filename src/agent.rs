@@ -21,6 +21,7 @@ pub mod copilot;
 mod delegate;
 mod forge;
 mod goal;
+mod guidance;
 mod hooks;
 mod image;
 mod instructions;
@@ -1152,11 +1153,20 @@ impl Agent {
         self.instruct();
     }
 
+    /// The stores hidden from the instructions read: the credential stores, but what the reads
+    /// re-open and the project.
+    fn instruction_hidden(&self) -> sandbox::Hidden {
+        let reads = self
+            .reads
+            .without_reach()
+            .opening([self.config.root.clone()]);
+        sandbox::Hidden::stores(self.config.providers.credential_files(), &reads)
+    }
+
     fn instruct(&mut self) {
         let config = &self.config;
         let directory = self.agent_directory.as_deref();
-        let reads = self.reads.without_reach().opening([config.root.clone()]);
-        let hidden = sandbox::Hidden::stores(config.providers.credential_files(), &reads);
+        let hidden = self.instruction_hidden();
         let loaded = instructions::load(&config.prompt, &config.root, directory, &hidden);
         let sources = subagent::Sources {
             user: self.agents_directory.as_deref(),

@@ -727,10 +727,50 @@ fn context_file(
     Some((path.to_path_buf(), contents))
 }
 
-/// Claude Code's rules in `claude`'s `rules` directory: each `.md` file under it, in the order of
-/// their paths, without its frontmatter. One whose frontmatter gives `paths` is left out: Claude
-/// Code loads it only once the agent works on a file it names.
+/// Claude Code's rules in `claude`'s `rules` directory loaded always: each `.md` file under it
+/// whose frontmatter gives no `paths`, in the order of their paths, without its frontmatter.
 fn rules(claude: &Path, hidden: &Hidden, problems: &mut Vec<Problem>) -> Vec<(PathBuf, String)> {
+    let mut files = Vec::new();
+    for (path, globs, body) in rule_files(claude, hidden, problems) {
+        if globs.is_none() {
+            files.extend(memory((path, body), hidden, problems));
+        }
+    }
+    files
+}
+
+/// The rules in `claude`'s `rules` directory whose `paths` match `file`, relative to `base`, as
+/// Claude Code loads them once the agent works on that file.
+fn matching_rules(
+    claude: &Path,
+    base: &Path,
+    file: &Path,
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Vec<(PathBuf, String)> {
+    if !file
+        .strip_prefix(base)
+        .is_ok_and(|relative| relative.components().next().is_some())
+    {
+        return Vec::new();
+    }
+    let mut files = Vec::new();
+    for (path, globs, body) in rule_files(claude, hidden, problems) {
+        if globs.is_some_and(|globs| matched(base, &globs, file)) {
+            files.extend(memory((path, body), hidden, problems));
+        }
+    }
+    files
+}
+
+/// Each `.md` file under `claude`'s `rules` directory, in the order of their paths, with the
+/// globs its frontmatter's `paths` gives (`None` for a rule loaded always) and its text without
+/// the frontmatter.
+fn rule_files(
+    claude: &Path,
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Vec<(PathBuf, Option<Vec<String>>, String)> {
     let mut paths = Vec::new();
     let mut seen = Vec::new();
     let mut directories = vec![claude.join("rules")];
@@ -759,9 +799,70 @@ fn rules(claude: &Path, hidden: &Hidden, problems: &mut Vec<Problem>) -> Vec<(Pa
             continue;
         };
         let (frontmatter, body) = super::commands::split_frontmatter(&contents);
-        if !scoped(&frontmatter) {
-            files.extend(memory((path, body), hidden, problems));
+        files.push((path, globs(&frontmatter), body));
+    }
+    files
+}
+
+/// The instructions Claude Code adds once the agent reads, writes or edits `file` in a session in
+/// `root`, outermost first: the rules of the user's `~/.claude/rules` whose `paths` match it,
+/// relative to `root`; for each directory below `root` down to the file's, its `CLAUDE.md`,
+/// `.claude/CLAUDE.md`, `CLAUDE.local.md` and the rules of its `.claude/rules` loaded always or
+/// matching it; and the rules matching it in the `.claude/rules` of `root` and the directories
+/// above it, but the home directory's. With `--bare`, none of the user's.
+pub(super) fn guidance(
+    root: &Path,
+    file: &Path,
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Vec<(PathBuf, String)> {
+    let real = |path: &Path| crate::os::canonicalize(path).unwrap_or_else(|_| path.into());
+    let (root, file) = match file.starts_with(root) {
+        true => (root.to_path_buf(), file.to_path_buf()),
+        false => (real(root), real(file)),
+    };
+    let home = std::env::home_dir();
+    let at_home = |directory: &Path| {
+        (home.as_deref()).is_some_and(|home| directory == home || real(directory) == real(home))
+    };
+    let mut files = Vec::new();
+    if let Some(claude) = super::login::claude_directory().filter(|_| !super::bare()) {
+        files.extend(matching_rules(&claude, &root, &file, hidden, problems));
+    }
+    let below: Vec<&Path> = (file.parent().into_iter())
+        .flat_map(Path::ancestors)
+        .take_while(|directory| *directory != root && directory.starts_with(&root))
+        .collect();
+    for directory in below
+        .into_iter()
+        .rev()
+        .filter(|directory| !at_home(directory))
+    {
+        let mut first = |names: &[&str]| {
+            let path =
+                (names.iter().map(|name| directory.join(name))).find(|path| path.is_file())?;
+            context_file(&path, hidden, problems)
+        };
+        let found = [
+            first(&["CLAUDE.md", "CLAUDE.MD"]),
+            first(&[".claude/CLAUDE.md"]),
+            first(&["CLAUDE.local.md"]),
+        ];
+        for file in found.into_iter().flatten() {
+            files.extend(memory(file, hidden, problems));
         }
+        let claude = directory.join(".claude");
+        files.extend(rules(&claude, hidden, problems));
+        files.extend(matching_rules(&claude, directory, &file, hidden, problems));
+    }
+    let above: Vec<&Path> = root.ancestors().collect();
+    for directory in above
+        .into_iter()
+        .rev()
+        .filter(|directory| !at_home(directory))
+    {
+        let claude = directory.join(".claude");
+        files.extend(matching_rules(&claude, directory, &file, hidden, problems));
     }
     files
 }
@@ -935,20 +1036,87 @@ fn imported_paths(text: &str) -> Vec<String> {
     paths
 }
 
-/// Whether a rule's `frontmatter` gives `paths`, as a list or a comma-separated string. One that
-/// does not parse gives none, as Claude Code reads it.
-fn scoped(frontmatter: &str) -> bool {
+/// The globs a rule's `frontmatter` gives in `paths`, as Claude Code reads them: a list or a
+/// comma-separated string, braces expanded, a trailing `/**` dropped. `None`, a rule loaded
+/// always, when it gives none or only `**`; one that does not parse gives none.
+fn globs(frontmatter: &str) -> Option<Vec<String>> {
     use yaml_rust2::Yaml;
     let Some(Yaml::Hash(fields)) = (yaml_rust2::YamlLoader::load_from_str(frontmatter).ok())
         .and_then(|documents| documents.into_iter().next())
     else {
-        return false;
+        return None;
     };
-    match fields.get(&Yaml::String("paths".into())) {
-        Some(Yaml::Array(paths)) => !paths.is_empty(),
-        Some(Yaml::String(paths)) => !paths.trim().is_empty(),
-        _ => false,
+    let given = match fields.get(&Yaml::String("paths".into()))? {
+        Yaml::Array(paths) => paths.iter().filter_map(Yaml::as_str).collect(),
+        Yaml::String(paths) => vec![paths.as_str()],
+        _ => Vec::new(),
+    };
+    let globs: Vec<String> = (given.into_iter())
+        .flat_map(split_globs)
+        .flat_map(|glob| expand_braces(&glob))
+        .map(|glob| glob.strip_suffix("/**").map(str::to_owned).unwrap_or(glob))
+        .filter(|glob| !glob.is_empty())
+        .collect();
+    match globs.iter().all(|glob| glob == "**") {
+        true => None,
+        false => Some(globs),
     }
+}
+
+/// `paths` split at its commas outside braces, each trimmed.
+fn split_globs(paths: &str) -> Vec<String> {
+    let (mut globs, mut glob, mut depth) = (Vec::new(), String::new(), 0i32);
+    for c in paths.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                globs.push(std::mem::take(&mut glob));
+                continue;
+            }
+            _ => {}
+        }
+        glob.push(c);
+    }
+    globs.push(glob);
+    (globs.into_iter())
+        .map(|glob| glob.trim().to_owned())
+        .filter(|glob| !glob.is_empty())
+        .collect()
+}
+
+/// How many globs one pattern's braces expand to at most, as Claude Code's.
+const BRACE_RESULTS: usize = 1000;
+
+/// `glob` with each `{a,b}` expanded, innermost pairs without braces inside first.
+fn expand_braces(glob: &str) -> Vec<String> {
+    let pattern = regex::Regex::new(r"^([^{]*)\{([^}]+)\}(.*)$").expect("a valid pattern");
+    let (mut done, mut pending) = (Vec::new(), vec![glob.to_owned()]);
+    while let Some(glob) = pending.pop() {
+        let Some(parts) = pattern.captures(&glob) else {
+            done.push(glob);
+            continue;
+        };
+        if done.len() + pending.len() >= BRACE_RESULTS {
+            done.push(glob);
+            continue;
+        }
+        for choice in parts[2].split(',') {
+            pending.push(format!("{}{}{}", &parts[1], choice.trim(), &parts[3]));
+        }
+    }
+    done.reverse();
+    done
+}
+
+/// Whether `globs`, as gitignore lines in `base`, match `file` under it or one of its
+/// directories; one that does not parse is dropped, as Claude Code drops it.
+fn matched(base: &Path, globs: &[String], file: &Path) -> bool {
+    let mut lines = ignore::gitignore::GitignoreBuilder::new(base);
+    for glob in globs {
+        let _ = lines.add_line(None, glob);
+    }
+    (lines.build()).is_ok_and(|lines| lines.matched_path_or_any_parents(file, false).is_ignore())
 }
 
 /// The context `files`, as Pi's `# Project Context`, one part each, the first with the heading.
@@ -1581,6 +1749,103 @@ specific tasks.\n";
                 None
             )
             .contains("<available_skills>")
+        );
+    }
+
+    #[test]
+    fn a_rule_s_paths_are_read_as_claude_code_reads_them() {
+        let read = |frontmatter: &str| globs(frontmatter);
+        assert_eq!(read("description: x"), None);
+        assert_eq!(read("paths: [\n"), None);
+        assert_eq!(read("paths: \"**\""), None);
+        assert_eq!(read("paths:\n  - \"**/**\"\n  - \"**\""), None);
+        assert_eq!(
+            read("paths: \"src/**, *.{ts,tsx}\""),
+            Some(vec!["src".into(), "*.ts".into(), "*.tsx".into()])
+        );
+        assert_eq!(
+            read("paths:\n  - \"lib/{a,b}/*.rs\"\n  - docs/**"),
+            Some(vec![
+                "lib/a/*.rs".into(),
+                "lib/b/*.rs".into(),
+                "docs".into()
+            ])
+        );
+    }
+
+    #[test]
+    fn a_file_worked_on_brings_in_the_rules_it_matches_and_the_claude_md_files_down_to_it() {
+        let scratch = std::env::temp_dir().join(format!("sjrs-guidance-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        let (outer, root) = (scratch.join("a"), scratch.join("a/b"));
+        let (sub, deeper) = (root.join("sub"), root.join("sub/deeper"));
+        for directory in [
+            outer.join(".claude/rules"),
+            root.join(".claude/rules"),
+            sub.join(".claude/rules"),
+            deeper.clone(),
+        ] {
+            std::fs::create_dir_all(directory).unwrap();
+        }
+        let write = |path: PathBuf, text: &str| std::fs::write(path, text).unwrap();
+        let scoped = |glob: &str, text: &str| format!("---\npaths: \"{glob}\"\n---\n{text}\n");
+        write(root.join("CLAUDE.md"), "Root, in the instructions already.");
+        write(
+            root.join(".claude/rules/always.md"),
+            "In the instructions already.",
+        );
+        write(
+            root.join(".claude/rules/rust.md"),
+            &scoped("**/*.rs", "Rust."),
+        );
+        write(
+            root.join(".claude/rules/docs.md"),
+            &scoped("docs/**", "Docs."),
+        );
+        write(
+            outer.join(".claude/rules/outer.md"),
+            &scoped("b/sub/**", "Outer."),
+        );
+        write(
+            outer.join(".claude/rules/other.md"),
+            &scoped("c/**", "Other."),
+        );
+        write(sub.join("CLAUDE.md"), "Sub <!-- unseen -->.\n");
+        write(sub.join("CLAUDE.local.md"), "Sub local.");
+        write(sub.join(".claude/rules/sub.md"), "Sub rule.");
+        write(
+            sub.join(".claude/rules/here.md"),
+            &scoped("deeper/*.rs", "Here."),
+        );
+        write(sub.join(".claude/rules/not.md"), &scoped("/*.rs", "Not."));
+        write(deeper.join("AGENTS.md"), "Not Claude Code's.");
+        let found = |file: &Path| -> Vec<(PathBuf, String)> {
+            (guidance(&root, file, &Hidden::default(), &mut Vec::new()).into_iter())
+                .filter(|(path, _)| path.starts_with(&scratch))
+                .map(|(path, text)| (path, text.trim().to_owned()))
+                .collect()
+        };
+        let expected = [
+            (sub.join("CLAUDE.md"), "Sub <!-- unseen -->."),
+            (sub.join("CLAUDE.local.md"), "Sub local."),
+            (sub.join(".claude/rules/sub.md"), "Sub rule."),
+            (sub.join(".claude/rules/here.md"), "Here."),
+            (outer.join(".claude/rules/outer.md"), "Outer."),
+            (root.join(".claude/rules/rust.md"), "Rust."),
+        ];
+        let expected: Vec<(PathBuf, String)> = (expected.into_iter())
+            .map(|(path, text)| (path, text.to_owned()))
+            .collect();
+        assert_eq!(found(&deeper.join("x.rs")), expected);
+        assert_eq!(
+            found(&root.join("docs/guide/a.md")),
+            [(root.join(".claude/rules/docs.md"), "Docs.".to_owned())]
+        );
+        assert!(found(&root.join("README.md")).is_empty());
+        // Outside the project, an outer directory's rules still match by their own paths.
+        assert_eq!(
+            found(&outer.join("c/x.rs")),
+            [(outer.join(".claude/rules/other.md"), "Other.".to_owned())]
         );
     }
 }
