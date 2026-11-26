@@ -340,16 +340,23 @@ impl Sandbox {
             });
         };
         // A protected name not made yet is refused too, as Seatbelt refuses it to commands, in
-        // any case, for a filesystem that folds it (WSL's `/mnt/c`).
-        let roots = self.writable_roots(root);
-        let named = roots.iter().any(|writable| {
-            let first = real
-                .strip_prefix(writable)
-                .ok()
-                .and_then(|rest| rest.iter().next());
-            let first = first.and_then(|name| name.to_str()).unwrap_or_default();
-            PROTECTED.iter().any(|name| {
-                first.eq_ignore_ascii_case(name) && !self.writable.contains(&writable.join(name))
+        // any case, for a filesystem that folds it (WSL's `/mnt/c`); a root is found by its file
+        // too, as the path may spell it otherwise (`PROJ` for `proj`, from a grant above it).
+        let roots: Vec<_> = (self.writable_roots(root).into_iter())
+            .map(|writable| (file_id(&writable), writable))
+            .collect();
+        let named = real.ancestors().any(|below| {
+            let (Some(above), Some(first)) = (below.parent(), below.file_name()) else {
+                return false;
+            };
+            let first = first.to_str().unwrap_or_default();
+            let id = file_id(above);
+            roots.iter().any(|(root_id, writable)| {
+                (above == writable || id.is_some() && id == *root_id)
+                    && PROTECTED.iter().any(|name| {
+                        first.eq_ignore_ascii_case(name)
+                            && !self.writable.contains(&writable.join(name))
+                    })
             })
         });
         // What exists is compared by its file too, which other spellings of its name reach where

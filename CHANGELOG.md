@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.402.3 — Protected names under a grant above the project
+
+### Fixed
+
+- On a drive that ignores case, `write` and `edit` refuse a missing `.claude`, `.scramjet`, `.agents` or `.git` of the project also when the path spells the project's directory otherwise (`PROJ` for `proj`) through a writable directory granted above it.
+
 ## 2.402.2 — Protected directories under other spellings of their names
 
 ### Fixed
