@@ -1,7 +1,8 @@
 //! The two lines under the prompt, as Scramjet's footer: the project's directory with its Git
-//! branch and the branch's open pull request, the session's name, the sandbox's mode and whether autopilot is on, then the
-//! session's tokens with the model's output rate, the cost, how full the context is, and the
-//! model with its provider and effort.
+//! branch and the branch's open pull request, the session's name, the sandbox's mode, whether
+//! autopilot is on and how many background commands run, then the session's tokens with the
+//! model's output rate, the cost, how full the context is, and the model with its provider and
+//! effort.
 
 use super::bottom::Segment;
 use super::pull_request::PullRequest;
@@ -9,10 +10,11 @@ use super::settings::scramjet_level;
 use super::style::{FOOTER, FOOTER_FIGURE, FOOTER_FULL, FOOTER_NEARLY_FULL, RESET};
 use super::terminal::{dollars, rate, tokens};
 use super::text::{clip, one_line, visible};
-use scramjet::agent::{Agent, Children, Tokens};
+use scramjet::agent::{Agent, Children, Tokens, tasks::Tasks};
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
@@ -44,6 +46,37 @@ pub(super) struct Shown {
     pub(super) autopilot: bool,
     /// Whether `/plan`'s plan mode is on.
     pub(super) plan: bool,
+    pub(super) tasks: Running,
+}
+
+/// The agent's background commands, counted each time the footer is drawn, so that one started
+/// or ended during a turn shows without the session telling the screen.
+#[derive(Clone, Default)]
+pub(super) struct Running(Option<Arc<Tasks>>);
+
+impl Running {
+    fn said(&self) -> Option<String> {
+        match self.0.as_ref().map_or(0, |tasks| tasks.running()) {
+            0 => None,
+            1 => Some("1 background task".to_owned()),
+            count => Some(format!("{count} background tasks")),
+        }
+    }
+}
+
+impl PartialEq for Running {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(one), Some(other)) => Arc::ptr_eq(one, other),
+            (one, other) => one.is_none() && other.is_none(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Running {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Running({:?})", self.said())
+    }
 }
 
 impl Shown {
@@ -67,6 +100,7 @@ impl Shown {
             sandbox: agent.sandbox().map(|sandbox| sandbox.mode.name()),
             autopilot: agent.autopilot(),
             plan: agent.planning(),
+            tasks: Running(Some(agent.tasks().clone())),
         }
     }
 }
@@ -187,6 +221,9 @@ impl Footer {
         if self.shown.autopilot {
             place += " • autopilot";
         }
+        if let Some(tasks) = self.shown.tasks.said() {
+            place += &format!(" • {tasks}");
+        }
         let place = clip(&visible(&one_line(&place)), room);
         [format!("{FOOTER}{place}{RESET}"), self.stats(room)]
     }
@@ -214,6 +251,7 @@ impl Footer {
             shown.plan.then(|| "plan mode".to_owned()),
             shown.sandbox.map(|mode| format!("sandbox {mode}")),
             shown.autopilot.then(|| "autopilot".to_owned()),
+            shown.tasks.said(),
         ];
         let rate =
             (shown.rate.filter(|_| shown.tokens.output > 0)).map(|r| (rate(r), FOOTER_FIGURE));
@@ -473,6 +511,7 @@ mod tests {
             sandbox: None,
             autopilot: false,
             plan: false,
+            tasks: Running::default(),
         }
     }
 

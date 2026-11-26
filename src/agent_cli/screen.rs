@@ -1459,6 +1459,7 @@ mod tests {
             sandbox: Some("read-only"),
             autopilot: true,
             plan: false,
+            tasks: Default::default(),
         });
         app.queue()
             .messages

@@ -321,7 +321,7 @@ pub(super) fn definition() -> Value {
 
 impl super::Agent {
     /// The commands bash runs in the background.
-    pub fn tasks(&self) -> &Tasks {
+    pub fn tasks(&self) -> &Arc<Tasks> {
         &self.tasks
     }
 
@@ -453,10 +453,14 @@ mod tests {
     #[cfg_attr(windows, ignore = "runs bash")]
     fn a_task_that_ends_within_a_turn_is_told_before_the_next_request() {
         let text = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
-        let background = json!({"command": "echo built; exit 4", "run_in_background": true});
+        let background =
+            json!({"command": "echo built; : > built; exit 4", "run_in_background": true});
+        // Waits for the background command, however loaded the machine, and then for its end
+        // to be recorded.
+        let wait = "for _ in $(seq 200); do [ -e built ] && break; sleep 0.05; done; sleep 0.5";
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", background),
-            tool_call("call_2", "bash", json!({"command": "sleep 1"})),
+            tool_call("call_2", "bash", json!({"command": wait})),
             text("Seen."),
             text("Nothing more."),
         ]);

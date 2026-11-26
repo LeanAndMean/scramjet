@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.368.0 — The footer counts background commands
+
+### Added
+
+- While background commands run, the footer says how many (`1 background task`), in every bottom, as soon as one starts or ends, also during a turn.
+
 ## 2.367.0 — A background command's end is told within the turn
 
 ### Changed
