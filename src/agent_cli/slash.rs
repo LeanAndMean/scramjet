@@ -48,6 +48,8 @@ pub(super) enum Builtin<'a> {
     Model(&'a str),
     /// Claude Code's `/effort [LEVEL]`: the thinking level.
     Effort(&'a str),
+    /// Claude Code's `/theme [NAME]`: the colors.
+    Theme(&'a str),
     ScopedModels,
     Login,
     Logout,
@@ -100,6 +102,7 @@ impl<'a> Builtin<'a> {
             "tree" => Self::Tree(argument),
             "model" => Self::Model(argument),
             "effort" => Self::Effort(argument),
+            "theme" => Self::Theme(argument),
             "scoped-models" if argument.is_empty() => Self::ScopedModels,
             "login" if argument.is_empty() => Self::Login,
             "logout" if argument.is_empty() => Self::Logout,
@@ -141,6 +144,7 @@ impl<'a> Builtin<'a> {
                 | Self::Keybindings
                 | Self::Model(_)
                 | Self::Effort(_)
+                | Self::Theme(_)
                 | Self::ScopedModels
                 | Self::Login
                 | Self::Logout
@@ -191,6 +195,7 @@ impl Interactive {
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
             Some(Builtin::Effort(wanted)) => self.effort(wanted),
+            Some(Builtin::Theme(wanted)) => self.theme(wanted),
             Some(Builtin::ScopedModels) => self.scoped_models(),
             Some(Builtin::Login) => self.login(),
             Some(Builtin::Logout) => self.logout(),
@@ -782,6 +787,36 @@ tools into its page",
         self.say(&format!("Thinking level: {}", scramjet_level(&level)));
     }
 
+    /// `/theme [NAME]`: uses the theme named and saves it as the settings' `theme`; without
+    /// one, the themes to pick from (on the full screen `/settings`' list).
+    fn theme(&mut self, wanted: &str) {
+        self.discover_themes();
+        if wanted.is_empty() && self.screen.is_some() {
+            return self.choose_theme();
+        }
+        let names = (self.themes.listed.iter()).map(|listed| listed.name.as_str());
+        let names = names.collect::<Vec<_>>().join(", ");
+        if wanted.is_empty() {
+            let current = self.session.settings.theme_name();
+            let following = match self.session.settings.theme {
+                None => ", following the terminal's background",
+                Some(_) => "",
+            };
+            return self.say(&format!(
+                "Theme: {current}{following}; the themes are {names}: /theme NAME"
+            ));
+        }
+        if self.themes.get(wanted).is_none() {
+            return self.say(&format!("Error: no theme {wanted}; the themes are {names}"));
+        }
+        let saved = self.session.settings.set_theme(wanted);
+        self.use_theme();
+        if let Err(error) = saved {
+            return self.say(&format!("Error: settings not saved: {error}"));
+        }
+        self.say(&format!("Theme: {wanted}"));
+    }
+
     /// `/btw QUESTION`: the model's answer from the conversation so far, on the full screen in a
     /// view of its own. Typed during a turn, it is asked at the turn's next pause, the turn's
     /// reply and calls going on meanwhile, and kept once the turn has ended.
@@ -1222,6 +1257,11 @@ mod tests {
             Some(Builtin::Effort("high"))
         );
         assert_eq!(Builtin::parse("/effort"), Some(Builtin::Effort("")));
+        assert_eq!(
+            Builtin::parse("/theme pi-light"),
+            Some(Builtin::Theme("pi-light"))
+        );
+        assert_eq!(Builtin::parse("/theme"), Some(Builtin::Theme("")));
     }
 
     #[test]

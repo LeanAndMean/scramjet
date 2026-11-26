@@ -373,8 +373,10 @@ no tool runs, the answer shows apart (on the full screen in a view of its own), 
 never sees the question or the answer again; what it spent is counted with the session.
 /effort LEVEL sets the thinking level, as Shift+Tab does, saved as defaultThinkingLevel; /effort
 alone lists the levels the model takes (on the full screen to pick one).
+/theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
+the themes (on the full screen to pick one, New theme… among them).
 Typed while a turn runs, /status, /diff, /agents, /skills, /memory, /doctor, /btw, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
-/model, /effort, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
+/model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,
 and the other commands stop the turn and run once it has.

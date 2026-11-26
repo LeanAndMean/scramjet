@@ -363,7 +363,7 @@ impl Interactive {
 
     /// The themes; Enter shows everything in one at once and keeps the list open to try the
     /// next, and the one chosen last stays.
-    fn choose_theme(&mut self) {
+    pub(super) fn choose_theme(&mut self) {
         if let Some(screen) = &self.screen {
             screen.link.to_terminal(background::color_questions());
             // A terminal answers within a frame, or not at all (tmux); Scramjet waits 100 ms

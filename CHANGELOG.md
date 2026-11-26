@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.360.0 — /theme
+
+### Added
+
+- `/theme` changes the theme, as Claude Code's does: alone it opens the list of themes `/settings` has (New theme… among them), and `/theme NAME` uses one by name. Either saves it as your `theme`.
+
 ## 2.359.0 — /skills
 
 ### Added

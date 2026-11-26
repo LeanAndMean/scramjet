@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 35] = [
+const SLASH_COMMANDS: [(&str, &str); 36] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -18,6 +18,10 @@ const SLASH_COMMANDS: [(&str, &str); 35] = [
     (
         "effort",
         "Set the thinking level, or pick it from a list: /effort [LEVEL]",
+    ),
+    (
+        "theme",
+        "Change the theme, or pick it from a list: /theme [NAME]",
     ),
     (
         "export",
@@ -535,6 +539,7 @@ mod tests {
                 "/model",
                 "/scoped-models",
                 "/effort",
+                "/theme",
                 "/export",
                 "/import",
                 "/copy",
@@ -575,8 +580,8 @@ mod tests {
                 "  /model          Select model (opens selector UI)",
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /effort         Set the thinking level, or pick it from …",
-                "  /export         Export session (HTML default, or specify…",
-                "  (1/35)",
+                "  /theme          Change the theme, or pick it from a list…",
+                "  (1/36)",
             ]
         );
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
@@ -587,15 +592,15 @@ mod tests {
         assert_eq!(
             plain(list.rows(24, 5)),
             [
+                "  /import",
                 "  /copy",
-                "  /rename",
-                "→ /status",
+                "→ /rename",
+                "  /status",
                 "  /diff",
-                "  /usage",
-                "  (9/35)"
+                "  (9/36)"
             ]
         );
-        for _ in 0..27 {
+        for _ in 0..28 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);

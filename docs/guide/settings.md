@@ -34,7 +34,7 @@ There is no project settings file: what `/sandbox` changes for one project is ke
 |---|---|---|---|
 | `hideThinkingBlock` | `true`, `false` | `false` | Hides the model's reasoning summaries behind a `Thinking...` line; Ctrl+T toggles it and saves it here. |
 | `markdown.toolDisplay` | `"rendered"`, `"source"` | `"rendered"` | How a Markdown file the agent reads shows: as a document, or as its source. |
-| `theme` | a theme's name | follows the terminal | The colors: `scramjet-dark` on a dark background and `scramjet-light` on a light one unless set ([themes](configuration.md#themes-looks-banners-and-bottoms)). |
+| `theme` | a theme's name | follows the terminal | The colors: `scramjet-dark` on a dark background and `scramjet-light` on a light one unless set; `/settings` and `/theme` change it ([themes](configuration.md#themes-looks-banners-and-bottoms)). |
 | `look` | `"tinted"`, `"panels"`, `"classic"`, `"rails"`, `"margin"`, `"cards"`, `"ribbons"`, `"outline"`, `"timeline"`, `"mono"` | `"tinted"` | How the conversation shows prompts, reasoning, tool calls and replies. |
 | `banner` | `"header"`, `"plain"`, `"card"`, `"logo"` | `"header"` | What a session shows as it starts; `logo` draws Scramjet's logo. |
 | `bottom` | `"bar"`, `"pi"`, `"boxed"`, `"composer"` | `"bar"` | How the status row, the prompt and the footer look. |

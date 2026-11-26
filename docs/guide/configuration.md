@@ -144,7 +144,7 @@ MCP servers come from the settings' `mcpServers`, as Claude Code's `.mcp.json` l
 
 ## Themes, looks, banners and bottoms
 
-The themes, chosen in `/settings` (`theme`):
+The themes, chosen in `/settings` or with `/theme` (`theme`; `/theme NAME` uses one by name):
 
 - `scramjet-dark`, its light companion `scramjet-light`, and Pi's `pi-light`, each painting its own background and text color, so they look alike in every terminal. The default follows the terminal's background: `scramjet-light` on a light one, as the terminal answers or `COLORFGBG` says.
 - `terminal-colors`, the terminal's own 16 colors.
