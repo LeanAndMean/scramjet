@@ -30,13 +30,13 @@ pub struct ClaudeCommands {
 const COMMANDS: &str = ".claude/commands";
 
 /// Where Claude Code's commands are looked for, first wins: the `.claude/commands` of `root` and
-/// of the directories above it up to its Git root, then the user's `~/.claude/commands` (not
-/// with `--bare`, and never also as a project's).
-fn places(root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
-    let user = home.map(|home| crate::os::join(home, COMMANDS));
-    let real = home
-        .and_then(|home| crate::os::canonicalize(home).ok())
-        .map(|home| crate::os::join(&home, COMMANDS));
+/// of the directories above it up to its Git root, then the `commands` of the user's `claude`
+/// directory, `~/.claude` (not with `--bare`, and never also as a project's).
+fn places(root: &Path, claude: Option<&Path>) -> Vec<PathBuf> {
+    let user = claude.map(|claude| crate::os::join(claude, "commands"));
+    let real = claude
+        .and_then(|claude| crate::os::canonicalize(claude).ok())
+        .map(|claude| crate::os::join(&claude, "commands"));
     let mut places = Vec::new();
     for directory in root.ancestors() {
         let commands = crate::os::join(directory, COMMANDS);
@@ -54,7 +54,7 @@ fn places(root: &Path, home: Option<&Path>) -> Vec<PathBuf> {
 impl ClaudeCommands {
     /// The commands of a session in `root`.
     pub fn discover(root: &Path) -> Self {
-        Self::load(&places(root, std::env::home_dir().as_deref()))
+        Self::load(&places(root, super::login::claude_directory().as_deref()))
     }
 
     fn load(places: &[PathBuf]) -> Self {
@@ -396,7 +396,7 @@ mod tests {
             home.join(COMMANDS).join("ops/deploy.md"),
             "# Deploy it\n\nnow",
         );
-        let found = ClaudeCommands::load(&places(&root, Some(&home)));
+        let found = ClaudeCommands::load(&places(&root, Some(&home.join(".claude"))));
         let names: Vec<_> = found.list().iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["ops:deploy", "review", "top", "mine"]);
         let review = &found.list()[1];
@@ -428,7 +428,7 @@ mod tests {
                 .contains("cannot read")
         );
         // The home as the project lists its commands once, as the user's.
-        let mine = places(&home, Some(&home));
+        let mine = places(&home, Some(&home.join(".claude")));
         assert_eq!(mine.last(), Some(&home.join(COMMANDS)));
         assert_eq!(
             mine.iter().filter(|p| **p == home.join(COMMANDS)).count(),

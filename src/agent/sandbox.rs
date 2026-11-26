@@ -102,7 +102,7 @@ const HIDDEN_DIRECTORIES: [&str; 11] = [
     ".config/glab-cli",
 ];
 
-/// Where Cargo's and Hugging Face's variables move their stores.
+/// Where Cargo's, Hugging Face's and Claude Code's variables move their stores.
 fn relocated(variable: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathBuf> {
     let set = |name| {
         variable(name)
@@ -130,6 +130,7 @@ fn relocated(variable: impl Fn(&str) -> Option<std::ffi::OsString>) -> Vec<PathB
         stores.extend(["token", "stored_tokens"].map(|name| hf.join(name)));
     }
     stores.extend(set("HF_TOKEN_PATH"));
+    stores.extend(set("CLAUDE_CONFIG_DIR").map(|claude| claude.join(".credentials.json")));
     stores
 }
 
@@ -3278,6 +3279,7 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             "XDG_CACHE_HOME" => Some("/x".into()),
             "HF_TOKEN_PATH" => Some("/t".into()),
             "SCRAMJET_CODING_AGENT_DIR" => Some("/v1".into()),
+            "CLAUDE_CONFIG_DIR" => Some("/cc".into()),
             _ => None,
         });
         let expected = [
@@ -3286,9 +3288,11 @@ echo x > ../.netrc; touch ../.ssh/new; echo done";
             "/c/credentials",
             "/x/huggingface/token",
         ];
-        let expected = expected
-            .into_iter()
-            .chain(["/x/huggingface/stored_tokens", "/t"]);
+        let expected = expected.into_iter().chain([
+            "/x/huggingface/stored_tokens",
+            "/t",
+            "/cc/.credentials.json",
+        ]);
         assert_eq!(
             relocated,
             expected.map(std::path::PathBuf::from).collect::<Vec<_>>()

@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.391.0 — Claude Code's instructions files
+
+### Added
+
+- Claude Code's other instruction files are read as context files: your `~/.claude/CLAUDE.md` and the rules in `~/.claude/rules`, then in the project and each directory above it `.claude/CLAUDE.md` after its `CLAUDE.md`, and the `.md` files under its `.claude/rules` (frontmatter left out) last. A rule whose frontmatter gives `paths` is not read yet. `/memory` lists them; `--bare` leaves out `~/.claude`, `--no-context-files` all of them.
+- Claude Code's `CLAUDE_CONFIG_DIR` is followed: where it is set, its directory is read in place of `~/.claude` (skills, commands, `CLAUDE.md`, rules), and its `.credentials.json` is hidden with the other credential stores.
+
 ## 2.390.0 — Claude Code's commands
 
 ### Added

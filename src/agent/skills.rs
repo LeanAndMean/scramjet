@@ -56,12 +56,8 @@ enum Place {
 /// directory: the Agent Skills standard's (Pi's and Codex's) and Claude Code's.
 const SHARED: [&str; 2] = [".agents/skills", ".claude/skills"];
 
-/// Where Pi looks, first wins: the project's `.scramjet/skills`, then the `.agents/skills` and
-/// Claude Code's `.claude/skills` of the project and the directories above it up to its Git
-/// root, the settings' `listed` paths, the `skills` directories of the command sets (as a Claude
-/// Code plugin's), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
-/// and `~/.claude/skills` (with `--bare`, none of them, and never as a project's); then, as
-/// Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
+/// `places_of` with Claude Code's directory in `home`.
+#[cfg(test)]
 fn places(
     listed: &[PathBuf],
     sets: &[PathBuf],
@@ -70,19 +66,56 @@ fn places(
     agent_directory: Option<&Path>,
     home: Option<&Path>,
 ) -> Vec<(PathBuf, Place)> {
+    let claude = home.map(|home| crate::os::join(home, ".claude"));
+    let user = User {
+        home,
+        claude: claude.as_deref(),
+    };
+    places_of(listed, sets, options, root, agent_directory, user)
+}
+
+/// The user's home directory and Claude Code's, `~/.claude` unless `CLAUDE_CONFIG_DIR` moves it.
+#[derive(Clone, Copy)]
+struct User<'a> {
+    home: Option<&'a Path>,
+    claude: Option<&'a Path>,
+}
+
+/// Where Pi looks, first wins: the project's `.scramjet/skills`, then the `.agents/skills` and
+/// Claude Code's `.claude/skills` of the project and the directories above it up to its Git
+/// root, the settings' `listed` paths, the `skills` directories of the command sets (as a Claude
+/// Code plugin's), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
+/// and the `skills` of Claude Code's directory (with `--bare`, none of them, and never as a
+/// project's); then, as Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
+fn places_of(
+    listed: &[PathBuf],
+    sets: &[PathBuf],
+    options: &SkillOptions,
+    root: &Path,
+    agent_directory: Option<&Path>,
+    user: User,
+) -> Vec<(PathBuf, Place)> {
     let given = (options.paths.iter()).map(|path| (path.clone(), Place::Given));
     if options.no_skills {
         return given.collect();
     }
     let nested = |path| (path, Place::Directory { top_files: false });
-    let users: Vec<PathBuf> = (SHARED.iter())
-        .filter_map(|shared| home.map(|home| crate::os::join(home, shared)))
-        .collect();
+    let theirs = |home: Option<&Path>, claude: Option<&Path>| -> Vec<PathBuf> {
+        let agents = home.map(|home| crate::os::join(home, SHARED[0]));
+        let claude = claude.map(|claude| crate::os::join(claude, "skills"));
+        agents.into_iter().chain(claude).collect()
+    };
+    let users = theirs(user.home, user.claude);
     // The project's path is the real one, which a home reached through a symlink is not.
-    let real_home = home.and_then(|home| crate::os::canonicalize(home).ok());
-    let reals: Vec<PathBuf> = (SHARED.iter())
-        .filter_map(|shared| real_home.as_ref().map(|home| crate::os::join(home, shared)))
-        .collect();
+    let real = |path: Option<&Path>| {
+        let path = path?;
+        (crate::os::canonicalize(path).ok()).or_else(|| {
+            let parent = crate::os::canonicalize(path.parent()?).ok()?;
+            Some(parent.join(path.file_name()?))
+        })
+    };
+    let (real_home, real_claude) = (real(user.home), real(user.claude));
+    let reals = theirs(real_home.as_deref(), real_claude.as_deref());
     let mut places = vec![(
         crate::os::join(root, ".scramjet/skills"),
         Place::Directory { top_files: true },
@@ -121,15 +154,19 @@ impl Skills {
     /// the command `sets`' own and the command line's `options`.
     pub fn discover(listed: &[PathBuf], sets: &[Set], options: &SkillOptions, root: &Path) -> Self {
         let agent_directory = super::login::config_directory().filter(|_| !super::bare());
-        let home = std::env::home_dir();
+        let (home, claude) = (std::env::home_dir(), super::login::claude_directory());
         let sets: Vec<PathBuf> = sets.iter().map(|set| set.directory.clone()).collect();
-        Self::load(&places(
+        let user = User {
+            home: home.as_deref(),
+            claude: claude.as_deref(),
+        };
+        Self::load(&places_of(
             listed,
             &sets,
             options,
             root,
             agent_directory.as_deref(),
-            home.as_deref(),
+            user,
         ))
     }
 

@@ -614,11 +614,12 @@ pub(super) fn load(
     loaded
 }
 
-/// The context files, as Scramjet's: those of the `agent_directory`, then those of `root` and
-/// the directories above it, outermost first, with their contents. A directory's `CLAUDE.md` comes
-/// before its `AGENTS.md`, which is left out when it says the same; its `CLAUDE.local.md` comes
-/// last; with `--bare`, none of the home directory's. One in a `hidden` store is left out, said
-/// in `problems`.
+/// The context files, as Scramjet's: those of the `agent_directory`, then the user's Claude Code
+/// `~/.claude/CLAUDE.md` and rules, then those of `root` and the directories above it, outermost
+/// first, with their contents. A directory's `CLAUDE.md` and `.claude/CLAUDE.md` come before its
+/// `AGENTS.md`, which is left out when it says the same, then its `CLAUDE.local.md` and its
+/// `.claude/rules`; with `--bare`, none of the home directory's. One in a `hidden` store is left
+/// out, said in `problems`.
 pub(super) fn context_files(
     root: &Path,
     agent_directory: Option<&Path>,
@@ -626,16 +627,21 @@ pub(super) fn context_files(
     problems: &mut Vec<Problem>,
 ) -> Vec<(PathBuf, String)> {
     let mut files = (agent_directory
-        .map(|directory| directory_context(directory, hidden, problems)))
+        .map(|directory| directory_context(directory, false, hidden, problems)))
     .unwrap_or_default();
     let mut above = Vec::new();
-    let home = std::env::home_dir().filter(|_| super::bare());
+    let home = std::env::home_dir();
     let real_home = (home.as_deref()).and_then(|home| crate::os::canonicalize(home).ok());
+    if let Some(claude) = super::login::claude_directory().filter(|_| !super::bare()) {
+        files.extend(context_file(&claude.join("CLAUDE.md"), hidden, problems));
+        files.extend(rules(&claude, hidden, problems));
+    }
     for directory in root.ancestors() {
-        if home.as_deref() == Some(directory) || real_home.as_deref() == Some(directory) {
+        let at_home = home.as_deref() == Some(directory) || real_home.as_deref() == Some(directory);
+        if at_home && super::bare() {
             continue;
         }
-        let found = directory_context(directory, hidden, problems).into_iter();
+        let found = directory_context(directory, !at_home, hidden, problems).into_iter();
         let found: Vec<_> = found
             .filter(|(path, _)| !files.iter().any(|(seen, _)| seen == path))
             .collect();
@@ -647,47 +653,114 @@ pub(super) fn context_files(
 
 /// The `CLAUDE.md` and `AGENTS.md` (or `.MD`) of `directory`, as Scramjet reads them, then its
 /// `CLAUDE.local.md`, the user's own notes kept out of version control, as Claude Code reads it.
+/// With `claude`, Claude Code's `.claude/CLAUDE.md` after the `CLAUDE.md`, and its
+/// `.claude/rules` last.
 fn directory_context(
     directory: &Path,
+    claude: bool,
     hidden: &Hidden,
     problems: &mut Vec<Problem>,
 ) -> Vec<(PathBuf, String)> {
     let mut first = |names: &[&str]| {
-        let path = (names.iter().map(|name| directory.join(name))).find(|path| {
-            std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES)
-        })?;
-        if let Some(owner) = crate::os::stranger(&path) {
-            let problem = Problem::in_file(crate::os::left_out(&path, owner), &path);
-            if !problems.contains(&problem) {
-                problems.push(problem);
-            }
-            return None;
-        }
-        let file = std::fs::File::open(&path).ok()?;
-        let mut file = match hidden.opened(&path, Ok(file)) {
-            Ok(file) => file.take(CONTEXT_FILE_BYTES),
-            Err(why) => {
-                let problem = Problem::in_file(why, &path);
-                if !problems.contains(&problem) {
-                    problems.push(problem);
-                }
-                return None;
-            }
-        };
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).ok()?;
-        Some((path, contents))
+        let path = (names.iter().map(|name| directory.join(name))).find(|path| path.is_file())?;
+        context_file(&path, hidden, problems)
     };
-    let claude = first(&["CLAUDE.md", "CLAUDE.MD"]);
+    let mut claudes: Vec<_> = first(&["CLAUDE.md", "CLAUDE.MD"]).into_iter().collect();
+    if claude {
+        claudes.extend(first(&[".claude/CLAUDE.md"]));
+    }
     let agents = first(&["AGENTS.md", "AGENTS.MD"]);
     let local = first(&["CLAUDE.local.md"]);
-    let mut files = match (claude, agents) {
-        (Some(claude), Some(agents)) if claude.1 != agents.1 => vec![claude, agents],
-        (Some(claude), _) => vec![claude],
-        (None, agents) => agents.into_iter().collect(),
-    };
+    let mut files = claudes.clone();
+    files.extend(agents.filter(|agents| !claudes.iter().any(|claude| claude.1 == agents.1)));
     files.extend(local);
+    if claude {
+        files.extend(rules(&directory.join(".claude"), hidden, problems));
+    }
     files
+}
+
+/// The file at `path` with its contents, unless it is over the size kept, another user's or in a
+/// `hidden` store (those two said in `problems`).
+fn context_file(
+    path: &Path,
+    hidden: &Hidden,
+    problems: &mut Vec<Problem>,
+) -> Option<(PathBuf, String)> {
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.len() <= CONTEXT_FILE_BYTES) {
+        return None;
+    }
+    let mut said = |problem: Problem| {
+        if !problems.contains(&problem) {
+            problems.push(problem);
+        }
+    };
+    if let Some(owner) = crate::os::stranger(path) {
+        said(Problem::in_file(crate::os::left_out(path, owner), path));
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut file = match hidden.opened(path, Ok(file)) {
+        Ok(file) => file.take(CONTEXT_FILE_BYTES),
+        Err(why) => {
+            said(Problem::in_file(why, path));
+            return None;
+        }
+    };
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    Some((path.to_path_buf(), contents))
+}
+
+/// Claude Code's rules in `claude`'s `rules` directory: each `.md` file under it, in the order of
+/// their paths, without its frontmatter. One whose frontmatter gives `paths` is left out: Claude
+/// Code loads it only once the agent works on a file it names.
+fn rules(claude: &Path, hidden: &Hidden, problems: &mut Vec<Problem>) -> Vec<(PathBuf, String)> {
+    let mut paths = Vec::new();
+    let mut seen = Vec::new();
+    let mut directories = vec![claude.join("rules")];
+    while let Some(directory) = directories.pop() {
+        // A link back to a directory already walked is walked once.
+        match crate::os::canonicalize(&directory) {
+            Ok(real) if !seen.contains(&real) => seen.push(real),
+            _ => continue,
+        }
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    (paths.iter())
+        .filter_map(|path| context_file(path, hidden, problems))
+        .filter_map(|(path, contents)| {
+            let (frontmatter, body) = super::commands::split_frontmatter(&contents);
+            (!scoped(&frontmatter)).then_some((path, body))
+        })
+        .collect()
+}
+
+/// Whether a rule's `frontmatter` gives `paths`, as a list or a comma-separated string. One that
+/// does not parse gives none, as Claude Code reads it.
+fn scoped(frontmatter: &str) -> bool {
+    use yaml_rust2::Yaml;
+    let Some(Yaml::Hash(fields)) = (yaml_rust2::YamlLoader::load_from_str(frontmatter).ok())
+        .and_then(|documents| documents.into_iter().next())
+    else {
+        return false;
+    };
+    match fields.get(&Yaml::String("paths".into())) {
+        Some(Yaml::Array(paths)) => !paths.is_empty(),
+        Some(Yaml::String(paths)) => !paths.trim().is_empty(),
+        _ => false,
+    }
 }
 
 /// The context `files`, as Pi's `# Project Context`, one part each, the first with the heading.
@@ -1106,7 +1179,8 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
     }
 
     #[test]
-    fn context_files_are_the_agent_directory_s_then_outermost_first_claude_md_before_agents_md() {
+    fn context_files_are_the_agent_directory_s_then_outermost_first_claude_md_before_agents_md_and_rules_last()
+     {
         let scratch = std::env::temp_dir().join(format!("sjrs-context-{}", std::process::id()));
         let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
         let (outer, root, home) = (
@@ -1125,6 +1199,24 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
         write(root.join("AGENTS.md"), "Same.");
         write(outer.join("CLAUDE.local.md"), "Outer local.");
         write(root.join("CLAUDE.local.md"), "Same.");
+        let rules = root.join(".claude/rules");
+        std::fs::create_dir_all(rules.join("sub")).unwrap();
+        write(root.join(".claude/CLAUDE.md"), "Dot claude.");
+        write(rules.join("b.md"), "Rule b.");
+        write(
+            rules.join("sub/a.md"),
+            "---\ndescription: x\n---\n\nRule a.\n",
+        );
+        write(
+            rules.join("scoped.md"),
+            "---\npaths:\n  - \"**/*.rs\"\n---\nScoped.",
+        );
+        write(
+            rules.join("listed.md"),
+            "---\npaths: \"src/**\"\n---\nScoped.",
+        );
+        write(rules.join("broken.md"), "---\npaths: [\n---\nBroken.");
+        write(rules.join("notes.txt"), "Not a rule.");
         let found: Vec<(PathBuf, String)> =
             context_files(&root, Some(&home), &Hidden::default(), &mut Vec::new())
                 .into_iter()
@@ -1141,7 +1233,11 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             (outer.join("AGENTS.md"), "Outer agents."),
             (outer.join("CLAUDE.local.md"), "Outer local."),
             (root.join("CLAUDE.md"), "Same."),
+            (root.join(".claude/CLAUDE.md"), "Dot claude."),
             (root.join("CLAUDE.local.md"), "Same."),
+            (rules.join("b.md"), "Rule b."),
+            (rules.join("broken.md"), "Broken."),
+            (rules.join("sub/a.md"), "Rule a."),
         ]
         .map(|(path, text)| (path, text.to_owned()));
         assert_eq!(found, expected);

@@ -30,6 +30,7 @@ fn program(binary: &std::path::Path) -> Command {
         ("XDG_STATE_HOME", "state"),
         ("XDG_DATA_HOME", "data"),
         ("XDG_RUNTIME_DIR", "runtime"),
+        ("CLAUDE_CONFIG_DIR", "claude"),
     ] {
         command.env(variable, home.join(directory));
     }
@@ -676,6 +677,90 @@ fn cache_retention_marks_requests_as_scramjet_1s() {
             )
         );
     }
+}
+
+#[test]
+fn claude_codes_instructions_and_rules_are_read_but_rules_for_some_paths() {
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("scramjet-cli-rules-{}", std::process::id())));
+    let (config, claude, project) = (
+        scratch.0.join("config"),
+        scratch.0.join("claude"),
+        scratch.0.join("project"),
+    );
+    for directory in [
+        config.join("scramjet"),
+        claude.join("rules"),
+        project.join(".claude/rules/web"),
+    ] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    let (port, bodies) = serve_refusals();
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let write = |path: std::path::PathBuf, text: &str| std::fs::write(path, text).unwrap();
+    write(claude.join("CLAUDE.md"), "User instructions.");
+    write(claude.join("rules/mine.md"), "User rule.");
+    write(project.join("CLAUDE.md"), "Project instructions.");
+    write(project.join(".claude/CLAUDE.md"), "Dot instructions.");
+    write(
+        project.join(".claude/rules/web/style.md"),
+        "---\nx: 1\n---\nProject rule.",
+    );
+    write(
+        project.join(".claude/rules/scoped.md"),
+        "---\npaths:\n  - \"**/*.tsx\"\n---\nScoped rule.",
+    );
+    let system = |arguments: &[&str]| {
+        let output = program(&binary())
+            .args(["-p", "--no-session", "--retries", "0"])
+            .args(arguments)
+            .arg("hi")
+            .current_dir(&project)
+            .env("XDG_CONFIG_HOME", &config)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("CLAUDE_CONFIG_DIR", &claude)
+            .env("SCRAMJET_OFFLINE", "1")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let (_, body) = bodies.recv_timeout(Duration::from_secs(20)).expect(&stderr);
+        let parts = body["system"].as_array().unwrap().iter();
+        parts
+            .map(|part| part["text"].as_str().unwrap())
+            .collect::<String>()
+    };
+    let text = system(&[]);
+    let at = |needle: &str| text.find(needle);
+    let order = [
+        "User instructions.",
+        "User rule.",
+        "Project instructions.",
+        "Dot instructions.",
+        "Project rule.",
+    ]
+    .map(at);
+    assert!(order.iter().all(Option::is_some), "{text}");
+    assert!(order.is_sorted(), "{order:?}: {text}");
+    assert!(
+        !text.contains("Scoped rule.") && !text.contains("x: 1"),
+        "{text}"
+    );
+    // `--bare` leaves out the user's, `--no-context-files` all of them.
+    let bare = system(&["--bare"]);
+    assert!(
+        !bare.contains("User instructions.")
+            && !bare.contains("User rule.")
+            && bare.contains("Project rule."),
+        "{bare}"
+    );
+    let none = system(&["--no-context-files"]);
+    let read = ["User rule.", "Project instructions.", "Project rule."];
+    assert!(!read.iter().any(|text| none.contains(text)), "{none}");
 }
 
 #[test]

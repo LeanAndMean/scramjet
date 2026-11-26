@@ -50,7 +50,7 @@ Instructions and tools:
   --system-prompt TEXT     the instructions' opening: TEXT, or the file it names
   --append-system-prompt TEXT
                            text, or a file's contents, after the opening (repeatable)
-  -nc, --no-context-files  leave out the AGENTS.md, CLAUDE.md and CLAUDE.local.md files
+  -nc, --no-context-files  leave out the AGENTS.md, CLAUDE.md, CLAUDE.local.md and rules
   --no-directives          leave out Scramjet's own orientation and directives
   --bare                   read nothing from your own directories but the settings,
                            models.json and auth.json
@@ -211,7 +211,8 @@ but to NO_PROXY's hosts and this machine.
                          (default: an APPEND_SYSTEM.md found as SYSTEM.md is)
   -nc, --no-context-files
                          leave out the AGENTS.md, CLAUDE.md and CLAUDE.local.md files of
-                         ~/.config/scramjet, the project and the directories above it
+                         ~/.config/scramjet, the project and the directories above it, and
+                         Claude Code's .claude/CLAUDE.md and .claude/rules there and in ~
   --no-directives        leave out the # Scramjet orientation and Scramjet's directives that
                          follow the context files and skills (also the directives setting
                          off), for sessions given a task and instructions of their own

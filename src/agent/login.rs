@@ -44,6 +44,15 @@ pub fn config_directory() -> Option<PathBuf> {
     crate::os::base_directory("XDG_CONFIG_HOME", ".config").map(|config| config.join("scramjet"))
 }
 
+/// Claude Code's directory, whose skills, commands and instructions are read too: its
+/// `CLAUDE_CONFIG_DIR`, by default `~/.claude`.
+pub fn claude_directory() -> Option<PathBuf> {
+    match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|directory| !directory.is_empty()) {
+        Some(directory) => Some(PathBuf::from(directory)),
+        None => std::env::home_dir().map(|home| crate::os::join(&home, ".claude")),
+    }
+}
+
 /// The credentials file.
 pub fn auth_file() -> Option<PathBuf> {
     config_directory().map(|directory| directory.join("auth.json"))

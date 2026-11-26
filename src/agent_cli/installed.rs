@@ -459,7 +459,22 @@ pub(super) struct Places<'a> {
 
 /// A context file's place and what it is for.
 fn memory_kind(path: &Path, places: &Places) -> (&'static str, &'static str) {
-    let directory = path.parent();
+    // Claude Code's `.claude/CLAUDE.md` and `.claude/rules` belong to the directory above `.claude`.
+    let claude = (path.ancestors().skip(1)).find(|directory| directory.ends_with(".claude"));
+    if let Some(claude) = claude {
+        let owner = claude.parent();
+        if places.user.is_some() && owner == std::env::home_dir().as_deref() {
+            let what = "Your Claude Code instructions for every project, read before the \
+                        project's.";
+            return ("yours, every project", what);
+        }
+        if owner == Some(places.root) {
+            let what = "The project's Claude Code instructions, kept with it for everyone who \
+                        works on it.";
+            return ("this project's", what);
+        }
+    }
+    let directory = claude.and_then(Path::parent).or(path.parent());
     let local = path
         .file_name()
         .is_some_and(|name| name == "CLAUDE.local.md");
