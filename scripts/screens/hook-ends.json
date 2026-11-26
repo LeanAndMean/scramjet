@@ -1,0 +1,51 @@
+{
+  "size": "100x34",
+  "arguments": ["--ask"],
+  "settings": {
+    "compaction": {"keepRecentTokens": 1},
+    "hooks": {
+      "Notification": [
+        {"hooks": [{"type": "command", "command": "mkdir -p /tmp/scramjet-hook-ends; cat >> /tmp/scramjet-hook-ends/log.jsonl; echo >> /tmp/scramjet-hook-ends/log.jsonl"}]}
+      ],
+      "PreCompact": [
+        {"matcher": "manual", "hooks": [{"type": "command", "command": "mkdir -p /tmp/scramjet-hook-ends; cat >> /tmp/scramjet-hook-ends/log.jsonl; echo >> /tmp/scramjet-hook-ends/log.jsonl; echo 'Keep the list of files.'"}]}
+      ],
+      "SessionEnd": [
+        {"hooks": [{"type": "command", "command": "mkdir -p /tmp/scramjet-hook-ends; cat >> /tmp/scramjet-hook-ends/log.jsonl; echo >> /tmp/scramjet-hook-ends/log.jsonl"}]}
+      ]
+    }
+  },
+  "replies": [
+    [{"text": "Hello."}],
+    [{"call": "bash", "arguments": {"command": "ls"}}],
+    [{"text": "Listed the files."}],
+    [{"text": "The user said hello."}],
+    [{"text": "Then listed the files."}],
+    [{"text": "Bye."}]
+  ],
+  "steps": [
+    {"until": "[Skills]"},
+    {"sleep": 0.5},
+    {"type": "hello\r"},
+    {"until": "Hello."},
+    {"sleep": 0.3},
+    {"type": "list the files\r"},
+    {"until": "Allow"},
+    {"sleep": 7.5},
+    {"shot": "asked"},
+    {"type": "y"},
+    {"until": "Listed the files."},
+    {"sleep": 0.3},
+    {"type": "/compact the files\r"},
+    {"until": "Then listed"},
+    {"sleep": 0.5},
+    {"shot": "compacted"},
+    {"type": "/clear\r"},
+    {"sleep": 1},
+    {"type": "bye\r"},
+    {"until": "Bye."},
+    {"sleep": 0.3},
+    {"type": "/exit\r"},
+    {"sleep": 2}
+  ]
+}

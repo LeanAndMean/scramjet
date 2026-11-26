@@ -72,7 +72,7 @@ pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, s
 pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use goal::{GoalCheck, Verdict};
-pub use hooks::Hooks;
+pub use hooks::{Hooks, Notifier};
 pub use image::{decode_base64, mime as image_type, set_images};
 pub use instructions::{Part, Section};
 pub use lint::{Diagnostic, Severity, lint};
@@ -464,6 +464,8 @@ pub enum AgentError {
     ContextOverflow(String),
     /// A compaction the agent started by itself failed.
     CompactionFailed(Box<AgentError>),
+    /// A hook stopped what was to run.
+    Hook(String),
     Session(std::io::Error),
     TooManySteps,
 }
@@ -477,6 +479,7 @@ impl std::fmt::Display for AgentError {
             }
             Self::ContextOverflow(message) => write!(f, "context overflow: {message}"),
             Self::CompactionFailed(error) => write!(f, "automatic compaction failed: {error}"),
+            Self::Hook(why) => f.write_str(why),
             Self::Session(error) => write!(f, "session: {error}"),
             Self::TooManySteps => write!(f, "stopped after {MAX_STEPS} model requests in one turn"),
         }
@@ -703,6 +706,9 @@ pub struct Agent {
     /// How the session began since the last request, for `SessionStart` hooks: `startup`,
     /// `resume`, `clear` or `compact`.
     session_start: Option<&'static str>,
+    /// Whether `SessionStart` hooks ran for this session, so that `SessionEnd` hooks run as it
+    /// ends.
+    hooks_began: bool,
     /// How many times `Stop` hooks kept this turn going.
     stop_blocks: usize,
     /// The paths the user's settings hide as the credential stores are, and re-open (`set_reads`).
@@ -918,6 +924,7 @@ impl Agent {
                 true => "startup",
                 false => "resume",
             }),
+            hooks_began: false,
             stop_blocks: 0,
             reads: Reads::default(),
             writable: Vec::new(),
@@ -1671,6 +1678,7 @@ impl Agent {
         let model = session.model().map(str::to_owned);
         let context_tokens = session.context_tokens();
         let effort = session.effort().map(str::to_owned);
+        self.end_session("resume");
         self.autopilot = session.autopilot().unwrap_or(self.autopilot);
         self.replace_session(session);
         self.conversation = conversation;
@@ -1707,6 +1715,7 @@ impl Agent {
         if let Some(profile) = &self.profile {
             session.record_profile(profile)?;
         }
+        self.end_session("clear");
         self.replace_session(session);
         self.conversation.clear();
         self.prompts.clear();

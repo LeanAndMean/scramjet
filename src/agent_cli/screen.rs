@@ -1221,7 +1221,13 @@ impl App {
 
     /// Tells the terminal that the agent waits for the user, when `waited` says it is time.
     fn tell_waiting(&mut self) -> io::Result<()> {
-        let (Some(waits), Some(channel)) = (self.waited(Instant::now()), self.notify) else {
+        let Some(waits) = self.waited(Instant::now()) else {
+            return Ok(());
+        };
+        if let Some(notifier) = &self.footer.shown.notifier {
+            notifier.notify(waits.kind(), waits.message());
+        }
+        let Some(channel) = self.notify else {
             return Ok(());
         };
         let var = |name: &str| std::env::var(name).ok();
@@ -1290,6 +1296,14 @@ impl Waits {
         match self {
             Self::Answer => Duration::from_secs(6),
             Self::Input => Duration::from_secs(60),
+        }
+    }
+
+    /// Claude Code's `notification_type` for it, as `Notification` hooks are given it.
+    fn kind(self) -> &'static str {
+        match self {
+            Self::Answer => "permission_prompt",
+            Self::Input => "idle_prompt",
         }
     }
 

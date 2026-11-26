@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.382.0 — Hooks as sessions end, before compactions and as you are told the agent waits
+
+### Added
+
+- Claude Code's `SessionEnd`, `PreCompact` and `Notification` hooks: as a session ends (cleared, switched from, quit), before a compaction (adding to its instructions, or stopping it), and as you are told the agent waits for you (a question unanswered, a prompt left idle), with Claude Code's input fields and matchers.
+
 ## 2.381.0 — Claude Code's model in the settings
 
 ### Added

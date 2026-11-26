@@ -55,6 +55,8 @@ pub(super) struct Shown {
     pub(super) session_id: String,
     pub(super) transcript: PathBuf,
     pub(super) model_name: Option<String>,
+    /// The `Notification` hooks, run as the user is told the agent waits.
+    pub(super) notifier: Option<scramjet::agent::Notifier>,
 }
 
 /// The agent's background commands, counted each time the footer is drawn, so that one started
@@ -114,6 +116,7 @@ impl Shown {
             session_id: agent.session_id(),
             transcript: agent.session_path().to_owned(),
             model_name: agent.model_name().map(str::to_owned),
+            notifier: agent.notifier(),
         }
     }
 }

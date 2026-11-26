@@ -796,6 +796,7 @@ impl Agent {
         if cut == start {
             return Ok(None);
         }
+        let focus = &self.pre_compact_hooks(focus, automatic.is_some(), ui, cancel)?;
         // As in Scramjet, a turn cut in two is summarized apart from the history before it.
         let turn = turn_start(&self.conversation, start, cut);
         let history = &self.conversation[start..turn.unwrap_or(cut)];

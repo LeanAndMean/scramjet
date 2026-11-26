@@ -1,7 +1,7 @@
 //! Claude Code's hooks: the user's commands that its `hooks` setting runs before and after the
 //! agent's tools, given the call as JSON on their input, and able to block it, change its input,
-//! ask the user or tell the model more; and as a prompt is sent, as a turn would end and as a
-//! session starts.
+//! ask the user or tell the model more; and as a prompt is sent, as a turn would end, as a session
+//! starts and ends, before a compaction and as the user is told the agent waits.
 
 use super::tools::{self, Call, Output};
 use super::{Agent, AgentError, AgentUi, Answer, PROBE, mcp, message_text, subagent};
@@ -11,13 +11,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// The events run, as Claude Code names them.
-pub const EVENTS: [&str; 6] = [
+pub const EVENTS: [&str; 9] = [
     "PreToolUse",
     "PostToolUse",
     "PostToolUseFailure",
     "UserPromptSubmit",
     "Stop",
     "SessionStart",
+    "SessionEnd",
+    "PreCompact",
+    "Notification",
 ];
 
 /// How many times in a row `Stop` hooks may keep a turn going, as Claude Code's
@@ -26,6 +29,9 @@ const STOP_BLOCKS: usize = 8;
 
 /// Claude Code's time limit for a command hook.
 const TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Claude Code's time limit for a `SessionEnd` hook that gives none, so that leaving waits little.
+const SESSION_END_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Event {
@@ -36,16 +42,25 @@ enum Event {
     Stop,
     /// Its matcher names the source: `startup`, `resume`, `clear` or `compact`.
     SessionStart,
+    /// Its matcher names the reason: `clear`, `resume`, `prompt_input_exit` or `other`.
+    SessionEnd,
+    /// Its matcher names the trigger: `manual` or `auto`.
+    PreCompact,
+    /// Its matcher names the notification's type: `permission_prompt` or `idle_prompt`.
+    Notification,
 }
 
 impl Event {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 9] = [
         Self::PreToolUse,
         Self::PostToolUse,
         Self::PostToolUseFailure,
         Self::UserPromptSubmit,
         Self::Stop,
         Self::SessionStart,
+        Self::SessionEnd,
+        Self::PreCompact,
+        Self::Notification,
     ];
 
     fn name(self) -> &'static str {
@@ -99,7 +114,8 @@ struct Group {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Command {
     pub command: String,
-    pub timeout: Duration,
+    /// The hook's own `timeout`, if it gives one.
+    pub timeout: Option<Duration>,
 }
 
 /// The settings' hooks, in the order the files and their lists give them.
@@ -154,6 +170,10 @@ impl Hooks {
 
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
+    }
+
+    fn has(&self, event: Event) -> bool {
+        self.groups.iter().any(|group| group.event == event)
     }
 
     /// The commands run for `event` on a tool, or a session's source, with `names`, each once;
@@ -244,9 +264,9 @@ fn read_command(hook: &Value, place: &str, warnings: &mut Vec<String>) -> Option
         return None;
     };
     let timeout = match hook.get("timeout") {
-        None | Some(Value::Null) => TIMEOUT,
+        None | Some(Value::Null) => None,
         Some(seconds) => match seconds.as_f64().filter(|seconds| *seconds > 0.0) {
-            Some(seconds) => Duration::from_secs_f64(seconds.min(86_400.0)),
+            Some(seconds) => Some(Duration::from_secs_f64(seconds.min(86_400.0))),
             None => {
                 warnings.push(format!("{place}.timeout must be seconds, above 0; ignored"));
                 return None;
@@ -320,7 +340,7 @@ impl Bound {
             &commands,
             input,
             root,
-            ui,
+            &mut |text| ui.notice(text),
             cancel,
         );
         let blocked: Vec<String> = said
@@ -373,7 +393,8 @@ impl Bound {
                 }
                 _ => input["tool_response"] = tool_response(call, output, root),
             }
-            for said in self.run(event, &label(event), &commands, input, root, ui, cancel) {
+            let notice = &mut |text: &str| ui.notice(text);
+            for said in self.run(event, &label(event), &commands, input, root, notice, cancel) {
                 told.extend(said.blocking);
                 told.extend(
                     said.context
@@ -401,7 +422,8 @@ impl Bound {
             return Ok(Vec::new());
         }
         let input = json!({"prompt": prompt});
-        let said = self.run(event, event.name(), &commands, input, root, ui, cancel);
+        let notice = &mut |text: &str| ui.notice(text);
+        let said = self.run(event, event.name(), &commands, input, root, notice, cancel);
         let blocked: Vec<String> = said.iter().filter_map(|said| said.why.clone()).collect();
         match blocked.is_empty() {
             true => Ok(told(event.name(), said)),
@@ -429,7 +451,8 @@ impl Bound {
         if let Some(last) = last {
             input["last_assistant_message"] = json!(last);
         }
-        let said = self.run(event, event.name(), &commands, input, root, ui, cancel);
+        let notice = &mut |text: &str| ui.notice(text);
+        let said = self.run(event, event.name(), &commands, input, root, notice, cancel);
         let (blocked, why): (Vec<_>, Vec<_>) = (said.into_iter())
             .filter_map(|said| said.blocking.zip(said.why))
             .unzip();
@@ -453,8 +476,64 @@ impl Bound {
         }
         let input = json!({"source": source, "model": model});
         let label = format!("{}:{source}", event.name());
-        let said = self.run(event, &label, &commands, input, root, ui, cancel);
+        let said = self.run(
+            event,
+            &label,
+            &commands,
+            input,
+            root,
+            &mut |text| ui.notice(text),
+            cancel,
+        );
         told(&label, said)
+    }
+
+    /// Runs the `PreCompact` hooks matching `trigger`, `manual` or `auto`, given the user's
+    /// `instructions` for the summary: what they printed, for the summary's instructions, or
+    /// `Err` with why the compaction is not to run.
+    pub fn compacting(
+        &self,
+        trigger: &str,
+        instructions: &str,
+        root: &Path,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<String>, String> {
+        let event = Event::PreCompact;
+        let commands = self.hooks.matching(event, Some(&[trigger.to_owned()]));
+        if commands.is_empty() {
+            return Ok(Vec::new());
+        }
+        let instructions = Some(instructions.trim()).filter(|given| !given.is_empty());
+        let input = json!({"trigger": trigger, "custom_instructions": instructions});
+        let label = format!("{}:{trigger}", event.name());
+        let said = self.run(
+            event,
+            &label,
+            &commands,
+            input,
+            root,
+            &mut |text| ui.notice(text),
+            cancel,
+        );
+        let blocked: Vec<String> = said.iter().filter_map(|said| said.why.clone()).collect();
+        match blocked.is_empty() {
+            true => Ok(said.into_iter().filter_map(|said| said.plain).collect()),
+            false => Err(blocked.join("\n")),
+        }
+    }
+
+    /// Runs the `SessionEnd` hooks matching `reason` as the session ends, waiting for them; what
+    /// they say goes nowhere, as nothing can follow.
+    fn session_ended(&self, reason: &str, root: &Path) {
+        let event = Event::SessionEnd;
+        let commands = self.hooks.matching(event, Some(&[reason.to_owned()]));
+        if !commands.is_empty() {
+            let input = json!({"reason": reason});
+            let label = format!("{}:{reason}", event.name());
+            let cancel = AtomicBool::new(false);
+            self.run(event, &label, &commands, input, root, &mut |_| {}, &cancel);
+        }
     }
 
     /// Runs `commands` at once, each given `input` with the session's fields; what each said.
@@ -466,7 +545,7 @@ impl Bound {
         commands: &[&Command],
         mut input: Value,
         root: &Path,
-        ui: &mut dyn AgentUi,
+        notice: &mut dyn FnMut(&str),
         cancel: &AtomicBool,
     ) -> Vec<Said> {
         input["session_id"] = json!(self.session_id);
@@ -486,7 +565,10 @@ impl Bound {
                             &command.command,
                             input,
                             &env,
-                            command.timeout,
+                            command.timeout.unwrap_or(match event {
+                                Event::SessionEnd => SESSION_END_TIMEOUT,
+                                _ => TIMEOUT,
+                            }),
                             cancel,
                         );
                         (command.command.as_str(), ran)
@@ -498,7 +580,7 @@ impl Bound {
                 .collect()
         });
         (ran.into_iter())
-            .map(|(command, ran)| said(event, label, command, ran, ui))
+            .map(|(command, ran)| said(event, label, command, ran, notice))
             .collect()
     }
 }
@@ -517,7 +599,94 @@ fn told(label: &str, said: Vec<Said>) -> Vec<String> {
     told
 }
 
+/// The `Notification` hooks with the session they tell of, which the screen runs as it tells the
+/// user that the agent waits.
+#[derive(Clone, Debug)]
+pub struct Notifier {
+    bound: Bound,
+    root: PathBuf,
+}
+
+impl PartialEq for Notifier {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.bound.hooks, &other.bound.hooks)
+            && self.bound.session_id == other.bound.session_id
+            && self.bound.transcript == other.bound.transcript
+            && self.bound.mode == other.bound.mode
+            && self.root == other.root
+    }
+}
+
+impl Notifier {
+    /// Runs the hooks matching `kind` (Claude Code's `notification_type`) on `message` in a
+    /// thread of their own, so that nothing waits for them; what they say is not read, as in
+    /// Claude Code.
+    pub fn notify(&self, kind: &'static str, message: &str) {
+        let event = Event::Notification;
+        let notifier = self.clone();
+        let input = json!({"message": message, "notification_type": kind});
+        let label = format!("{}:{kind}", event.name());
+        let spawned = std::thread::Builder::new()
+            .name("notification hooks".into())
+            .spawn(move || {
+                let (bound, root) = (&notifier.bound, &notifier.root);
+                let commands = bound.hooks.matching(event, Some(&[kind.to_owned()]));
+                let cancel = AtomicBool::new(false);
+                bound.run(event, &label, &commands, input, root, &mut |_| {}, &cancel);
+            });
+        drop(spawned);
+    }
+}
+
 impl Agent {
+    /// The `Notification` hooks, if the settings have any, for the screen to run.
+    pub fn notifier(&self) -> Option<Notifier> {
+        let bound = self
+            .bound_hooks()
+            .filter(|bound| bound.hooks.has(Event::Notification))?;
+        Some(Notifier {
+            bound,
+            root: self.config.root.clone(),
+        })
+    }
+
+    /// Runs the `SessionEnd` hooks for `reason` once a session whose `SessionStart` hooks ran
+    /// ends: `clear`, `resume` (another session continues), `prompt_input_exit` (the user
+    /// quit) or `other`.
+    pub fn end_session(&mut self, reason: &str) {
+        if !std::mem::take(&mut self.hooks_began) {
+            return;
+        }
+        if let Some(hooks) = self.bound_hooks() {
+            hooks.session_ended(reason, &self.config.root);
+        }
+    }
+
+    /// The instructions for a compaction's summary, `focus` with what `PreCompact` hooks add to
+    /// it; `Err` when one blocks the compaction.
+    pub(super) fn pre_compact_hooks(
+        &self,
+        focus: &str,
+        automatic: bool,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<String, AgentError> {
+        let Some(hooks) = self.bound_hooks() else {
+            return Ok(focus.to_owned());
+        };
+        let trigger = if automatic { "auto" } else { "manual" };
+        match hooks.compacting(trigger, focus, &self.config.root, ui, cancel) {
+            Ok(added) => Ok(([focus.trim()].into_iter())
+                .chain(added.iter().map(String::as_str))
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")),
+            Err(why) => Err(AgentError::Hook(format!(
+                "compaction blocked by PreCompact hook: {why}"
+            ))),
+        }
+    }
+
     /// What `UserPromptSubmit` hooks tell the model of `prompt`; `None`, the user told why, when
     /// one blocks it, so it is not sent.
     pub(super) fn prompt_hooks(
@@ -559,6 +728,7 @@ impl Agent {
         let (Some(source), Some(hooks)) = (self.session_start.take(), self.bound_hooks()) else {
             return Ok(());
         };
+        self.hooks_began = true;
         let told = hooks.session_started(source, self.model_id(), &self.config.root, ui, cancel);
         self.add_hook_context(told)
     }
@@ -599,6 +769,14 @@ impl Agent {
     }
 }
 
+/// A session still going as its agent ends (the input ended, `-p` finished, an ACP client closed
+/// it) ends for its hooks too.
+impl Drop for Agent {
+    fn drop(&mut self) {
+        self.end_session("other");
+    }
+}
+
 fn additional(label: &str, context: &str) -> String {
     format!("{label} hook additional context: {}", context.trim())
 }
@@ -617,14 +795,14 @@ fn said(
     label: &str,
     command: &str,
     ran: Result<tools::Exited, String>,
-    ui: &mut dyn AgentUi,
+    notice: &mut dyn FnMut(&str),
 ) -> Said {
     let mut said = Said::default();
     let exited = match ran {
         Ok(exited) => exited,
         Err(why) if why == "cancelled" => return said,
         Err(why) => {
-            ui.notice(&format!("{label} hook error: {command}: {why}"));
+            notice(&format!("{label} hook error: {command}: {why}"));
             return said;
         }
     };
@@ -635,9 +813,12 @@ fn said(
                 "" => "No stderr output",
                 stderr => stderr,
             };
-            // As Claude Code's, a session's start cannot be blocked: the user is told.
+            // As Claude Code's, a session's start or end and a notification cannot be blocked:
+            // the user is told.
             match event {
-                Event::SessionStart => ui.notice(&format!("{label} hook error: {why}")),
+                Event::SessionStart | Event::SessionEnd | Event::Notification => {
+                    notice(&format!("{label} hook error: {why}"))
+                }
                 _ => {
                     said.blocking = Some(blocking(label, command, why));
                     said.why = Some(why.to_owned());
@@ -651,7 +832,7 @@ fn said(
                 "" => "No stderr output",
                 stderr => stderr,
             };
-            ui.notice(&format!(
+            notice(&format!(
                 "{label} hook error: Failed with non-blocking status code {code}: {stderr}"
             ));
             return said;
@@ -665,7 +846,7 @@ fn said(
         return said;
     };
     if let Some(message) = answer.get("systemMessage").and_then(Value::as_str) {
-        ui.notice(message);
+        notice(message);
     }
     let specific = answer.get("hookSpecificOutput").and_then(Value::as_object);
     let field = |name: &str| {
@@ -698,14 +879,18 @@ fn said(
                 said.why = Some(why.to_owned());
             }
         }
-        Event::PostToolUse | Event::PostToolUseFailure | Event::UserPromptSubmit | Event::Stop => {
+        Event::PostToolUse
+        | Event::PostToolUseFailure
+        | Event::UserPromptSubmit
+        | Event::Stop
+        | Event::PreCompact => {
             if answer.get("decision").and_then(Value::as_str) == Some("block") {
                 let why = reason.unwrap_or("Blocked by hook");
                 said.blocking = Some(blocking(label, command, why));
                 said.why = Some(why.to_owned());
             }
         }
-        Event::SessionStart => {}
+        Event::SessionStart | Event::SessionEnd | Event::Notification => {}
     }
     said
 }
@@ -836,19 +1021,20 @@ mod tests {
                 {"matcher": "(", "hooks": [{"type": "command", "command": "b"}]},
                 {"hooks": [{"type": "command", "command": "c", "timeout": 0}]},
             ],
-            "Notification": [{"hooks": [{"type": "command", "command": "d"}]}],
+            "SubagentStop": [{"hooks": [{"type": "command", "command": "d"}]}],
             "PostToolUse": {"matcher": "Write"},
         }));
         assert_eq!(
             warnings,
             [
-                "s.json: hooks.Notification is not run: Scramjet runs PreToolUse, PostToolUse, \
-                 PostToolUseFailure, UserPromptSubmit, Stop, SessionStart hooks; ignored",
                 "s.json: hooks.PostToolUse must be a list of matchers with their hooks; ignored",
                 "s.json: hooks.PreToolUse[0].hooks[1]: Scramjet runs only \"command\" hooks, \
                  not \"prompt\"; ignored",
                 "s.json: hooks.PreToolUse[1].matcher is not a regular expression; ignored",
                 "s.json: hooks.PreToolUse[2].hooks[0].timeout must be seconds, above 0; ignored",
+                "s.json: hooks.SubagentStop is not run: Scramjet runs PreToolUse, PostToolUse, \
+                 PostToolUseFailure, UserPromptSubmit, Stop, SessionStart, SessionEnd, \
+                 PreCompact, Notification hooks; ignored",
             ]
         );
         let bash = names(&call("bash", json!({})));
@@ -857,7 +1043,7 @@ mod tests {
             run,
             [&Command {
                 command: "a".into(),
-                timeout: Duration::from_secs(5)
+                timeout: Some(Duration::from_secs(5))
             }]
         );
         assert!(hooks.matching(Event::PostToolUse, Some(&bash)).is_empty());
@@ -969,6 +1155,130 @@ mod tests {
         assert_eq!(start["hook_event_name"], "SessionStart");
         assert_eq!(start["source"], "startup");
         assert_eq!(start["model"], agent.model_id());
+    }
+
+    #[test]
+    fn compactions_session_ends_and_notifications_run_claude_codes_hooks() {
+        use crate::agent::AutoCompaction;
+        use crate::agent::tests::{Recorder, agent, missing, serve, stream};
+        use crate::provider_fixture as fixture;
+        if missing("bash") {
+            return;
+        }
+        let (endpoint, server) = serve(
+            ["history", "prefix"]
+                .map(|text| stream(&fixture::text_events(text, fixture::known_usage())))
+                .to_vec(),
+        );
+        let (mut agent, _scratch) = agent(endpoint, "hook-compactions");
+        let root = agent.root().to_owned();
+        let command = |command: &str| json!([{"type": "command", "command": command}]);
+        let (hooks, warnings) = read(json!({
+            "PreCompact": [
+                {"matcher": "manual", "hooks": command("cat > compact.json; echo Keep the file names")},
+                {"matcher": "auto", "hooks": command("echo 'not now' >&2; exit 2")},
+            ],
+            "SessionStart": [{"hooks": command("true")}],
+            "SessionEnd": [{"hooks": command("cat >> ends.jsonl; echo >> ends.jsonl")}],
+            "Notification": [{"matcher": "idle_prompt", "hooks": command("cat > told.json")}],
+        }));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        agent.set_hooks(std::sync::Arc::new(hooks));
+        let call = |id: &str, name: &str| json!({"type": "function_call", "call_id": id, "name": name, "arguments": json!({"path": format!("{id}.rs")}).to_string()});
+        let output = |id: &str, text: String| json!({"type": "function_call_output", "call_id": id, "output": text});
+        for item in [
+            json!({"role": "user", "content": "old goal"}),
+            json!({"type": "message", "role": "assistant", "content": [{"text": "noted"}]}),
+            json!({"role": "user", "content": "long task"}),
+            call("a", "read"),
+            output("a", "x".repeat(90_000)),
+            call("b", "edit"),
+            output("b", "y".repeat(1000)),
+            json!({"type": "message", "role": "assistant", "content": [{"text": "done"}]}),
+        ] {
+            agent.add(item).unwrap();
+        }
+        let (mut ui, cancel) = (Recorder::default(), AtomicBool::new(false));
+        agent.session_start_hooks(&mut ui, &cancel).unwrap();
+        let automatic = Some(AutoCompaction::Threshold);
+        let Err(blocked) = agent.compact("", automatic, &mut ui, &cancel) else {
+            panic!("compacted");
+        };
+        assert_eq!(
+            blocked.to_string(),
+            "compaction blocked by PreCompact hook: not now"
+        );
+        assert_eq!(agent.conversation().len(), 8, "nothing changed");
+        agent
+            .compact("the plan", None, &mut ui, &cancel)
+            .unwrap()
+            .unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        let prompt = requests[0]["input"][0]["content"].as_str().unwrap();
+        assert!(
+            prompt.ends_with("Additional focus: the plan\nKeep the file names"),
+            "{prompt}"
+        );
+        let read_json = |file: &str| -> Value {
+            serde_json::from_str(&std::fs::read_to_string(root.join(file)).unwrap()).unwrap()
+        };
+        let compact = read_json("compact.json");
+        assert_eq!(compact["hook_event_name"], "PreCompact");
+        assert_eq!(compact["trigger"], "manual");
+        assert_eq!(compact["custom_instructions"], "the plan");
+
+        agent
+            .notifier()
+            .unwrap()
+            .notify("permission_prompt", "an answer");
+        agent
+            .notifier()
+            .unwrap()
+            .notify("idle_prompt", "Waiting for your input");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !root.join("told.json").exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        let told = read_json("told.json");
+        assert_eq!(told["hook_event_name"], "Notification");
+        assert_eq!(told["notification_type"], "idle_prompt");
+        assert_eq!(told["message"], "Waiting for your input");
+        assert_eq!(told["session_id"], agent.session_id());
+
+        let first = agent.session_id();
+        agent.new_session().unwrap();
+        agent.end_session("prompt_input_exit");
+        let ends = std::fs::read_to_string(root.join("ends.jsonl")).unwrap();
+        assert_eq!(
+            ends.lines().count(),
+            1,
+            "the new session's hooks did not start"
+        );
+        agent.session_start_hooks(&mut ui, &cancel).unwrap();
+        let second = agent.session_id();
+        drop(agent);
+        let ends: Vec<Value> = (std::fs::read_to_string(root.join("ends.jsonl")).unwrap())
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let ended: Vec<_> = (ends.iter())
+            .map(|end| (end["reason"].clone(), end["session_id"].clone()))
+            .collect();
+        assert_eq!(
+            ended,
+            [
+                (json!("clear"), json!(first)),
+                (json!("other"), json!(second))
+            ],
+            "a session never started for its hooks does not end for them"
+        );
+        assert!(
+            ui.shown.iter().all(|shown| !shown.contains("hook error")),
+            "{:?}",
+            ui.shown
+        );
     }
 
     #[test]
