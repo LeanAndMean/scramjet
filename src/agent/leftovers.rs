@@ -178,6 +178,11 @@ mod tests {
         #[cfg(unix)]
         assert!(link.symlink_metadata().is_ok() && other_name.join("inner/dump.txt").exists());
         drop(_lock);
+        // A child another test forked meanwhile shares the lock until it runs its program.
+        let dropped = std::time::Instant::now();
+        while super::held(&held) && dropped.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(
             super::sweep_in(&base, Duration::ZERO),
             std::slice::from_ref(&held)
