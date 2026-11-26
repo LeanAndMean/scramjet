@@ -446,15 +446,15 @@ impl Interactive {
             let note = "No background tasks: the agent starts one with bash's run_in_background";
             return self.say_styled(style::MUTED, note);
         }
+        if self.screen.is_some() {
+            return self.pick_task();
+        }
         let mut text = String::from("Background tasks:");
         for task in &listed {
-            let state = match &task.ended {
-                Some(ending) => format!("{} after {}s", ending.said(), task.ran.as_secs()),
-                None => format!("running for {}s", task.ran.as_secs()),
-            };
             text += &format!(
-                "\n{}  {state}  {}\n   output: {}",
+                "\n{}  {}  {}\n   output: {}",
                 task.id,
+                task_state(task),
                 clip(task.command.lines().next().unwrap_or_default(), 120),
                 scramjet::os::tilde(&task.output)
             );
@@ -463,6 +463,79 @@ impl Interactive {
             text += "\n/tasks stop N stops one.";
         }
         self.say(&text);
+    }
+
+    /// `/tasks`' list on the full screen, each task's output file its note: Enter on a running
+    /// task asks whether to show its output or stop it, on an ended one shows its output; the
+    /// list then shows again, until Escape.
+    fn pick_task(&mut self) {
+        let mut at = 0;
+        loop {
+            let Some(screen) = &self.screen else {
+                return;
+            };
+            let listed = self.session.agent.tasks().list();
+            if listed.is_empty() {
+                return;
+            }
+            at = at.min(listed.len() - 1);
+            let rows: Vec<String> = (listed.iter())
+                .map(|task| {
+                    let command = task.command.lines().next().unwrap_or_default();
+                    format!("{}  {}  {}", task.id, task_state(task), visible(command))
+                })
+                .collect();
+            let notes = (listed.iter())
+                .map(|task| format!("Output: {}", scramjet::os::tilde(&task.output)))
+                .collect();
+            let visible_rows = (super::editor::terminal_size().1 / 2).max(super::select::VISIBLE);
+            let picker = super::select::Picker::select(
+                "Background tasks",
+                visible_rows,
+                rows.len(),
+                at,
+                None,
+                |index, width| clip(&rows[index], width),
+            );
+            let hint = super::select::hint("open", &[], "close");
+            let Some(index) = screen.pick(picker.noting(hint, notes).held()) else {
+                return;
+            };
+            at = index;
+            let task = &listed[index];
+            if task.ended.is_none() {
+                let choices = [
+                    scramjet::agent::Choice {
+                        label: "Show its output".to_owned(),
+                        description: None,
+                        value: String::new(),
+                    },
+                    scramjet::agent::Choice {
+                        label: "Stop it".to_owned(),
+                        description: Some("With all it started.".to_owned()),
+                        value: String::new(),
+                    },
+                ];
+                let title = format!("Task {}", task.id);
+                let question = super::select::Picker::question(&title, &choices, None);
+                match screen.pick(question.held()) {
+                    Some(0) => {}
+                    Some(_) => {
+                        let tasks = self.session.agent.tasks();
+                        match tasks.stop(task.id, false) {
+                            Ok(text) => {
+                                tasks.wait_ended(task.id, std::time::Duration::from_secs(2));
+                                self.say_styled(style::MUTED, &text)
+                            }
+                            Err(error) => self.say(&format!("Error: {error}")),
+                        }
+                        continue;
+                    }
+                    None => continue,
+                }
+            }
+            screen.show_report(task_output(task));
+        }
     }
 
     /// `/agents`, as Claude Code's: the agents a subagent call can name, each with where it
@@ -1286,6 +1359,39 @@ fn token_count(typed: &str) -> Option<u64> {
     let parsed = number.parse::<f64>().ok()? * scale;
     let whole = number.bytes().all(|b| b.is_ascii_digit() || b == b'.');
     (whole && parsed.is_finite() && parsed < 1e12).then(|| parsed.round() as u64)
+}
+
+/// How a task ended, or how long it has run: `exited with code 0 after 3s`.
+fn task_state(task: &scramjet::agent::tasks::Task) -> String {
+    match &task.ended {
+        Some(ending) => format!("{} after {}s", ending.said(), task.ran.as_secs()),
+        None => format!("running for {}s", task.ran.as_secs()),
+    }
+}
+
+/// A task's command, how it ended or runs, its file and the end of its output so far.
+fn task_output(task: &scramjet::agent::tasks::Task) -> ReportView {
+    let output = match task.output_tail() {
+        Some(text) if text.is_empty() => "(no output yet)".to_owned(),
+        Some(text) => text
+            .lines()
+            .map(super::text::printable)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => "(its output file cannot be read)".to_owned(),
+    };
+    let summary = format!(
+        "$ {}\n{}; output in {}\n\n{output}",
+        visible(&task.command),
+        task_state(task),
+        scramjet::os::tilde(&task.output)
+    );
+    let tab = Tab {
+        name: "Output".to_owned(),
+        summary,
+        details: String::new(),
+    };
+    ReportView::new(&format!("Task {}", task.id), "", vec![tab], 0, false).at_end()
 }
 
 #[cfg(test)]

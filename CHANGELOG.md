@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.369.0 — /tasks is a list on the full screen
+
+### Added
+
+- On the full screen `/tasks` is a list: Enter on a task shows its output so far, from its end, or, while it runs, asks whether to show it or stop it.
+
 ## 2.368.0 — The footer counts background commands
 
 ### Added

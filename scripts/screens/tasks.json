@@ -26,19 +26,6 @@
       {
         "text": "The build ended with code 0 and printed built."
       }
-    ],
-    [
-      {
-        "call": "task_stop",
-        "arguments": {
-          "task_id": 2
-        }
-      }
-    ],
-    [
-      {
-        "text": "The server is stopped."
-      }
     ]
   ],
   "steps": [
@@ -70,6 +57,9 @@
       "shot": "running"
     },
     {
+      "type": "\u001b"
+    },
+    {
       "until": "printed built."
     },
     {
@@ -79,16 +69,49 @@
       "shot": "woken"
     },
     {
-      "type": "stop the server\r"
+      "type": "/tasks\r"
     },
     {
-      "until": "server is stopped"
+      "until": "Background tasks"
     },
     {
       "sleep": 0.3
     },
     {
-      "type": "/tasks\r"
+      "type": "\r"
+    },
+    {
+      "until": "tick 3"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "output"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "until": "Background tasks"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[B\r"
+    },
+    {
+      "until": "Stop it"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "ask"
+    },
+    {
+      "type": "\u001b[B\r"
     },
     {
       "until": "was stopped after"
@@ -98,6 +121,15 @@
     },
     {
       "shot": "ended"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "closed"
     }
   ]
 }

@@ -348,7 +348,8 @@ PgUp and PgDn, Home and End scroll it, the mouse or Shift and the arrows select,
 (ignored files left out), without a model turn; on the full screen d lists the files changed.
 /tasks lists the commands the agent runs in the background (bash's run_in_background, as Claude
 Code's), each running or how it ended, with the file its output goes to; /tasks stop N stops one
-(/bashes and Codex's /ps too). They run on across turns until they end, are stopped (the agent's
+(/bashes and Codex's /ps too). On the full screen it is a list: Enter shows a task's output, its
+end first, or, while it runs, asks whether to show it or stop the task. They run on across turns until they end, are stopped (the agent's
 task_stop) or Scramjet exits; the first prompt after one ends tells the agent how it ended.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,

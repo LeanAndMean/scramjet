@@ -875,6 +875,7 @@ impl App {
         };
         match (shown, self.conversation.take()) {
             (Some(usage), None) => {
+                let start = !usage.is_some_and(|view| view.from_end);
                 let sample = match usage {
                     Some(view) => report_shown(view),
                     None => {
@@ -888,7 +889,7 @@ impl App {
                 };
                 let conversation = std::mem::replace(&mut self.transcript, sample);
                 self.conversation = Some((conversation, self.top.take()));
-                self.top = Some(Place::START);
+                self.top = start.then_some(Place::START);
             }
             (None, Some((conversation, top))) => {
                 self.transcript = conversation;

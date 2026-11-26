@@ -26,6 +26,9 @@ you are told how, with the end of its output, before your next request. task_sto
 /// Lines of a task's output its notification ends with, and the bytes they come from at most.
 const TAIL_LINES: usize = 20;
 const TAIL_BYTES: u64 = 4096;
+/// Lines of a task's output `/tasks` shows, and the bytes they come from at most.
+const SHOWN_LINES: usize = 2000;
+const SHOWN_BYTES: u64 = 256 * 1024;
 
 /// The agent's background tasks, numbered from 1.
 #[derive(Default)]
@@ -88,6 +91,13 @@ pub struct Task {
     /// How long it ran, or has run so far.
     pub ran: Duration,
     pub ended: Option<Ending>,
+}
+
+impl Task {
+    /// The last lines of its output so far, as `/tasks` shows them; `None` when unreadable.
+    pub fn output_tail(&self) -> Option<String> {
+        tail(&self.output, SHOWN_LINES, SHOWN_BYTES)
+    }
 }
 
 impl Tasks {
@@ -213,6 +223,15 @@ impl Tasks {
         (!said.is_empty()).then(|| said.join("\n"))
     }
 
+    /// Waits at most `within` for task `id`'s end to be recorded, as after stopping it.
+    pub fn wait_ended(&self, id: u32, within: Duration) {
+        let until = Instant::now() + within;
+        let ended = || (self.lock().iter()).any(|entry| entry.id == id && entry.ended.is_some());
+        while !ended() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     /// Stops task `id` with all it started; `by_model`: the model asked, so it is not told again.
     pub fn stop(&self, id: u32, by_model: bool) -> Result<String, String> {
         let mut list = self.lock();
@@ -273,7 +292,7 @@ impl Tasks {
                 ran.as_secs(),
                 entry.output.display()
             );
-            match tail(&entry.output) {
+            match tail(&entry.output, TAIL_LINES, TAIL_BYTES) {
                 Some(tail) if !tail.is_empty() => {
                     text += &format!("<output-tail>\n{tail}\n</output-tail>\n");
                 }
@@ -291,23 +310,23 @@ impl Tasks {
     }
 }
 
-/// The last `TAIL_LINES` lines of the file at `path`, from its last `TAIL_BYTES` at most.
-fn tail(path: &std::path::Path) -> Option<String> {
+/// The last `lines` lines of the file at `path`, from its last `bytes` at most.
+fn tail(path: &std::path::Path, lines: usize, bytes: u64) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let length = file.metadata().ok()?.len();
-    let from = length.saturating_sub(TAIL_BYTES);
+    let from = length.saturating_sub(bytes);
     file.seek(SeekFrom::Start(from)).ok()?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
+    let mut read = Vec::new();
+    file.read_to_end(&mut read).ok()?;
+    let text = String::from_utf8_lossy(&read);
     let text = text.trim_end();
-    let mut lines: Vec<&str> = text.lines().collect();
+    let mut kept: Vec<&str> = text.lines().collect();
     // A cut first line is left out, as is what is before the last lines.
-    if from > 0 && !lines.is_empty() {
-        lines.remove(0);
+    if from > 0 && !kept.is_empty() {
+        kept.remove(0);
     }
-    let start = lines.len().saturating_sub(TAIL_LINES);
-    Some(lines[start..].join("\n"))
+    let start = kept.len().saturating_sub(lines);
+    Some(kept[start..].join("\n"))
 }
 
 /// `task_stop`'s definition.
@@ -457,7 +476,7 @@ mod tests {
             json!({"command": "echo built; : > built; exit 4", "run_in_background": true});
         // Waits for the background command, however loaded the machine, and then for its end
         // to be recorded.
-        let wait = "for _ in $(seq 200); do [ -e built ] && break; sleep 0.05; done; sleep 0.5";
+        let wait = "for _ in $(seq 200); do [ -e built ] && break; sleep 0.05; done; sleep 2";
         let (endpoint, server) = serve(vec![
             tool_call("call_1", "bash", background),
             tool_call("call_2", "bash", json!({"command": wait})),
@@ -585,5 +604,21 @@ mod tests {
         let bash = &tools[0]["parameters"]["properties"];
         assert_eq!(bash["run_in_background"]["type"], "boolean");
         assert_eq!(tools[1]["name"], super::STOP);
+    }
+
+    #[test]
+    fn the_tail_keeps_the_last_lines_and_drops_a_line_cut_by_the_byte_limit() {
+        let file = std::env::temp_dir().join(format!("scramjet-tail-{}.log", std::process::id()));
+        std::fs::write(&file, "one\ntwo\nthree\nfour\n").unwrap();
+        assert_eq!(super::tail(&file, 2, 1024).unwrap(), "three\nfour");
+        assert_eq!(
+            super::tail(&file, 10, 1024).unwrap(),
+            "one\ntwo\nthree\nfour"
+        );
+        assert_eq!(super::tail(&file, 10, 12).unwrap(), "three\nfour");
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(super::tail(&file, 10, 1024).unwrap(), "");
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(super::tail(&file, 10, 1024), None);
     }
 }
