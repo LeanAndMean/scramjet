@@ -350,6 +350,131 @@ pub(super) fn agents_text(loaded: &Loaded) -> String {
     text
 }
 
+/// Where `/memory` looks for context files: the user's directory (none with `--bare`) and the
+/// project's.
+pub(super) struct Places<'a> {
+    pub user: Option<&'a Path>,
+    pub root: &'a Path,
+}
+
+/// A context file's place and what it is for.
+fn memory_kind(path: &Path, places: &Places) -> (&'static str, &'static str) {
+    let directory = path.parent();
+    let local = path
+        .file_name()
+        .is_some_and(|name| name == "CLAUDE.local.md");
+    if directory.is_some() && directory == places.user {
+        let what = "Your instructions for every project, read before the project's.";
+        ("yours, every project", what)
+    } else if directory == Some(places.root) && local {
+        let what = "Your own notes for this project, read after its other files; keep it out \
+                    of version control.";
+        ("your notes, this project", what)
+    } else if directory == Some(places.root) {
+        let what = "The project's instructions, kept with it for everyone who works on it.";
+        ("this project's", what)
+    } else {
+        let what = "From a directory above the project, read before the project's own.";
+        ("a directory above", what)
+    }
+}
+
+/// `/memory`'s rows: the problems with instructions files, then the context files read, those
+/// there but not read, and where the user's, the project's and the user's notes for the project
+/// would go when they are not there, each a row whose Enter opens it in the editor. Each note's
+/// first line says what the file is for, the rest what Enter does.
+pub(super) fn memory(loaded: &Loaded, places: &Places) -> Listing {
+    let mut listing = Listing::default();
+    let problems = (loaded.problems.iter())
+        .filter(|problem| problem.text.starts_with("instructions: "))
+        .map(|problem| problem_row(problem, loaded.settings))
+        .collect();
+    listing.section("Needs attention", problems);
+    let enter = keymap::key(Binding::SelectConfirm);
+    let opens = |then: &str| match &enter {
+        Some(key) => format!("\n{key} opens it in your editor; {then}."),
+        None => String::new(),
+    };
+    let row = |path: &Path, state: Option<&str>, then: &str| {
+        let (kind, what) = memory_kind(path, places);
+        let mut columns = vec![shown(path), kind.to_owned()];
+        columns.extend(state.map(str::to_owned));
+        (
+            columns,
+            format!("{what}{}", opens(then)),
+            Some(path.to_path_buf()),
+        )
+    };
+    let read = &loaded.installed.context_files;
+    let once_saved = "once saved, it is read again";
+    let rows = (read.iter())
+        .map(|path| row(path, None, once_saved))
+        .collect();
+    listing.section("Read in this session", rows);
+    let names: [&[&str]; 3] = [
+        &["CLAUDE.md", "CLAUDE.MD"],
+        &["AGENTS.md", "AGENTS.MD"],
+        &["CLAUDE.local.md"],
+    ];
+    let mut unread = Vec::new();
+    let mut missing = Vec::new();
+    for (directory, user) in
+        (places.user.map(|user| (user, true)).into_iter()).chain([(places.root, false)])
+    {
+        let found: Vec<Option<PathBuf>> = (names.iter())
+            .map(|names| {
+                (names.iter().map(|name| directory.join(name))).find(|path| path.is_file())
+            })
+            .collect();
+        for path in found.iter().flatten() {
+            if !read.contains(path) {
+                unread.push(row(path, Some("not read"), once_saved));
+            }
+        }
+        let to_write = match user {
+            true => found.iter().all(Option::is_none).then_some("AGENTS.md"),
+            false => found[..2]
+                .iter()
+                .all(Option::is_none)
+                .then_some("AGENTS.md"),
+        };
+        let local = (!user && found[2].is_none()).then_some("CLAUDE.local.md");
+        for name in to_write.into_iter().chain(local) {
+            missing.push(row(
+                &directory.join(name),
+                Some("not there yet"),
+                "once saved, it is read with the others",
+            ));
+        }
+    }
+    for (_, note, _) in &mut unread {
+        let why = " It is there but not in this session's instructions: --no-context-files leaves \
+                   them all out, and one over 256 KB, one in a store kept hidden, one another user \
+                   owns, or an AGENTS.md saying what the CLAUDE.md beside it says, is left out.";
+        note.insert_str(note.find('\n').unwrap_or(note.len()), why);
+    }
+    listing.section("Not read", unread);
+    listing.section("Not there yet", missing);
+    listing
+}
+
+/// `/memory` without a full screen: its rows, each file's note under it without what Enter does.
+pub(super) fn memory_text(loaded: &Loaded, places: &Places) -> String {
+    let listing = memory(loaded, places);
+    let mut text = String::new();
+    let mut problems = false;
+    for (at, row) in listing.rows.iter().enumerate() {
+        text.push_str(row);
+        text.push('\n');
+        if listing.headings[at] {
+            problems = row == "Needs attention";
+        } else if !problems && let Some(what) = listing.notes[at].lines().next() {
+            text.push_str(&format!("      {what}\n"));
+        }
+    }
+    text
+}
+
 /// What an agent's file asks for: its tools, its model and a worktree of its own.
 fn asks(agent: &AgentFile) -> String {
     let tools = match (&agent.tools, agent.disallowed.as_slice()) {
@@ -844,6 +969,104 @@ mod tests {
             ..loaded
         });
         assert!(none.rows.is_empty());
+    }
+
+    #[test]
+    fn memory_lists_the_context_files_read_those_not_read_and_where_missing_ones_go() {
+        let base = std::env::temp_dir().join(format!("scramjet-memory-{}", std::process::id()));
+        let _scratch = Scratch(base.clone());
+        let (user, above) = (base.join("config"), base.join("work"));
+        let root = above.join("project");
+        for path in [above.join("AGENTS.md"), root.join("CLAUDE.md")] {
+            write(&path, "Same.");
+        }
+        write(&root.join("AGENTS.md"), "Same.");
+        let problem = Problem::in_file("instructions: big.md: too large", &root.join("big.md"));
+        let found = Installed {
+            sets: Vec::new(),
+            agents: Vec::new(),
+            context_files: vec![above.join("AGENTS.md"), root.join("CLAUDE.md")],
+            prompt_files: Vec::new(),
+            autonomy: (root.join(".scramjet/autonomy.yaml"), None),
+            problems: Vec::new(),
+        };
+        let problems = [problem, Problem::new("agents: x.md: broken")];
+        let loaded = Loaded {
+            installed: &found,
+            commands: &[],
+            skills: &[],
+            settings: None,
+            problems: &problems,
+        };
+        let places = Places {
+            user: Some(&user),
+            root: &root,
+        };
+        let shown = |path: PathBuf| shown(&path);
+        let (above_agents, claude) = (
+            shown(above.join("AGENTS.md")),
+            shown(root.join("CLAUDE.md")),
+        );
+        let read = above_agents.len().max(claude.len());
+        let (user_agents, local) = (
+            shown(user.join("AGENTS.md")),
+            shown(root.join("CLAUDE.local.md")),
+        );
+        let missing = user_agents.len().max(local.len());
+        let text = memory_text(&loaded, &places);
+        let expected = [
+            "Needs attention".to_owned(),
+            "  instructions: big.md: too large".to_owned(),
+            "Read in this session".to_owned(),
+            format!("  {above_agents:read$}  a directory above"),
+            "      From a directory above the project, read before the project's own.".to_owned(),
+            format!("  {claude:read$}  this project's"),
+            "      The project's instructions, kept with it for everyone who works on it."
+                .to_owned(),
+            "Not read".to_owned(),
+            format!(
+                "  {}  this project's  not read",
+                shown(root.join("AGENTS.md"))
+            ),
+        ];
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[..expected.len()], expected, "{text}");
+        assert!(lines[expected.len()].starts_with(
+            "      The project's instructions, kept with it for everyone who works on it. It is \
+             there but not in this session's instructions"
+        ));
+        assert_eq!(
+            lines[expected.len() + 1..],
+            [
+                "Not there yet".to_owned(),
+                format!("  {user_agents:missing$}  yours, every project      not there yet"),
+                "      Your instructions for every project, read before the project's.".to_owned(),
+                format!("  {local:missing$}  your notes, this project  not there yet"),
+                "      Your own notes for this project, read after its other files; keep it out \
+                 of version control."
+                    .to_owned(),
+            ],
+            "{text}"
+        );
+        // Enter opens each file, a missing one included, saying so in its note.
+        let listing = memory(&loaded, &places);
+        let missing = listing.row_of(&user.join("AGENTS.md"), 0).unwrap();
+        assert_eq!(listing.files[missing], Some(user.join("AGENTS.md")));
+        assert!(
+            (listing.notes[missing])
+                .ends_with("opens it in your editor; once saved, it is read with the others."),
+            "{}",
+            listing.notes[missing]
+        );
+        // With `--bare` the user's directory is not offered.
+        let bare = memory_text(
+            &loaded,
+            &Places {
+                user: None,
+                root: &root,
+            },
+        );
+        assert!(!bare.contains("yours, every project"), "{bare}");
     }
 
     #[cfg(unix)]

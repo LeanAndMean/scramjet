@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.354.0 — /memory
+
+### Added
+
+- `/memory` lists the context files the agent reads (`AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`), as Claude Code's `/memory` does: those read in this session, those there but not read, and where your own, the project's and your notes for the project would go. On the full screen Enter opens one in your editor, creating it if it is not there, and the instructions are read again once you save it; without one it prints them.
+
 ## 2.353.0 — /agents
 
 ### Added

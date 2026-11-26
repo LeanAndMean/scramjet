@@ -28,6 +28,7 @@ pub(super) enum Builtin<'a> {
     Status,
     Diff,
     Agents,
+    Memory,
     /// With whether the details come first.
     Usage(bool),
     Context,
@@ -74,6 +75,7 @@ impl<'a> Builtin<'a> {
             "status" if argument.is_empty() => Self::Status,
             "diff" if argument.is_empty() => Self::Diff,
             "agents" if argument.is_empty() => Self::Agents,
+            "memory" if argument.is_empty() => Self::Memory,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
@@ -115,6 +117,7 @@ impl<'a> Builtin<'a> {
                 | Self::Status
                 | Self::Diff
                 | Self::Agents
+                | Self::Memory
                 | Self::Usage(_)
                 | Self::Context
                 | Self::SystemPrompt
@@ -155,6 +158,7 @@ impl Interactive {
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Diff) => self.diff(),
             Some(Builtin::Agents) => self.agents(),
+            Some(Builtin::Memory) => self.memory(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
             Some(Builtin::SystemPrompt) => self.system_prompt(),
@@ -392,6 +396,26 @@ impl Interactive {
             return self.show_listing("Agents", installed::agents);
         }
         let text = installed::agents_text(&self.loaded(&found, &problems));
+        self.say(text.trim_end());
+    }
+
+    /// `/memory`, as Claude Code's: the context files read, and where the user's and the
+    /// project's would go; on the full screen in a list whose Enter opens one in the editor,
+    /// creating it when it is not there, and reads them again once it changed.
+    fn memory(&mut self) {
+        let agent = &self.session.agent;
+        let user = agent.agent_directory().map(Path::to_path_buf);
+        let root = agent.root().to_path_buf();
+        let places = installed::Places {
+            user: user.as_deref(),
+            root: &root,
+        };
+        if self.screen.is_some() {
+            return self.show_listing("Memory", |loaded| installed::memory(loaded, &places));
+        }
+        let found = self.session.agent.installed();
+        let problems = self.problems(&found);
+        let text = installed::memory_text(&self.loaded(&found, &problems), &places);
         self.say(text.trim_end());
     }
 
@@ -963,6 +987,7 @@ mod tests {
             "/status",
             "/diff",
             "/agents",
+            "/memory",
             "/context",
             "/system-prompt",
             "/export",

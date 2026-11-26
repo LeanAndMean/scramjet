@@ -965,7 +965,7 @@ impl Interactive {
     pub(super) fn show_listing(
         &mut self,
         title: &str,
-        build: fn(&installed::Loaded) -> installed::Listing,
+        build: impl Fn(&installed::Loaded) -> installed::Listing,
     ) {
         let mut at = 0;
         let mut edited: Option<PathBuf> = None;
@@ -1013,6 +1013,11 @@ impl Interactive {
             return;
         };
         let before = std::fs::read(file).ok();
+        if let (None, Some(directory)) = (&before, file.parent())
+            && let Err(error) = std::fs::create_dir_all(directory)
+        {
+            return self.say(&format!("Error: {error}"));
+        }
         if let Err(error) = screen.edit(file) {
             return self.say(&format!("Error: {error}"));
         }

@@ -359,7 +359,9 @@ available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disabl
 starts or stops them, saved in disabledMcpServers.
 /agents lists the agents subagent calls can name, each with where it comes from, the tools and
 model its file asks for and any problem in agent files; on the full screen Enter opens one's file.
-Typed while a turn runs, /status, /diff, /agents, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+/memory lists the context files read, those not read, and where your AGENTS.md, the project's and
+its CLAUDE.local.md would go; on the full screen Enter opens one in your editor, creating it.
+Typed while a turn runs, /status, /diff, /agents, /memory, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,
