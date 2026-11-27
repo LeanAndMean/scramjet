@@ -96,6 +96,8 @@ pub trait AgentUi {
     fn entry(&mut self, _line: Option<usize>, _times: Times) {}
     /// The running turn wrote what it showed as `saved` on `line` of the session file.
     fn saved(&mut self, _saved: Saved, _line: usize) {}
+    /// The running turn added `item` to the conversation, after showing it.
+    fn added(&mut self, _item: &Value) {}
     /// `output` is what the model receives; `detail`, if any, is better shown to the user.
     fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool);
     /// `tool_result` for a result that came `at`, shown later.

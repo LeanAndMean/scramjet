@@ -53,6 +53,7 @@ mod shell;
 mod side;
 mod skills;
 mod status;
+pub mod stream_json;
 mod subagent;
 mod suggest;
 mod switch;
@@ -2533,6 +2534,7 @@ impl Agent {
         if let (Some(saved), Some(line)) = (ui::Saved::of(&item), self.session.leaf()) {
             ui.saved(saved, line);
         }
+        ui.added(&item);
         self.conversation.push(item);
         Ok(())
     }

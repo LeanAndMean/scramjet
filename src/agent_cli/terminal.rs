@@ -303,6 +303,9 @@ pub(super) struct Terminal {
     pub(super) markdown_reads: MarkdownReads,
     /// Replies go to stderr with the rest, leaving stdout to `--output-format json`'s result.
     pub(super) replies_on_stderr: bool,
+    /// `--output-format stream-json`'s session id: each item added prints as Claude Code's
+    /// message line on stdout.
+    pub(super) stream_json: Option<String>,
     /// The reasoning streamed in the current block, and whether only its marker is shown.
     reasoning: String,
     reasoning_hidden: bool,
@@ -791,6 +794,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             hide_thinking,
             markdown_reads: MarkdownReads::Rendered,
             replies_on_stderr: false,
+            stream_json: None,
             reasoning: String::new(),
             reasoning_hidden: false,
             capture: None,
@@ -1077,6 +1081,14 @@ pub(super) fn usage_line(agent: &Agent) -> String {
 }
 
 impl AgentUi for Terminal {
+    fn added(&mut self, item: &serde_json::Value) {
+        let Some(session) = &self.stream_json else {
+            return;
+        };
+        if let Some(line) = scramjet::agent::stream_json::message(item, session) {
+            print_line(&line);
+        }
+    }
     fn waiting(&mut self, purpose: Purpose) {
         self.clear();
         self.streamed.clear();
@@ -2105,6 +2117,12 @@ fn preview_shown(
         }
         _ => lines.iter().flat_map(|line| wrapped(line)).collect(),
     }
+}
+
+/// One JSON line on stdout, at once, for `--output-format`'s reader.
+pub(super) fn print_line(line: &serde_json::Value) {
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{line}").and_then(|()| stdout.flush());
 }
 
 #[cfg(test)]

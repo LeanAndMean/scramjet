@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.408.0 — `--output-format stream-json` for `-p`
+
+### Added
+
+- `-p --output-format stream-json` prints a JSON line as each thing happens, as Claude Code's does: first `system` `init` (`cwd`, `session_id`, `model`, `tools`), then an `assistant` line for each text, thinking or `tool_use` block of a reply and a `user` line for each `tool_result`, and last the `result` object `json` prints. `--verbose`, which Claude Code needs with it, is accepted and not needed.
+
 ## 2.407.0 — `--output-format json` for `-p`
 
 ### Added

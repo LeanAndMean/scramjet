@@ -83,7 +83,7 @@ mod update;
 mod usage;
 mod writable;
 
-use args::{Options, Start};
+use args::{Options, OutputFormat, Start};
 use scramjet::agent::{
     self, Agent, AgentConfig, AgentError, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS,
     ModelOption, Next, Providers, Sandbox, Session, SessionChoice, SkillOptions, SystemPrompt,
@@ -207,7 +207,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         messages.push(String::new());
     }
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
-    let (max_turns, output_json) = (options.max_turns, options.output_json);
+    let (max_turns, output) = (options.max_turns, options.output);
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
     settings.in_project(&root);
@@ -252,7 +252,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     handle_signals(&cancel, &hide_thinking)?;
     let mut ui = Terminal::new(hide_thinking.clone(), true);
     ui.markdown_reads = settings.markdown_reads;
-    ui.replies_on_stderr = output_json;
+    ui.replies_on_stderr = output != OutputFormat::Text;
     if !print_only {
         let themes = (themes, theme_options);
         let mut interactive =
@@ -283,6 +283,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if let Some(files) = files {
         agent.attach(files);
     }
+    if output == OutputFormat::StreamJson {
+        ui.stream_json = Some(agent.session_id());
+        terminal::print_line(&stream_init(&agent));
+    }
     let started = std::time::Instant::now();
     let replies = agent.replies().count();
     let mut reached_max_turns = false;
@@ -308,15 +312,35 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
         eprintln!("Error: settings not saved: {error}");
     }
-    if output_json {
+    if output != OutputFormat::Text {
         let replied = agent.replies().count() > replies;
-        println!(
-            "{}",
-            run_result(&agent, started, &result, reached_max_turns, replied)
-        );
+        terminal::print_line(&run_result(
+            &agent,
+            started,
+            &result,
+            reached_max_turns,
+            replied,
+        ));
     }
     write_held_at_exit(&mut agent);
     result
+}
+
+/// `--output-format stream-json`'s first line, as Claude Code's: where the run is, its
+/// session, model and tools.
+fn stream_init(agent: &Agent) -> serde_json::Value {
+    let definitions = agent.tool_definitions();
+    let tools: Vec<_> = (definitions.as_array().into_iter().flatten())
+        .filter_map(|tool| tool["name"].as_str().or(tool["function"]["name"].as_str()))
+        .collect();
+    serde_json::json!({
+        "type": "system",
+        "subtype": "init",
+        "cwd": agent.root(),
+        "session_id": agent.session_id(),
+        "model": agent.model(),
+        "tools": tools,
+    })
 }
 
 /// `--output-format json`'s object, as Claude Code's `-p` prints it: what the run ended with,

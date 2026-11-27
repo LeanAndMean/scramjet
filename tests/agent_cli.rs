@@ -112,13 +112,8 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
     assert!(refused(&["--max-turns", "3", "hi"]).starts_with("scramjet: --max-turns needs -p\n"));
     let json = refused(&["--output-format", "json", "hi"]);
     assert!(
-        json.starts_with("scramjet: --output-format json needs -p\n"),
+        json.starts_with("scramjet: --output-format needs -p\n"),
         "{json}"
-    );
-    let stream = refused(&["--output-format", "stream-json", "-p", "hi"]);
-    assert!(
-        stream.starts_with("scramjet: --output-format stream-json is not in"),
-        "{stream}"
     );
     let other = refused(&["--output-format", "xml", "-p", "hi"]);
     assert!(
@@ -2353,6 +2348,79 @@ fn output_format_json_prints_the_runs_result_as_one_object() {
     assert!(error.starts_with("reached max turns (1)"), "{error}");
     let ran = std::fs::read_to_string(project.join("ran.txt")).unwrap();
     assert_eq!(ran, "ran\nran\n");
+}
+
+#[test]
+#[cfg(unix)]
+fn output_format_stream_json_prints_a_line_per_message_then_the_result() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-stream-json-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    let (port, _bodies) = serve_bash_call("echo ran");
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let output = program(binary)
+        .args(["--retries", "0", "--no-session"])
+        .args(["--output-format", "stream-json", "--verbose", "-p", "hi"])
+        .current_dir(&project)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let lines: Vec<serde_json::Value> = (stdout.lines())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let kinds: Vec<_> = lines
+        .iter()
+        .map(|line| line["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["system", "assistant", "user", "assistant", "result"],
+        "{stdout}"
+    );
+    let (init, session) = (&lines[0], &lines[4]["session_id"]);
+    assert_eq!(init["subtype"], "init");
+    assert_eq!(init["model"], "test/claude-test");
+    assert_eq!(&init["session_id"], session);
+    assert!(
+        init["tools"].as_array().unwrap().contains(&"bash".into()),
+        "{init}"
+    );
+    let call = &lines[1]["message"]["content"][0];
+    assert_eq!(call["type"], "tool_use");
+    assert_eq!(call["name"], "bash");
+    assert_eq!(call["input"]["command"], "echo ran");
+    let result = &lines[2]["message"]["content"][0];
+    assert_eq!(result["type"], "tool_result");
+    assert_eq!(result["tool_use_id"], call["id"]);
+    assert_eq!(result["is_error"], false);
+    assert!(
+        result["content"].as_str().unwrap().contains("ran"),
+        "{result}"
+    );
+    let text = &lines[3]["message"]["content"][0];
+    assert_eq!(*text, serde_json::json!({"type": "text", "text": "Done."}));
+    assert!(
+        lines[1..4]
+            .iter()
+            .all(|line| &line["session_id"] == session)
+    );
+    assert_eq!(lines[4]["subtype"], "success");
+    assert_eq!(lines[4]["result"], "Done.");
 }
 
 #[test]
