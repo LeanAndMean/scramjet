@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.436.0 — Claude Code's agents named by their source
+
+### Changed
+
+- Claude Code's agents from `~/.claude/agents` and `.claude/agents` are now `claude:NAME`, so the agent's list of subagents shows where each comes from, as their commands' `/claude:NAME` does. One no longer replaces a Scramjet agent of the same name: both are there.
+
 ## 2.435.0 — Claude Code's commands named by their source
 
 ### Changed

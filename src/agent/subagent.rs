@@ -182,8 +182,8 @@ pub(super) enum Scope {
 
 /// Where agents are found, besides the project.
 pub(super) struct Sources<'a> {
-    /// The user's loose agent directories, a later one's agent replacing an earlier one's of its
-    /// name: Claude Code's `~/.claude/agents`, then `~/.config/scramjet/agents` (`user_directories`).
+    /// The user's loose agent directories: Claude Code's `~/.claude/agents`, whose agents are
+    /// `claude:NAME`, then `~/.config/scramjet/agents` (`user_directories`).
     pub user: &'a [PathBuf],
     /// The session's command sets, whose agents are registered.
     pub sets: &'a Sets,
@@ -201,6 +201,9 @@ pub(super) fn user_directories() -> Vec<PathBuf> {
     let ours = super::login::config_directory().map(|dir| dir.join("agents"));
     claude.into_iter().chain(ours).collect()
 }
+
+/// The prefix of Claude Code's own agents' names, as its commands' (`/claude:NAME`).
+const CLAUDE_PREFIX: &str = "claude:";
 
 /// The directory of Claude Code's agents within its own directory or a project's `.claude`.
 const CLAUDE_AGENTS: &str = "agents";
@@ -430,8 +433,9 @@ command set {}",
 
 /// The agents of Claude Code's agent `directory`, as Claude Code 2.1.259 reads them: its `.md`
 /// files and those of its subdirectories, hidden ones included, links followed, each named by its
-/// frontmatter's `name` alone, which must not start with `-` or hold `:`; a literal `\n` in
-/// `description` is a line break. Of two files of a name, the later in path order wins.
+/// frontmatter's `name`, which must not start with `-` or hold `:`, shown as `claude:NAME` so that
+/// where it comes from shows; a literal `\n` in `description` is a line break. Of two files of a
+/// name, the later in path order wins.
 fn claude_loose(
     directory: &Path,
     source: &'static str,
@@ -465,6 +469,7 @@ fn claude_loose(
             diagnostics.push(Problem::in_file(text, &path));
             continue;
         }
+        agent.name = format!("{CLAUDE_PREFIX}{}", agent.name);
         agent.description = agent.description.replace("\\n", "\n");
         diagnostics.extend(agent.problems());
         match agents.iter_mut().find(|known| known.name == agent.name) {
@@ -2177,23 +2182,28 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
         assert_eq!(
             found,
             [
+                format!("claude:both user {}", path(claude.join("both.md"))),
+                format!("claude:mine user {}", path(claude.join("mine.md"))),
                 format!("both user {}", path(ours.join("both.md"))),
-                format!("mine user {}", path(claude.join("mine.md"))),
                 format!(
-                    "hidden project {}",
+                    "claude:hidden project {}",
                     path(root.join(".claude/agents/.hidden.md"))
+                ),
+                format!(
+                    "claude:near project {}",
+                    path(cwd.join(".claude/agents/near.md"))
+                ),
+                format!(
+                    "claude:reviewer project {}",
+                    path(root.join(".claude/agents/team/review.md"))
                 ),
                 format!(
                     "near project {}",
                     path(root.join(".scramjet/agents/near.md"))
                 ),
-                format!(
-                    "reviewer project {}",
-                    path(root.join(".claude/agents/team/review.md"))
-                ),
             ]
         );
-        let reviewer = &discovery.agents[4];
+        let reviewer = &discovery.agents[5];
         assert_eq!(reviewer.description, "reviewer one\ntwo");
         assert_eq!(
             reviewer.tools,
@@ -2216,17 +2226,19 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
                 ),
             ]
         );
-        // Without the Scramjet file, the nearest `.claude/agents` wins.
-        std::fs::remove_file(root.join(".scramjet/agents/near.md")).unwrap();
+        // The nearest `.claude/agents` wins, beside Scramjet's agent of that name.
         let near = discover(&sources, &cwd, Scope::Project).agents;
-        let near = near.iter().find(|agent| agent.name == "near").unwrap();
+        let near = near
+            .iter()
+            .find(|agent| agent.name == "claude:near")
+            .unwrap();
         assert_eq!(near.tools, Some(vec!["bash".into()]));
         let user = discover(&sources, &cwd, Scope::User).agents;
         assert_eq!(
             user.iter()
                 .map(|agent| agent.name.as_str())
                 .collect::<Vec<_>>(),
-            ["both", "mine"]
+            ["claude:both", "claude:mine", "both"]
         );
     }
 

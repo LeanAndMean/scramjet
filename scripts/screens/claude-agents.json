@@ -1,0 +1,51 @@
+{
+  "size": "100x40",
+  "settings": {
+    "claudeCode": {"agents": true}
+  },
+  "config": {
+    "agents/reviewer.md": "---\nname: reviewer\ndescription: Scramjet's own reviewer\n---\n\nReview as Scramjet's.\n"
+  },
+  "claude": {
+    "agents/reviewer.md": "---\nname: reviewer\ndescription: Claude Code's reviewer\n---\n\nReview as Claude Code's.\n"
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "prompt": "Review the README",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "claude:reviewer",
+          "task": "Review README.md"
+        }
+      }
+    ],
+    [
+      {
+        "text": "The README is short."
+      }
+    ],
+    [
+      {
+        "text": "Claude Code's reviewer says the README is short."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "reviewer says"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "called"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}
