@@ -715,12 +715,7 @@ impl Commands {
 
 /// The built-in set's commands typed without the set, as Claude Code and Codex name them: the
 /// first name is the one the `/` list shows, the others are accepted too.
-const SHORT: [(&str, &[&str]); 4] = [
-    ("scramjet:bug", &["bug", "feedback", "report-issue"]),
-    ("scramjet:init", &["init"]),
-    ("scramjet:review", &["review"]),
-    ("scramjet:security-review", &["security-review"]),
-];
+const SHORT: [(&str, &[&str]); 1] = [("scramjet:bug", &["bug", "feedback", "report-issue"])];
 
 impl Command {
     /// Whether `/<name>` runs it, by its name or a short one.
@@ -1648,9 +1643,7 @@ or agents directory, nor a models.json",
     fn the_built_in_sets_short_names_run_its_commands() {
         let commands = Commands::parsed(&[
             ("scramjet:bug.md", "Report $ARGUMENTS"),
-            ("scramjet:init.md", "Initialize $ARGUMENTS"),
-            ("scramjet:review.md", "Review $ARGUMENTS"),
-            ("scramjet:security-review.md", "Audit $ARGUMENTS"),
+            ("scramjet:troubleshoot.md", "Diagnose $ARGUMENTS"),
         ]);
         let framed = |name, text| {
             format!("<scramjet-command name=\"scramjet:{name}\">\n{text}\n</scramjet-command>")
@@ -1659,36 +1652,15 @@ or agents directory, nor a models.json",
             let expected = Some(framed("bug", "Report it hangs"));
             assert_eq!(commands.expand(&format!("{typed} it hangs")), expected);
         }
-        for typed in ["/init", "/scramjet:init"] {
-            let expected = Some(framed("init", "Initialize the tests"));
-            assert_eq!(commands.expand(&format!("{typed} the tests")), expected);
-        }
-        for typed in ["/review", "/scramjet:review"] {
-            let expected = Some(framed("review", "Review main"));
-            assert_eq!(commands.expand(&format!("{typed} main")), expected);
-        }
-        for typed in ["/security-review", "/scramjet:security-review"] {
-            let expected = Some(framed("security-review", "Audit main"));
-            assert_eq!(commands.expand(&format!("{typed} main")), expected);
-        }
         assert_eq!(commands.expand("/bugs"), None);
+        assert_eq!(commands.expand("/troubleshoot it"), None);
         let listed = |name| commands.get(name).unwrap().listed_name();
-        assert_eq!(
-            [
-                listed("scramjet:bug"),
-                listed("scramjet:init"),
-                listed("scramjet:review"),
-                listed("scramjet:security-review")
-            ],
-            ["bug", "init", "review", "security-review"]
-        );
+        assert_eq!(listed("scramjet:bug"), "bug");
+        assert_eq!(listed("scramjet:troubleshoot"), "scramjet:troubleshoot");
         let bug = commands.get("scramjet:bug").unwrap();
         assert!(bug.answers_to("scramjet:bug") && bug.answers_to("feedback"));
-        assert!(!bug.answers_to("review"));
+        assert!(!bug.answers_to("troubleshoot"));
         assert_eq!(Commands::default().expand("/bug"), None);
-        assert_eq!(Commands::default().expand("/init"), None);
-        assert_eq!(Commands::default().expand("/review"), None);
-        assert_eq!(Commands::default().expand("/security-review"), None);
     }
 
     #[test]

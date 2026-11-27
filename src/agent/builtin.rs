@@ -20,9 +20,6 @@ macro_rules! set_files {
 const SET: &[(&str, &str)] = set_files![
     "set.yaml",
     "commands/bug.md",
-    "commands/init.md",
-    "commands/review.md",
-    "commands/security-review.md",
     "commands/troubleshoot.md",
     "agents/command-architect.md",
     "agents/command-failure-analyst.md",
