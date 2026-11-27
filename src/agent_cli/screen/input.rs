@@ -1,8 +1,7 @@
 //! The keys the screen takes, from the terminal's input and the session's wake-ups.
 
 use super::{
-    Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Optional, SEARCH_BUSY, Shown,
-    TYPING,
+    Answer, App, BUSY, Flow, Input, MODEL_NEXT, NOTHING_QUEUED, Open, Optional, Shown, TYPING,
 };
 use crate::agent_cli::background::{self, Asked};
 use crate::agent_cli::editor::{Action, Note};
@@ -247,18 +246,6 @@ impl App {
                 self.top = None;
                 self.handed = None;
                 let _ = self.inputs.send(Input::Prompt(model));
-            } else {
-                self.draft.set_note(Note::Info(BUSY.to_owned()));
-            }
-            return Flow::Go;
-        }
-        if key.is(Binding::HistorySearch) {
-            if running {
-                self.draft.set_note(Note::Info(SEARCH_BUSY.to_owned()));
-            } else if self.ready {
-                self.ready = false;
-                self.handed = None;
-                let _ = self.inputs.send(Input::SearchPrompts);
             } else {
                 self.draft.set_note(Note::Info(BUSY.to_owned()));
             }

@@ -168,7 +168,6 @@ pub(super) enum Row {
     FollowUp,
     DoubleEscape,
     CopyOnSelect,
-    CopyFullResponse,
     WheelStep,
     RetainTranscript,
     Changelog,
@@ -226,7 +225,6 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::FollowUp,
             Row::DoubleEscape,
             Row::CopyOnSelect,
-            Row::CopyFullResponse,
             Row::WheelStep,
             Row::PromptHeight,
             Row::CompletionRows,
@@ -287,7 +285,6 @@ impl Row {
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
             Self::CopyOnSelect => "Copy on select",
-            Self::CopyFullResponse => "Copy full response",
             Self::WheelStep => "Wheel scrolls",
             Self::RetainTranscript => "Retain transcript",
             Self::Changelog => "Changelog",
@@ -385,10 +382,6 @@ impl Row {
                      paste anywhere (Command+V on a Mac). A right click{with} copies a selection \
                      either way."
                 );
-            }
-            Self::CopyFullResponse => {
-                "/copy copies the whole reply at once; off, a reply with code blocks offers \
-                 each of them to copy instead."
             }
             Self::WheelStep => "The lines of the conversation a notch of the mouse wheel scrolls.",
             Self::RetainTranscript => {
@@ -496,8 +489,6 @@ pub(super) struct Settings {
     /// `copyOnSelect`: a completed mouse selection is copied; by default only on macOS, whose
     /// terminals keep Command+C to themselves.
     pub(super) copy_on_select: bool,
-    /// `copyFullResponse`: `/copy` copies the whole reply without offering its code blocks.
-    pub(super) copy_full_response: bool,
     /// `spellCheck`: misspelled words in the prompt are underlined.
     pub(super) spell_check: bool,
     /// `images.autoResize`: images too large to send are scaled down, as Scramjet's.
@@ -734,7 +725,6 @@ impl Settings {
             hide_thinking_block: false,
             double_escape: DoubleEscape::Tree,
             copy_on_select: cfg!(target_os = "macos"),
-            copy_full_response: false,
             spell_check: true,
             resize_images: true,
             block_images: false,
@@ -830,11 +820,6 @@ impl Settings {
             None => {}
             Some(Value::Bool(copy)) => self.copy_on_select = *copy,
             Some(_) => wrong("copyOnSelect", "true or false"),
-        }
-        match object.get("copyFullResponse") {
-            None => {}
-            Some(Value::Bool(full)) => self.copy_full_response = *full,
-            Some(_) => wrong("copyFullResponse", "true or false"),
         }
         match object.get("retainTranscriptOnExit") {
             None => {}
@@ -2311,8 +2296,6 @@ impl Settings {
             .into(),
             Row::CopyOnSelect if self.copy_on_select => "on".into(),
             Row::CopyOnSelect => "off".into(),
-            Row::CopyFullResponse if self.copy_full_response => "on".into(),
-            Row::CopyFullResponse => "off".into(),
             Row::WheelStep => match self.layout.wheel_step {
                 1 => "1 line".into(),
                 lines => format!("{lines} lines"),
@@ -2457,10 +2440,6 @@ impl Settings {
             Row::CopyOnSelect => {
                 self.copy_on_select = !self.copy_on_select;
                 self.save("copyOnSelect", json!(self.copy_on_select))
-            }
-            Row::CopyFullResponse => {
-                self.copy_full_response = !self.copy_full_response;
-                self.save("copyFullResponse", json!(self.copy_full_response))
             }
             Row::RetainTranscript => {
                 self.retain_transcript = !self.retain_transcript;
@@ -2755,12 +2734,6 @@ impl Settings {
 
     /// Sets `key` in the file as it is now, keeping the rest of it; a file that cannot be read
     /// is left as it is.
-    /// `/copy`'s "Always copy full response": `copyFullResponse` on, and saved.
-    pub(super) fn copy_full_responses(&mut self) -> io::Result<()> {
-        self.copy_full_response = true;
-        self.save("copyFullResponse", json!(true))
-    }
-
     fn save(&self, key: &str, value: Value) -> io::Result<()> {
         self.update(|object| {
             object.insert(key.to_owned(), value);
@@ -3043,7 +3016,6 @@ const KEYS: &[(&str, &[&str])] = &[
             "hideThinkingBlock",
             "doubleEscapeAction",
             "copyOnSelect",
-            "copyFullResponse",
             "retainTranscriptOnExit",
             "collapseChangelog",
             "lastChangelogVersion",
@@ -3365,7 +3337,7 @@ mod tests {
         let count = rows.len();
         rows.sort_by_key(|row| format!("{row:?}"));
         rows.dedup();
-        assert_eq!((rows.len(), count), (34, 34));
+        assert_eq!(rows.len(), count);
     }
 
     struct Scratch(PathBuf);
@@ -4327,10 +4299,9 @@ or false; ignored"
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
                 "defaultThinkingLevel": "off", "theme": "pi-light", "treeFilterMode": "labeled-only",
                 "resumeChains": "folded", "steeringMode": "one-at-a-time", "followUpMode": "all",
-                "markdown": {"toolDisplay": "source"}, "copyOnSelect": true, "copyFullResponse": true}"#,
+                "markdown": {"toolDisplay": "source"}, "copyOnSelect": true}"#,
         );
         assert!(settings.copy_on_select);
-        assert!(settings.copy_full_response);
         assert_eq!(settings.tree_filter, Filter::Labeled);
         assert_eq!(settings.resume_chains, Chains::Folded);
         assert_eq!(settings.markdown_reads, MarkdownReads::Source);
@@ -4486,13 +4457,12 @@ or false; ignored"
             &scratch,
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
-                "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "copyFullResponse": 1, "banner": "big", "bottom": "tall",
+                "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big", "bottom": "tall",
                 "defaultShell": "zsh"}"#,
         );
         assert_eq!(settings.banner, Banner::Header);
         assert_eq!(settings.bottom, Bottom::Bar);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
-        assert!(!settings.copy_full_response);
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.resume_chains, Chains::Flat);
         assert_eq!(settings.theme, None);
@@ -4507,7 +4477,6 @@ or false; ignored"
             [
                 format!("{path}: hideThinkingBlock must be true or false; ignored"),
                 format!("{path}: copyOnSelect must be true or false; ignored"),
-                format!("{path}: copyFullResponse must be true or false; ignored"),
                 format!("{path}: branchSummary.skipPrompt must be true or false; ignored"),
                 format!(
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
@@ -4986,10 +4955,6 @@ or false; ignored"
             [default, other, default, other]
         );
         assert_eq!(
-            seen(Row::CopyFullResponse, &mut settings),
-            ["off", "on", "off", "on"]
-        );
-        assert_eq!(
             seen(Row::SpellCheck, &mut settings),
             ["on", "off", "on", "off"]
         );
@@ -5096,7 +5061,6 @@ or false; ignored"
                 "steeringMode": "one-at-a-time",
                 "hideThinkingBlock": true,
                 "copyOnSelect": !cfg!(target_os = "macos"),
-                "copyFullResponse": true,
                 "spellCheck": false,
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,

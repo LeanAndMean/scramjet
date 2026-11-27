@@ -63,7 +63,6 @@ pub(super) enum Binding {
     ModelCycleForward,
     ModelCycleBackward,
     ModelSelect,
-    HistorySearch,
     ToolsExpand,
     ThinkingToggle,
     External,
@@ -189,7 +188,7 @@ const SUSPEND: &[&str] = if cfg!(windows) { &[] } else { &["ctrl+z"] };
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 100] = [
+const DEFINITIONS: [Definition; 99] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -236,7 +235,6 @@ const DEFINITIONS: [Definition; 100] = [
     define(B::ModelCycleForward, "app.model.cycleForward", &["ctrl+p"], S::Other, "Cycle to the next model"),
     define(B::ModelCycleBackward, "app.model.cycleBackward", &["shift+ctrl+p"], S::Other, "Cycle to the previous model"),
     define(B::ModelSelect, "app.model.select", &["ctrl+l"], S::Other, "Open model selector"),
-    define(B::HistorySearch, "app.history.search", &["ctrl+r"], S::Other, "Search earlier prompts"),
     define(B::ToolsExpand, "app.tools.expand", &["ctrl+o"], S::Other, "Toggle tool output expansion"),
     define(B::ThinkingToggle, "app.thinking.toggle", &["ctrl+t"], S::Other, "Toggle thinking block visibility"),
     define(B::External, "app.editor.external", &["ctrl+g"], S::Other, "Edit message in external editor"),
@@ -861,11 +859,7 @@ mod tests {
         let cases: [(Binding, Press, &[&str]); 7] = [
             (B::FollowUp, ctrl('k'), &["Delete to end of line (Editing)"]),
             // The editor's and the lists' keys do not meet; those of each list and all lists do.
-            (
-                B::CursorDown,
-                ctrl('r'),
-                &["Search earlier prompts (Other)"],
-            ),
+            (B::CursorDown, ctrl('r'), &[]),
             (
                 B::SelectDown,
                 ctrl('r'),

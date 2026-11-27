@@ -93,7 +93,7 @@ What the agent may do:
   --settings FILE|JSON     settings over the settings file's, for this run (repeatable)
 
 Other:
-  --export FILE [OUTPUT]   write a session file as a web page, or text, and exit
+  --export FILE [OUTPUT]   write a session file as a web page and exit
   -v, --version            print the version and exit
   -h, --help               print this help
   --help-all               print each option in full, the keys, the built-in commands and
@@ -361,8 +361,7 @@ but to NO_PROXY's hosts and this machine.
                          as read scales it; a relative path is from the current directory
   MESSAGE                prompts sent one after another when the session starts
   --export FILE [OUTPUT] write the session file FILE as a web page to OUTPUT (default:
-                         scramjet-session-<its name>.html here), as text to an OUTPUT
-                         ending in .txt, as /export does, and exit
+                         scramjet-session-<its name>.html here), as /export does, and exit
   --list-models [SEARCH] list the providers' models (those SEARCH matches) by provider, with
                          their context window, output limit, and whether they reason and
                          take images, and exit
@@ -378,9 +377,7 @@ prompt, and under it the project's directory and Git branch, the session's token
 context is and the model. Page Up/Down and the mouse wheel scroll the
 conversation; Escape goes back to its end.
 In the prompt, Enter or Alt+Enter sends; Shift+Enter, Ctrl-J or a trailing \\ starts a new
-line; pasted text is inserted without sending. Up/Down recall earlier prompts; Ctrl+R lists
-them, this folder's other sessions' too (Tab: every folder's), newest first, typed words
-narrowing them, and Enter puts the one chosen in the prompt. Ctrl-G edits the
+line; pasted text is inserted without sending. Up/Down recall earlier prompts. Ctrl-G edits the
 prompt in $VISUAL or $EDITOR; its text replaces the prompt when the editor exits with 0.
 `!command` runs a bash command in the project directory without a model turn and adds its output
 to the conversation for the next prompt; `!!command` runs it without adding it.
@@ -454,8 +451,7 @@ task_stop) or Scramjet exits; the first prompt after one ends tells the agent ho
 Claude Code's TodoWrite), which the conversation shows each time it changes.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,
-as a session file of its own, in .txt as text, as -p prints it; without a PATH the full
-screen asks whether to save the page, copy the text to the clipboard or save it; /import FILE.jsonl continues in a copy of such a file, saved
+as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
 with this project's sessions. /copy copies the last reply's text, as the model wrote it, to the
 clipboard. /release-notes (or /changelog) shows what changed in each version, the newest
 first; the first start after an update shows What's new since the version run before. The keys named here are the defaults: keybindings.json beside the settings file

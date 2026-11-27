@@ -322,76 +322,6 @@ impl Interactive {
 
     /// This folder's sessions, or with `all` every folder's, as `loaded` holds them, read into
     /// it when it does not, the newest first and the rest while the list shows.
-    /// Ctrl+R: a list of the prompts typed earlier, this session's then this folder's other
-    /// sessions', newest first, which typed words narrow; Tab shows every folder's. Enter gives
-    /// the prompt chosen, for the editor to hold.
-    pub(super) fn search_prompts(&mut self) -> Option<String> {
-        let mut all = false;
-        let mut query = String::new();
-        let mut loaded: [Option<Loaded>; 2] = [None, None];
-        loop {
-            let reading = (loaded[usize::from(all)].as_ref())
-                .and_then(|loaded| loaded.reading.as_ref())
-                .map(|reading| (reading.left, reading.done()));
-            let sessions = match self.listed_sessions(all, &mut loaded) {
-                Ok(sessions) => sessions,
-                Err(error) => {
-                    self.screen.as_ref()?.dismiss();
-                    self.say(&format!("Error: {error}"));
-                    return None;
-                }
-            };
-            let agent = &self.session.agent;
-            let prompts = earlier_prompts(agent.prompts(), agent.session_path(), &sessions);
-            let screen = self.screen.as_ref()?;
-            let texts = (prompts.iter().enumerate())
-                .map(|(rank, (prompt, _))| Haystack::ranked(prompt, rank))
-                .collect();
-            let notes = (prompts.iter())
-                .map(|&(prompt, from)| match from {
-                    None => "From this session".to_owned(),
-                    Some(at) => prompt_source(prompt, &sessions[at], all),
-                })
-                .collect();
-            let row = |index: usize, width: usize| clip(&one_line(prompts[index].0), width);
-            let scope = if all { ", all folders" } else { "" };
-            let more = match reading {
-                Some((left, _)) => format!(", reading {left} more"),
-                None => String::new(),
-            };
-            let title = format!("Earlier prompts{scope}{more}");
-            let none = match (reading.is_some(), prompts.is_empty()) {
-                (true, _) => "No matching prompts among those read so far",
-                (false, true) => "No earlier prompts",
-                (false, false) => "No matching prompts",
-            };
-            let other = if all { "this folder" } else { "all folders" };
-            let keys = select::hint("edit", &[(Binding::Tab, other)], "cancel");
-            let picker = select::Picker::search(&title, select::VISIBLE, texts, 0, None, none, row);
-            let mut picker = (picker.noting(keys, notes).held().tabbing())
-                .in_order()
-                .by_words()
-                .query(std::mem::take(&mut query));
-            if let Some((_, done)) = reading {
-                picker = picker.reading(done);
-            }
-            match screen.pick_or_act(picker) {
-                select::Picked::Tab(at) => {
-                    query = at.query;
-                    all = !all;
-                }
-                select::Picked::Read(at) => query = at.query,
-                picked => {
-                    screen.dismiss();
-                    return match picked {
-                        select::Picked::Row(Some(index)) => Some(prompts[index].0.to_owned()),
-                        _ => None,
-                    };
-                }
-            }
-        }
-    }
-
     fn listed_sessions(
         &self,
         all: bool,
@@ -1007,46 +937,6 @@ fn search_text(session: &SessionInfo) -> String {
     format!("{id} {name} {}", session.text)
 }
 
-/// The prompts Ctrl+R lists, newest first, each at its newest only, with the session of
-/// `sessions` it is from: `current`'s (the session at `here`, `None`) first, then the others'.
-fn earlier_prompts<'a>(
-    current: &'a [String],
-    here: &std::path::Path,
-    sessions: &'a [SessionInfo],
-) -> Vec<(&'a str, Option<usize>)> {
-    let mut seen = std::collections::HashSet::new();
-    let others = (sessions.iter().enumerate())
-        .filter(|(_, session)| session.path != here)
-        .flat_map(|(at, session)| session.prompts.iter().rev().map(move |p| (p, Some(at))));
-    (current.iter().rev().map(|prompt| (prompt, None)))
-        .chain(others)
-        .map(|(prompt, from)| (prompt.as_str(), from))
-        .filter(|(prompt, _)| !prompt.trim().is_empty() && seen.insert(*prompt))
-        .collect()
-}
-
-/// Where `prompt`, listed, was typed: its session, as `/resume` names it, its age, and with
-/// `all` its folder.
-fn prompt_source(prompt: &str, session: &SessionInfo, all: bool) -> String {
-    let label = (session.name.as_deref())
-        .or(session.first_prompt.as_deref())
-        .unwrap_or("(no messages)");
-    let age = match age_label(
-        (std::time::SystemTime::now().duration_since(session.modified)).unwrap_or_default(),
-    ) {
-        now if now == "now" => "just now".to_owned(),
-        age => format!("{age} ago"),
-    };
-    let mut note = match label == prompt {
-        true => format!("A session's first prompt, {age}"),
-        false => format!("From the session \"{}\", {age}", clip(&one_line(label), 60)),
-    };
-    if all && let Some(root) = &session.root {
-        note = format!("{note}, in {}", shortened(&root.display().to_string()));
-    }
-    note
-}
-
 /// Scramjet's session age: `now`, `5m`, `3h`, `2d`, `1w`, `4mo`, `1y`.
 fn age_label(age: Duration) -> String {
     let minutes = age.as_secs() / 60;
@@ -1085,7 +975,6 @@ mod tests {
             path: PathBuf::new(),
             first_prompt: Some("Fix\tthe parser\nthen run the tests".into()),
             text: String::new(),
-            prompts: Vec::new(),
             name: None,
             item_count: 12,
             summary: None,
@@ -1106,7 +995,6 @@ mod tests {
             path: PathBuf::new(),
             first_prompt: session.first_prompt.clone(),
             text: String::new(),
-            prompts: Vec::new(),
             name: Some("Parser\nwork".into()),
             item_count: 12,
             summary: None,
@@ -1138,7 +1026,6 @@ mod tests {
             path: PathBuf::from("/nonexistent/sessions/project/1793-1.jsonl"),
             first_prompt: named.first_prompt,
             text: String::new(),
-            prompts: Vec::new(),
             name: None,
             item_count: 12,
             summary: None,
@@ -1189,7 +1076,6 @@ mod tests {
             path: path(name),
             first_prompt: None,
             text: String::new(),
-            prompts: Vec::new(),
             name: Some(name.into()),
             item_count: 1,
             summary: None,
@@ -1227,7 +1113,6 @@ mod tests {
             path: path(name),
             first_prompt: None,
             text: String::new(),
-            prompts: Vec::new(),
             name: Some(name.into()),
             item_count: 1,
             summary: None,
@@ -1263,7 +1148,6 @@ mod tests {
                         path: path(name),
                         first_prompt: Some(if chained { "/rs:loop" } else { name }.to_owned()),
                         text: name.to_owned(),
-                        prompts: Vec::new(),
                         name: None,
                         item_count: 1,
                         summary: (chained && name != "C1").then(|| format!("{name} done")),
@@ -1374,47 +1258,12 @@ mod tests {
     }
 
     #[test]
-    fn earlier_prompts_come_newest_first_each_once_this_sessions_first() {
-        let session = |name: &str, prompts: &[&str]| SessionInfo {
-            path: PathBuf::from(format!("/nonexistent/{name}.jsonl")),
-            first_prompt: prompts.first().map(|p| p.to_string()),
-            text: String::new(),
-            prompts: prompts.iter().map(|p| p.to_string()).collect(),
-            name: None,
-            item_count: 1,
-            summary: None,
-            modified: std::time::SystemTime::now(),
-            parent: None,
-            continues: None,
-            root: None,
-        };
-        // Newest first, the current session's file among them.
-        let sessions = [
-            session("here", &["saved here"]),
-            session("newer", &["fix the parser", "run the tests", " "]),
-            session("older", &["run the tests", "/rs:loop"]),
-        ];
-        let current = ["saved here".to_owned(), "run the tests".to_owned()];
-        let here = PathBuf::from("/nonexistent/here.jsonl");
-        assert_eq!(
-            earlier_prompts(&current, &here, &sessions),
-            [
-                ("run the tests", None),
-                ("saved here", None),
-                ("fix the parser", Some(1)),
-                ("/rs:loop", Some(2)),
-            ]
-        );
-    }
-
-    #[test]
     fn sessions_matching_equally_are_found_newest_first() {
         let now = std::time::SystemTime::now();
         let session = |name: &str, parent: Option<&str>, age: u64| SessionInfo {
             path: PathBuf::from(format!("/nonexistent/{name}.jsonl")),
             first_prompt: None,
             text: "fix the parser".into(),
-            prompts: Vec::new(),
             name: None,
             item_count: 1,
             summary: None,

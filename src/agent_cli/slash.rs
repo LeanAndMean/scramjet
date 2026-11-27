@@ -23,8 +23,7 @@ pub(super) enum Builtin<'a> {
     Settings,
     Export(&'a str),
     Import(&'a str),
-    /// Claude Code's `/copy [N]`: the Nth-latest reply, or one of its code blocks.
-    Copy(&'a str),
+    Copy,
     /// With the new session's name, if given.
     Clear(&'a str),
     Rename(&'a str),
@@ -87,7 +86,7 @@ impl<'a> Builtin<'a> {
             "settings" if argument.is_empty() => Self::Settings,
             "export" => Self::Export(argument),
             "import" => Self::Import(argument),
-            "copy" => Self::Copy(argument),
+            "copy" if argument.is_empty() => Self::Copy,
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
@@ -136,7 +135,7 @@ impl<'a> Builtin<'a> {
             self,
             Self::Settings
                 | Self::Export(_)
-                | Self::Copy(_)
+                | Self::Copy
                 | Self::Rename(_)
                 | Self::Status
                 | Self::Tasks(_)
@@ -177,7 +176,7 @@ impl Interactive {
             Some(Builtin::Settings) => self.settings(),
             Some(Builtin::Export(path)) => self.export(path),
             Some(Builtin::Import(path)) => self.import(path),
-            Some(Builtin::Copy(age)) => self.copy_reply(age),
+            Some(Builtin::Copy) => self.copy_reply(),
             Some(Builtin::Clear(name)) => {
                 if drive::new_session(self) && !name.is_empty() {
                     self.name(name);
@@ -272,35 +271,10 @@ impl Interactive {
     }
 
     /// `/export [path]`, as Scramjet's: the current branch as a web page, or, to a path ending in
-    /// `.jsonl`, as a session file of its own, in `.txt` as text. Without a path the full screen
-    /// asks, as Claude Code's does, whether to save the page, copy the text or save it.
+    /// `.jsonl`, as a session file of its own.
     fn export(&mut self, argument: &str) {
-        let mut path = path_argument(argument).map(str::to_owned);
-        if path.is_none()
-            && let Some(screen) = &self.screen
-            && !self.session.agent.conversation().is_empty()
-        {
-            let id = self.session.agent.session_id();
-            let choices = [
-                choice(
-                    "Save as a web page",
-                    Some(format!("scramjet-session-{id}.html")),
-                ),
-                choice(
-                    "Copy to clipboard",
-                    Some("The conversation as text".to_owned()),
-                ),
-                choice("Save as text", Some(format!("scramjet-session-{id}.txt"))),
-            ];
-            let question = super::select::Picker::question("Export conversation", &choices, None);
-            match screen.pick(question) {
-                None => return self.say_styled(style::MUTED, "Export cancelled"),
-                Some(0) => {}
-                Some(1) => return self.copy_conversation(),
-                Some(_) => path = Some(format!("scramjet-session-{id}.txt")),
-            }
-        }
-        match export_branch(&self.session.agent, path.as_deref(), Path::new("")) {
+        let path = path_argument(argument);
+        match export_branch(&self.session.agent, path, Path::new("")) {
             Ok(Some(path)) => {
                 let said = format!("Session exported to: {}", path.display());
                 self.say_styled(style::MUTED, &said)
@@ -308,17 +282,6 @@ impl Interactive {
             Ok(None) => self.say("Nothing to export yet"),
             Err(error) => self.say(&format!("Error: failed to export the session: {error}")),
         }
-    }
-
-    /// The current branch as `/export` writes it in text, copied to the clipboard.
-    fn copy_conversation(&mut self) {
-        let text = match self.session.agent.branch() {
-            Ok(branch) => export::text(&branch, super::editor::terminal_size().0),
-            Err(error) => {
-                return self.say(&format!("Error: failed to export the session: {error}"));
-            }
-        };
-        self.copy_text(&text, "Conversation copied to clipboard");
     }
 
     /// `/import <path.jsonl>`, as Scramjet's: continues in a copy of a session file, once the user
@@ -338,80 +301,13 @@ impl Interactive {
         drive::import(self, path);
     }
 
-    /// `/copy [N]`, as Claude Code's: the Nth-latest of the last 20 replies, as the model wrote
-    /// it; on the full screen a reply with code blocks offers each of them, unless
-    /// `copyFullResponse` is on.
-    fn copy_reply(&mut self, age: &str) {
-        let replies: Vec<String> = self.session.agent.replies().take(20).collect();
-        if replies.is_empty() {
+    /// `/copy`, as Scramjet's: the last reply's text, as the model wrote it, to the clipboard.
+    fn copy_reply(&mut self) {
+        let Some(text) = self.session.agent.last_reply() else {
             return self.say("No agent messages to copy yet.");
-        }
-        let index = match age {
-            "" => 0,
-            typed => match typed.parse::<usize>() {
-                Ok(age) if age >= 1 => age - 1,
-                _ => {
-                    return self.say(&format!(
-                        "Usage: /copy [N] where N is 1 (latest), 2, 3, \u{2026} Got: {typed}"
-                    ));
-                }
-            },
         };
-        let Some(reply) = replies.get(index) else {
-            let count = replies.len();
-            let noun = if count == 1 { "message" } else { "messages" };
-            return self.say(&format!("Only {count} agent {noun} available to copy"));
-        };
-        let blocks = code_blocks(reply);
-        let chosen = match &self.screen {
-            Some(screen) if !blocks.is_empty() && !self.session.settings.copy_full_response => {
-                let mut choices = vec![choice("Full response", Some(sized(reply, "char")))];
-                choices.extend(blocks.iter().map(|(code, language)| {
-                    let lines = code.lines().count().max(1);
-                    let lines = (lines > 1).then(|| format!("{lines} lines"));
-                    let about = [language.clone(), lines].into_iter().flatten();
-                    let about = about.collect::<Vec<_>>().join(", ");
-                    let label = code.split_whitespace().collect::<Vec<_>>().join(" ");
-                    choice(
-                        &clip(&visible(&label), 60),
-                        Some(about).filter(|a| !a.is_empty()),
-                    )
-                }));
-                choices.push(choice(
-                    "Always copy full response",
-                    Some("Skip this list from now on (Copy full response in /settings)".to_owned()),
-                ));
-                let question =
-                    super::select::Picker::question("Select content to copy:", &choices, None);
-                match screen.pick(question) {
-                    None => return self.say_styled(style::MUTED, "Copy cancelled"),
-                    Some(0) => Copied::Full,
-                    Some(at) if at == choices.len() - 1 => Copied::Always,
-                    Some(at) => Copied::Block(at - 1),
-                }
-            }
-            _ => Copied::Full,
-        };
-        let text = match chosen {
-            Copied::Block(at) => blocks[at].0.as_str(),
-            Copied::Full | Copied::Always => reply.as_str(),
-        };
-        self.copy_text(text, "Copied to clipboard");
-        if let Copied::Always = chosen {
-            match self.session.settings.copy_full_responses() {
-                Ok(()) => self.say_styled(
-                    style::MUTED,
-                    "Preference saved: /copy copies whole replies (Copy full response in /settings)",
-                ),
-                Err(error) => self.say(&format!("Error: the preference was not saved: {error}")),
-            }
-        }
-    }
-
-    /// Puts `text` on the clipboard, saying `copied` and how much it was.
-    fn copy_text(&mut self, text: &str, copied: &str) {
         let terminal = self.screen.is_some() || std::io::stderr().is_terminal();
-        match clipboard::copy(text, terminal) {
+        match clipboard::copy(&text, terminal) {
             Ok(sequence) => {
                 if let Some(sequence) = sequence {
                     match &self.screen {
@@ -419,8 +315,7 @@ impl Interactive {
                         None => eprint!("{sequence}"),
                     }
                 }
-                let copied = format!("{copied} ({})", sized(text, "character"));
-                self.say_styled(style::MUTED, &copied);
+                self.say_styled(style::MUTED, "Copied last agent message to clipboard");
             }
             Err(error) => self.say(&format!("Error: {error}")),
         }
@@ -1261,7 +1156,7 @@ fn path_argument(argument: &str) -> Option<&str> {
 }
 
 /// Writes `agent`'s current branch to `path`, relative to `directory`: to a path ending in
-/// `.jsonl` as a session file of its own, to one in `.txt` as text, else as a web page, by default named for the session,
+/// `.jsonl` as a session file of its own, else as a web page, by default named for the session,
 /// as Scramjet names it. Returns where, or none before any conversation.
 pub(super) fn export_branch(
     agent: &Agent,
@@ -1279,9 +1174,6 @@ pub(super) fn export_branch(
     let path = std::path::absolute(path)?;
     if path.to_string_lossy().ends_with(".jsonl") {
         agent.export_session(&path)?;
-    } else if export::is_text(&path) {
-        let width = super::editor::terminal_size().0;
-        std::fs::write(&path, export::text(&agent.branch()?, width))?;
     } else {
         let tools = agent.tool_definitions();
         let setup = export::Setup {
@@ -1340,88 +1232,9 @@ fn task_output(task: &scramjet::agent::tasks::Task) -> ReportView {
     ReportView::new(&format!("Task {}", task.id), "", vec![tab], 0, false).at_end()
 }
 
-/// What `/copy`'s list chose.
-#[derive(Clone, Copy)]
-enum Copied {
-    Full,
-    Always,
-    Block(usize),
-}
-
-fn choice(label: &str, description: Option<String>) -> scramjet::agent::Choice {
-    scramjet::agent::Choice {
-        label: label.to_owned(),
-        description,
-        value: String::new(),
-    }
-}
-
-/// `12 characters, 2 lines`, with `unit` the first count's, singular.
-fn sized(text: &str, unit: &str) -> String {
-    let plural = |count: usize, unit: &str| match count {
-        1 => format!("1 {unit}"),
-        count => format!("{count} {unit}s"),
-    };
-    let lines = text.matches('\n').count() + 1;
-    format!(
-        "{}, {}",
-        plural(text.chars().count(), unit),
-        plural(lines, "line")
-    )
-}
-
-/// The code blocks of the Markdown `text`, each with its fence's language if it names one.
-fn code_blocks(text: &str) -> Vec<(String, Option<String>)> {
-    use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag, TagEnd};
-    let mut blocks = Vec::new();
-    let mut open: Option<(String, Option<String>)> = None;
-    for event in Parser::new(text) {
-        match event {
-            Event::Start(Tag::CodeBlock(kind)) => {
-                let language = match kind {
-                    CodeBlockKind::Fenced(info) => {
-                        info.split_whitespace().next().map(str::to_owned)
-                    }
-                    CodeBlockKind::Indented => None,
-                };
-                open = Some((String::new(), language));
-            }
-            Event::Text(code) => {
-                if let Some((block, _)) = &mut open {
-                    block.push_str(&code);
-                }
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                if let Some((block, language)) = open.take() {
-                    let block = block.strip_suffix('\n').unwrap_or(&block).to_owned();
-                    blocks.push((block, language));
-                }
-            }
-            _ => {}
-        }
-    }
-    blocks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn copy_offers_the_code_blocks_with_their_languages() {
-        let reply = "Run:\n\n```bash title\ncargo test\ncargo fmt\n```\n\nThen\n\n    indented\n\n`inline` and\n\n~~~\nplain\n~~~";
-        assert_eq!(
-            code_blocks(reply),
-            [
-                ("cargo test\ncargo fmt".to_owned(), Some("bash".to_owned())),
-                ("indented".to_owned(), None),
-                ("plain".to_owned(), None),
-            ]
-        );
-        assert!(code_blocks("No **code** here, `inline` only.").is_empty());
-        assert_eq!(sized("one\ntwo", "char"), "7 chars, 2 lines");
-        assert_eq!(sized("é", "character"), "1 character, 1 line");
-    }
 
     #[test]
     fn a_path_argument_is_its_first_word_or_quoted() {
@@ -1479,6 +1292,7 @@ mod tests {
             "/context all",
             "/system-prompt all",
             "/hotkeys all",
+            "/copy all",
             "/scoped-models luna",
             "/login github",
             "/exit now",
@@ -1496,9 +1310,8 @@ mod tests {
             Builtin::parse("/rename  my work "),
             Some(Builtin::Rename("my work"))
         );
-        assert_eq!(Builtin::parse("/copy 2 "), Some(Builtin::Copy("2")));
-        assert_eq!(stops("/copy all"), Some(false));
-        assert_eq!(Builtin::parse("/copy"), Some(Builtin::Copy("")));
+        assert_eq!(Builtin::parse("/copy"), Some(Builtin::Copy));
+        assert_eq!(Builtin::parse("/copy 2"), None);
         // A new session's name, as Claude Code's `/clear [name]` and `/branch [name]` take one.
         assert_eq!(
             Builtin::parse("/clear  next "),

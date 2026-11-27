@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.421.0 — Unreleased commands and keys taken out
+
 ## 2.420.0 — Unreleased commands taken out
 
 ## 2.419.0 — Unreleased commands taken out
@@ -247,12 +249,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - The agent keeps a checklist for work of several steps, as Claude Code's `TodoWrite` and Codex's plan: its `todo_write` tool shows each change as a list of boxes, the item being worked on in bold and those done struck through, and `/todos` shows the list as it stands. A compaction keeps it, and over ACP it is the session's plan. `"tools": {"todo_write": false}` turns it off.
 
-## 2.386.0 — Ctrl+R searches earlier prompts
-
-### Added
-
-- Ctrl+R, as in Claude Code and Codex: a list of the prompts you typed earlier, in this session and this folder's others (Tab: every folder's), newest first; typed words narrow it, and Enter puts the one chosen in the prompt.
-
 ## 2.385.0 — Claude Code's alwaysThinkingEnabled
 
 ### Added
@@ -313,18 +309,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - The full screen tells the terminal when the agent waits for you, as Claude Code's `preferredNotifChannel` setting says: a minute after a reply you have not touched a key since, or 6 seconds after an unanswered question. iTerm2, kitty and Ghostty show a desktop notification (`auto`, the default, picks theirs and sends nothing in other terminals, Windows Terminal among them); `terminal_bell` rings the bell anywhere. `/settings` has it under Display as Notifications.
 - The terminal's title starts with ● while the agent works and ○ while it waits for you, as Scramjet 1's.
-
-## 2.375.0 — /export as text
-
-### Added
-
-- `/export` writes the conversation as text, as it prints in a terminal without colors or thinking, to a path ending in `.txt` (`--export FILE OUT.txt` too). On the full screen `/export` without a path asks, as Claude Code's does: save the web page (first, as before), copy the text to the clipboard, or save it as `scramjet-session-<id>.txt`.
-
-## 2.374.0 — /copy N and code blocks
-
-### Added
-
-- `/copy N` copies the Nth-latest reply (of the last 20), as Claude Code's. On the full screen a reply with code blocks opens a list to copy the whole reply or one block (its language and lines shown); its last entry, "Always copy full response", turns on the new `copyFullResponse` setting (a row in `/settings`), which skips the list. "Copied to clipboard" now says how many characters and lines.
 
 ## 2.372.0 — The status line
 

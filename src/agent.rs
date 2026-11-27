@@ -2415,7 +2415,7 @@ apply to it; only those whose cost is known count toward the ${most}",
         self.replies().next()
     }
 
-    /// The texts of the replies that have any, the latest first, as `/copy N` numbers them.
+    /// The texts of the replies that have any, the latest first.
     pub fn replies(&self) -> impl Iterator<Item = String> + '_ {
         (self.conversation.iter().rev())
             .filter(|item| item["type"] == "message" && item["role"] != "user")

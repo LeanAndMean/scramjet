@@ -66,9 +66,6 @@ pub struct SessionInfo {
     /// Its prompts and replies on every branch, which `/resume` searches as Scramjet searches
     /// a session's messages.
     pub text: String,
-    /// Its prompts on every branch as typed, oldest first, which Ctrl+R searches.
-    #[serde(default)]
-    pub prompts: Vec<String>,
     /// The session's name from its latest `session_info` line, which `/resume` shows instead.
     pub name: Option<String>,
     /// Conversation items after the latest compaction, as a resume restores them.
@@ -1099,7 +1096,6 @@ impl Session {
                 .next()
                 .map(|entry| prompt_text(&entry.value).to_owned()),
             text: entries.text(),
-            prompts: entries.prompts(),
             name: entries.name.clone(),
             item_count: context.items.len(),
             summary: super::status::completed_summary(&context.items),
