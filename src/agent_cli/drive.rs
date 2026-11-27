@@ -144,6 +144,7 @@ impl Session {
                         sandbox
                     }
                 };
+                warnings.extend(sandbox.spelling_warning(&root));
                 self.agent.set_sandbox(Some(sandbox));
                 self.settings.sandbox = Some(mode);
                 warnings.extend(self.remember());

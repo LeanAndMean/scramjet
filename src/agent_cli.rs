@@ -515,6 +515,7 @@ local models), or add providers to {file} (see --help)"
             }
         }
     }
+    warnings.extend((sandbox.as_ref()).and_then(|sandbox| sandbox.spelling_warning(&root)));
     let config = AgentConfig {
         providers,
         model,

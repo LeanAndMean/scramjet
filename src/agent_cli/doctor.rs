@@ -3,7 +3,7 @@
 //! connections tried are to the providers' servers on this machine.
 use super::settings::Settings;
 use super::{keymap, theme, update, writable};
-use scramjet::agent::{McpState, Providers, Sandbox};
+use scramjet::agent::{McpState, Providers, Sandbox, SandboxMode};
 use std::{
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
@@ -129,7 +129,7 @@ pub(super) fn checks(setup: &Setup) -> Vec<Check> {
         settings(setup),
         models(setup),
         servers(setup.providers, starting(setup).0.as_deref()),
-        sandbox(setup.settings),
+        sandbox(setup.settings, setup.root),
         tools(setup.root),
         terminal(),
         mcp(setup),
@@ -522,12 +522,22 @@ fn connect(host: &str, port: u16) -> Result<(), String> {
     Err(last)
 }
 
-/// Whether the sandbox can start here; a failure matters when the settings ask for one.
-fn sandbox(settings: &Settings) -> Check {
+/// Whether the sandbox can start here, and keep what it protects in the project read-only; a
+/// failure matters when the settings ask for one.
+fn sandbox(settings: &Settings, root: &Path) -> Check {
     let asked = settings.sandbox.is_some();
-    match Sandbox::check() {
-        Ok(()) => Check::new(Mark::Good, "sandbox", "can confine commands (--sandbox)"),
-        Err(error) => Check::new(if asked { Mark::Bad } else { Mark::Warn }, "sandbox", error),
+    if let Err(error) = Sandbox::check() {
+        return Check::new(if asked { Mark::Bad } else { Mark::Warn }, "sandbox", error);
+    }
+    let writing = Sandbox {
+        mode: SandboxMode::WorkspaceWrite,
+        network: false,
+        writable: Vec::new(),
+    };
+    match writing.spelling_warning(root) {
+        None => Check::new(Mark::Good, "sandbox", "can confine commands (--sandbox)"),
+        Some(warning) => Check::new(Mark::Warn, "sandbox", "can confine commands (--sandbox)")
+            .with([warning.trim_start_matches("Sandbox: ").to_owned()]),
     }
 }
 

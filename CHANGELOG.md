@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.404.0 — Told when the sandbox cannot keep .git read-only
+
+### Added
+
+- On a drive that ignores case (WSL's `/mnt/c`), a sandbox that starts (or `/sandbox` turning one on) warns that commands can change the project's `.git`, `.claude`, `.scramjet` or `.agents` through other spellings of their names, and `/doctor` says so too; each spelling is tried in the sandbox first, so a drive where the protection holds gets no warning.
+
 ## 2.403.0 — The todo item in progress on the status line
 
 ### Added

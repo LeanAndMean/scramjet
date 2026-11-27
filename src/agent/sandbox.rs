@@ -301,6 +301,81 @@ impl Sandbox {
         kept
     }
 
+    /// What of `protected_paths` commands can change all the same, through its name spelled in
+    /// other case, on a drive that ignores case (WSL's `/mnt/c`): bubblewrap's read-only mount
+    /// covers the name only as spelled. Each is tried in the sandbox, as a drive that folds case
+    /// in Linux's own lookups (ext4's casefold) leads every spelling to the mount.
+    pub fn other_spellings(&self, root: &Path) -> Vec<PathBuf> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let same = |one: &Path, other: &Path| match (
+                std::fs::symlink_metadata(one),
+                std::fs::symlink_metadata(other),
+            ) {
+                (Ok(one), Ok(other)) => (one.dev(), one.ino()) == (other.dev(), other.ino()),
+                _ => false,
+            };
+            let (kept, spelled): (Vec<PathBuf>, Vec<PathBuf>) = (self.protected_paths(root))
+                .into_iter()
+                .filter_map(|kept| {
+                    let name = kept.file_name()?.to_str()?;
+                    let swapped: String = (name.chars())
+                        .map(|c| match c.is_ascii_lowercase() {
+                            true => c.to_ascii_uppercase(),
+                            false => c.to_ascii_lowercase(),
+                        })
+                        .collect();
+                    let spelled = kept.with_file_name(swapped);
+                    (spelled != kept && same(&kept, &spelled)).then_some((kept, spelled))
+                })
+                .unzip();
+            if kept.is_empty() {
+                return Vec::new();
+            }
+            let script = r#"i=0; for path; do test -w "$path" && echo "$i"; i=$((i+1)); done; :"#;
+            let hidden = Hidden::current(&[], &Default::default());
+            let Ok(mut process) = sandboxed(root, script, &hidden, self) else {
+                return Vec::new();
+            };
+            let output = process.args(&spelled).stdin(Stdio::null()).output();
+            let output = output.map(|output| String::from_utf8_lossy(&output.stdout).into_owned());
+            (output.unwrap_or_default().lines())
+                .filter_map(|line| kept.get(line.trim().parse::<usize>().ok()?).cloned())
+                .collect()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            _ = root;
+            Vec::new()
+        }
+    }
+
+    /// The warning that `other_spellings` finds something, if it does.
+    pub fn spelling_warning(&self, root: &Path) -> Option<String> {
+        let found = self.other_spellings(root);
+        let real = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+        let names: Vec<String> = (found.iter())
+            .map(|path| {
+                path.strip_prefix(&real)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            })
+            .collect();
+        let named = match names.as_slice() {
+            [] => return None,
+            [one] => one.clone(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        };
+        let upper = found[0].file_name()?.to_string_lossy().to_uppercase();
+        Some(format!(
+            "Sandbox: this drive ignores case, so commands can change {named}, read-only only \
+as spelled, through other spellings ({upper}, or a Windows short name); on a case-sensitive \
+drive (in WSL, outside /mnt) they cannot"
+        ))
+    }
+
     /// Refuses a `write` or `edit` of `path` that the sandbox does not allow: outside the
     /// writable directories (`writable_roots`), or in what stays protected in them. A path is
     /// taken by its real place, through the symlinks of the part that exists, which it returns
@@ -2167,6 +2242,52 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         drop(agent);
         assert!(!directory.exists());
         std::fs::remove_file(&users).unwrap();
+    }
+
+    #[test]
+    fn protected_names_reached_in_other_case_are_found_on_a_drive_that_ignores_case() {
+        use super::{Sandbox, SandboxMode};
+        let sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        let linux = std::env::temp_dir().join(format!("scramjet-case-{}", std::process::id()));
+        let _linux = crate::agent::tests::ScratchDir::new(linux.clone());
+        std::fs::create_dir_all(linux.join(".claude")).unwrap();
+        assert_eq!(
+            sandbox.other_spellings(&linux),
+            Vec::<std::path::PathBuf>::new()
+        );
+        assert_eq!(sandbox.spelling_warning(&linux), None);
+        // WSL's Windows drive, which ignores case; skipped where there is none.
+        let windows = std::path::Path::new("/mnt/c/Users/Public");
+        if !cfg!(target_os = "linux") || !windows.is_dir() {
+            return;
+        }
+        let root = windows.join(format!("scramjet-case-{}", std::process::id()));
+        let _windows = crate::agent::tests::ScratchDir::new(root.clone());
+        for directory in [".claude/commands", ".git", "src"] {
+            std::fs::create_dir_all(root.join(directory)).unwrap();
+        }
+        let real = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(
+            sandbox.other_spellings(&root),
+            [real.join(".claude"), real.join(".git")]
+        );
+        let warning = sandbox.spelling_warning(&root).unwrap();
+        assert!(
+            warning.starts_with("Sandbox: this drive ignores case, so commands can change .claude and .git, read-only only as spelled, through other spellings (.CLAUDE,"),
+            "{warning}"
+        );
+        // What it says holds: in the sandbox, the other spelling writes the protected directory.
+        let hidden = super::Hidden::current(&[], &Default::default());
+        let output = super::sandboxed(&root, "touch .CLAUDE/commands/x.md", &hidden, &sandbox)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert!(root.join(".claude/commands/x.md").exists());
     }
 
     #[test]
