@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.412.0 — `--resume ID` and `--fork-session`
+
+### Added
+
+- `-r ID` (`--resume ID`) resumes the session whose id starts with ID, or a `.jsonl` file, as Claude Code's `--resume` does, and works with `-p`, so `scramjet -p --resume ID 'follow-up'` scripts run unchanged; `-r` without one still opens the list. A word that is not digits and dashes is still the first prompt.
+- `--fork-session`, Claude Code's: with `-c`, `--resume ID` or `--session`, the session continues in a new copy, as `--fork` does.
+
 ## 2.411.0 — Claude Code's permission options
 
 ### Added

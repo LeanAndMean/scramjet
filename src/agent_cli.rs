@@ -449,6 +449,10 @@ fn session_choice(
             }
         }
         Start::Unsaved => SessionChoice::Unsaved,
+        Start::ForkLatest => match Session::latest(&directory()?).map_err(|e| e.to_string())? {
+            Some(path) => SessionChoice::Fork(path),
+            None => SessionChoice::New,
+        },
         Start::Fork(named) => SessionChoice::Fork(find(&named)?.path().to_owned()),
         Start::Session(named) => match find(&named)? {
             Found::Here(path) => return open(path, &named),

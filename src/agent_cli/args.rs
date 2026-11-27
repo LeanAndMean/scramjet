@@ -21,9 +21,10 @@ unless --ask, --sandbox or the settings say otherwise.
 
 Sessions:
   -c, --continue           resume the session of this project written to last
-  -r, --resume             choose one of this project's sessions to resume
+  -r, --resume [ID]        choose one of this project's sessions to resume, or resume ID's
   --session FILE|ID        resume that session
   --fork FILE|ID           continue a copy of that session in a new one
+  --fork-session           with -c or --resume ID, continue a copy in a new session
   --no-session, --no-session-persistence
                            save no session
   --ephemeral              leave nothing behind: no session, and the settings' changes kept
@@ -128,7 +129,7 @@ impl Help {
 pub(super) const HELP_ALL: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
-[--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
+[--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
 [--permission-mode MODE] [--dangerously-skip-permissions]
@@ -193,13 +194,18 @@ but to NO_PROXY's hosts and this machine.
                          programs of yours can read the command line: a variable models.json
                          names, or /login, keeps it out of sight)
   -c, --continue         resume the session for this project written to last
-  -r, --resume           choose one of this project's sessions to resume, as /resume does
+  -r, --resume [ID]      choose one of this project's sessions to resume, as /resume does;
+                         with an ID (digits and dashes, as /status shows it) or a .jsonl
+                         file next, as Claude Code's --resume ID, the same as --session,
+                         -p included
   --session FILE|ID      resume a session file (a word with a / or ending in .jsonl), or the
                          newest session of this project whose id (as /status shows it) starts
                          with ID, else of another project, which is forked here once you
                          agree
   --fork FILE|ID         continue a copy of that session, its branches and name included, in a
                          new session of this project
+  --fork-session         as Claude Code's: with -c, --resume ID or --session, continue a
+                         copy of that session in a new one, as --fork does
   --no-session, --no-session-persistence
                          save no session (the second, Claude Code's name): those of this run (/clear, /fork,
                          /branch and /import too) are kept in a private temporary directory
@@ -542,6 +548,8 @@ pub(super) enum Start {
     Session(String),
     /// `--fork`: the same, continued in a new session of the project.
     Fork(String),
+    /// `-c --fork-session`: the session `-c` takes, continued in a new one.
+    ForkLatest,
     /// `--no-session`: a new one that is not saved.
     Unsaved,
 }
@@ -674,6 +682,7 @@ impl Options {
             version: false,
         };
         let (mut fork, mut no_session, mut bypass) = (None, false, false);
+        let mut fork_session = false;
         let (mut tools, mut no_tools, mut no_builtin_tools) = (None, false, false);
         // The other options naming the session to start in, which `--fork` cannot be given with.
         let mut chosen = Vec::new();
@@ -803,8 +812,13 @@ and stream-json"
                 }
                 Some("-r" | "--resume") => {
                     chosen.push("--resume");
-                    options.start = Start::Resume
+                    let id = arguments.next_if(|next| next.to_str().is_some_and(names_session));
+                    options.start = match id.and_then(|id| id.into_string().ok()) {
+                        Some(id) => Start::Session(id),
+                        None => Start::Resume,
+                    }
                 }
+                Some("--fork-session") => fork_session = true,
                 Some("--session") => {
                     chosen.push("--session");
                     options.start = Start::Session(value()?)
@@ -915,8 +929,19 @@ workspace-write and danger-full-access"
             }
             options.start = start;
         }
+        if fork_session {
+            options.start = match std::mem::replace(&mut options.start, Start::New) {
+                Start::Session(named) => Start::Fork(named),
+                Start::Continue => Start::ForkLatest,
+                _ => {
+                    return Err(format!(
+                        "--fork-session needs -c, --resume ID or --session\n\n{USAGE}"
+                    ));
+                }
+            };
+        }
         if matches!(options.start, Start::Resume) && options.print {
-            return Err(format!("--resume cannot be used with -p\n\n{USAGE}"));
+            return Err(format!("--resume needs a session ID with -p\n\n{USAGE}"));
         }
         if options.max_turns.is_some() && !options.print {
             return Err(format!("--max-turns needs -p\n\n{USAGE}"));
@@ -937,6 +962,13 @@ workspace-write and danger-full-access"
         }
         Ok(Ok(options))
     }
+}
+
+/// Whether the word after `--resume` is a session's id or file rather than a message.
+fn names_session(word: &str) -> bool {
+    word.ends_with(".jsonl")
+        || (word.starts_with(|c: char| c.is_ascii_digit())
+            && word.chars().all(|c| c.is_ascii_digit() || c == '-'))
 }
 
 /// The tools a `--tools` or `--disallowedTools` value names, separated by commas or spaces outside
@@ -1045,6 +1077,37 @@ mod tests {
             error.starts_with("--disallowedTools Bash(git push *):"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn resume_takes_an_id_and_fork_session_forks_it_as_claude_codes() {
+        let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
+        let start = |arguments: &[&str]| parse(arguments).unwrap().unwrap().start;
+        let resumed = start(&["-p", "--resume", "1795-12", "again"]);
+        assert!(matches!(resumed, Start::Session(id) if id == "1795-12"));
+        let file = start(&["-r", "old.jsonl"]);
+        assert!(matches!(file, Start::Session(id) if id == "old.jsonl"));
+        // A message after it is not an id.
+        let options = parse(&["-r", "fix the bug"]).unwrap().unwrap();
+        assert!(matches!(options.start, Start::Resume));
+        assert_eq!(options.messages, ["fix the bug"]);
+        let error = parse(&["-r", "-p", "hi"]).err().unwrap();
+        assert!(
+            error.starts_with("--resume needs a session ID with -p\n"),
+            "{error}"
+        );
+        let forked = start(&["-r", "17", "--fork-session"]);
+        assert!(matches!(forked, Start::Fork(id) if id == "17"));
+        let forked = start(&["--fork-session", "--session", "18"]);
+        assert!(matches!(forked, Start::Fork(id) if id == "18"));
+        assert!(matches!(
+            start(&["-c", "--fork-session"]),
+            Start::ForkLatest
+        ));
+        for alone in [&["--fork-session"][..], &["-r", "--fork-session"]] {
+            let error = parse(alone).err().unwrap();
+            assert!(error.starts_with("--fork-session needs -c, --resume ID or --session\n"));
+        }
     }
 
     #[test]
