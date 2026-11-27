@@ -14,8 +14,6 @@ pub(super) struct ReportView {
     details: bool,
     /// The reports are markdown, shown as a reply's.
     pub(super) markdown: bool,
-    /// It opens at its end, as a command's output is read.
-    pub(super) from_end: bool,
     /// Another view a key opens in this one's place, with the key and what it shows.
     link: Option<(&'static str, &'static str, Box<ReportView>)>,
 }
@@ -55,7 +53,6 @@ impl ReportView {
             at,
             details,
             markdown: false,
-            from_end: false,
             link: None,
         }
     }
@@ -72,14 +69,6 @@ impl ReportView {
     pub(super) fn markdown(self) -> Self {
         Self {
             markdown: true,
-            ..self
-        }
-    }
-
-    /// The same view, opening at its end.
-    pub(super) fn at_end(self) -> Self {
-        Self {
-            from_end: true,
             ..self
         }
     }

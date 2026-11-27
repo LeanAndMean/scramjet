@@ -423,11 +423,6 @@ under each part, and s the system prompt as /system-prompt does.
 /system-prompt shows, on the full screen, the instructions the last request sent, each part under
 a heading, then its tool definitions; before any request, those the next sends. Up and Down,
 PgUp and PgDn, Home and End scroll it, the mouse or Shift and the arrows select, Escape closes it.
-/tasks lists the commands the agent runs in the background (bash's run_in_background, as Claude
-Code's), each running or how it ended, with the file its output goes to; /tasks stop N stops one
-(/bashes and Codex's /ps too). On the full screen it is a list: Enter shows a task's output, its
-end first, or, while it runs, asks whether to show it or stop the task. They run on across turns until they end, are stopped (the agent's
-task_stop) or Scramjet exits; the first prompt after one ends tells the agent how it ended.
 /todos shows the checklist the agent keeps for work of several steps (its todo_write tool, as
 Claude Code's TodoWrite), which the conversation shows each time it changes.
 /export [PATH] writes the session's current branch as a web page that runs no script and
@@ -462,7 +457,7 @@ Code's; one due during a turn runs once the turn ends. It lasts while the sessio
 lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /tasks, /todos, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /todos, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

@@ -10,7 +10,7 @@ use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, allowed,
     delegate, forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest,
-    switch, tasks, todo, web,
+    switch, todo, web,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -176,7 +176,6 @@ impl Agent {
             }),
             mcp: self.mcp.clone(),
             scratch: self.scratch.clone(),
-            tasks: self.tasks.clone(),
         }
     }
 
@@ -525,11 +524,6 @@ impl Agent {
                 false,
             );
         }
-        if call.name == tasks::STOP {
-            let output = self.tasks.stop_call(&call.arguments);
-            ui.tool_result(call.name, &output.text, None, output.failed);
-            return Called::Done(output, false);
-        }
         if call.name == permissions::NAME {
             let output = self.request_permissions(&call.arguments, ui);
             ui.tool_result(call.name, &output.text, None, output.failed);
@@ -653,7 +647,6 @@ struct Kit {
     sandbox: Option<Sandbox>,
     mcp: Option<Arc<mcp::Servers>>,
     scratch: Arc<sandbox::Scratch>,
-    tasks: Arc<tasks::Tasks>,
 }
 
 impl Kit {
@@ -690,7 +683,6 @@ impl Kit {
             sandbox: self.sandbox.as_ref(),
             mcp: self.mcp.as_deref(),
             scratch: &self.scratch,
-            tasks: &self.tasks,
         }
     }
 }
@@ -706,7 +698,6 @@ pub(super) struct Tools<'a> {
     mcp: Option<&'a mcp::Servers>,
     /// What the agent's sandboxed commands have as `/tmp`.
     scratch: &'a Arc<sandbox::Scratch>,
-    tasks: &'a Arc<tasks::Tasks>,
 }
 
 impl Tools<'_> {
@@ -807,9 +798,6 @@ impl Tools<'_> {
                 let hidden = hidden.map(|hidden| hidden.offline(offline).scratch(self.scratch));
                 let progress = &mut |output: &str| ui.tool_output(output);
                 let output = match (self.sandbox, &hidden) {
-                    _ if call.in_background() => {
-                        call.start(root, self.sandbox, hidden.as_ref(), self.tasks)
-                    }
                     (Some(sandbox), Some(hidden)) => {
                         call.run_in_sandbox(root, sandbox, hidden, cancel, progress)
                     }

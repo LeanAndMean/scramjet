@@ -5,7 +5,6 @@
 //! `scope.rs`; `/login` and `/logout` in `login.rs`.
 use super::drive::{self, SandboxChange};
 use super::interactive::{Interactive, completions};
-use super::report::{ReportView, Tab};
 use super::settings::{card_level, scramjet_level};
 use super::terminal;
 use super::text::{clip, visible};
@@ -28,8 +27,6 @@ pub(super) enum Builtin<'a> {
     Clear(&'a str),
     Rename(&'a str),
     Status,
-    /// Claude Code's `/tasks [stop N]`: the commands bash runs in the background.
-    Tasks(&'a str),
     /// Claude Code's `/todos`: the agent's checklist.
     Todos,
     /// With whether the details come first.
@@ -88,7 +85,6 @@ impl<'a> Builtin<'a> {
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
-            "tasks" => Self::Tasks(argument),
             "todos" if argument.is_empty() => Self::Todos,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
@@ -135,7 +131,6 @@ impl<'a> Builtin<'a> {
                 | Self::Copy
                 | Self::Rename(_)
                 | Self::Status
-                | Self::Tasks(_)
                 | Self::Todos
                 | Self::Goal(_)
                 | Self::Loop(_)
@@ -180,7 +175,6 @@ impl Interactive {
             }
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
-            Some(Builtin::Tasks(argument)) => self.tasks(argument),
             Some(Builtin::Todos) => self.todos(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
@@ -408,120 +402,6 @@ impl Interactive {
             false => super::usage::summary(&history, current, model, now, None),
         };
         self.say(report.trim_end());
-    }
-
-    /// `/tasks`, as Claude Code's: the commands bash runs in the background, each with how it
-    /// ended or how long it has run, and its output's file; `/tasks stop N` stops one.
-    fn tasks(&mut self, argument: &str) {
-        let tasks = self.session.agent.tasks();
-        if let Some(id) = argument.strip_prefix("stop") {
-            let stopped = match id.trim().parse() {
-                Ok(id) => tasks.stop(id, false),
-                Err(_) => Err("Usage: /tasks [stop N]".to_owned()),
-            };
-            return match stopped {
-                Ok(text) => self.say_styled(style::MUTED, &text),
-                Err(error) => self.say(&format!("Error: {error}")),
-            };
-        }
-        if !argument.is_empty() {
-            return self.say("Usage: /tasks [stop N]");
-        }
-        let listed = tasks.list();
-        if listed.is_empty() {
-            let note = "No background tasks: the agent starts one with bash's run_in_background";
-            return self.say_styled(style::MUTED, note);
-        }
-        if self.screen.is_some() {
-            return self.pick_task();
-        }
-        let mut text = String::from("Background tasks:");
-        for task in &listed {
-            text += &format!(
-                "\n{}  {}  {}\n   output: {}",
-                task.id,
-                task_state(task),
-                clip(task.command.lines().next().unwrap_or_default(), 120),
-                scramjet::os::tilde(&task.output)
-            );
-        }
-        if listed.iter().any(|task| task.ended.is_none()) {
-            text += "\n/tasks stop N stops one.";
-        }
-        self.say(&text);
-    }
-
-    /// `/tasks`' list on the full screen, each task's output file its note: Enter on a running
-    /// task asks whether to show its output or stop it, on an ended one shows its output; the
-    /// list then shows again, until Escape.
-    fn pick_task(&mut self) {
-        let mut at = 0;
-        loop {
-            let Some(screen) = &self.screen else {
-                return;
-            };
-            let listed = self.session.agent.tasks().list();
-            if listed.is_empty() {
-                return;
-            }
-            at = at.min(listed.len() - 1);
-            let rows: Vec<String> = (listed.iter())
-                .map(|task| {
-                    let command = task.command.lines().next().unwrap_or_default();
-                    format!("{}  {}  {}", task.id, task_state(task), visible(command))
-                })
-                .collect();
-            let notes = (listed.iter())
-                .map(|task| format!("Output: {}", scramjet::os::tilde(&task.output)))
-                .collect();
-            let visible_rows = (super::editor::terminal_size().1 / 2).max(super::select::VISIBLE);
-            let picker = super::select::Picker::select(
-                "Background tasks",
-                visible_rows,
-                rows.len(),
-                at,
-                None,
-                |index, width| clip(&rows[index], width),
-            );
-            let hint = super::select::hint("open", &[], "close");
-            let Some(index) = screen.pick(picker.noting(hint, notes).held()) else {
-                return;
-            };
-            at = index;
-            let task = &listed[index];
-            if task.ended.is_none() {
-                let choices = [
-                    scramjet::agent::Choice {
-                        label: "Show its output".to_owned(),
-                        description: None,
-                        value: String::new(),
-                    },
-                    scramjet::agent::Choice {
-                        label: "Stop it".to_owned(),
-                        description: Some("With all it started.".to_owned()),
-                        value: String::new(),
-                    },
-                ];
-                let title = format!("Task {}", task.id);
-                let question = super::select::Picker::question(&title, &choices, None);
-                match screen.pick(question.held()) {
-                    Some(0) => {}
-                    Some(_) => {
-                        let tasks = self.session.agent.tasks();
-                        match tasks.stop(task.id, false) {
-                            Ok(text) => {
-                                tasks.wait_ended(task.id, std::time::Duration::from_secs(2));
-                                self.say_styled(style::MUTED, &text)
-                            }
-                            Err(error) => self.say(&format!("Error: {error}")),
-                        }
-                        continue;
-                    }
-                    None => continue,
-                }
-            }
-            screen.show_report(task_output(task));
-        }
     }
 
     /// `/context`, as Claude Code's: how much of the window each part of the context takes; on
@@ -1135,39 +1015,6 @@ pub(super) fn grouped(count: u64) -> String {
         grouped.push(digit);
     }
     grouped
-}
-
-/// How a task ended, or how long it has run: `exited with code 0 after 3s`.
-fn task_state(task: &scramjet::agent::tasks::Task) -> String {
-    match &task.ended {
-        Some(ending) => format!("{} after {}s", ending.said(), task.ran.as_secs()),
-        None => format!("running for {}s", task.ran.as_secs()),
-    }
-}
-
-/// A task's command, how it ended or runs, its file and the end of its output so far.
-fn task_output(task: &scramjet::agent::tasks::Task) -> ReportView {
-    let output = match task.output_tail() {
-        Some(text) if text.is_empty() => "(no output yet)".to_owned(),
-        Some(text) => text
-            .lines()
-            .map(super::text::printable)
-            .collect::<Vec<_>>()
-            .join("\n"),
-        None => "(its output file cannot be read)".to_owned(),
-    };
-    let summary = format!(
-        "$ {}\n{}; output in {}\n\n{output}",
-        visible(&task.command),
-        task_state(task),
-        scramjet::os::tilde(&task.output)
-    );
-    let tab = Tab {
-        name: "Output".to_owned(),
-        summary,
-        details: String::new(),
-    };
-    ReportView::new(&format!("Task {}", task.id), "", vec![tab], 0, false).at_end()
 }
 
 #[cfg(test)]

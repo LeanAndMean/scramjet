@@ -182,9 +182,7 @@ pub(super) fn offered(
         .filter(|tool| only.map_or(!named(off, tool), |only| named(only, tool)))
         .filter(|tool| mcp || !super::mcp::TOOLS.contains(tool))
         .filter(|tool| sandbox || *tool != super::permissions::NAME);
-    let coding: Vec<_> = coding.collect();
-    let stop = (coding.contains(&"bash")).then_some(super::tasks::STOP);
-    coding.into_iter().chain(stop).chain(harness).collect()
+    coding.chain(harness).collect()
 }
 
 /// The definitions of the tools `offered` names, in the order `offered` gives them.
@@ -192,11 +190,6 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     let mut tools: Vec<Value> = (CODING_TOOLS.iter())
         .map(|tool| definition(tool, false, false))
         .collect();
-    if let Some(bash) = tools.iter_mut().find(|tool| tool["name"] == "bash") {
-        bash["parameters"]["properties"]["run_in_background"] =
-            json!({"type":"boolean","description":super::tasks::PARAMETER});
-    }
-    tools.push(super::tasks::definition());
     tools.push(super::status::definition());
     tools.extend(super::publish::definitions());
     tools.push(super::question::definition());
@@ -411,7 +404,6 @@ impl<'a> Call<'a> {
                 super::publish::summary(name, &self.arguments)
             }
             super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
-            super::tasks::STOP => format!("task {}", self.arguments["task_id"]),
             super::mcp::SEARCH | super::mcp::CALL => {
                 super::mcp::summary_line(self.name, &self.arguments)
             }
@@ -720,23 +712,6 @@ impl<'a> Call<'a> {
                 (process, "bash")
             }
         })
-    }
-
-    /// Whether this is a bash call the model asked to run in the background.
-    pub fn in_background(&self) -> bool {
-        self.name == "bash" && self.arguments["run_in_background"].as_bool() == Some(true)
-    }
-
-    /// Starts this bash call's command among `tasks`, as `run` or `run_in_sandbox` would run it.
-    pub fn start(
-        &self,
-        root: &Path,
-        sandbox: Option<&Sandbox>,
-        hidden: Option<&Hidden>,
-        tasks: &Arc<super::tasks::Tasks>,
-    ) -> Result<Output, String> {
-        let (process, program) = self.bash_process(root, sandbox, hidden)?;
-        tasks.start(process, program, self.str("command")?)
     }
 
     /// Refuses a path argument in a hidden credential store; the shells have none.

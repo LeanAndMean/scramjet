@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 36] = [
+const SLASH_COMMANDS: [(&str, &str); 35] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -31,10 +31,6 @@ const SLASH_COMMANDS: [(&str, &str); 36] = [
     ("copy", "Copy last agent message to clipboard"),
     ("rename", "Set session display name"),
     ("status", "Show session info and stats"),
-    (
-        "tasks",
-        "Show the commands running in the background, or stop one: /tasks [stop N]",
-    ),
     ("todos", "Show the agent's todo list"),
     (
         "usage",
@@ -103,7 +99,7 @@ const SLASH_COMMANDS: [(&str, &str); 36] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 21] = [
+const ALIASES: [(&str, &str); 19] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
@@ -118,8 +114,6 @@ const ALIASES: [(&str, &str); 21] = [
     ("keymap", "hotkeys"),
     ("changelog", "release-notes"),
     ("permissions", "sandbox"),
-    ("bashes", "tasks"),
-    ("ps", "tasks"),
     ("checkpoint", "rewind"),
     ("undo", "rewind"),
     ("proactive", "loop"),
@@ -550,7 +544,6 @@ mod tests {
                 "/copy",
                 "/rename",
                 "/status",
-                "/tasks",
                 "/todos",
                 "/usage",
                 "/context",
@@ -599,7 +592,7 @@ mod tests {
         let rows = plain(list.rows(24, 5));
         assert_eq!(
             rows[..5],
-            ["  /import", "  /copy", "→ /rename", "  /status", "  /tasks"]
+            ["  /import", "  /copy", "→ /rename", "  /status", "  /todos"]
         );
         assert_eq!(rows[5], format!("  (9/{count})"));
         for _ in 0..count - 8 {

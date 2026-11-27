@@ -68,7 +68,6 @@ impl Agent {
             }
         };
         self.tell_plan(&mut message);
-        self.tell_tasks(&mut message);
         self.add_shown(message, ui)?;
         self.save_command()?;
         self.say_saving(ui);
@@ -398,7 +397,6 @@ finish and is not checked on. Reply to continue.",
                     }
                     let steering = ui.steering();
                     self.add_queued(steering, ui, cancel)?;
-                    self.tell_tasks_within(ui)?;
                     if let Some(level) = ui.effort() {
                         self.set_effort(level)?;
                     }

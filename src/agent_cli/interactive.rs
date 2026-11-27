@@ -33,8 +33,6 @@ use std::{
 /// How often the full screen, waiting for a prompt, tries again to write the lines a full disk
 /// kept the session from writing.
 const RETRY_HELD: Duration = Duration::from_secs(5);
-/// How often an idle full screen looks whether a background task has ended, while one runs.
-const TASK_POLL: Duration = Duration::from_millis(200);
 
 pub(super) struct Interactive {
     pub(super) session: Session,
@@ -291,10 +289,6 @@ impl Interactive {
                 *self.kept.lock().unwrap_or_else(PoisonError::into_inner) = kept;
                 let mut held_at = Instant::now();
                 let input = loop {
-                    if let Some(prompt) = self.session.agent.tasks().woken() {
-                        screen.stop_waiting();
-                        return Ok(Read::Prompt(prompt));
-                    }
                     if let Some(due) = self.session.agent.loop_due(Instant::now()) {
                         screen.stop_waiting();
                         if due.last {
@@ -304,10 +298,7 @@ impl Interactive {
                         return Ok(Read::Prompt(due.prompt));
                     }
                     let holding = self.session.agent.session_holding();
-                    let within = match self.session.agent.tasks().running() {
-                        0 => holding.then_some(RETRY_HELD),
-                        _ => Some(TASK_POLL),
-                    };
+                    let within = holding.then_some(RETRY_HELD);
                     let looping = self.session.agent.looping();
                     let due_in = looping.map(|looping| looping.due_in(Instant::now()));
                     let within = match (within, due_in) {

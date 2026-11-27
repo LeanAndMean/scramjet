@@ -714,18 +714,12 @@ pub fn show_entries(
     unanswered(&mut calls, ui);
 }
 
-/// Whether `sent` is the prompt `typed` after reminders alone, plan mode's (`plan`) or the
-/// background tasks' (`tasks`), shown as typed, as it showed when sent.
+/// Whether `sent` is the prompt `typed` after plan mode's reminder alone (`plan`), shown as
+/// typed, as it showed when sent.
 fn reminded(typed: &str, sent: &str) -> bool {
-    (sent.strip_suffix(typed)).is_some_and(|before| {
-        [
-            "<system-reminder>Plan mode ",
-            "<system-reminder>Background commands ",
-        ]
-        .iter()
-        .any(|start| before.starts_with(start))
-            && before.ends_with("</system-reminder>\n\n")
-    })
+    (sent.strip_suffix(typed))
+        .and_then(|before| before.strip_prefix("<system-reminder>Plan mode "))
+        .is_some_and(|note| note.ends_with("</system-reminder>\n\n"))
 }
 
 #[cfg(test)]
