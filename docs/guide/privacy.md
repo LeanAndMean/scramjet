@@ -45,6 +45,6 @@ Requests to ChatGPT, its model list's too, name the system, its kernel release a
 
 [Where Scramjet keeps its files](install.md#where-scramjet-keeps-its-files) lists them, and [uninstalling](install.md#uninstalling) how to delete them. The ones that matter here:
 
-- **Sessions** (`~/.local/state/scramjet/sessions/`), one file each: every message, the instructions sent and every tool's output, so whatever the agent read or printed. Look through one before sharing it. `/resume` deletes one (Ctrl+D, once confirmed), or delete its file. Unsent drafts are kept beside them. What `write` and `edit` replaced is copied into `~/.local/state/scramjet/file-history/`, each copy named by its SHA-256, for `/rewind`; nothing removes those copies yet: delete the folder to drop them, after which `/rewind` cannot put those files back.
+- **Sessions** (`~/.local/state/scramjet/sessions/`), one file each: every message, the instructions sent and every tool's output, so whatever the agent read or printed. Look through one before sharing it. `/resume` deletes one (Ctrl+D, once confirmed), or delete its file. Unsent drafts are kept beside them.
 - **Logins and keys** in `~/.config/scramjet/auth.json`, readable by you only. `/logout` removes a login; deleting the file does not revoke it at the provider: do that in its console or account settings.
 - **Usage:** each response's tokens and cost are in its session, and what `/usage` shows of your quota and output speeds in the state folder.

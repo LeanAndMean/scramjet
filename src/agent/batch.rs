@@ -24,7 +24,7 @@ enum Shown {
     Other(Show),
     /// A question to the user, held back while another thread shows the calls (`pump`).
     Ask(Show),
-    Ended(Box<(Output, Usage, Option<Ran>)>),
+    Ended(Output, Usage, Option<Ran>),
 }
 
 /// When a call started running and how long it ran, saved with its result.
@@ -165,7 +165,7 @@ impl Batch {
                         (output, Usage::default(), None)
                     }
                 };
-                let _ = to.send((index, Shown::Ended(Box::new((output, usage, ran)))));
+                let _ = to.send((index, Shown::Ended(output, usage, ran)));
             });
         }
         Self {
@@ -242,7 +242,7 @@ impl Batch {
                 Shown::Output(output) => ui.tool_output(&output),
                 Shown::Subagents(children) => ui.subagents(&children),
                 Shown::Other(show) | Shown::Ask(show) => show(ui),
-                Shown::Ended(ended) => self.ended[index] = Some(*ended),
+                Shown::Ended(output, usage, ran) => self.ended[index] = Some((output, usage, ran)),
             }
             return;
         }
@@ -269,8 +269,8 @@ impl Batch {
                 Shown::Output(output) => ui.tool_output(&output),
                 Shown::Subagents(children) => ui.subagents(&children),
                 Shown::Other(show) | Shown::Ask(show) => show(ui),
-                Shown::Ended(ended) => {
-                    self.ended[self.shown] = Some(*ended);
+                Shown::Ended(output, usage, ran) => {
+                    self.ended[self.shown] = Some((output, usage, ran));
                     self.shown += 1;
                 }
             }

@@ -56,7 +56,6 @@ mod programs;
 mod pull_request;
 mod record;
 mod report;
-mod rewind;
 mod sandbox_menu;
 mod scope;
 mod screen;

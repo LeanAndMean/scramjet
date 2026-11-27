@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 33] = [
+const SLASH_COMMANDS: [(&str, &str); 32] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -52,10 +52,6 @@ const SLASH_COMMANDS: [(&str, &str); 33] = [
         "Duplicate the current session at the current position",
     ),
     ("tree", "Navigate session tree (switch branches)"),
-    (
-        "rewind",
-        "Restore the code and/or conversation to before a message: /rewind [N [code|conversation]]",
-    ),
     ("login", "Log in to a provider (GitHub Copilot)"),
     ("logout", "Remove a provider's saved login"),
     ("clear", "Start a new session"),
@@ -94,7 +90,7 @@ const SLASH_COMMANDS: [(&str, &str); 33] = [
 
 /// Other names of the listed commands, accepted but not listed: Scramjet's, and Claude Code's
 /// and Codex's for the same action.
-const ALIASES: [(&str, &str); 19] = [
+const ALIASES: [(&str, &str); 17] = [
     ("new", "clear"),
     ("reset", "clear"),
     ("quit", "exit"),
@@ -109,8 +105,6 @@ const ALIASES: [(&str, &str); 19] = [
     ("keymap", "hotkeys"),
     ("changelog", "release-notes"),
     ("permissions", "sandbox"),
-    ("checkpoint", "rewind"),
-    ("undo", "rewind"),
     ("proactive", "loop"),
     // The built-in set's `scramjet:bug`, listed as `bug` (`Command::listed_name`).
     ("feedback", "bug"),
@@ -548,7 +542,6 @@ mod tests {
                 "/fork",
                 "/branch",
                 "/tree",
-                "/rewind",
                 "/login",
                 "/logout",
                 "/clear",

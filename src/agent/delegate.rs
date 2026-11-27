@@ -62,7 +62,6 @@ pub(super) fn run(
         detail: None,
         failed: true,
         images: Vec::new(),
-        before: None,
     };
     let (name, args) = match given(arguments) {
         Ok(given) => given,
@@ -112,7 +111,6 @@ or aborting the delegation.\n\n{body}"
         detail: None,
         failed: false,
         images: Vec::new(),
-        before: None,
     }
 }
 

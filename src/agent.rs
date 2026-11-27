@@ -44,7 +44,6 @@ mod rates;
 pub mod recurring;
 mod redact;
 mod request;
-pub mod rewind;
 mod sandbox;
 mod session;
 mod shell;
@@ -683,8 +682,6 @@ pub struct Agent {
     rates: Option<PathBuf>,
     /// The state directory under which children's worktrees are made (`subagent::worktrees`).
     worktrees: Option<PathBuf>,
-    /// Where what `write` and `edit` replaced is kept, for `/rewind` (`rewind::store`).
-    file_history: Option<PathBuf>,
     sets: Sets,
     /// Scramjet's agent directory, whose context files, `SYSTEM.md` and `APPEND_SYSTEM.md` the
     /// instructions take.
@@ -915,7 +912,6 @@ impl Agent {
             approvals: approvals::path(),
             rates: rates::path(),
             worktrees: subagent::worktrees(),
-            file_history: rewind::store(),
             sets: Sets::default(),
             agent_directory: None,
             context_files: Vec::new(),

@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.429.0 — Unreleased /rewind taken out
+
 ## 2.428.0 — Unreleased plan mode taken out
 
 ## 2.427.0 — Unreleased tools taken out
@@ -227,12 +229,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 ### Added
 
 - `/loop [INTERVAL] PROMPT` sends a prompt now and again each interval while the full screen waits for you, as Claude Code's does: `/loop 5m check the deploy`, or `/loop run the tests every 20m`, 10 minutes when no interval is given. The footer says `loop every 5m`; `/loop` says when it runs next, `/loop stop` ends it, and it ends with the session or after 7 days.
-
-## 2.364.0 — /rewind
-
-### Added
-
-- `/rewind` (also `/checkpoint` and `/undo`) goes back to before one of your prompts, as Claude Code's does: it puts back the files the agent's `write` and `edit` changed since, moves the conversation there with the prompt in the editor, or both. What commands and subagents changed stays as it is. `/rewind N code` or `/rewind N conversation` does one at once.
 
 ## 2.362.0 — /goal
 

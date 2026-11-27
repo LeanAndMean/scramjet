@@ -39,8 +39,6 @@ pub(super) enum Builtin<'a> {
     /// With the new session's name, if given.
     Branch(&'a str),
     Tree(&'a str),
-    /// Claude Code's `/rewind [N [code|conversation]]`: back to before a prompt.
-    Rewind(&'a str),
     Model(&'a str),
     /// Claude Code's `/effort [LEVEL]`: the thinking level.
     Effort(&'a str),
@@ -93,7 +91,6 @@ impl<'a> Builtin<'a> {
             "fork" => Self::Fork(argument),
             "branch" => Self::Branch(argument),
             "tree" => Self::Tree(argument),
-            "rewind" => Self::Rewind(argument),
             "model" => Self::Model(argument),
             "effort" => Self::Effort(argument),
             "theme" => Self::Theme(argument),
@@ -179,7 +176,6 @@ impl Interactive {
             Some(Builtin::Fork(wanted)) => self.fork(wanted),
             Some(Builtin::Branch(name)) => self.clone_session(name),
             Some(Builtin::Tree(wanted)) => self.tree(wanted),
-            Some(Builtin::Rewind(wanted)) => self.rewind(wanted),
             Some(Builtin::Model(wanted)) => self.model(wanted),
             Some(Builtin::Effort(wanted)) => self.effort(wanted),
             Some(Builtin::Theme(wanted)) => self.theme(wanted),
