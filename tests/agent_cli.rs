@@ -1111,24 +1111,13 @@ continues it in a new session of this one"
     );
     assert!(!std::fs::read_to_string(&source).unwrap().contains("more"));
 
-    // Claude Code's `--resume ID` and `--fork-session`.
+    // Claude Code's `--resume ID`.
     assert!(run(&["-p", "--resume", "16", "third"]).starts_with(refused));
     assert!(
         std::fs::read_to_string(&ours)
             .unwrap()
             .contains("\"content\":\"third\"")
     );
-    let before = sessions().collect::<Vec<_>>();
-    assert!(run(&["-c", "--fork-session", "-p", "fourth"]).starts_with(refused));
-    let copy = sessions().find(|path| !before.contains(path)).unwrap();
-    let text = std::fs::read_to_string(copy).unwrap();
-    let parent = format!("\"parentSession\":{:?}", ours.to_str().unwrap());
-    assert!(
-        text.contains(&parent) && text.contains("\"content\":\"third\""),
-        "{text}"
-    );
-    assert!(text.contains("\"content\":\"fourth\""), "{text}");
-    assert!(!std::fs::read_to_string(&ours).unwrap().contains("fourth"));
 }
 
 #[test]

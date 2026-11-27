@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.426.0 — Unreleased permission options taken out
+
 ## 2.425.0 — Unreleased background commands taken out
 
 ## 2.424.0 — Unreleased options taken out
@@ -24,42 +26,25 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - `-n NAME` or `--name NAME` names the session as `/rename` does, as Claude Code's: a new one, the one `-c` or `--resume ID` continues, or the one `-r`'s list picks. The name shows in the footer, the terminal's title and `/resume`.
 
-## 2.414.0 — `--allowedTools` and `--permission-prompts`
-
-### Added
-
-- `--allowedTools LIST` (or `--allowed-tools`) names the tools whose calls `--ask` lets run without asking, as Claude Code's: Scramjet's or Claude Code's names (`Bash`, `Write`), and MCP servers' tools as `mcp__SERVER__TOOL`, `mcp__SERVER` or `mcp__SERVER__*`. With `--tools`, naming an MCP tool keeps the MCP tools offered, as Claude Code's `--tools` lists only its own. Its rules for one tool's calls (`Bash(git *)`) are not kept, with a warning: those calls ask, or are refused, as without them.
-- `--permission-prompts none`, as Claude Code's: a call `--ask` would ask about is refused, and the model told why; `host`, the default, asks.
-
-### Changed
-
-- `--permission-mode dontAsk` refuses what `--ask` would ask about and `--allowedTools` does not allow, as Claude Code's, where it changed nothing before. Claude Code's `-p` research invocations with `--tools WebFetch --allowedTools mcp__…` run unchanged.
-
 ## 2.413.0 — `--plugin-dir`
 
 ### Added
 
 - `--plugin-dir DIR`, Claude Code's: loads a directory for this run only (repeatable), as a command set when it has a `set.yaml`, else as a Claude Code plugin, in place of an installed set or plugin of the same name; `scramjet --plugin-dir ~/repos/mach12` tries a checkout without installing it.
 
-## 2.412.0 — `--resume ID` and `--fork-session`
+## 2.412.0 — `--resume ID`
 
 ### Added
 
 - `-r ID` (`--resume ID`) resumes the session whose id starts with ID, or a `.jsonl` file, as Claude Code's `--resume` does, and works with `-p`, so `scramjet -p --resume ID 'follow-up'` scripts run unchanged; `-r` without one still opens the list. A word that is not digits and dashes is still the first prompt.
-- `--fork-session`, Claude Code's: with `-c`, `--resume ID` or `--session`, the session continues in a new copy, as `--fork` does.
 
-## 2.411.0 — Claude Code's permission options
+## 2.411.0 — `--no-session-persistence`
 
 ### Added
 
-- `--permission-mode MODE` takes Claude Code's modes: `plan` starts the session in plan mode, as `/plan` does, and `bypassPermissions` turns `--ask` off; `default`, `acceptEdits`, `auto` and `dontAsk` change nothing, as Scramjet asks only with `--ask`. `--dangerously-skip-permissions` turns `--ask` off too, and `--allow-dangerously-skip-permissions` is taken and changes nothing, so Claude Code's `-p` invocations run unchanged.
 - `--no-session-persistence`, Claude Code's name for `--no-session`.
 
-## 2.410.0 — `--disallowedTools`
-
-### Added
-
-- `--disallowedTools LIST` (or `--disallowed-tools`) leaves tools out of a run, as Claude Code's does: out of `--tools`' list, else out of the settings' tools, subagents' coding tools included. Claude Code's rules for one tool's calls (`Bash(git push *)`) and MCP servers' tools (`mcp__server__tool`) are refused with an error rather than ignored, as Scramjet cannot leave them out.
+## 2.410.0 — Claude Code's tool names in `--tools`
 
 ### Changed
 

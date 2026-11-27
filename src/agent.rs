@@ -1,7 +1,6 @@
 //! A coding agent that talks to its models' providers (Responses or Messages) and works in
 //! a project.
 
-mod allowed;
 mod approvals;
 mod attached;
 mod autonomy;
@@ -67,7 +66,6 @@ mod ui;
 pub mod usage;
 mod yaml;
 
-pub use allowed::Allowed;
 pub use attached::Attached;
 pub use autonomy::{
     Approval, Approvals, Edge, NextStep, NextSteps, Publication, Scope, Setting, Suggestion,
@@ -763,8 +761,6 @@ pub struct Agent {
     /// Whether plan mode is on (`/plan`), and whether the model was last told it is.
     planning: bool,
     plan_told: bool,
-    /// `--allowedTools` and `--permission-prompts none`, under `--ask`.
-    allowed: allowed::Allowed,
     /// The `/loop`, while one runs.
     recurring: Option<recurring::Loop>,
     /// The MCP servers, while the model is offered their tools.
@@ -967,7 +963,6 @@ impl Agent {
             autopilot,
             planning: false,
             plan_told: false,
-            allowed: allowed::Allowed::default(),
             recurring: None,
             mcp: None,
             scratch: Arc::default(),

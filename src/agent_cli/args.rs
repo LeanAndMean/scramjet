@@ -1,7 +1,7 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
 use scramjet::agent::{
-    Allowed, CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt, tool_named_as_claude_codes,
+    CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt, tool_named_as_claude_codes,
 };
 use std::{ffi::OsString, path::PathBuf};
 
@@ -24,7 +24,6 @@ Sessions:
   -r, --resume [ID]        choose one of this project's sessions to resume, or resume ID's
   --session FILE|ID        resume that session
   --fork FILE|ID           continue a copy of that session in a new one
-  --fork-session           with -c or --resume ID, continue a copy in a new session
   -n, --name NAME          name the session, as /rename does
   --no-session, --no-session-persistence
                            save no session
@@ -70,18 +69,12 @@ Instructions and tools:
   --theme PATH             a theme file, or a directory of themes (repeatable)
   --no-themes              no themes but the built-in ones and those --theme names
   -t, --tools LIST         the only tools the agent has, comma-separated
-  --disallowedTools, --disallowed-tools LIST
-                           tools the agent does not have, as Claude Code's
   -nt, --no-tools          no tools at all
   -nbt, --no-builtin-tools no coding tools; Scramjet's own stay
 
 What the agent may do:
   --ask                    ask before each command, and each write or edit outside the
                            project
-  --permission-mode MODE, --permission-prompts host|none,
-  --allowedTools LIST, --allowed-tools LIST, --dangerously-skip-permissions,
-  --allow-dangerously-skip-permissions
-                           Claude Code's, over --ask (see --help-all)
   -s, --sandbox MODE       confine the agent's commands: read-only, workspace-write, or
                            danger-full-access (the default); on Linux and macOS
   --add-dir DIR            let the sandbox's commands change DIR too (repeatable)
@@ -129,10 +122,9 @@ impl Help {
 pub(super) const HELP_ALL: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
-[--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [-n NAME] [--session-dir DIR]
+[--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [-n NAME] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
-[--permission-mode MODE] [--dangerously-skip-permissions] [--allowedTools LIST]... [--permission-prompts host|none]
 [-s MODE] [--offline] [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
@@ -203,8 +195,6 @@ but to NO_PROXY's hosts and this machine.
                          agree
   --fork FILE|ID         continue a copy of that session, its branches and name included, in a
                          new session of this project
-  --fork-session         as Claude Code's: with -c, --resume ID or --session, continue a
-                         copy of that session in a new one, as --fork does
   -n, --name NAME        as Claude Code's: name the session, new or resumed, as /rename does
                          (shown in the footer, the terminal's title and /resume)
   --no-session, --no-session-persistence
@@ -260,11 +250,6 @@ but to NO_PROXY's hosts and this machine.
                          for you after each reply
                          Claude Code's names (Bash, Read, Glob…) are taken, and spaces
                          between names; default is the tools the agent has without it
-  --disallowedTools LIST, --disallowed-tools LIST
-                         tools the agent does not have in this run, in --tools' or the
-                         settings' (repeatable), as Claude Code's; Claude Code's rules for
-                         one tool's calls, Bash(git push *), and MCP servers' tools are
-                         refused, as Scramjet cannot leave them out
   -nt, --no-tools        no tools at all, unless --tools names some
   -nbt, --no-builtin-tools
                          no coding tools, unless --tools names some; Scramjet's own stay
@@ -272,24 +257,6 @@ but to NO_PROXY's hosts and this machine.
                          project (answer `a` to stop asking until exit); by default tool
                          calls run without asking. Bash is not sandboxed
                          unless --sandbox says so.
-  --permission-mode MODE Claude Code's permission modes: plan starts the session in plan mode,
-                         as /plan does; bypassPermissions turns --ask off; dontAsk is --ask
-                         with --permission-prompts none, so what --allowedTools does not
-                         allow is refused; default, acceptEdits and auto change nothing, as
-                         nothing asks without --ask
-  --allowedTools LIST, --allowed-tools LIST
-                         tools whose calls run without --ask asking (repeatable), as Claude
-                         Code's: Scramjet's or Claude Code's names (Bash, Write), and MCP
-                         servers' tools as mcp__SERVER__TOOL, mcp__SERVER or mcp__SERVER__*;
-                         an MCP tool named keeps mcp_search and mcp_call in --tools' list.
-                         Claude Code's rules for one tool's calls, Bash(git *), are not kept:
-                         those calls ask, or are refused, as without them
-  --permission-prompts host|none
-                         Claude Code's: with none, a call --ask would ask about is refused,
-                         and the model told so; host, the default, asks
-  --dangerously-skip-permissions, --allow-dangerously-skip-permissions
-                         taken as Claude Code's: the first turns --ask off, as
-                         --permission-mode bypassPermissions; the second changes nothing
   -s, --sandbox MODE     confine the agent's tools, as Codex's modes do (default: the
                          settings' sandbox, else danger-full-access): read-only runs bash with
                          every file read-only, a private /tmp (on macOS /tmp and TMPDIR
@@ -498,7 +465,7 @@ with the keys hideThinkingBlock, doubleEscapeAction (tree, fork or none for the 
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
 effortLevel (else defaultThinkingLevel; Claude Code's alwaysThinkingEnabled: false starts at
-off); tools, the agent's coding tools among read, bash, edit, write (the default) and grep, find, ls; enabledModels, the patterns of the models Ctrl+P cycles through;
+off); tools, the agent's coding tools among read, bash, edit, write, grep, find and ls (all seven by default); enabledModels, the patterns of the models Ctrl+P cycles through;
 defaultProvider and defaultModel, the model chosen last, which /model, Ctrl+P, a next step's
 list and the agent save (Claude Code's model, an id or alias such as sonnet, read before them
 and saved in their place when set); and startupModel: per-directory (new sessions start with the model
@@ -530,8 +497,6 @@ pub(super) enum Start {
     Session(String),
     /// `--fork`: the same, continued in a new session of the project.
     Fork(String),
-    /// `-c --fork-session`: the session `-c` takes, continued in a new one.
-    ForkLatest,
     /// `--no-session`: a new one that is not saved.
     Unsaved,
 }
@@ -579,13 +544,7 @@ pub(super) struct Options {
     pub(super) no_themes: bool,
     /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools of the run.
     pub(super) only_tools: Option<Vec<String>>,
-    /// `--disallowedTools`, as Claude Code's: tools left out of the run's.
-    pub(super) denied_tools: Vec<String>,
-    /// `--allowedTools` and `--permission-prompts none` (or `--permission-mode dontAsk`).
-    pub(super) allowed: Allowed,
     pub(super) ask: bool,
-    /// `--permission-mode plan`: the session starts in plan mode.
-    pub(super) plan: bool,
     /// `--sandbox`: `Some(None)` for `danger-full-access`.
     pub(super) sandbox: Option<Option<SandboxMode>>,
     /// `--add-dir`: directories the sandbox makes writable too.
@@ -671,10 +630,7 @@ impl Options {
             themes: Vec::new(),
             no_themes: false,
             only_tools: None,
-            denied_tools: Vec::new(),
-            allowed: Allowed::default(),
             ask: false,
-            plan: false,
             sandbox: None,
             add_dirs: Vec::new(),
             retries: None,
@@ -691,9 +647,7 @@ impl Options {
             list_credential_stores: false,
             version: false,
         };
-        let (mut fork, mut no_session, mut bypass) = (None, false, false);
-        let mut dont_ask = false;
-        let mut fork_session = false;
+        let (mut fork, mut no_session) = (None, false);
         let (mut tools, mut no_tools, mut no_builtin_tools) = (None, false, false);
         // The other options naming the session to start in, which `--fork` cannot be given with.
         let mut chosen = Vec::new();
@@ -829,7 +783,6 @@ and stream-json"
                         None => Start::Resume,
                     }
                 }
-                Some("--fork-session") => fork_session = true,
                 Some("--session") => {
                     chosen.push("--session");
                     options.start = Start::Session(value()?)
@@ -860,29 +813,6 @@ and stream-json"
                     // Claude Code's word for its default tools.
                     tools = (names != ["default"]).then_some(names)
                 }
-                Some("--disallowedTools" | "--disallowed-tools") => {
-                    for name in tool_list(&value()?) {
-                        if name.contains('(') || name.starts_with("mcp__") {
-                            return Err(format!(
-                                "--disallowedTools {name}: Scramjet leaves out only whole \
-built-in tools, not one tool's calls or an MCP server's tools\n\n{USAGE}"
-                            ));
-                        }
-                        options.denied_tools.push(name);
-                    }
-                }
-                Some("--allowedTools" | "--allowed-tools") => {
-                    options.allowed.tools.extend(tool_list(&value()?))
-                }
-                Some("--permission-prompts") => match value()?.as_str() {
-                    "host" => options.allowed.refuse_asked = false,
-                    "none" => options.allowed.refuse_asked = true,
-                    other => {
-                        return Err(format!(
-                            "--permission-prompts {other}: host or none\n\n{USAGE}"
-                        ));
-                    }
-                },
                 Some("-nt" | "--no-tools") => no_tools = true,
                 Some("-nbt" | "--no-builtin-tools") => no_builtin_tools = true,
                 Some("--export") => options.export = Some(PathBuf::from(value()?)),
@@ -896,20 +826,6 @@ built-in tools, not one tool's calls or an MCP server's tools\n\n{USAGE}"
                 Some("--list-credential-stores") => options.list_credential_stores = true,
                 Some("-v" | "--version") => options.version = true,
                 Some("--ask") => options.ask = true,
-                Some("--permission-mode") => match value()?.as_str() {
-                    "plan" => options.plan = true,
-                    "bypassPermissions" => bypass = true,
-                    "dontAsk" => dont_ask = true,
-                    "default" | "acceptEdits" | "auto" => {}
-                    other => {
-                        return Err(format!(
-                            "--permission-mode {other}: not one of Claude Code's modes: \
-default, acceptEdits, auto, dontAsk, bypassPermissions and plan\n\n{USAGE}"
-                        ));
-                    }
-                },
-                Some("--dangerously-skip-permissions") => bypass = true,
-                Some("--allow-dangerously-skip-permissions") => {}
                 Some("-s" | "--sandbox") => {
                     let mode = value()?;
                     options.sandbox = Some(SandboxMode::parse(&mode).ok_or(format!(
@@ -928,11 +844,6 @@ workspace-write and danger-full-access"
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
             }
         }
-        if dont_ask {
-            options.ask = true;
-            options.allowed.refuse_asked = true;
-        }
-        options.ask &= !bypass;
         // As Scramjet's, `--tools` wins over the other two.
         options.only_tools = tools
             .or_else(|| no_tools.then(Vec::new))
@@ -965,17 +876,6 @@ workspace-write and danger-full-access"
             }
             options.start = start;
         }
-        if fork_session {
-            options.start = match std::mem::replace(&mut options.start, Start::New) {
-                Start::Session(named) => Start::Fork(named),
-                Start::Continue => Start::ForkLatest,
-                _ => {
-                    return Err(format!(
-                        "--fork-session needs -c, --resume ID or --session\n\n{USAGE}"
-                    ));
-                }
-            };
-        }
         if matches!(options.start, Start::Resume) && options.print {
             return Err(format!("--resume needs a session ID with -p\n\n{USAGE}"));
         }
@@ -1007,26 +907,13 @@ fn names_session(word: &str) -> bool {
             && word.chars().all(|c| c.is_ascii_digit() || c == '-'))
 }
 
-/// The tools a `--tools` or `--disallowedTools` value names, separated by commas or spaces outside
-/// parentheses (`Bash(git *)`), with Claude Code's names (`Bash`, `Read`) as Scramjet's.
+/// The tools a `--tools` value names, separated by commas or spaces, with Claude Code's names
+/// (`Bash`, `Read`) as Scramjet's.
 fn tool_list(value: &str) -> Vec<String> {
-    let (mut names, mut name, mut depth) = (Vec::new(), String::new(), 0usize);
-    for c in value.chars().chain([',']) {
-        match c {
-            '(' => depth += 1,
-            ')' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-        if depth == 0 && (c == ',' || c.is_whitespace()) {
-            if !name.is_empty() {
-                names.push(tool_named_as_claude_codes(&name).to_owned());
-            }
-            name.clear();
-        } else {
-            name.push(c);
-        }
-    }
-    names
+    (value.split(|c: char| c == ',' || c.is_whitespace()))
+        .filter(|name| !name.is_empty())
+        .map(|name| tool_named_as_claude_codes(name).to_owned())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1081,42 +968,17 @@ mod tests {
     }
 
     #[test]
-    fn tools_and_disallowed_tools_take_claude_codes_names_and_lists() {
+    fn tools_take_claude_codes_names_and_lists() {
         assert_eq!(
             only_tools(&["--tools", "Bash,Edit Read"]),
             Some(vec!["bash".into(), "edit".into(), "read".into()])
         );
         assert_eq!(only_tools(&["--tools", "default"]), None);
         assert_eq!(only_tools(&["--tools", ""]), Some(Vec::new()));
-        let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
-        let denied = |arguments: &[&str]| parse(arguments).unwrap().unwrap().denied_tools;
-        assert_eq!(
-            denied(&[
-                "--disallowedTools",
-                "WebFetch, Glob",
-                "--disallowed-tools",
-                "subagent"
-            ]),
-            ["web_fetch", "find", "subagent"]
-        );
-        for refused in ["Bash(git push *) Edit", "mcp__tavily__search"] {
-            let error = parse(&["--disallowedTools", refused]).err().unwrap();
-            assert!(
-                error.contains("leaves out only whole built-in tools"),
-                "{error}"
-            );
-        }
-        let error = parse(&["--disallowedTools", "Bash(git push *) Edit"])
-            .err()
-            .unwrap();
-        assert!(
-            error.starts_with("--disallowedTools Bash(git push *):"),
-            "{error}"
-        );
     }
 
     #[test]
-    fn resume_takes_an_id_and_fork_session_forks_it_as_claude_codes() {
+    fn resume_takes_an_id_as_claude_codes() {
         let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
         let start = |arguments: &[&str]| parse(arguments).unwrap().unwrap().start;
         let resumed = start(&["-p", "--resume", "1795-12", "again"]);
@@ -1132,18 +994,6 @@ mod tests {
             error.starts_with("--resume needs a session ID with -p\n"),
             "{error}"
         );
-        let forked = start(&["-r", "17", "--fork-session"]);
-        assert!(matches!(forked, Start::Fork(id) if id == "17"));
-        let forked = start(&["--fork-session", "--session", "18"]);
-        assert!(matches!(forked, Start::Fork(id) if id == "18"));
-        assert!(matches!(
-            start(&["-c", "--fork-session"]),
-            Start::ForkLatest
-        ));
-        for alone in [&["--fork-session"][..], &["-r", "--fork-session"]] {
-            let error = parse(alone).err().unwrap();
-            assert!(error.starts_with("--fork-session needs -c, --resume ID or --session\n"));
-        }
     }
 
     #[test]
@@ -1184,61 +1034,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(options.start, Start::Unsaved));
-    }
-
-    #[test]
-    fn claude_codes_permission_options_plan_or_turn_ask_off() {
-        let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
-        let options = |arguments: &[&str]| parse(arguments).unwrap().unwrap();
-        let planned = options(&["--ask", "--permission-mode", "plan"]);
-        assert!(planned.plan && planned.ask);
-        for mode in ["default", "acceptEdits", "auto"] {
-            let kept = options(&["--ask", "--permission-mode", mode]);
-            assert!(
-                kept.ask && !kept.plan && !kept.allowed.refuse_asked,
-                "{mode}"
-            );
-            assert!(!options(&["--permission-mode", mode]).ask, "{mode}");
-        }
-        let dont_ask = options(&["--permission-mode", "dontAsk"]);
-        assert!(dont_ask.ask && dont_ask.allowed.refuse_asked);
-        let bypassed = options(&[
-            "--permission-mode",
-            "dontAsk",
-            "--dangerously-skip-permissions",
-        ]);
-        assert!(!bypassed.ask);
-        let allowed = options(&[
-            "--allowedTools",
-            "mcp__tavily__search,WebFetch",
-            "--allowed-tools",
-            "Bash(git *) Write",
-            "--permission-prompts",
-            "none",
-        ]);
-        assert_eq!(
-            allowed.allowed.tools,
-            ["mcp__tavily__search", "web_fetch", "Bash(git *)", "write"]
-        );
-        assert!(allowed.allowed.refuse_asked && !allowed.ask);
-        let host = options(&[
-            "--permission-prompts",
-            "none",
-            "--permission-prompts",
-            "host",
-        ]);
-        assert!(!host.allowed.refuse_asked);
-        let error = parse(&["--permission-prompts", "sdk"]).err().unwrap();
-        assert!(error.starts_with("--permission-prompts sdk: host or none"));
-        for bypass in [
-            &["--ask", "--permission-mode", "bypassPermissions"][..],
-            &["--dangerously-skip-permissions", "--ask"],
-        ] {
-            assert!(!options(bypass).ask, "{bypass:?}");
-        }
-        assert!(options(&["--allow-dangerously-skip-permissions", "--ask"]).ask);
-        let error = parse(&["--permission-mode", "yolo"]).err().unwrap();
-        assert!(error.starts_with("--permission-mode yolo: not one of Claude Code's modes"));
     }
 
     #[test]

@@ -438,10 +438,6 @@ fn session_choice(
             }
         }
         Start::Unsaved => SessionChoice::Unsaved,
-        Start::ForkLatest => match Session::latest(&directory()?).map_err(|e| e.to_string())? {
-            Some(path) => SessionChoice::Fork(path),
-            None => SessionChoice::New,
-        },
         Start::Fork(named) => SessionChoice::Fork(find(&named)?.path().to_owned()),
         Start::Session(named) => match find(&named)? {
             Found::Here(path) => return open(path, &named),
@@ -500,7 +496,7 @@ a new session of this one",
 /// option or setting they come from, the models remembered that the providers lack, and what is
 /// wrong in the providers' files.
 fn start(
-    mut options: Options,
+    options: Options,
     (root, session_dir): (PathBuf, Option<PathBuf>),
     choice: SessionChoice,
     settings: &Settings,
@@ -527,52 +523,6 @@ fn start(
     };
     let chosen = named.is_some();
     let chosen_effort = (options.effort.clone()).or_else(|| named.as_ref()?.level.clone());
-    let unknown_denied: Vec<String> = (options.denied_tools.iter())
-        .filter(|name| {
-            !CODING_TOOLS.contains(&name.as_str()) && !HARNESS_TOOLS.contains(&name.as_str())
-        })
-        .map(|name| format!("--disallowedTools: {name} is not one of Scramjet's tools; ignored"))
-        .collect();
-    if !options.denied_tools.is_empty() {
-        let mut tools = options.only_tools.take().unwrap_or_else(|| {
-            let on = |tool: &&str| !settings.harness_off.iter().any(|off| off == tool);
-            let harness = HARNESS_TOOLS.into_iter().filter(on).map(String::from);
-            settings.tools.iter().cloned().chain(harness).collect()
-        });
-        tools.retain(|tool| !options.denied_tools.contains(tool));
-        options.only_tools = Some(tools);
-    }
-    // As Claude Code's, whose --tools are only its built-in tools: an MCP server's tool allowed
-    // is offered.
-    if let Some(tools) = (options.only_tools.as_mut()).filter(|_| options.allowed.names_mcp()) {
-        for tool in [scramjet::agent::MCP_SEARCH, scramjet::agent::MCP_CALL] {
-            if !tools.iter().any(|named| named == tool) {
-                tools.push(tool.to_owned());
-            }
-        }
-    }
-    let allowed = &options.allowed;
-    let mut unknown_allowed: Vec<String> = (allowed.tools.iter())
-        .filter(|name| {
-            !name.contains('(')
-                && !name.starts_with("mcp__")
-                && !CODING_TOOLS.contains(&name.as_str())
-                && !HARNESS_TOOLS.contains(&name.as_str())
-        })
-        .map(|name| format!("--allowedTools: {name} is not one of Scramjet's tools; ignored"))
-        .collect();
-    if options.ask {
-        let then = match allowed.refuse_asked {
-            true => "refused",
-            false => "asked about",
-        };
-        unknown_allowed.extend(allowed.rules().map(|rule| {
-            format!(
-                "--allowedTools: {rule}: Scramjet allows only whole tools and MCP servers' \
-tools; the calls this rule names are {then}, as without it"
-            )
-        }));
-    }
     let unknown_tools: Vec<String> = (options.only_tools.iter().flatten())
         .filter(|name| {
             !CODING_TOOLS.contains(&name.as_str()) && !HARNESS_TOOLS.contains(&name.as_str())
@@ -667,11 +617,9 @@ local models), or add providers to {file} (see --help)"
     agent.set_reads(settings.reads());
     agent.set_subagents(settings.subagents());
     agent.set_offline(!settings.sandbox_network);
-    agent.set_planning(options.plan);
     if let Some(name) = &options.name {
         agent.set_session_name(name).map_err(|e| e.to_string())?;
     }
-    agent.set_allowed(options.allowed.clone());
     warnings.extend(offline_notice(&agent));
     if agent.sandbox().is_none() {
         let said = agent.grant_writable_always(&settings.allow_write());
@@ -701,8 +649,6 @@ local models), or add providers to {file} (see --help)"
     };
     warnings.extend((scope_warnings.iter()).map(|warning| format!("{source}: {warning}")));
     warnings.extend(unknown_tools);
-    warnings.extend(unknown_denied);
-    warnings.extend(unknown_allowed);
     warnings.extend(missing_shells);
     agent.set_model_scope(scoped.iter().map(|scoped| scoped.model.clone()).collect());
     let new = !chosen && agent.last_model().is_none();

@@ -8,9 +8,9 @@ use super::sandbox::{Sandbox, SandboxMode};
 use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
-    Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, allowed,
-    delegate, forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest,
-    switch, todo, web,
+    Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, delegate,
+    forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest, switch, todo,
+    web,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -110,12 +110,10 @@ impl Agent {
         (parsed.len() > 1 && parsed.iter().all(runs)).then_some(parsed)
     }
 
-    /// The question `--ask` asks before `call` runs, unless `--allowedTools` allows it.
+    /// The question `--ask` asks before `call` runs.
     fn question_for(&self, call: &Call) -> Option<String> {
         match call.approval(&self.config.root) {
-            Approval::Ask(question) if self.config.ask && !self.allowed.allows(call) => {
-                Some(question)
-            }
+            Approval::Ask(question) if self.config.ask => Some(question),
             _ => None,
         }
     }
@@ -570,13 +568,6 @@ impl Agent {
                 before: None,
             };
             return Called::Done(output, ends);
-        }
-        if self.allowed.refuse_asked && self.question_for(&call).is_some() {
-            ui.tool_result(call.name, allowed::REFUSED, None, true);
-            if together {
-                ui.of_call(None);
-            }
-            return Called::Done(failure(allowed::REFUSED.to_owned()), false);
         }
         let answer = match self.question_for(&call) {
             Some(question) => {
@@ -2851,42 +2842,6 @@ sed.\n- Be concise";
             std::fs::read_to_string(agent.root().join("big.rs")).unwrap(),
             content
         );
-    }
-
-    #[test]
-    fn allowed_tools_run_unasked_and_with_prompts_refused_the_rest_do_not_run() {
-        if crate::agent::tests::missing("bash") {
-            return;
-        }
-        let outside = |id: &str| {
-            let path = std::env::temp_dir().join(format!("scramjet-allowed-{id}"));
-            tool_call(id, "write", json!({"path": path, "content": "x"}))
-        };
-        let (endpoint, server) = serve(vec![
-            tool_call("call_1", "bash", json!({"command": "touch ran"})),
-            outside("call_2"),
-            stream(&fixture::text_events("done", fixture::known_usage())),
-        ]);
-        let (mut agent, _scratch) = agent(endpoint, "allowed");
-        agent.config.ask = true;
-        agent.set_allowed(allowed::Allowed {
-            tools: vec!["bash".into()],
-            refuse_asked: true,
-        });
-        let mut ui = Recorder::default();
-        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
-        server.join().unwrap();
-        assert_eq!(ui.questions, 0);
-        assert!(agent.root().join("ran").exists());
-        assert!(
-            !std::env::temp_dir()
-                .join("scramjet-allowed-call_2")
-                .exists()
-        );
-        let outputs: Vec<_> = (agent.conversation().iter())
-            .filter_map(|item| item["output"].as_str())
-            .collect();
-        assert_eq!(outputs, ["(no output)", allowed::REFUSED]);
     }
 
     #[test]
