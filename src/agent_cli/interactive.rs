@@ -185,9 +185,6 @@ impl Interactive {
         super::exit::wait_if_exiting();
         // The terminal is given back first, so that an error saving the settings shows.
         let screen = self.screen.take().map_or(Ok(()), Handle::close);
-        if let Ok(Ended::Quit) = result {
-            self.session.agent.end_session("prompt_input_exit");
-        }
         self.save_hide_thinking();
         if let Ok(Ended::NothingResumed) = result {
             eprintln!("{}", self.ui.dim("No session selected"));

@@ -511,9 +511,6 @@ pub(super) struct Settings {
     pub(super) banner: Banner,
     /// `bottom`: how the status row, the prompt and the footer look.
     pub(super) bottom: Bottom,
-    /// `hooks`, Claude Code's: commands run before and after the agent's tools, each file's
-    /// after the one before's.
-    pub(super) hooks: std::sync::Arc<scramjet::agent::Hooks>,
     /// `effortLevel`, Claude Code's name, else `defaultThinkingLevel`, Scramjet's; named as
     /// requests send levels.
     pub(super) default_thinking_level: Option<String>,
@@ -724,7 +721,6 @@ impl Settings {
             look: Design::Tinted,
             banner: Banner::Header,
             bottom: Bottom::Bar,
-            hooks: Default::default(),
             default_thinking_level: None,
             default_provider: None,
             default_model: None,
@@ -1152,10 +1148,6 @@ impl Settings {
             Err(()) => self.warnings.push(format!(
                 "{path}: modelCatalogs must be a list of URLs; ignored"
             )),
-        }
-        if let Some(hooks) = object.get("hooks") {
-            let read = scramjet::agent::Hooks::read(hooks, &path, &mut self.warnings);
-            std::sync::Arc::make_mut(&mut self.hooks).extend(read);
         }
         self.apply_sandbox(&path, object);
     }
@@ -2968,7 +2960,6 @@ const KEYS: &[(&str, &[&str])] = &[
             "sandboxNetwork",
             "directives",
             "sandbox",
-            "hooks",
             // Scramjet 1's, not read here.
             "anthropicExtraUsage",
             "dockEditor",
@@ -3364,29 +3355,6 @@ mod tests {
         assert!(
             missing.is_empty(),
             "not in the settings reference: {missing:?}"
-        );
-    }
-
-    #[test]
-    fn claude_codes_hooks_are_read_with_warnings_for_what_does_not_run() {
-        let scratch = Scratch::new("hooks");
-        assert!(settings_with(&scratch, "{}").hooks.is_empty());
-        let settings = settings_with(
-            &scratch,
-            r#"{"hooks": {"PostToolUse": [{"matcher": "Write|Edit", "hooks": [{"type": "command", "command": "cargo fmt"}]}],
-                "PermissionRequest": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#,
-        );
-        assert!(!settings.hooks.is_empty());
-        assert_eq!(settings.warnings.len(), 1, "{:?}", settings.warnings);
-        assert!(
-            settings.warnings[0].ends_with(
-                ": hooks.PermissionRequest is not run: Scramjet runs PreToolUse, PostToolUse, \
-                 PostToolUseFailure, UserPromptSubmit, Stop, SessionStart, SessionEnd, \
-                 PreCompact, Notification, PostCompact, StopFailure, SubagentStart, SubagentStop \
-                 hooks; ignored"
-            ),
-            "{:?}",
-            settings.warnings
         );
     }
 

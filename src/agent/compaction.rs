@@ -797,7 +797,6 @@ impl Agent {
         if cut == start {
             return Ok(None);
         }
-        let focus = &self.pre_compact_hooks(focus, automatic.is_some(), ui, cancel)?;
         // As in Scramjet, a turn cut in two is summarized apart from the history before it.
         let turn = turn_start(&self.conversation, start, cut);
         let history = &self.conversation[start..turn.unwrap_or(cut)];
@@ -845,8 +844,6 @@ impl Agent {
         self.conversation.extend(kept);
         // A delegated command's earlier result may be summarized away, so it may run again.
         self.delegated.clear();
-        self.session_start = Some("compact");
-        self.post_compact_hooks(&summary, automatic.is_some(), ui, cancel);
         // Unknown until the next response reports it.
         self.usage.context_tokens = None;
         ui.usage(

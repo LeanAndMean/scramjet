@@ -45,10 +45,6 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        let Some(told) = self.prompt_hooks(prompt, ui, cancel) else {
-            return Ok(());
-        };
-        self.stop_blocks = 0;
         self.follow_runtime(ui, true, cancel);
         self.compaction_failed = false;
         self.compact_before_prompt(ui, cancel)?;
@@ -74,7 +70,6 @@ impl Agent {
         self.tell_plan(&mut message);
         self.tell_tasks(&mut message);
         self.add_shown(message, ui)?;
-        self.add_hook_context(told)?;
         self.save_command()?;
         self.say_saving(ui);
         self.prompts.push(typed);
@@ -188,7 +183,6 @@ impl Agent {
             match ran {
                 Err(AgentError::Paused) => return Err(AgentError::Paused),
                 Err(error) => {
-                    self.stop_failure_hooks(&error, cancel);
                     self.suggestion = suggest::Pending::Nothing;
                     self.interrupted = self.lifecycle.interrupted();
                     self.save_command()?;
@@ -414,7 +408,6 @@ finish and is not checked on. Reply to continue.",
                     self.settle_mcp(ui, cancel)?;
                     self.follow_runtime(ui, false, cancel);
                     self.compact_within_turn(ui, cancel)?;
-                    self.session_start_hooks(ui, cancel)?;
                     if let Some(most) = self.max_turns.filter(|most| self.turns_made >= *most) {
                         return Err(AgentError::MaxTurns(most));
                     }
@@ -495,7 +488,7 @@ to a larger-context model)"
             self.follow_runtime(ui, false, cancel);
             if calls.is_empty() {
                 self.compact_when_full(ui, cancel)?;
-                if self.continue_queued(ui, cancel)? || self.stop_hooks_go_on(ui, cancel)? {
+                if self.continue_queued(ui, cancel)? {
                     continue;
                 }
                 return Ok(());
@@ -522,7 +515,7 @@ to a larger-context model)"
         self.save_command()?;
         if ends {
             self.compact_when_full(ui, cancel)?;
-            return Ok(!(self.continue_queued(ui, cancel)? || self.stop_hooks_go_on(ui, cancel)?));
+            return Ok(!self.continue_queued(ui, cancel)?);
         }
         Ok(false)
     }
@@ -542,8 +535,7 @@ to a larger-context model)"
     }
 
     /// Adds messages the user queued during the turn as typed prompts are added: a command
-    /// starts there, replacing the one running, as in Scramjet. Returns whether any was added,
-    /// not blocked by a `UserPromptSubmit` hook.
+    /// starts there, replacing the one running, as in Scramjet. Returns whether any was added.
     fn add_queued(
         &mut self,
         messages: Vec<String>,
@@ -557,9 +549,6 @@ to a larger-context model)"
         self.suggestion = suggest::Pending::Nothing;
         let mut added = false;
         for prompt in messages {
-            let Some(told) = self.prompt_hooks(&prompt, ui, cancel) else {
-                continue;
-            };
             let Some(message) = self.user_message(&prompt, ui, cancel) else {
                 continue;
             };
@@ -571,7 +560,6 @@ to a larger-context model)"
                 None => ui.user_prompt(&prompt),
             }
             self.add_shown(message, ui)?;
-            self.add_hook_context(told)?;
             self.prompts.push(prompt);
         }
         self.save_command()?;

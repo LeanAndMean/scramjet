@@ -9,7 +9,7 @@ use super::report::{ReportView, Tab};
 use super::settings::{card_level, scramjet_level};
 use super::terminal;
 use super::text::{clip, visible};
-use super::{changelog, clipboard, completion, export, installed, keymap, style};
+use super::{changelog, clipboard, completion, export, keymap, style};
 use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode, todo};
 use std::{
     io::IsTerminal,
@@ -32,8 +32,6 @@ pub(super) enum Builtin<'a> {
     Tasks(&'a str),
     /// Claude Code's `/todos`: the agent's checklist.
     Todos,
-    /// Claude Code's `/hooks`: the hooks the settings run.
-    Hooks,
     /// With whether the details come first.
     Usage(bool),
     Context,
@@ -92,7 +90,6 @@ impl<'a> Builtin<'a> {
             "status" if argument.is_empty() => Self::Status,
             "tasks" => Self::Tasks(argument),
             "todos" if argument.is_empty() => Self::Todos,
-            "hooks" if argument.is_empty() => Self::Hooks,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
@@ -140,7 +137,6 @@ impl<'a> Builtin<'a> {
                 | Self::Status
                 | Self::Tasks(_)
                 | Self::Todos
-                | Self::Hooks
                 | Self::Goal(_)
                 | Self::Loop(_)
                 | Self::Plan(_)
@@ -186,7 +182,6 @@ impl Interactive {
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Tasks(argument)) => self.tasks(argument),
             Some(Builtin::Todos) => self.todos(),
-            Some(Builtin::Hooks) => self.hooks(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
             Some(Builtin::SystemPrompt) => self.system_prompt(),
@@ -526,63 +521,6 @@ impl Interactive {
                 }
             }
             screen.show_report(task_output(task));
-        }
-    }
-
-    /// `/hooks`, as Claude Code's: the hooks the settings run, by event, after what is wrong in
-    /// them; on the full screen in a list whose Enter opens the settings file.
-    fn hooks(&mut self) {
-        let Some(file) = self.session.settings.path().map(Path::to_path_buf) else {
-            return self.say_styled(style::MUTED, "No hooks: there is no settings file");
-        };
-        let listing = |settings: &super::settings::Settings| {
-            let warnings: Vec<String> = (settings.warnings.iter())
-                .filter(|warning| {
-                    (warning.split_once(": ")).is_some_and(|(_, rest)| rest.starts_with("hooks"))
-                })
-                .cloned()
-                .collect();
-            installed::hooks(&settings.hooks.listed(), &warnings, &file)
-        };
-        if listing(&self.session.settings).rows.is_empty() {
-            let note = format!(
-                "No hooks: Claude Code's hooks setting in {} adds them",
-                scramjet::os::tilde(&file)
-            );
-            return self.say_styled(style::MUTED, &note);
-        }
-        if self.screen.is_none() {
-            let text = installed::hooks_text(&listing(&self.session.settings), &file);
-            return self.say(text.trim_end());
-        }
-        let mut at = None;
-        loop {
-            let Some(screen) = &self.screen else {
-                return;
-            };
-            let listing = listing(&self.session.settings);
-            if listing.rows.is_empty() {
-                return;
-            }
-            let first = listing.headings.iter().position(|heading| !heading);
-            let at_row = at.unwrap_or(first.unwrap_or(0)).min(listing.rows.len() - 1);
-            let visible = (super::editor::terminal_size().1 / 2).max(super::select::VISIBLE);
-            let rows = &listing.rows;
-            let picker = super::select::Picker::select(
-                "Hooks",
-                visible,
-                rows.len(),
-                at_row,
-                None,
-                |index, width| clip(&rows[index], width),
-            );
-            let keys = super::select::hint("edit", &[], "back");
-            let picker = (picker.headed(listing.headings)).noting(keys, listing.notes);
-            let Some(index) = screen.pick(picker.held()) else {
-                return;
-            };
-            at = Some(index);
-            self.edit_installed(&file);
         }
     }
 

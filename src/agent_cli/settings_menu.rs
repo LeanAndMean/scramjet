@@ -1010,7 +1010,7 @@ impl Interactive {
 
     /// Opens `file` in `$VISUAL` or `$EDITOR`; when it changed, reads what was loaded again, as
     /// `/reload` does, or, while a turn waits (`/reload` waits for turns), says to run it after.
-    pub(super) fn edit_installed(&mut self, file: &Path) {
+    fn edit_installed(&mut self, file: &Path) {
         let Some(screen) = &self.screen else {
             return;
         };

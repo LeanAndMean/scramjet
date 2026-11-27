@@ -119,7 +119,6 @@ The agent is told what is writable, and asks for more with `request_permissions`
 
 - On Linux, `sandbox.launcher` names a program started with Bubblewrap's arguments in `bwrap`'s place, such as a wrapper for machines where `bwrap` alone cannot start (a name alone is found on `PATH`, a path is taken as `allowWrite`'s are). It serves the stores hidden by `hideCredentials` and subagents' commands too; macOS and Windows ignore it.
 - MCP servers run outside the sandbox, with your environment and credential stores, as in Codex and Claude Code: they are programs you configured, not the agent's, and changing the sandbox does not restart them.
-- Hooks (the settings' `hooks`) run outside it too, as Claude Code's do: they are your commands, given the agent's calls; a `PreToolUse` hook can block a call or change its input before the sandbox runs it.
 - `--ask` asks before every shell command and every write or edit outside the project, as a way to watch, not containment.
 
 ## Subagents

@@ -9,8 +9,8 @@ use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, allowed,
-    delegate, forge, hooks, mcp, permissions, publish, question, sandbox, status, subagent,
-    suggest, switch, tasks, todo, web,
+    delegate, forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest,
+    switch, tasks, todo, web,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -177,25 +177,10 @@ impl Agent {
             mcp: self.mcp.clone(),
             scratch: self.scratch.clone(),
             tasks: self.tasks.clone(),
-            hooks: self.bound_hooks(),
         }
     }
 
-    /// The settings' hooks with what their input says of the session, if there are any.
-    pub(super) fn bound_hooks(&self) -> Option<hooks::Bound> {
-        (!self.hooks.is_empty()).then(|| hooks::Bound {
-            hooks: self.hooks.clone(),
-            session_id: self.session.id(),
-            transcript: self.session.path().to_owned(),
-            mode: match (self.planning, self.config.ask) {
-                (true, _) => "plan",
-                (false, true) => "default",
-                (false, false) => "bypassPermissions",
-            },
-        })
-    }
-
-    /// Runs a coding tool's `call` as the agent's calls run, without their hooks or display:
+    /// Runs a coding tool's `call` as the agent's calls run, without their display:
     /// `ui` sees only what it tells or asks the user.
     pub(super) fn run_aside(
         &self,
@@ -669,7 +654,6 @@ struct Kit {
     mcp: Option<Arc<mcp::Servers>>,
     scratch: Arc<sandbox::Scratch>,
     tasks: Arc<tasks::Tasks>,
-    hooks: Option<hooks::Bound>,
 }
 
 impl Kit {
@@ -699,7 +683,6 @@ impl Kit {
                 subagents: &self.subagents,
                 writable: self.writable.clone(),
                 sandbox: self.sandbox.as_ref(),
-                hooks: self.hooks.as_ref(),
             },
             hide_credentials: self.hide_credentials,
             planning: self.planning,
@@ -709,7 +692,6 @@ impl Kit {
             mcp: self.mcp.as_deref(),
             scratch: &self.scratch,
             tasks: &self.tasks,
-            hooks: self.hooks.as_ref(),
         }
     }
 }
@@ -726,57 +708,17 @@ pub(super) struct Tools<'a> {
     /// What the agent's sandboxed commands have as `/tmp`.
     scratch: &'a Arc<sandbox::Scratch>,
     tasks: &'a Arc<tasks::Tasks>,
-    hooks: Option<&'a hooks::Bound>,
 }
 
 impl Tools<'_> {
-    /// Runs `call` between the hooks matching it and shows its result; with the usage of its
-    /// children, if any.
+    /// Runs `call` and shows its result; with the usage of its children, if any.
     pub(super) fn run(
         &self,
         call: &Call,
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> (Output, Usage) {
-        let root = self.parent.root;
-        let changed;
-        let (call, context) = match self
-            .hooks
-            .and_then(|hooks| hooks.before(call, root, ui, cancel))
-        {
-            None => (call, Vec::new()),
-            Some(hooks::Before::Blocked(text)) => {
-                ui.tool_result(call.name, &text, None, true);
-                return (Output::failure(text), Usage::default());
-            }
-            Some(hooks::Before::Run {
-                arguments,
-                ask,
-                context,
-            }) => {
-                if let Some(reason) = ask
-                    && !hooks::ask(call, &reason, root, ui, cancel)
-                {
-                    let text = "The user denied this tool call.";
-                    ui.tool_result(call.name, text, None, true);
-                    return (Output::failure(text.to_owned()), Usage::default());
-                }
-                match arguments {
-                    Some(arguments) => {
-                        changed = Call {
-                            name: call.name,
-                            arguments,
-                        };
-                        (&changed, context)
-                    }
-                    None => (call, context),
-                }
-            }
-        };
-        let (mut output, usage) = self.run_tool(call, ui, cancel);
-        if let Some(hooks) = self.hooks {
-            hooks.after(call, &mut output, context, root, ui, cancel);
-        }
+        let (output, usage) = self.run_tool(call, ui, cancel);
         ui.tool_result(
             call.name,
             &output.text,
@@ -2922,146 +2864,6 @@ sed.\n- Be concise";
             std::fs::read_to_string(agent.root().join("big.rs")).unwrap(),
             content
         );
-    }
-
-    #[test]
-    fn hooks_run_around_the_tools_and_block_change_and_tell_as_claude_codes_do() {
-        if crate::agent::tests::missing("bash") {
-            return;
-        }
-        let (endpoint, server) = serve(vec![
-            tool_call("call_1", "bash", json!({"command": "rm -f kept"})),
-            tool_call("call_2", "bash", json!({"command": "echo hi"})),
-            tool_call("call_3", "write", json!({"path": "a.txt", "content": "x"})),
-            tool_call("call_4", "ls", json!({})),
-            tool_call("call_5", "bash", json!({"command": "exit 3"})),
-            stream(&fixture::text_events("done", fixture::known_usage())),
-        ]);
-        let (mut agent, _scratch) = agent(endpoint, "hooks");
-        let root = agent.root().to_owned();
-        std::fs::write(root.join("kept"), "").unwrap();
-        let changed = r#"cat > /dev/null; printf '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": {"file_path": "%s/changed.txt", "content": "hooked"}, "additionalContext": "mind the change"}}' "$CLAUDE_PROJECT_DIR""#;
-        let settings = json!({
-            "PreToolUse": [
-                {"matcher": "Bash", "hooks": [{"type": "command",
-                    "command": "input=$(cat); echo \"$input\" >> pre.jsonl; case $input in *'\"rm '*) echo 'no rm here' >&2; exit 2;; esac"}]},
-                {"matcher": "Write", "hooks": [{"type": "command", "command": changed}]},
-                {"matcher": "ls", "hooks": [{"type": "command", "command": "echo oops >&2; exit 1"}]},
-            ],
-            "PostToolUse": [
-                {"matcher": "Write|Edit", "hooks": [{"type": "command",
-                    "command": "cat > post.json; echo '{\"systemMessage\": \"formatted\"}'"}]},
-            ],
-            "PostToolUseFailure": [
-                {"hooks": [{"type": "command",
-                    "command": "cat > failed.json; echo 'look again' >&2; exit 2"}]},
-            ],
-        });
-        let mut warnings = Vec::new();
-        let hooks = hooks::Hooks::read(&settings, "settings.json", &mut warnings);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        agent.set_hooks(Arc::new(hooks));
-        let mut ui = Recorder::default();
-        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
-        server.join().unwrap();
-        let outputs: Vec<_> = (agent.conversation().iter())
-            .filter_map(|item| item["output"].as_str())
-            .collect();
-        assert_eq!(
-            outputs[0],
-            "PreToolUse:Bash hook blocking error from command: \"input=$(cat); echo \"$input\" >> \
-             pre.jsonl; case $input in *'\"rm '*) echo 'no rm here' >&2; exit 2;; esac\": no rm here"
-        );
-        assert!(root.join("kept").exists());
-        assert_eq!(outputs[1], "hi\n");
-        let pre = std::fs::read_to_string(root.join("pre.jsonl")).unwrap();
-        assert_eq!(pre.lines().count(), 3, "{pre}");
-        let pre: Value = serde_json::from_str(pre.lines().nth(1).unwrap()).unwrap();
-        assert_eq!(pre["hook_event_name"], "PreToolUse");
-        assert_eq!(pre["tool_name"], "Bash");
-        assert_eq!(pre["tool_input"], json!({"command": "echo hi"}));
-        assert_eq!(pre["cwd"], root.to_string_lossy().as_ref());
-        assert_eq!(pre["permission_mode"], "bypassPermissions");
-        assert_eq!(pre["session_id"], agent.session.id());
-        assert_eq!(
-            pre["transcript_path"],
-            agent.session.path().to_string_lossy().as_ref()
-        );
-        assert!(!root.join("a.txt").exists());
-        assert_eq!(
-            std::fs::read_to_string(root.join("changed.txt")).unwrap(),
-            "hooked"
-        );
-        assert!(
-            outputs[2].ends_with("\n\nPreToolUse:Write hook additional context: mind the change"),
-            "{}",
-            outputs[2]
-        );
-        let post: Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("post.json")).unwrap())
-                .unwrap();
-        let written = root.join("changed.txt").to_string_lossy().into_owned();
-        assert_eq!(post["hook_event_name"], "PostToolUse");
-        assert_eq!(post["tool_name"], "Write");
-        assert_eq!(post["tool_input"]["file_path"], written.as_str());
-        assert_eq!(post["tool_response"]["filePath"], written.as_str());
-        assert!(
-            ui.shown.contains(&"notice formatted".to_owned()),
-            "{:?}",
-            ui.shown
-        );
-        assert!(outputs[3].contains("changed.txt"), "{}", outputs[3]);
-        assert!(
-            ui.shown.contains(
-                &"notice PreToolUse:LS hook error: Failed with non-blocking status code 1: oops"
-                    .to_owned()
-            ),
-            "{:?}",
-            ui.shown
-        );
-        assert!(
-            outputs[4].ends_with(
-                "\n\nPostToolUseFailure:Bash hook blocking error from command: \"cat > \
-                 failed.json; echo 'look again' >&2; exit 2\": look again"
-            ),
-            "{}",
-            outputs[4]
-        );
-        let failed: Value =
-            serde_json::from_str(&std::fs::read_to_string(root.join("failed.json")).unwrap())
-                .unwrap();
-        assert_eq!(failed["tool_input"], json!({"command": "exit 3"}));
-        assert!(failed["error"].as_str().unwrap().contains('3'), "{failed}");
-    }
-
-    #[test]
-    fn a_hook_asking_puts_the_call_to_the_user_with_its_reason() {
-        if crate::agent::tests::missing("bash") {
-            return;
-        }
-        let (endpoint, server) = serve(vec![
-            tool_call("call_1", "bash", json!({"command": "touch made"})),
-            stream(&fixture::text_events("done", fixture::known_usage())),
-        ]);
-        let (mut agent, _scratch) = agent(endpoint, "hook-asks");
-        let ask = r#"echo '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "It touches files."}}'"#;
-        let settings = json!({"PreToolUse": [{"hooks": [{"type": "command", "command": ask}]}]});
-        let hooks = hooks::Hooks::read(&settings, "settings.json", &mut Vec::new());
-        agent.set_hooks(Arc::new(hooks));
-        let mut ui = Recorder::default();
-        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
-        server.join().unwrap();
-        assert_eq!(ui.questions, 1);
-        assert!(
-            ui.shown.contains(&"question It touches files.".to_owned()),
-            "{:?}",
-            ui.shown
-        );
-        assert!(!agent.root().join("made").exists());
-        let outputs: Vec<_> = (agent.conversation().iter())
-            .filter_map(|item| item["output"].as_str())
-            .collect();
-        assert_eq!(outputs, ["The user denied this tool call."]);
     }
 
     #[test]

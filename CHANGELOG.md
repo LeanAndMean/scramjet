@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.423.0 — Unreleased hooks taken out
+
 ## 2.422.0 — Unreleased settings taken out
 
 ## 2.421.0 — Unreleased commands and keys taken out
@@ -257,47 +259,17 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - Claude Code's `alwaysThinkingEnabled` setting: `false` starts sessions with thinking off, whatever `effortLevel` says, until you choose a level.
 
-## 2.384.0 — `/hooks`
-
-### Added
-
-- `/hooks`, as Claude Code's: the hooks your settings run, by event with their matchers and commands, after any problem in them; on the full screen each row's note says how long it may run, and Enter opens the settings file, read again once you save it.
-
-## 2.383.0 — Hooks around subagents, after compactions and as turns fail
-
-### Added
-
-- Claude Code's `SubagentStart`, `SubagentStop`, `PostCompact` and `StopFailure` hooks: as each subagent starts (telling it more) and would finish (keeping it going, at most 8 times), after a compaction (what they print shown to you), and as a turn ends on the provider's error (matched on Claude Code's kinds, such as `rate_limit` or `invalid_request`), with Claude Code's input fields and matchers.
-
-## 2.382.0 — Hooks as sessions end, before compactions and as you are told the agent waits
-
-### Added
-
-- Claude Code's `SessionEnd`, `PreCompact` and `Notification` hooks: as a session ends (cleared, switched from, quit), before a compaction (adding to its instructions, or stopping it), and as you are told the agent waits for you (a question unanswered, a prompt left idle), with Claude Code's input fields and matchers.
-
 ## 2.381.0 — Claude Code's model in the settings
 
 ### Added
 
 - Claude Code's `model` setting: an id, `provider/id` or one of its aliases (`sonnet`, `opus`, `haiku`, `best`, `opusplan`, `default`, with or without `[1m]`) names the model new sessions start with, found as `--model` finds one (`sonnet`: the newest Sonnet the providers offer). It is read before `defaultModel`, and when it is set, choosing a model saves the choice there.
 
-## 2.380.0 — Hooks as prompts are sent, turns end and sessions start
-
-### Added
-
-- Claude Code's `UserPromptSubmit`, `Stop` and `SessionStart` hooks in the settings' `hooks`, copied as they are: a hook can keep a prompt from being sent or add context to it, keep the agent working when its turn would end (at most 8 times in a row, as Claude Code), and tell the model something as a session starts, is resumed, cleared or compacted.
-
 ## 2.378.0 — Claude Code's effortLevel in the settings
 
 ### Changed
 
 - The settings' thinking level is read as Claude Code's `effortLevel`, so a settings file written with Claude Code's name starts sessions at that level; Scramjet's `defaultThinkingLevel` is still read when there is no `effortLevel`. Shift+Tab, `/effort` and the ACP thinking option now save `effortLevel`, replacing a `defaultThinkingLevel` in the file.
-
-## 2.377.0 — Claude Code's hooks around the agent's tools
-
-### Added
-
-- The settings' `hooks`, in Claude Code's form and copied as they are: `PreToolUse`, `PostToolUse` and `PostToolUseFailure` command hooks run around the agent's tool calls, matched by Claude Code's tool names (`Bash`, `Write|Edit`, …) or Scramjet's. A hook can block a call (exit code 2, or `permissionDecision: "deny"`), ask you about it, change its input, or tell the model or you more. Claude Code's other events and kinds of hooks are named in a warning at start; subagents' tools run no hooks yet.
 
 ## 2.371.0 — /loop
 

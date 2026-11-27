@@ -273,7 +273,6 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         ui.notice(warning);
     }
     agent.set_hide_credentials(settings.hide_credentials.hides(true));
-    agent.set_hooks(settings.hooks.clone());
     agent.set_unattended(true);
     agent.set_max_turns(max_turns);
     agent.set_max_budget(max_budget);

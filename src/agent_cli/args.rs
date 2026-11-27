@@ -465,8 +465,6 @@ skills and context files again, and starts the MCP servers whose entries changed
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
 available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disable [SERVER|all]
 starts or stops them, saved in disabledMcpServers.
-/hooks lists the hooks the settings run, by event with their matchers, after any problem in
-them, as Claude Code's; on the full screen Enter opens the settings file.
 /goal CONDITION sets a goal, as Claude Code's: the agent works toward it, and after each turn
 that ends by itself the model is asked whether the conversation shows it met; until
 it does, the reason goes back to the agent and the work goes on. Escape stops it; /goal says the
@@ -483,7 +481,7 @@ Code's; one due during a turn runs once the turn ends. It lasts while the sessio
 lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /tasks, /todos, /hooks, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /tasks, /todos, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

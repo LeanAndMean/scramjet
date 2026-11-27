@@ -24,7 +24,6 @@ mod delegate;
 mod forge;
 mod goal;
 mod guidance;
-mod hooks;
 mod image;
 mod instructions;
 mod leftovers;
@@ -81,7 +80,6 @@ pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, s
 pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
 pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
 pub use goal::{GoalCheck, Verdict};
-pub use hooks::{EVENTS as HOOK_EVENTS, Hooks, Listed as ListedHook, Notifier};
 pub use image::{decode_base64, mime as image_type, set_images};
 pub use instructions::{Part, Section};
 pub use lint::{Diagnostic, Severity, lint};
@@ -490,8 +488,6 @@ pub enum AgentError {
     ContextOverflow(String),
     /// A compaction the agent started by itself failed.
     CompactionFailed(Box<AgentError>),
-    /// A hook stopped what was to run.
-    Hook(String),
     Session(std::io::Error),
     TooManySteps,
     /// The run made the model requests `set_max_turns` allows.
@@ -509,7 +505,6 @@ impl std::fmt::Display for AgentError {
             }
             Self::ContextOverflow(message) => write!(f, "context overflow: {message}"),
             Self::CompactionFailed(error) => write!(f, "automatic compaction failed: {error}"),
-            Self::Hook(why) => f.write_str(why),
             Self::Session(error) => write!(f, "session: {error}"),
             Self::TooManySteps => write!(f, "stopped after {MAX_STEPS} model requests in one turn"),
             Self::MaxTurns(most) => write!(
@@ -742,17 +737,6 @@ pub struct Agent {
     model_scope: Vec<String>,
     /// Whether the coding tools keep out of the credential stores (`sandbox::Hidden`).
     hide_credentials: bool,
-    /// The settings' hooks, run around the agent's tools (`set_hooks`), as prompts are sent, as
-    /// turns would end and as sessions start.
-    hooks: Arc<Hooks>,
-    /// How the session began since the last request, for `SessionStart` hooks: `startup`,
-    /// `resume`, `clear` or `compact`.
-    session_start: Option<&'static str>,
-    /// Whether `SessionStart` hooks ran for this session, so that `SessionEnd` hooks run as it
-    /// ends.
-    hooks_began: bool,
-    /// How many times `Stop` hooks kept this turn going.
-    stop_blocks: usize,
     /// The paths the user's settings hide as the credential stores are, and re-open (`set_reads`).
     reads: Reads,
     /// The directories made writable without a sandbox (`set_writable`).
@@ -978,13 +962,6 @@ impl Agent {
             runtime_windows: HashMap::new(),
             model_scope: Vec::new(),
             hide_credentials: false,
-            hooks: Arc::default(),
-            session_start: Some(match conversation.is_empty() {
-                true => "startup",
-                false => "resume",
-            }),
-            hooks_began: false,
-            stop_blocks: 0,
             reads: Reads::default(),
             writable: Vec::new(),
             offline: false,
@@ -1743,12 +1720,10 @@ impl Agent {
         let model = session.model().map(str::to_owned);
         let context_tokens = session.context_tokens();
         let effort = session.effort().map(str::to_owned);
-        self.end_session("resume");
         self.autopilot = session.autopilot().unwrap_or(self.autopilot);
         self.replace_session(session);
         self.conversation = conversation;
         self.prompts = prompts;
-        self.session_start = Some("resume");
         self.usage = Usage {
             context_tokens,
             ..Usage::default()
@@ -1780,11 +1755,9 @@ impl Agent {
         if let Some(profile) = &self.profile {
             session.record_profile(profile)?;
         }
-        self.end_session("clear");
         self.replace_session(session);
         self.conversation.clear();
         self.prompts.clear();
-        self.session_start = Some("clear");
         self.usage = Usage::default();
         self.restore_command();
         Ok(())
@@ -2118,12 +2091,6 @@ impl Agent {
     /// always do. A `!` command, which the user runs, never does.
     pub fn set_hide_credentials(&mut self, hide: bool) {
         self.hide_credentials = hide;
-    }
-
-    /// The hooks run before and after the agent's own tools in the turns that follow, as
-    /// Claude Code's `hooks` setting runs them; not its subagents'.
-    pub fn set_hooks(&mut self, hooks: Arc<Hooks>) {
-        self.hooks = hooks;
     }
 
     /// Hides `reads.deny` (the settings' `sandbox.filesystem.denyRead`) but what `reads.allow`
