@@ -475,6 +475,8 @@ pub enum AgentError {
     Hook(String),
     Session(std::io::Error),
     TooManySteps,
+    /// The run made the model requests `set_max_turns` allows.
+    MaxTurns(u32),
 }
 impl std::fmt::Display for AgentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -489,6 +491,10 @@ impl std::fmt::Display for AgentError {
             Self::Hook(why) => f.write_str(why),
             Self::Session(error) => write!(f, "session: {error}"),
             Self::TooManySteps => write!(f, "stopped after {MAX_STEPS} model requests in one turn"),
+            Self::MaxTurns(most) => write!(
+                f,
+                "reached max turns ({most}): the run made the {most} model requests --max-turns allows"
+            ),
         }
     }
 }
@@ -730,6 +736,9 @@ pub struct Agent {
     subagents: Subagents,
     /// Whether the turn runs with no one to answer a question (`set_unattended`).
     unattended: bool,
+    /// The most model requests the run's turns make (`set_max_turns`), and those made.
+    max_turns: Option<u32>,
+    turns_made: u32,
     /// Whether a grant can be kept always for the project (`set_keeps_grants`).
     keeps_grants: bool,
     /// Directories the user granted always for the project, for the front to keep
@@ -945,6 +954,8 @@ impl Agent {
             offline: false,
             subagents: Subagents::default(),
             unattended: false,
+            max_turns: None,
+            turns_made: 0,
             keeps_grants: true,
             kept_grants: Vec::new(),
             reach_fixed: false,
@@ -2179,6 +2190,14 @@ impl Agent {
     /// a request for write access is then refused rather than asked.
     pub fn set_unattended(&mut self, unattended: bool) {
         self.unattended = unattended;
+    }
+
+    /// The most requests to the model the agent's turns make from now on, all together, as
+    /// Claude Code's `--max-turns`: the turn that would make one more stops with
+    /// `AgentError::MaxTurns`, after the calls of the last reply ran. Subagents' requests and
+    /// compactions are not counted.
+    pub fn set_max_turns(&mut self, most: Option<u32>) {
+        (self.max_turns, self.turns_made) = (most, 0);
     }
 
     /// Whether the user can keep a granted write always for the project; without, a grant

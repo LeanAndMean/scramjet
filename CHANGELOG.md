@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.406.0 — `--max-turns` for `-p`
+
+### Added
+
+- `--max-turns N` bounds a `-p` run, as Claude Code's does: before a request to the model past the Nth, counted over all the run's messages, it stops with `reached max turns (N)` and exits 1. The last reply's tool calls run first; subagents' requests and compactions are not counted.
+
 ## 2.405.1 — A Claude Code plugin's skills as its marketplace lists them
 
 ### Fixed

@@ -109,6 +109,14 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
     };
     assert!(refused(&["-p"]).starts_with("scramjet: -p needs a message or an @FILE\n"));
     assert!(refused(&["-"]).starts_with("scramjet: the message - (read from stdin) needs -p\n"));
+    assert!(refused(&["--max-turns", "3", "hi"]).starts_with("scramjet: --max-turns needs -p\n"));
+    for most in ["0", "-1", "many"] {
+        let refusal = refused(&["--max-turns", most, "-p", "hi"]);
+        assert!(
+            refusal.starts_with("scramjet: invalid --max-turns"),
+            "{refusal}"
+        );
+    }
     // Before a session is started.
     let missing = refused(&["-p", "@/nonexistent/notes.md"]);
     let absolute = std::path::absolute("/nonexistent/notes.md").unwrap();
@@ -2208,6 +2216,55 @@ pid=$$ parent=$(basename \"$(ps -o comm= -p $PPID)\")\"",
     assert_eq!(field("sid"), field("pid"), "{text}");
     assert_eq!(field("pgid"), field("pid"), "{text}");
     assert_eq!(field("parent"), "scramjet", "{text}");
+}
+
+#[test]
+#[cfg(unix)]
+fn max_turns_stops_the_run_before_a_request_past_the_limit() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-max-turns-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    // Each reply calls bash again, so only the limit ends the run.
+    let call = call_events(
+        "bash",
+        serde_json::json!({"command": "echo ran >> ran.txt"}),
+    );
+    let (port, bodies) = serve_events(vec![call[0].clone()]);
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let output = program(binary)
+        .args([
+            "--retries",
+            "0",
+            "--no-session",
+            "--max-turns",
+            "2",
+            "-p",
+            "hi",
+            "again",
+        ])
+        .current_dir(&project)
+        .env("XDG_STATE_HOME", scratch.0.join("state"))
+        .env("XDG_CONFIG_HOME", &config)
+        .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("reached max turns (2)"), "{stderr}");
+    // The last reply's call ran; the second message was not sent.
+    let ran = std::fs::read_to_string(project.join("ran.txt")).unwrap();
+    assert_eq!(ran, "ran\nran\n");
+    assert_eq!(bodies.try_iter().count(), 2);
 }
 
 #[test]

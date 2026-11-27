@@ -207,6 +207,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         messages.push(String::new());
     }
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
+    let max_turns = options.max_turns;
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
     settings.in_project(&root);
@@ -274,6 +275,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     agent.set_hide_credentials(settings.hide_credentials.hides(true));
     agent.set_hooks(settings.hooks.clone());
     agent.set_unattended(true);
+    agent.set_max_turns(max_turns);
     // A message read from stdin (`-`) may start a command.
     let commands = (messages.iter()).any(|message| message == "-" || message.starts_with('/'));
     agent.leave_out_idle_tools(commands);

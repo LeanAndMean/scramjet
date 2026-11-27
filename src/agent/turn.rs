@@ -415,6 +415,10 @@ finish and is not checked on. Reply to continue.",
                     self.follow_runtime(ui, false, cancel);
                     self.compact_within_turn(ui, cancel)?;
                     self.session_start_hooks(ui, cancel)?;
+                    if let Some(most) = self.max_turns.filter(|most| self.turns_made >= *most) {
+                        return Err(AgentError::MaxTurns(most));
+                    }
+                    self.turns_made += 1;
                     let parts = self.instruction_parts();
                     let mut request = self.request_with(&parts);
                     self.fit_for_runtime(&mut request, &mut past_window_said, ui);

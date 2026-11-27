@@ -29,6 +29,7 @@ Sessions:
   --project DIR            the project's directory (default: the current one)
   -p, --print              send the messages, print the replies and exit (a message -
                            reads stdin)
+  --max-turns N            with -p, stop with an error before a model request past the Nth
   @FILE                    send a file's text, or an image, with the first message
   MESSAGE                  prompts sent one after another once the session starts
 
@@ -116,7 +117,7 @@ pub(super) const HELP_ALL: &str =
 [--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
-[-s MODE] [--offline] [-p] [@FILE...] [MESSAGE...]
+[-s MODE] [--offline] [-p [--max-turns N]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
        scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
@@ -260,6 +261,10 @@ but to NO_PROXY's hosts and this machine.
                          shows what it loaded, and Scramjet has no extensions or prompt
                          templates
   -p, --print            run the messages and exit; a message `-` is read from stdin
+  --max-turns N          with -p, the most requests to the model the run makes, all its
+                         messages' together, as Claude Code's: one more stops it with an
+                         error, exiting 1, once the last reply's tool calls ran (its subagents'
+                         requests and compactions are not counted; default: no limit)
   @FILE                  send FILE with the first message (or alone): a
                          text file's contents, or a PNG, JPEG, GIF or WebP image, scaled down
                          as read scales it; a relative path is from the current directory
@@ -531,6 +536,8 @@ pub(super) struct Options {
     pub(super) api_key: Option<String>,
     /// `-p`: run the messages and exit.
     pub(super) print: bool,
+    /// `--max-turns`, with `-p`: the most model requests the run makes.
+    pub(super) max_turns: Option<u32>,
     /// `@FILE` arguments, without the `@`: sent with the first message.
     pub(super) files: Vec<String>,
     /// The other words: prompts to send in order; with `-p`, `-` is read from stdin.
@@ -584,6 +591,7 @@ impl Options {
             cache_retention: None,
             api_key: None,
             print: false,
+            max_turns: None,
             files: Vec::new(),
             messages: Vec::new(),
             export: None,
@@ -678,6 +686,10 @@ without spaces"
                             .parse()
                             .map_err(|_| "invalid --max-output-tokens")?,
                     )
+                }
+                Some("--max-turns") => {
+                    let most = value()?.parse().ok().filter(|most| *most > 0);
+                    options.max_turns = Some(most.ok_or("invalid --max-turns")?)
                 }
                 Some("--retries") => {
                     options.retries = Some(value()?.parse().map_err(|_| "invalid --retries")?)
@@ -792,6 +804,9 @@ workspace-write and danger-full-access"
         }
         if matches!(options.start, Start::Resume) && options.print {
             return Err(format!("--resume cannot be used with -p\n\n{USAGE}"));
+        }
+        if options.max_turns.is_some() && !options.print {
+            return Err(format!("--max-turns needs -p\n\n{USAGE}"));
         }
         if options.print && options.messages.is_empty() && options.files.is_empty() {
             return Err(format!("-p needs a message or an @FILE\n\n{USAGE}"));
