@@ -46,7 +46,7 @@ impl Agent {
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
         self.follow_runtime(ui, true, cancel);
-        self.compaction_failed = false;
+        self.compaction_failed = None;
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
         self.suggestion = suggest::Pending::Nothing;

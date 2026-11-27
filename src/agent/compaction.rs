@@ -12,6 +12,8 @@ use std::sync::atomic::AtomicBool;
 
 pub(super) const SUMMARY_PREFIX: &str = "The conversation history before this point was compacted into the following summary:\n\n<summary>\n";
 pub(super) const SUMMARY_SUFFIX: &str = "\n</summary>";
+/// How many automatic compactions may fail in one turn before none is tried until the next.
+const COMPACTION_TRIES: u32 = 3;
 /// How a branch summary is sent: Scramjet's `BRANCH_SUMMARY_PREFIX`/`SUFFIX`.
 const BRANCH_PREFIX: &str =
     "The following is a summary of a branch that this conversation came back from:\n\n<summary>\n";
@@ -857,7 +859,7 @@ impl Agent {
     /// One request without tools for the text a summarization `prompt` asks for, of at most
     /// `tokens` output tokens (fewer when the model or `--max-output-tokens` allows fewer). As in
     /// Scramjet, a branch summary is asked for without reasoning, and a summary cut off at the
-    /// output token limit is kept.
+    /// output token limit is kept. A reply without text is asked for again without reasoning.
     pub(super) fn summarize(
         &mut self,
         prompt: String,
@@ -880,21 +882,48 @@ impl Agent {
             "prompt_cache_key": self.session.id(),
             "max_output_tokens": tokens,
         });
-        let effort = match (purpose, self.info.protocol) {
-            // A Messages request without effort would think; `none` sends no thinking.
-            (Purpose::BranchSummary, Protocol::Messages | Protocol::Completions) => Some("none"),
-            (Purpose::BranchSummary, Protocol::Responses | Protocol::Codex) => {
-                Some(self.info.fit("none"))
-            }
+        // A Messages request without effort would think; `none` sends no thinking.
+        let quiet = match self.info.protocol {
+            Protocol::Messages | Protocol::Completions => "none",
+            Protocol::Responses | Protocol::Codex => self.info.fit("none"),
+        };
+        let effort = match purpose {
+            Purpose::BranchSummary => Some(quiet),
             _ => self.effort(),
         };
+        let quiet = quiet.to_owned();
+        let effort = effort.map(str::to_owned);
         if self.info.reasoning {
             request["reasoning"] = json!({"summary": "auto"});
-            if let Some(effort) = effort {
+            if let Some(effort) = &effort {
                 request["reasoning"]["effort"] = json!(effort);
             }
         }
-        let reply = self.respond(&request, purpose, ui, cancel)?;
+        let (mut summary, reasoned) = self.summary_reply(&request, purpose, spent, ui, cancel)?;
+        // A model may spend the whole reply reasoning (LeanAndMean/scramjet#9): ask once more
+        // without reasoning.
+        if summary.is_none()
+            && reasoned
+            && self.info.reasoning
+            && effort.as_deref() != Some(quiet.as_str())
+        {
+            request["reasoning"]["effort"] = json!(quiet);
+            (summary, _) = self.summary_reply(&request, purpose, spent, ui, cancel)?;
+        }
+        summary.ok_or_else(|| AgentError::Provider("the model returned no summary".into()))
+    }
+
+    /// The text of a summary `request`'s reply, `None` when it has none, and whether it reasoned.
+    fn summary_reply(
+        &mut self,
+        request: &Value,
+        purpose: Purpose,
+        spent: &mut Spent,
+        ui: &mut dyn AgentUi,
+        cancel: &AtomicBool,
+    ) -> Result<(Option<String>, bool), AgentError> {
+        let reply = self.respond(request, purpose, ui, cancel)?;
+        let reasoned = reply.items.iter().any(|item| item["type"] == "reasoning");
         spent.add(&self.config.model, &reply);
         let summary = reply
             .items
@@ -903,10 +932,7 @@ impl Agent {
             .map(message_text)
             .collect::<Vec<_>>()
             .join("\n");
-        if summary.trim().is_empty() {
-            return Err(AgentError::Provider("the model returned no summary".into()));
-        }
-        Ok(summary)
+        Ok(((!summary.trim().is_empty()).then_some(summary), reasoned))
     }
 
     /// Compacts as `/compact` without a focus does and shows the result as `/compact` does,
@@ -1006,7 +1032,8 @@ impl Agent {
         }
         match self.auto_compact(AutoCompaction::Threshold, ui, cancel) {
             Err(AgentError::CompactionFailed(error)) => {
-                self.compaction_failed = true;
+                let times = self.compaction_failed.map_or(0, |(_, times)| times);
+                self.compaction_failed = Some((tokens, times + 1));
                 ui.compaction_failed(&error);
                 Ok(())
             }
@@ -1025,13 +1052,20 @@ impl Agent {
         ui: &mut dyn AgentUi,
         cancel: &AtomicBool,
     ) -> Result<(), AgentError> {
-        if self.info.window.is_none() || self.compaction_failed {
+        let Some(window) = self.info.window else {
             return Ok(());
-        }
+        };
         let tokens = match self.info.runtime {
             Some(_) => self.context_size().unwrap_or(0).max(self.request_tokens()),
             None => self.context_size().unwrap_or_else(|| self.request_tokens()),
         };
+        // After a failure, each try costs a request: wait for the context to grow by a twentieth
+        // of the window, and give up for the turn after a few.
+        if let Some((failed_at, times)) = self.compaction_failed
+            && (times >= COMPACTION_TRIES || tokens < failed_at + window / 20)
+        {
+            return Ok(());
+        }
         self.compact_if_full(tokens, ui, cancel)
     }
 
@@ -1660,6 +1694,52 @@ mod tests {
         assert_eq!(agent.usage.requests, 0);
     }
 
+    #[test]
+    fn a_summary_of_reasoning_only_is_asked_for_again_without_reasoning() {
+        let reasoning = json!({"type":"reasoning","id":"rs_1","status":"completed",
+            "summary":[{"type":"summary_text","text":"thinking"}]});
+        let only_reasoning = || {
+            stream(&[
+                json!({"type":"response.created","response":{"id":"resp_1","status":"in_progress","output":[]}}),
+                json!({"type":"response.output_item.added","output_index":0,
+                    "item":{"type":"reasoning","id":"rs_1","summary":[]}}),
+                json!({"type":"response.output_item.done","output_index":0,"item":reasoning}),
+                json!({"type":"response.completed","response":{"id":"resp_1","status":"completed",
+                    "output":[reasoning],"usage":fixture::known_usage()}}),
+            ])
+        };
+        let (endpoint, server) = serve(vec![
+            only_reasoning(),
+            stream(&fixture::text_events("summary", fixture::known_usage())),
+            only_reasoning(),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "summary-reasoning-only");
+        agent.set_effort("high").unwrap();
+        let mut ui = Recorder::default();
+        let cancel = AtomicBool::new(false);
+        let mut spent = Spent::default();
+        let mut summarize = |agent: &mut Agent, purpose| {
+            agent.summarize("p".into(), purpose, 2048, &mut spent, &mut ui, &cancel)
+        };
+        assert_eq!(
+            summarize(&mut agent, Purpose::Compaction(None)).unwrap(),
+            "summary"
+        );
+        // Already asked without reasoning: not asked again.
+        assert_eq!(
+            summarize(&mut agent, Purpose::BranchSummary)
+                .unwrap_err()
+                .to_string(),
+            "provider: the model returned no summary"
+        );
+        let bodies = server.join().unwrap();
+        let efforts: Vec<_> = bodies
+            .iter()
+            .map(|body| &body["reasoning"]["effort"])
+            .collect();
+        assert_eq!(efforts, ["high", "none", "none"]);
+    }
+
     /// Usage of a response that filled `total` tokens of context.
     fn full_usage(total: u64) -> Value {
         json!({"input_tokens": total - 10, "output_tokens": 10, "total_tokens": total})
@@ -2069,6 +2149,53 @@ model. (automatic compaction is off: /compact, or turn it on in /settings)"
                 "function_call_output"
             );
         }
+    }
+
+    #[test]
+    fn a_failed_compaction_within_a_turn_is_tried_again_once_the_context_grows() {
+        let call = |total| {
+            let events = fixture::call_events(r#"{"command":"true"}"#, full_usage(total));
+            let text = serde_json::to_string(&events).unwrap();
+            stream(
+                &serde_json::from_str::<Vec<Value>>(&text.replace("\"inert\"", "\"bash\""))
+                    .unwrap(),
+            )
+        };
+        let failure = || b"HTTP/1.1 400 Bad Request\r\ncontent-length: 4\r\n\r\nnope".to_vec();
+        // A window of 30,000 compacts from 22,500 and tries again 1,500 tokens after a failure.
+        let (endpoint, server) = serve(vec![
+            call(23_000),
+            failure(),
+            call(24_000),
+            call(24_500),
+            failure(),
+            call(26_000),
+            failure(),
+            call(28_000),
+            call(30_000),
+            stream(&fixture::text_events("done", fixture::known_usage())),
+        ]);
+        let (mut agent, _scratch) = agent(endpoint, "within-turn-retry");
+        agent.set_context_window(Some(30_000));
+        for content in ["remember the goal".to_owned(), "recent work ".repeat(3000)] {
+            agent
+                .add(json!({"role":"user", "content":content}))
+                .unwrap();
+        }
+        let mut ui = Recorder::default();
+        agent.turn("go", &mut ui, &AtomicBool::new(false)).unwrap();
+        let compaction = Purpose::Compaction(Some(AutoCompaction::Threshold));
+        let reply = Purpose::Reply;
+        // After three failures none is tried until the next turn.
+        assert_eq!(
+            ui.waits,
+            [
+                reply, compaction, reply, reply, compaction, reply, compaction, reply, reply, reply
+            ]
+        );
+        assert_eq!(ui.failed_compactions.len(), 3);
+        assert_eq!(ui.replies, ["done"]);
+        assert_eq!(server.join().unwrap().len(), 10);
     }
 
     #[test]

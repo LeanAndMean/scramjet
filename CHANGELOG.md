@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.430.1 — Compaction after a reasoning-only summary
+
+### Fixed
+
+- A compaction summary that comes back as reasoning only is asked for once more without reasoning, instead of failing.
+- After an automatic compaction fails within a turn, it is tried again once the context has grown by a twentieth of the window, up to three times a turn, instead of never until the next prompt.
+
 ## 2.430.0 — Unreleased skills as /NAME taken out
 
 ## 2.429.0 — Unreleased /rewind taken out
