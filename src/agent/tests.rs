@@ -3036,7 +3036,6 @@ fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
         let sources = subagent::Sources {
             user: &[],
             sets: &sets,
-            given: &[],
         };
         let agents = subagent::discover(&sources, &project, subagent::Scope::Both);
         let skills = Skills::discover(&[], sets.list(), &SkillOptions::default(), &project);

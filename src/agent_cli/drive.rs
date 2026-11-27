@@ -47,7 +47,7 @@ impl Session {
     pub(super) fn reload(&mut self, servers: &[McpServer]) -> Vec<String> {
         let listed = self.settings.allow_write();
         self.settings.reload();
-        self.settings.with_mcp_servers(servers);
+        with_servers(&mut self.settings, servers);
         let settings = &self.settings;
         scramjet::agent::set_shell(
             settings.shell_path.clone(),
@@ -418,6 +418,14 @@ pub(super) enum SandboxChange {
     Save,
     /// The project's own rows and grants forgotten.
     Reset,
+}
+
+/// Puts `servers` in place of the settings' MCP servers of the same names, enabled.
+pub(super) fn with_servers(settings: &mut Settings, servers: &[McpServer]) {
+    let given = |name: &String| servers.iter().any(|server| &server.name == name);
+    (settings.mcp_servers).retain(|server| !given(&server.name));
+    (settings.disabled_mcp_servers).retain(|name| !given(name));
+    settings.mcp_servers.extend(servers.iter().cloned());
 }
 
 /// Messages given while a turn runs, until the agent takes them: steering for the model's next

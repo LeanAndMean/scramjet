@@ -599,11 +599,6 @@ pub(super) struct Settings {
     pub(super) mcp_servers: Vec<McpServer>,
     /// `disabledMcpServers`: the names of those not started, as Claude Code's (`/mcp disable`).
     pub(super) disabled_mcp_servers: Vec<String>,
-    /// `--mcp-config`'s servers over `mcpServers`, and with `--strict-mcp-config` in their place;
-    /// kept at `/reload`.
-    mcp_given: Option<(Vec<McpServer>, bool)>,
-    /// `--settings`' keys over the file's (`give`); kept at `/reload`.
-    given: Option<Given>,
     /// `modelCatalogs`: the URLs of the model catalogs providers come from (`agent::Catalog`).
     pub(super) model_catalogs: Vec<String>,
     /// The project the sandbox's rows are for, and their default (`project`).
@@ -619,7 +614,7 @@ impl Settings {
 
     #[cfg(test)]
     fn read(path: Option<PathBuf>) -> Self {
-        Self::read_with(path, None, false, None)
+        Self::read_with(path, None, false)
     }
 
     /// The settings as `load` reads them, cloning first the packages not cloned yet, as
@@ -632,41 +627,27 @@ impl Settings {
     fn loaded(cloning: bool) -> Self {
         let path =
             scramjet::agent::login::config_directory().map(|config| config.join("settings.json"));
-        let given = GIVEN.get().cloned();
-        let mut settings = Self::read_with(path, packages::clones(), cloning, given);
+        let mut settings = Self::read_with(path, packages::clones(), cloning);
         let records = scramjet::agent::records_directory().ok();
         settings.recall = records.map(|state| state.join("last-used-models.json"));
         settings
     }
 
-    /// The settings in `path`, with `given`'s keys over its, and packages cloned under
-    /// `clones`, those missing cloned there first when `cloning`.
-    fn read_with(
-        path: Option<PathBuf>,
-        clones: Option<PathBuf>,
-        cloning: bool,
-        given: Option<Given>,
-    ) -> Self {
+    /// The settings in `path`, with packages cloned under `clones`, those missing cloned
+    /// there first when `cloning`.
+    fn read_with(path: Option<PathBuf>, clones: Option<PathBuf>, cloning: bool) -> Self {
         let mut settings = Self::defaults(path);
-        (settings.clones, settings.given) = (clones, given);
-        let mut object = match &settings.path {
-            Some(path) => match read_object(path) {
-                Ok(object) => Some(object),
-                Err(error) => {
-                    (settings.warnings).push(format!("{error}; using the defaults"));
-                    None
-                }
-            },
-            None => None,
-        };
-        if let Some(given) = &settings.given {
-            merge(object.get_or_insert_default(), &given.object);
-        }
-        let Some(object) = object else {
+        settings.clones = clones;
+        let Some(path) = &settings.path else {
             return settings;
         };
         settings.cloning = cloning;
-        settings.apply(&object);
+        match read_object(path) {
+            Ok(object) => settings.apply(&object),
+            Err(error) => settings
+                .warnings
+                .push(format!("{error}; using the defaults")),
+        }
         settings.cloning = false;
         settings
     }
@@ -678,22 +659,14 @@ impl Settings {
             return;
         };
         match read_object(path) {
-            Ok(mut object) => {
+            Ok(object) => {
                 let (recall, clones) = (self.recall.take(), self.clones.take());
                 let (retries_given, project) = (self.retries_given, self.project.take());
-                let (mcp_given, given) = (self.mcp_given.take(), self.given.take());
                 *self = Self::defaults(self.path.take());
                 (self.recall, self.clones) = (recall, clones);
                 (self.retries_given, self.project) = (retries_given, project);
-                if let Some(given) = &given {
-                    merge(&mut object, &given.object);
-                }
-                self.given = given;
                 self.apply(&object);
                 self.apply_project();
-                if let Some((servers, strict)) = mcp_given {
-                    self.give_mcp_servers(servers, strict);
-                }
             }
             Err(error) => self.warnings = vec![format!("{error}; kept as they were")],
         }
@@ -763,8 +736,6 @@ impl Settings {
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
             disabled_mcp_servers: Vec::new(),
-            mcp_given: None,
-            given: None,
             model_catalogs: Vec::new(),
             project: None,
             warnings: Vec::new(),
@@ -772,10 +743,7 @@ impl Settings {
     }
 
     fn apply(&mut self, object: &Map<String, Value>) {
-        let mut path = shown(self.path.as_deref().unwrap_or(Path::new("")));
-        if let Some(given) = &self.given {
-            path = format!("{path} with {}", given.label);
-        }
+        let path = shown(self.path.as_deref().unwrap_or(Path::new("")));
         self.warnings.extend(mistyped_keys(object, &path));
         let mut wrong = |key: &str, expected: &str| {
             self.warnings
@@ -2113,25 +2081,6 @@ impl Settings {
         })
     }
 
-    /// `--mcp-config`'s `servers` in place of the settings' of the same names, enabled, or with
-    /// `strict` in place of them all, now and at each `/reload`.
-    pub(super) fn give_mcp_servers(&mut self, servers: Vec<McpServer>, strict: bool) {
-        if strict {
-            self.mcp_servers.clear();
-            self.disabled_mcp_servers.clear();
-        }
-        self.with_mcp_servers(&servers);
-        self.mcp_given = Some((servers, strict));
-    }
-
-    /// Puts `servers` in place of the MCP servers of the same names, enabled.
-    pub(super) fn with_mcp_servers(&mut self, servers: &[McpServer]) {
-        let given = |name: &String| servers.iter().any(|server| &server.name == name);
-        (self.mcp_servers).retain(|server| !given(&server.name));
-        (self.disabled_mcp_servers).retain(|name| !given(name));
-        self.mcp_servers.extend(servers.iter().cloned());
-    }
-
     /// `/mcp enable` and `disable`'s choice: the MCP servers not started; none leaves
     /// `disabledMcpServers` out.
     pub(super) fn set_disabled_mcp_servers(&mut self, names: Vec<String>) -> io::Result<()> {
@@ -2691,118 +2640,6 @@ fn recalled(path: &Path) -> Map<String, Value> {
     let text = std::fs::read(path).ok();
     text.and_then(|text| serde_json::from_slice(&text).ok())
         .unwrap_or_default()
-}
-
-/// The MCP servers of `--mcp-config`'s `configs`, as Claude Code's: each a JSON object with
-/// `mcpServers`, or a file holding one (relative to `cwd`); a later server replaces an earlier one
-/// of its name.
-pub(super) fn mcp_config(configs: &[String], cwd: &Path) -> Result<Vec<McpServer>, String> {
-    let mut servers: Vec<McpServer> = Vec::new();
-    for config in configs {
-        let failed = |why: String| format!("--mcp-config {config}: {why}");
-        let text = match config.trim_start().starts_with('{') {
-            true => config.clone(),
-            false => {
-                let path = super::given_path(config, cwd);
-                std::fs::read_to_string(&path)
-                    .map_err(|error| failed(format!("{}: {error}", path.display())))?
-            }
-        };
-        let value: Value =
-            serde_json::from_str(&text).map_err(|error| failed(format!("not JSON: {error}")))?;
-        let Some(Value::Object(entries)) = value.get("mcpServers") else {
-            return Err(failed(
-                r#"must be an object with "mcpServers", the servers by name"#.to_owned(),
-            ));
-        };
-        for (name, entry) in entries {
-            let server = mcp_server(name, entry).map_err(|why| failed(format!("{name}: {why}")))?;
-            servers.retain(|known| known.name != server.name);
-            servers.push(server);
-        }
-    }
-    Ok(servers)
-}
-
-/// `--settings`' keys, read once at the start (`give`), which every reading of the settings puts
-/// over the file's.
-static GIVEN: std::sync::OnceLock<Given> = std::sync::OnceLock::new();
-
-/// The settings `--settings` gives for the run, with what it was, for warnings.
-#[derive(Debug, Clone)]
-pub(super) struct Given {
-    label: String,
-    object: Map<String, Value>,
-}
-
-/// `--settings`' `values`, as Claude Code's: each a JSON object or a file holding one (relative
-/// to `cwd`), a later one's keys over an earlier one's, put over the settings file's from now on
-/// and never written to it.
-pub(super) fn give(values: &[String], cwd: &Path) -> Result<(), String> {
-    let given = given(values, cwd)?;
-    GIVEN
-        .set(given)
-        .map_err(|_| "--settings: given twice".to_owned())
-}
-
-fn given(values: &[String], cwd: &Path) -> Result<Given, String> {
-    let mut object = Map::new();
-    for value in values {
-        let failed = |why: String| format!("--settings {value}: {why}");
-        let (text, base) = match value.trim_start().starts_with('{') {
-            true => (value.clone(), cwd.to_owned()),
-            false => {
-                let path = super::given_path(value, cwd);
-                let text = std::fs::read_to_string(&path)
-                    .map_err(|error| failed(format!("{}: {error}", path.display())))?;
-                (text, path.parent().unwrap_or(cwd).to_owned())
-            }
-        };
-        let Value::Object(mut read) =
-            serde_json::from_str(&text).map_err(|error| failed(format!("not JSON: {error}")))?
-        else {
-            return Err(failed("must be a JSON object of settings".to_owned()));
-        };
-        from_base(&mut read, &base);
-        merge(&mut object, &read);
-    }
-    let label = match values {
-        [value] if !value.trim_start().starts_with('{') => format!("--settings {value}"),
-        _ => "--settings".to_owned(),
-    };
-    Ok(Given { label, object })
-}
-
-/// The relative paths among `object`'s top keys made relative to `base`, where `--settings`'
-/// were given, rather than to the settings file's directory.
-fn from_base(object: &mut Map<String, Value>, base: &Path) {
-    let based = |entry: &mut Value| {
-        if let Value::String(text) = entry
-            && !text.trim().is_empty()
-            && Source::parse(text).is_none()
-        {
-            *text = super::given_path(text, base).display().to_string();
-        }
-    };
-    for key in ["commandSets", "packages", "skills", "themes"] {
-        if let Some(Value::Array(entries)) = object.get_mut(key) {
-            entries.iter_mut().for_each(based);
-        }
-    }
-    if let Some(shell) = object.get_mut("shellPath") {
-        based(shell);
-    }
-}
-
-/// `over`'s keys put in `into`, objects merged key by key and other values replaced, as Claude
-/// Code merges its settings' objects.
-fn merge(into: &mut Map<String, Value>, over: &Map<String, Value>) {
-    for (key, value) in over {
-        match (into.get_mut(key), value) {
-            (Some(Value::Object(inner)), Value::Object(value)) => merge(inner, value),
-            _ => drop(into.insert(key.clone(), value.clone())),
-        }
-    }
 }
 
 /// An entry of `mcpServers`, as Claude Code's: `command`, with `args` and `env`, or for a server
@@ -5070,109 +4907,5 @@ or false; ignored"
                 .unwrap()
                 .contains("\"hideThinkingBlock\": true")
         );
-    }
-
-    #[test]
-    fn mcp_configs_given_go_over_the_settings_servers_or_with_strict_in_their_place() {
-        let scratch = Scratch::new("mcp-config");
-        let file = scratch.0.join("more.json");
-        std::fs::write(
-            &file,
-            r#"{"mcpServers": {"b": {"command": "two"}, "c": {"url": "http://localhost:1/mcp"}}}"#,
-        )
-        .unwrap();
-        let configs = [
-            r#"{"mcpServers": {"a": {"command": "one"}, "b": {"command": "first"}}}"#.to_owned(),
-            "more.json".to_owned(),
-        ];
-        let given = super::mcp_config(&configs, &scratch.0).unwrap();
-        let names =
-            |servers: &[McpServer]| servers.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
-        assert_eq!(names(&given), ["a", "b", "c"]);
-        let McpTransport::Program { command, .. } = &given[1].transport else {
-            panic!("{:?}", given[1]);
-        };
-        assert_eq!(command, "two");
-        let mut settings = settings_with(
-            &scratch,
-            r#"{"mcpServers": {"b": {"command": "old"}, "d": {"command": "kept"}},
-                "disabledMcpServers": ["b", "d"]}"#,
-        );
-        settings.give_mcp_servers(given.clone(), false);
-        assert_eq!(names(&settings.mcp_servers), ["d", "a", "b", "c"]);
-        assert_eq!(settings.disabled_mcp_servers, ["d"]);
-        settings.reload();
-        assert_eq!(names(&settings.mcp_servers), ["d", "a", "b", "c"]);
-        assert_eq!(settings.disabled_mcp_servers, ["d"]);
-        settings.give_mcp_servers(given, true);
-        settings.reload();
-        assert_eq!(names(&settings.mcp_servers), ["a", "b", "c"]);
-        assert!(settings.disabled_mcp_servers.is_empty());
-        let failed =
-            |config: &str| super::mcp_config(&[config.to_owned()], &scratch.0).unwrap_err();
-        assert!(failed("missing.json").starts_with("--mcp-config missing.json: "));
-        assert!(failed("{x").contains("not JSON"));
-        assert!(failed(r#"{"servers": {}}"#).contains(r#"with "mcpServers""#));
-        let odd = failed(r#"{"mcpServers": {"e": {"args": []}}}"#);
-        assert!(
-            odd.contains("e: command must be the program to run"),
-            "{odd}"
-        );
-        std::fs::remove_dir_all(&scratch.0).unwrap();
-    }
-    #[test]
-    fn settings_given_go_over_the_files_for_the_run_and_are_never_written() {
-        let scratch = Scratch::new("given");
-        std::fs::create_dir_all(scratch.0.join("run/sets")).unwrap();
-        std::fs::write(
-            scratch.0.join("run/more.json"),
-            r#"{"retry": {"baseDelayMs": 7}, "skills": ["sets", "/abs", "~/home"]}"#,
-        )
-        .unwrap();
-        let values = [
-            r#"{"hideThinkingBlock": true, "retry": {"maxRetries": 9}, "skills": ["x"]}"#
-                .to_owned(),
-            "run/more.json".to_owned(),
-        ];
-        let given = super::given(&values, &scratch.0).unwrap();
-        assert_eq!(given.label, "--settings");
-        let path = scratch.0.join("settings.json");
-        std::fs::write(
-            &path,
-            r#"{"retry": {"maxRetries": 2, "baseDelayMs": 5}, "copyOnSelect": true,
-                "themes": ["mine"]}"#,
-        )
-        .unwrap();
-        let mut settings = Settings::read_with(Some(path.clone()), None, false, Some(given));
-        assert!(settings.hide_thinking_block && settings.copy_on_select);
-        assert_eq!(settings.retry.attempts, 9);
-        assert_eq!(settings.retry.delay, Duration::from_millis(7));
-        let home = std::env::home_dir().unwrap();
-        assert_eq!(
-            settings.skills,
-            [scratch.0.join("run/sets"), "/abs".into(), home.join("home")]
-        );
-        assert_eq!(settings.themes, [scratch.0.join("mine")]);
-        settings.set_hide_thinking_block(false).unwrap();
-        let written = std::fs::read_to_string(&path).unwrap();
-        assert!(!written.contains("maxRetries\": 9") && !written.contains("skills"));
-        settings.reload();
-        assert_eq!(settings.retry.attempts, 9);
-        assert!(settings.hide_thinking_block, "the given key wins again");
-        let given = super::given(&[r#"{"copyOnSelect": 1}"#.to_owned()], &scratch.0).unwrap();
-        let settings =
-            Settings::read_with(Some(scratch.0.join("none.json")), None, false, Some(given));
-        assert!(
-            (settings.warnings.iter()).any(|w| w.contains("with --settings: copyOnSelect must be")),
-            "{:?}",
-            settings.warnings
-        );
-        let failed = |value: &str| super::given(&[value.to_owned()], &scratch.0).unwrap_err();
-        assert!(failed("missing.json").starts_with("--settings missing.json: "));
-        assert!(failed("{x").contains("not JSON"));
-        std::fs::write(scratch.0.join("list.json"), "[1]").unwrap();
-        assert!(failed("list.json").contains("must be a JSON object"));
-        let file = super::given(&["run/more.json".to_owned()], &scratch.0).unwrap();
-        assert_eq!(file.label, "--settings run/more.json");
     }
 }

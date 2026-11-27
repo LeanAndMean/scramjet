@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.424.0 — Unreleased options taken out
+
 ## 2.423.0 — Unreleased hooks taken out
 
 ## 2.422.0 — Unreleased settings taken out
@@ -14,29 +16,11 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## 2.419.0 — Unreleased commands taken out
 
-## 2.418.0 — `--agents`
-
-### Added
-
-- `--agents JSON` defines subagents for one run, as Claude Code's: `{"NAME": {"description": ..., "prompt": ...}}`, with `tools`, `disallowedTools`, `model` and `isolation` as an agent file's frontmatter has them, or a file holding that JSON. They are listed to the agent, need no approval, and take the place of your own or a project's agent of their name.
-
 ## 2.417.0 — `--name`
 
 ### Added
 
 - `-n NAME` or `--name NAME` names the session as `/rename` does, as Claude Code's: a new one, the one `-c` or `--resume ID` continues, or the one `-r`'s list picks. The name shows in the footer, the terminal's title and `/resume`.
-
-## 2.416.0 — `--settings`
-
-### Added
-
-- `--settings FILE|JSON` gives settings for one run, as Claude Code's: a JSON object, or a file holding one, its keys over your settings file's (objects merged key by key). It is read again at `/reload` and never saved into your file.
-
-## 2.415.0 — `--mcp-config` and `--strict-mcp-config`
-
-### Added
-
-- `--mcp-config CONFIG...` gives MCP servers for one run, as Claude Code's: each a JSON object with `mcpServers`, as in the settings, or a file holding one. Its servers replace the settings' of their names, even ones `/mcp` disabled, and `/reload` keeps them. `--strict-mcp-config` leaves out the settings' servers.
 
 ## 2.414.0 — `--allowedTools` and `--permission-prompts`
 

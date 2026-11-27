@@ -2196,7 +2196,7 @@ fn start_session(
     let mut settings = Settings::load();
     settings.in_project(&root);
     settings.retries_given = options.retries;
-    settings.with_mcp_servers(servers);
+    drive::with_servers(&mut settings, servers);
     let session_dir = (options.session_dir.as_deref())
         .or(settings.session_dir.as_deref())
         .map(|directory| super::given_path(directory, cwd));

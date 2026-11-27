@@ -147,10 +147,6 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     }
     options.isolate()?;
-    if !options.settings.is_empty() {
-        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        settings::give(&options.settings, &cwd)?;
-    }
     if !checked {
         writable::check()?;
     }
@@ -215,10 +211,6 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     scramjet::agent::set_launcher(settings.sandbox_launcher.clone());
     scramjet::agent::set_images(settings.resize_images, settings.block_images);
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    if !options.mcp_configs.is_empty() || options.strict_mcp {
-        let servers = settings::mcp_config(&options.mcp_configs, &cwd)?;
-        settings.give_mcp_servers(servers, options.strict_mcp);
-    }
     let session_dir = (options.session_dir.as_deref())
         .or(settings.session_dir.as_deref())
         .map(|directory| given_path(directory, &cwd));
