@@ -3,7 +3,10 @@ use super::settings::{LEVELS, card_level};
 use scramjet::agent::{
     Allowed, CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt, tool_named_as_claude_codes,
 };
-use std::{ffi::OsString, path::PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 
 /// What an argument error shows after it.
 pub(super) const USAGE: &str = "Usage: scramjet [OPTIONS] [@FILE...] [MESSAGE...]
@@ -31,8 +34,7 @@ Sessions:
                            for the run only
   --session-dir DIR        save and find sessions in DIR
   --project DIR            the project's directory (default: the current one)
-  -p, --print              send the messages, print the replies and exit (a message -
-                           reads stdin)
+  -p, --print              send the messages, print the replies and exit (- reads stdin)
   --max-turns N            with -p, stop with an error before a model request past the Nth
   --max-budget-usd AMOUNT  with -p, stop with an error before a model request once AMOUNT
                            dollars are spent
@@ -51,8 +53,7 @@ Models:
                            high, xhigh or max
   --max-output-tokens N    the most tokens a reply may have
   --retries N              resend a request that failed transiently up to N times
-  --cache-retention short|long
-                           how long the provider keeps the conversation's start cached
+  --cache-retention short|long  how long the provider keeps the conversation's start cached
   --api-key KEY            the key for the model's provider, for this run only
   --list-models [SEARCH]   list the providers' models and exit
 
@@ -67,6 +68,8 @@ Instructions and tools:
   --skill PATH             a skill file, or a directory of skills (repeatable)
   -ns, --no-skills         no skills but those --skill names
   --plugin-dir DIR         a command set or Claude Code plugin for this run (repeatable)
+  --mcp-config CONFIG..., --strict-mcp-config
+                           MCP servers for this run, as Claude Code's; strict: only those
   --theme PATH             a theme file, or a directory of themes (repeatable)
   --no-themes              no themes but the built-in ones and those --theme names
   -t, --tools LIST         the only tools the agent has, comma-separated
@@ -132,7 +135,8 @@ pub(super) const HELP_ALL: &str =
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
 [--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
-[--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
+[--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--mcp-config CONFIG...]... [--strict-mcp-config]
+[--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
 [--permission-mode MODE] [--dangerously-skip-permissions] [--allowedTools LIST]... [--permission-prompts host|none]
 [-s MODE] [--offline] [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
@@ -247,6 +251,12 @@ but to NO_PROXY's hosts and this machine.
   --plugin-dir DIR       as Claude Code's: load DIR for this run only (repeatable), as a
                          command set when it has a set.yaml, else as a Claude Code plugin,
                          in place of an installed set or plugin of its name
+  --mcp-config CONFIG... as Claude Code's: MCP servers for this run (repeatable), each CONFIG
+                         a JSON object with mcpServers, as in the settings, or a file holding
+                         one; the words after it that are JSON objects or .json files are
+                         configs too. Its servers replace the settings' of their names, and
+                         start even if /mcp disabled them
+  --strict-mcp-config    no MCP servers but --mcp-config's
   --theme PATH           a theme file, or a directory of themes, for /settings to offer after
                          the others (repeatable); a relative PATH is from the current
                          directory
@@ -598,6 +608,10 @@ pub(super) struct Options {
     pub(super) skills: Vec<String>,
     /// `--plugin-dir`: as typed, resolved by `isolate`.
     pub(super) plugin_dirs: Vec<String>,
+    /// `--mcp-config`: as typed, read once the session starts.
+    pub(super) mcp_configs: Vec<String>,
+    /// `--strict-mcp-config`: no MCP servers but `--mcp-config`'s.
+    pub(super) strict_mcp: bool,
     /// `--no-skills`.
     pub(super) no_skills: bool,
     /// `--bare`.
@@ -695,6 +709,8 @@ impl Options {
             prompt: SystemPrompt::default(),
             skills: Vec::new(),
             plugin_dirs: Vec::new(),
+            mcp_configs: Vec::new(),
+            strict_mcp: false,
             no_skills: false,
             bare: false,
             ephemeral: false,
@@ -875,6 +891,17 @@ and stream-json"
                 Some("--no-directives") => options.prompt.no_directives = true,
                 Some("--skill") => options.skills.push(value()?),
                 Some("--plugin-dir") => options.plugin_dirs.push(value()?),
+                Some("--mcp-config") => {
+                    options.mcp_configs.push(value()?);
+                    // Claude Code's takes several words: those after it that are configs too.
+                    while let Some(next) = arguments.peek().and_then(|next| next.to_str())
+                        && mcp_config_like(next)
+                    {
+                        options.mcp_configs.push(next.to_owned());
+                        arguments.next();
+                    }
+                }
+                Some("--strict-mcp-config") => options.strict_mcp = true,
                 Some("-ns" | "--no-skills") => options.no_skills = true,
                 Some("--theme") => options.themes.push(value()?),
                 Some("--no-themes") => options.no_themes = true,
@@ -1028,6 +1055,15 @@ fn names_session(word: &str) -> bool {
     word.ends_with(".jsonl")
         || (word.starts_with(|c: char| c.is_ascii_digit())
             && word.chars().all(|c| c.is_ascii_digit() || c == '-'))
+}
+
+/// Whether a word after `--mcp-config`'s first is another config rather than a prompt: a JSON
+/// object, or a `.json` file that exists.
+fn mcp_config_like(word: &str) -> bool {
+    match word.trim_start().starts_with('{') {
+        true => serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(word).is_ok(),
+        false => word.ends_with(".json") && Path::new(word).is_file(),
+    }
 }
 
 /// The tools a `--tools` or `--disallowedTools` value names, separated by commas or spaces outside
@@ -1315,5 +1351,41 @@ mod tests {
         assert_eq!(parsed.unwrap().err(), Some(Help::All));
         let width = |text: &str| text.lines().map(|line| line.chars().count()).max();
         assert!(width(HELP) <= Some(92), "{:?}", width(HELP));
+    }
+
+    #[test]
+    fn mcp_config_takes_the_configs_after_it_but_not_the_prompt() {
+        let scratch =
+            std::env::temp_dir().join(format!("scramjet-rs-mcp-args-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let file = scratch.join("servers.json");
+        std::fs::write(&file, "{}").unwrap();
+        let file = file.to_str().unwrap();
+        let parse = |arguments: &[&str]| {
+            (Options::parse(arguments.iter().map(OsString::from)).unwrap()).unwrap()
+        };
+        let json = r#"{"mcpServers": {}}"#;
+        let options = parse(&[
+            "-p",
+            "--mcp-config",
+            "a.json",
+            json,
+            file,
+            "say {hi}",
+            "x.json",
+        ]);
+        assert_eq!(options.mcp_configs, ["a.json", json, file]);
+        assert_eq!(options.messages, ["say {hi}", "x.json"]);
+        assert!(!options.strict_mcp);
+        let options = parse(&[
+            "--mcp-config",
+            "{not json",
+            "--mcp-config",
+            file,
+            "--strict-mcp-config",
+        ]);
+        assert_eq!(options.mcp_configs, ["{not json", file]);
+        assert!(options.strict_mcp && options.messages.is_empty());
+        std::fs::remove_dir_all(&scratch).unwrap();
     }
 }

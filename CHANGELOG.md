@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.415.0 — `--mcp-config` and `--strict-mcp-config`
+
+### Added
+
+- `--mcp-config CONFIG...` gives MCP servers for one run, as Claude Code's: each a JSON object with `mcpServers`, as in the settings, or a file holding one. Its servers replace the settings' of their names, even ones `/mcp` disabled, and `/reload` keeps them. `--strict-mcp-config` leaves out the settings' servers.
+
 ## 2.414.0 — `--allowedTools` and `--permission-prompts`
 
 ### Added

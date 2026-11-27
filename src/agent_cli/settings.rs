@@ -628,6 +628,9 @@ pub(super) struct Settings {
     pub(super) mcp_servers: Vec<McpServer>,
     /// `disabledMcpServers`: the names of those not started, as Claude Code's (`/mcp disable`).
     pub(super) disabled_mcp_servers: Vec<String>,
+    /// `--mcp-config`'s servers over `mcpServers`, and with `--strict-mcp-config` in their place;
+    /// kept at `/reload`.
+    mcp_given: Option<(Vec<McpServer>, bool)>,
     /// `modelCatalogs`: the URLs of the model catalogs providers come from (`agent::Catalog`).
     pub(super) model_catalogs: Vec<String>,
     /// The project the sandbox's rows are for, and their default (`project`).
@@ -691,11 +694,15 @@ impl Settings {
             Ok(object) => {
                 let (recall, clones) = (self.recall.take(), self.clones.take());
                 let (retries_given, project) = (self.retries_given, self.project.take());
+                let mcp_given = self.mcp_given.take();
                 *self = Self::defaults(self.path.take());
                 (self.recall, self.clones) = (recall, clones);
                 (self.retries_given, self.project) = (retries_given, project);
                 self.apply(&object);
                 self.apply_project();
+                if let Some((servers, strict)) = mcp_given {
+                    self.give_mcp_servers(servers, strict);
+                }
             }
             Err(error) => self.warnings = vec![format!("{error}; kept as they were")],
         }
@@ -769,6 +776,7 @@ impl Settings {
             enabled_models: Vec::new(),
             mcp_servers: Vec::new(),
             disabled_mcp_servers: Vec::new(),
+            mcp_given: None,
             model_catalogs: Vec::new(),
             project: None,
             warnings: Vec::new(),
@@ -2208,6 +2216,25 @@ impl Settings {
         })
     }
 
+    /// `--mcp-config`'s `servers` in place of the settings' of the same names, enabled, or with
+    /// `strict` in place of them all, now and at each `/reload`.
+    pub(super) fn give_mcp_servers(&mut self, servers: Vec<McpServer>, strict: bool) {
+        if strict {
+            self.mcp_servers.clear();
+            self.disabled_mcp_servers.clear();
+        }
+        self.with_mcp_servers(&servers);
+        self.mcp_given = Some((servers, strict));
+    }
+
+    /// Puts `servers` in place of the MCP servers of the same names, enabled.
+    pub(super) fn with_mcp_servers(&mut self, servers: &[McpServer]) {
+        let given = |name: &String| servers.iter().any(|server| &server.name == name);
+        (self.mcp_servers).retain(|server| !given(&server.name));
+        (self.disabled_mcp_servers).retain(|name| !given(name));
+        self.mcp_servers.extend(servers.iter().cloned());
+    }
+
     /// `/mcp enable` and `disable`'s choice: the MCP servers not started; none leaves
     /// `disabledMcpServers` out.
     pub(super) fn set_disabled_mcp_servers(&mut self, names: Vec<String>) -> io::Result<()> {
@@ -2791,6 +2818,37 @@ fn recalled(path: &Path) -> Map<String, Value> {
     let text = std::fs::read(path).ok();
     text.and_then(|text| serde_json::from_slice(&text).ok())
         .unwrap_or_default()
+}
+
+/// The MCP servers of `--mcp-config`'s `configs`, as Claude Code's: each a JSON object with
+/// `mcpServers`, or a file holding one (relative to `cwd`); a later server replaces an earlier one
+/// of its name.
+pub(super) fn mcp_config(configs: &[String], cwd: &Path) -> Result<Vec<McpServer>, String> {
+    let mut servers: Vec<McpServer> = Vec::new();
+    for config in configs {
+        let failed = |why: String| format!("--mcp-config {config}: {why}");
+        let text = match config.trim_start().starts_with('{') {
+            true => config.clone(),
+            false => {
+                let path = super::given_path(config, cwd);
+                std::fs::read_to_string(&path)
+                    .map_err(|error| failed(format!("{}: {error}", path.display())))?
+            }
+        };
+        let value: Value =
+            serde_json::from_str(&text).map_err(|error| failed(format!("not JSON: {error}")))?;
+        let Some(Value::Object(entries)) = value.get("mcpServers") else {
+            return Err(failed(
+                r#"must be an object with "mcpServers", the servers by name"#.to_owned(),
+            ));
+        };
+        for (name, entry) in entries {
+            let server = mcp_server(name, entry).map_err(|why| failed(format!("{name}: {why}")))?;
+            servers.retain(|known| known.name != server.name);
+            servers.push(server);
+        }
+    }
+    Ok(servers)
 }
 
 /// An entry of `mcpServers`, as Claude Code's: `command`, with `args` and `env`, or for a server
@@ -5238,5 +5296,54 @@ or false; ignored"
                 .unwrap()
                 .contains("\"hideThinkingBlock\": true")
         );
+    }
+
+    #[test]
+    fn mcp_configs_given_go_over_the_settings_servers_or_with_strict_in_their_place() {
+        let scratch = Scratch::new("mcp-config");
+        let file = scratch.0.join("more.json");
+        std::fs::write(
+            &file,
+            r#"{"mcpServers": {"b": {"command": "two"}, "c": {"url": "http://localhost:1/mcp"}}}"#,
+        )
+        .unwrap();
+        let configs = [
+            r#"{"mcpServers": {"a": {"command": "one"}, "b": {"command": "first"}}}"#.to_owned(),
+            "more.json".to_owned(),
+        ];
+        let given = super::mcp_config(&configs, &scratch.0).unwrap();
+        let names =
+            |servers: &[McpServer]| servers.iter().map(|s| s.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&given), ["a", "b", "c"]);
+        let McpTransport::Program { command, .. } = &given[1].transport else {
+            panic!("{:?}", given[1]);
+        };
+        assert_eq!(command, "two");
+        let mut settings = settings_with(
+            &scratch,
+            r#"{"mcpServers": {"b": {"command": "old"}, "d": {"command": "kept"}},
+                "disabledMcpServers": ["b", "d"]}"#,
+        );
+        settings.give_mcp_servers(given.clone(), false);
+        assert_eq!(names(&settings.mcp_servers), ["d", "a", "b", "c"]);
+        assert_eq!(settings.disabled_mcp_servers, ["d"]);
+        settings.reload();
+        assert_eq!(names(&settings.mcp_servers), ["d", "a", "b", "c"]);
+        assert_eq!(settings.disabled_mcp_servers, ["d"]);
+        settings.give_mcp_servers(given, true);
+        settings.reload();
+        assert_eq!(names(&settings.mcp_servers), ["a", "b", "c"]);
+        assert!(settings.disabled_mcp_servers.is_empty());
+        let failed =
+            |config: &str| super::mcp_config(&[config.to_owned()], &scratch.0).unwrap_err();
+        assert!(failed("missing.json").starts_with("--mcp-config missing.json: "));
+        assert!(failed("{x").contains("not JSON"));
+        assert!(failed(r#"{"servers": {}}"#).contains(r#"with "mcpServers""#));
+        let odd = failed(r#"{"mcpServers": {"e": {"args": []}}}"#);
+        assert!(
+            odd.contains("e: command must be the program to run"),
+            "{odd}"
+        );
+        std::fs::remove_dir_all(&scratch.0).unwrap();
     }
 }
