@@ -28,6 +28,6 @@ A package builds nothing: `install` names the programs it runs (`providersComman
 
 ## Running commands
 
-`/<set>:<command> args` runs a command. Each run, and each `delegate` of it, reads the command's file as it is then, so an edit takes effect without `/reload`; a new command needs `/reload`. A command runs until the agent reports it `completed` or you agree to abandon it.
+`/<set>:<command> args` runs a command. Each run, and each `delegate` of it, reads the command's file as it is then, so an edit takes effect without `/reload`; a new command needs `/reload`. A command runs until the agent hands off with `completed` (the `handoff` tool) or you agree to abandon it. Outside a command, the agent hands off the commands it recommends running next, for you to accept or dismiss; the handoff ends its turn.
 
 When it finishes, it may recommend next steps: you choose one (Left/Right picks the model it runs with, Shift+Tab the effort, Tab whether it starts a fresh session, marked `(fresh session)`), or an edge set in `/settings` (Next steps) continues automatically, and `/autopilot on` takes the recommended one after 3 seconds. The publication tools (issues, pull requests and comments on GitHub, through `gh`) show the exact payload for your approval unless the command's policy allows them.

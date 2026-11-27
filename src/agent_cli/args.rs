@@ -245,9 +245,8 @@ but to NO_PROXY's hosts and this machine.
   -t, --tools LIST       the only tools the agent has in this run, comma-separated:
                          coding tools, in place of the settings' tools, and
                          Scramjet's own (subagent, get_scramjet_user_input, delegate,
-                         report_scramjet_command_status…), left out unless named; without
-                         report_scramjet_command_status a command cannot finish, and waits
-                         for you after each reply
+                         handoff…), left out unless named; without handoff a command
+                         cannot finish, and waits for you after each reply
                          Claude Code's names (Bash, Read, Glob…) are taken, and spaces
                          between names; default is the tools the agent has without it
   -nt, --no-tools        no tools at all, unless --tools names some

@@ -54,7 +54,7 @@
         "pace": 0.12
       },
       {
-        "call": "report_scramjet_command_status",
+        "call": "handoff",
         "arguments": {
           "status": "completed",
           "summary": "Planned issue 12 in two stages, in `notes/plan-12.md`.",

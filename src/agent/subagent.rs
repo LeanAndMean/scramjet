@@ -120,9 +120,11 @@ pub(super) fn sweep_worktrees(root: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The name here of a tool an agent file names as Claude Code does, so that one file serves both.
+/// The name here of a tool an agent file names as Claude Code does, so that one file serves both,
+/// or by a name Scramjet 1 gave it.
 pub fn ours(tool: &str) -> &str {
     match tool {
+        tool if super::status::is_handoff(tool) => super::status::NAME,
         "Read" => "read",
         "Write" => "write",
         "Edit" | "MultiEdit" => "edit",

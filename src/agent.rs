@@ -1755,13 +1755,12 @@ impl Agent {
         offered
     }
 
-    /// For a run whose only prompts are given at its start (`-p`): leaves out
-    /// `suggest_scramjet_next_steps`, as no one can choose a suggestion, and, unless `commands`
-    /// (a prompt may start a command) or the session left a command waiting,
-    /// `report_scramjet_command_status`, which only a command takes. Small models call them
-    /// anyway when offered.
+    /// For a run whose only prompts are given at its start (`-p`): leaves out `handoff` unless
+    /// `commands` (a prompt may start a command) or the session left a command waiting, as no
+    /// one can choose the steps it hands off outside a command. Small models call it anyway when
+    /// offered.
     pub fn leave_out_idle_tools(&mut self, commands: bool) {
-        self.left_out = vec![suggest::NAME];
+        self.left_out = Vec::new();
         if !commands && self.lifecycle.active().is_none() {
             self.left_out.push(status::NAME);
         }

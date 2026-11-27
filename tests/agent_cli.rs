@@ -8265,7 +8265,7 @@ fn acp_fresh_session_steps_change_the_session_for_clients_that_follow() {
     }
 }
 
-/// A scripted Claude reply: `text`, then a `report_scramjet_command_status` call with `input`.
+/// A scripted Claude reply: `text`, then a `handoff` call with `input`.
 #[cfg(unix)]
 fn report_events(text: &str, input: serde_json::Value) -> Vec<String> {
     let mut events = vec![
@@ -8277,7 +8277,7 @@ fn report_events(text: &str, input: serde_json::Value) -> Vec<String> {
         r#"{"type":"content_block_stop","index":0}"#.to_owned(),
         serde_json::json!({"type": "content_block_start", "index": 1,
             "content_block": {"type": "tool_use", "id": "toolu_1",
-                "name": "report_scramjet_command_status", "input": {}}})
+                "name": "handoff", "input": {}}})
         .to_string(),
         serde_json::json!({"type": "content_block_delta", "index": 1,
             "delta": {"type": "input_json_delta", "partial_json": input.to_string()}})
@@ -8532,10 +8532,7 @@ fn acp_offers_the_agents_suggested_steps_with_the_extension_or_as_text() {
     let scramjet = serde_json::json!({"_meta": {"io.github.leanandmean.scramjet": {}}});
     for capabilities in [scramjet, serde_json::json!({})] {
         let knows = capabilities != serde_json::json!({});
-        let (port, _bodies) = serve_events(call_events(
-            "suggest_scramjet_next_steps",
-            suggested.clone(),
-        ));
+        let (port, _bodies) = serve_events(call_events("handoff", suggested.clone()));
         let (mut child, mut stdin, messages) = acp(&scratch.0, port);
         send(
             &mut stdin,
@@ -8560,7 +8557,7 @@ fn acp_offers_the_agents_suggested_steps_with_the_extension_or_as_text() {
         };
         let (call, _) = until(&messages, result);
         let output = call["params"]["update"]["content"][0]["content"]["text"].as_str();
-        assert!(output.unwrap().starts_with("Suggestion accepted"), "{call}");
+        assert!(output.unwrap().starts_with("Handed off"), "{call}");
         if knows {
             let (list, _) = until(&messages, |message| {
                 message["method"] == "_io.github.leanandmean.scramjet/next_step"

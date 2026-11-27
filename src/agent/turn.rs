@@ -1991,38 +1991,33 @@ auto-dispatches it only when its message is a slash command."
     }
 
     #[test]
-    fn a_suggestion_waits_for_the_turns_end_unless_the_user_goes_on_or_it_stops() {
-        let suggest = |id: &str| {
-            let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
-            tool_call(
-                id,
-                suggest::NAME,
-                json!({"next_steps":[step],"recommended_next_step":0}),
-            )
-        };
+    fn a_handoff_outside_a_command_ends_the_turn_unless_the_user_goes_on_or_it_stops() {
+        let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
+        let steps = json!({"next_steps":[step],"recommended_next_step":0});
+        let handoff = |id: &str| tool_call(id, status::NAME, steps.clone());
+        // With another call in its response, the turn goes on.
+        let with_ls = || tool_calls(&[(status::NAME, steps.clone()), ("ls", json!({}))]);
         let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
         let failed = b"HTTP/1.1 400 Bad Request\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
-        let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
         let (endpoint, server) = serve(vec![
-            suggest("call_1"),
-            reply("Try it."),
-            suggest("call_2"),
+            handoff("first"),
+            handoff("second"),
             reply("Waiting."),
+            // A handoff after a freetext question is refused, and the turn goes on.
             tool_calls(&[
-                (suggest::NAME, json!({"next_steps":[step]})),
                 (
                     question::NAME,
                     json!({"type":"freetext","message":"Which?"}),
                 ),
+                (status::NAME, steps.clone()),
             ]),
-            suggest("call_3"),
             reply("Asked."),
-            suggest("call_4"),
+            with_ls(),
             failed.to_vec(),
-            suggest("call_5"),
+            with_ls(),
             reply("Unseen."),
             reply("Plain."),
-            suggest("call_6"),
+            handoff("call_6"),
             tool_call(
                 "call_7",
                 status::NAME,
@@ -2036,7 +2031,7 @@ auto-dispatches it only when its message is a slash command."
         };
         let cancel = AtomicBool::new(false);
 
-        // Kept for the end of the turn, which goes on after it.
+        // Kept for the end of the turn, which it ends.
         agent.turn("what next?", &mut ui, &cancel).unwrap();
         let suggested = agent.take_suggestion().unwrap();
         assert_eq!(suggested.recommended, Some(0));
@@ -2064,29 +2059,62 @@ auto-dispatches it only when its message is a slash command."
         agent.turn("plain", &mut ui, &cancel).unwrap();
         assert_eq!(agent.take_suggestion(), None);
 
-        // A running command offers its steps with its report instead.
+        // A running command takes a status and summary with its steps.
         agent.turn("/rs:work 1", &mut ui, &cancel).unwrap();
         assert_eq!(agent.take_suggestion(), None);
         assert!(agent.take_completed().is_some());
 
         let bodies = server.join().unwrap();
-        let accepted = "Suggestion accepted — the user will see a selector popup with: /rs:work 5";
-        assert_eq!(outputs(&bodies[1]), [("call_1".into(), accepted.into())]);
+        assert_eq!(bodies.len(), 12);
+        let accepted = "Handed off: the user sees the list of next steps with /rs:work 5, in this \
+session recommended, and accepts or dismisses it. The turn ends here.";
+        assert_eq!(outputs(&bodies[1]), [("first".into(), accepted.into())]);
         let result = |body: &Value, id: &str| {
             let found = outputs(body).into_iter().find(|(call, _)| call == id);
             found.unwrap().1
         };
-        assert!(result(&bodies[6], "call_3").starts_with("A freetext reply is pending"));
-        let refused = result(&bodies[13], "call_6");
+        assert!(result(&bodies[4], "call_1").starts_with("A freetext reply is pending"));
+        let refused = result(&bodies[11], "call_6");
         assert!(
-            refused.contains("only when no command is active (/rs:work is)"),
+            refused.contains("status: must be completed or abandoned"),
             "{refused}"
         );
         // The model sees the tool and its guideline.
         let tools = bodies[0]["tools"].as_array().unwrap();
-        assert!(tools.iter().any(|tool| tool["name"] == suggest::NAME));
+        assert!(tools.iter().any(|tool| tool["name"] == status::NAME));
         let instructions = bodies[0]["instructions"].as_str().unwrap();
         assert!(instructions.contains(suggest::GUIDELINE));
+    }
+
+    #[test]
+    fn calls_by_scramjet_1s_names_run_handoff() {
+        let step = json!({"message":"/rs:work 5","fresh_session":false,"reason":"Go on."});
+        let (endpoint, server) = serve(vec![
+            tool_call("call_1", status::OLD_NAMES[1], json!({"next_steps":[step]})),
+            tool_call(
+                "call_2",
+                status::OLD_NAMES[0],
+                json!({"summary":"Done.","status":"completed"}),
+            ),
+        ]);
+        let (mut agent, _scratch) = command_agent(endpoint, "old-names", CLOSED);
+        let mut ui = Recorder {
+            suggests: true,
+            ..Recorder::default()
+        };
+        let cancel = AtomicBool::new(false);
+        agent.turn("what next?", &mut ui, &cancel).unwrap();
+        assert!(agent.take_suggestion().is_some());
+        agent.turn("/rs:work 1", &mut ui, &cancel).unwrap();
+        assert!(agent.take_completed().is_some());
+        assert!(ui.shown.contains(&"call handoff completed".to_owned()));
+        let bodies = server.join().unwrap();
+        let tools = bodies[0]["tools"].as_array().unwrap();
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| status::OLD_NAMES.contains(&tool["name"].as_str().unwrap()))
+        );
     }
 
     /// An agent in a scratch project whose `rs:work` command has `next`, and `rs:other`.
@@ -2202,18 +2230,14 @@ auto-dispatches it only when its message is a slash command."
             .filter_map(|item| item["output"].as_str())
             .collect();
         assert_eq!(outputs.len(), 4);
-        assert_eq!(outputs[0], "→ /rs:work again");
+        assert_eq!(outputs[0], "→ /rs:work again, in a new session");
         assert!(outputs[1].starts_with("`blocked` is not a status a command reports."));
         assert_eq!(outputs[2..], [r#"{"parked":true}"#, "status: completed"]);
         assert!(ui.shown.iter().any(|shown| {
-            shown.starts_with("result report_scramjet_command_status `blocked` is not")
-                && shown.ends_with(" failed")
+            shown.starts_with("result handoff `blocked` is not") && shown.ends_with(" failed")
         }));
         assert!(!ui.shown.iter().any(|shown| shown.starts_with("notice")));
-        assert!(
-            ui.shown
-                .contains(&"call report_scramjet_command_status completed".to_owned())
-        );
+        assert!(ui.shown.contains(&"call handoff completed".to_owned()));
         // The status checks are neither recalled nor shown again.
         let prompts = ["/rs:work go", "/rs:work", "a.txt"];
         assert_eq!(agent.prompts(), prompts);
@@ -2282,7 +2306,7 @@ did not finish or ask you anything. Reply to continue.";
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("/rs:work a", &mut ui, &cancel).unwrap();
-        let waiting = "notice /rs:work is waiting for you: report_scramjet_command_status is not \
+        let waiting = "notice /rs:work is waiting for you: handoff is not \
 among this run's tools, so it cannot finish and is not checked on. Reply to continue.";
         assert_eq!(ui.shown.last().map(String::as_str), Some(waiting));
         assert_eq!(agent.lifecycle.saved()["command"], "rs:work");

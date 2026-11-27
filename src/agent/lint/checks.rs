@@ -229,7 +229,7 @@ fn claude_name(tool: &str) -> Option<&'static str> {
 }
 
 fn scramjet_tool(tool: &str) -> bool {
-    tool == "cmd" || tools::HARNESS_TOOLS.contains(&tool)
+    tool == "cmd" || tools::HARNESS_TOOLS.contains(&super::super::subagent::ours(tool))
 }
 
 /// The tools the frontmatter's `keys` list (a YAML list or comma-separated text) that Claude

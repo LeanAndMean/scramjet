@@ -266,6 +266,14 @@ pub(super) const GROUPS: [(&str, &[Row]); 7] = [
 ];
 
 /// The flag of `claude` that `row`, one of `CLAUDE_ROWS`, turns on.
+/// `handoff` for the names Scramjet 1 gave the two tools it replaced, else `tool`.
+fn handoff_named(tool: &str) -> &str {
+    match tool {
+        "report_scramjet_command_status" | "suggest_scramjet_next_steps" => "handoff",
+        tool => tool,
+    }
+}
+
 fn claude_flag(claude: &mut ClaudeCode, row: Row) -> &mut bool {
     match row {
         Row::ClaudeSkills => &mut claude.skills,
@@ -1970,7 +1978,7 @@ impl Settings {
     fn read_tools(&mut self, path: &str, names: &[Value]) {
         let mut tools: Vec<String> = Vec::new();
         for name in names {
-            match name.as_str() {
+            match name.as_str().map(handoff_named) {
                 Some(tool) if CODING_TOOLS.contains(&tool) || HARNESS_TOOLS.contains(&tool) => {
                     if !tools.iter().any(|known| known == tool) {
                         tools.push(tool.to_owned());
@@ -1998,6 +2006,11 @@ impl Settings {
         let mut tools: Vec<String> = DEFAULT_TOOLS.map(str::to_owned).to_vec();
         let mut off: Vec<String> = Vec::new();
         for (tool, on) in switched {
+            // Scramjet 1's suggestion tool is `handoff` now, which commands need to finish.
+            if tool == "suggest_scramjet_next_steps" {
+                continue;
+            }
+            let tool = &handoff_named(tool).to_owned();
             let (list, harness) = match tool.as_str() {
                 tool if CODING_TOOLS.contains(&tool) => (&mut tools, false),
                 tool if HARNESS_TOOLS.contains(&tool) => (&mut off, true),
@@ -3982,6 +3995,27 @@ mod tests {
                 format!(r#"{path}: tools: "nope" is not a tool; ignored"#),
             ]
         );
+        // Scramjet 1's names for `handoff`: listing either keeps it; only the report's turns it
+        // off, as commands cannot finish without it.
+        let old = settings_with(
+            &scratch,
+            r#"{"tools": ["read", "suggest_scramjet_next_steps"]}"#,
+        );
+        assert!(
+            !old.harness_off.contains(&"handoff".to_owned()),
+            "{:?}",
+            old.harness_off
+        );
+        let old = settings_with(
+            &scratch,
+            r#"{"tools": {"suggest_scramjet_next_steps": false}}"#,
+        );
+        assert!(old.harness_off.is_empty() && old.warnings.is_empty());
+        let old = settings_with(
+            &scratch,
+            r#"{"tools": {"report_scramjet_command_status": false}}"#,
+        );
+        assert_eq!(old.harness_off, ["handoff"]);
         assert_eq!(
             settings_with(&scratch, r#"{"tools": {}}"#).tools,
             DEFAULT_TOOLS

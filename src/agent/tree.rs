@@ -454,9 +454,8 @@ fn asked_at(entries: &[session::Entry], entry: &session::Entry) -> Option<Asked>
         next = Some(output.line);
         let id = output.value["call_id"].as_str().unwrap_or_default();
         let call = reply.iter().find(|call| call["call_id"] == id);
-        let runs_again = call.is_none_or(|call| {
-            [status::NAME, suggest::NAME].contains(&call["name"].as_str().unwrap_or_default())
-        });
+        let runs_again =
+            call.is_none_or(|call| status::is_handoff(call["name"].as_str().unwrap_or_default()));
         if !runs_again && output.value["output"] != calls::NOT_RUN {
             kept.insert(id.to_owned(), output.value.clone());
         }
@@ -466,7 +465,7 @@ fn asked_at(entries: &[session::Entry], entry: &session::Entry) -> Option<Asked>
     for call in &reply[position + 1..] {
         let id = call["call_id"].as_str().unwrap_or_default();
         let name = call["name"].as_str().unwrap_or_default();
-        if !answered.contains(id) && ![status::NAME, suggest::NAME].contains(&name) {
+        if !answered.contains(id) && !status::is_handoff(name) {
             let output = json!({"type":"function_call_output","call_id":id,
                 "output":super::INTERRUPTED,super::FAILED:true});
             kept.insert(id.to_owned(), output);

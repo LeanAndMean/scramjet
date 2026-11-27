@@ -8,7 +8,7 @@ What you keep asking the agent for can become a command, and commands can lead i
 
 A command is a Markdown file of instructions, run as `/<set>:<name> arguments`. Its frontmatter gives a `description` and an `argument-hint`, shown in the `/` list; the body is sent to the agent with the arguments put in place of `$ARGUMENTS` (or `$1`, `$2`…). The agent receives it as an active task, the arguments marked as yours (`<user-context>`), so state what the command must achieve under `## Goals` and let the agent work out how from the project in front of it.
 
-A command runs until the agent reports it `completed`, with a summary, or `abandoned`, which you confirm. A reply that stops without either gets a status check asking it to go on, ask or finish; what only you can decide it asks with a question that waits for your answer. Each run reads the file as it is then, so an edit takes effect at the next run.
+A command runs until the agent hands off (the `handoff` tool) with `completed` and a summary, or with `abandoned`, which you confirm. A reply that stops without either gets a status check asking it to go on, ask or finish; what only you can decide it asks with a question that waits for your answer. Each run reads the file as it is then, so an edit takes effect at the next run.
 
 ## Command sets
 

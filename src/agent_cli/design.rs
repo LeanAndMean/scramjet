@@ -938,9 +938,8 @@ fn margin_label(name: &str) -> (String, bool) {
     let short = match name {
         "subagent" => "agent",
         "delegate" => "invoke",
-        "report_scramjet_command_status" => "report",
+        "handoff" => "next",
         "get_scramjet_user_input" => "ask",
-        "suggest_scramjet_next_steps" => "next",
         "switch_scramjet_model" => "model",
         "create_issue" => "issue",
         "create_pr" => "pr",

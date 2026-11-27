@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.440.0 — `handoff`
+
+### Changed
+
+- The agent's `report_scramjet_command_status` and `suggest_scramjet_next_steps` tools are one, `handoff`: in a command it ends the command's part with its status, summary and next steps as before; outside one it hands off the commands to run next, for you to accept or dismiss, and ends the turn there. Its result says whether each step runs in this session or a new one. Calls, `--tools`, `tools` in the settings and commands' `allowed-tools` by the old names still work.
+
 ## 2.439.0 — Commits in the sandbox
 
 ### Changed

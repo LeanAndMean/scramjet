@@ -88,7 +88,6 @@ disjoint edits in one call"
             (question::NAME, question::SNIPPET.to_owned()),
             (subagent::NAME, subagent::SNIPPET.to_owned()),
             (switch::NAME, switch::SNIPPET.to_owned()),
-            (suggest::NAME, suggest::SNIPPET.to_owned()),
             (mcp::SEARCH, mcp::SEARCH_SNIPPET.to_owned()),
             (mcp::CALL, mcp::CALL_SNIPPET.to_owned()),
         ]);
@@ -134,7 +133,7 @@ not pad with large unchanged regions.",
 with relevant checks.",
         );
     }
-    if has(suggest::NAME) {
+    if has(status::NAME) {
         guidelines.push(suggest::GUIDELINE);
     }
     guidelines.extend([
@@ -1381,7 +1380,7 @@ mod tests {
         );
         let listed = "Available tools:\n- read: Read file contents\n- bash: Execute bash commands \
 (ls, grep, find, etc.)\n- edit: Make precise file edits with exact text replacement, including \
-multiple disjoint edits in one call\n- write: Create or overwrite files\n- report_scramjet_command_status:";
+multiple disjoint edits in one call\n- write: Create or overwrite files\n- handoff:";
         assert!(text.contains(listed), "{text}");
         let guidelines = "Guidelines:\n- Use bash for file operations like ls, rg, find, and for \
 git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use edit for precise";
@@ -1398,15 +1397,13 @@ git, builds and tests\n- Use read to examine files instead of cat or sed.\n- Use
             &Skills::default(),
             &Loaded::default(),
         );
-        assert!(text.contains("Available tools:\n- report_scramjet_command_status:"));
+        assert!(text.contains("Available tools:\n- handoff:"));
         let guidelines = format!("Guidelines:\n{}\n- Be concise", suggest::GUIDELINE);
         assert!(text.contains(&guidelines), "{text}");
         let listed = format!(
-            "- {}: {}\n- {}: {}\n- {}: {}\n- {}: {}\n\nGuidelines:",
+            "- {}: {}\n- {}: {}\n- {}: {}\n\nGuidelines:",
             switch::NAME,
             switch::SNIPPET,
-            suggest::NAME,
-            suggest::SNIPPET,
             mcp::SEARCH,
             mcp::SEARCH_SNIPPET,
             mcp::CALL,

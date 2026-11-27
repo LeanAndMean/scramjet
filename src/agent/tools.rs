@@ -134,7 +134,7 @@ pub fn missing_shells(tools: &[String]) -> Vec<String> {
 }
 
 /// The harness's own tools, which the model sees after the coding tools, in this order.
-pub const HARNESS_TOOLS: [&str; 13] = [
+pub const HARNESS_TOOLS: [&str; 12] = [
     super::status::NAME,
     super::publish::TOOLS[0],
     super::publish::TOOLS[1],
@@ -144,7 +144,6 @@ pub const HARNESS_TOOLS: [&str; 13] = [
     super::delegate::NAME,
     super::subagent::NAME,
     super::switch::NAME,
-    super::suggest::NAME,
     super::permissions::NAME,
     super::mcp::SEARCH,
     super::mcp::CALL,
@@ -194,7 +193,6 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     tools.push(super::delegate::definition());
     tools.push(super::subagent::definition());
     tools.push(super::switch::definition());
-    tools.push(super::suggest::definition());
     tools.push(super::permissions::definition());
     tools.extend(super::mcp::definitions());
     tools.retain(|tool| (tool["name"].as_str()).is_some_and(|name| offered.contains(&name)));
@@ -361,6 +359,10 @@ impl<'a> Call<'a> {
                 arguments: json!({"server": server, "tool": tool, "arguments": arguments}),
             });
         }
+        let name = match super::status::is_handoff(name) {
+            true => super::status::NAME,
+            false => name,
+        };
         Ok(Self { name, arguments })
     }
     fn str(&self, field: &str) -> Result<&str, String> {
@@ -390,13 +392,15 @@ impl<'a> Call<'a> {
             }
             super::subagent::NAME => super::subagent::summary(&self.arguments),
             super::delegate::NAME => super::delegate::summary(&self.arguments),
-            super::suggest::NAME => super::suggest::summary(&self.arguments),
             super::switch::NAME => super::switch::summary(&self.arguments),
             super::permissions::NAME => super::permissions::summary(&self.arguments),
             name if super::publish::TOOLS.contains(&name) => {
                 super::publish::summary(name, &self.arguments)
             }
-            super::status::NAME => self.arguments["status"].as_str().unwrap_or("").to_owned(),
+            super::status::NAME => match self.arguments["status"].as_str() {
+                Some(status) => status.to_owned(),
+                None => super::suggest::summary(&self.arguments),
+            },
             super::mcp::SEARCH | super::mcp::CALL => {
                 super::mcp::summary_line(self.name, &self.arguments)
             }

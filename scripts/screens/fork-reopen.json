@@ -11,7 +11,7 @@
         "text": "The first step is done."
       },
       {
-        "call": "report_scramjet_command_status",
+        "call": "handoff",
         "arguments": {
           "status": "completed",
           "summary": "Ran the first step.",
@@ -36,7 +36,7 @@
         "text": "The second step is done."
       },
       {
-        "call": "report_scramjet_command_status",
+        "call": "handoff",
         "arguments": {
           "status": "completed",
           "summary": "Ran the second step."
@@ -48,7 +48,7 @@
         "text": "The third step is done."
       },
       {
-        "call": "report_scramjet_command_status",
+        "call": "handoff",
         "arguments": {
           "status": "completed",
           "summary": "Ran the third step."

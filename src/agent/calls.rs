@@ -448,17 +448,16 @@ impl Agent {
             }
             return Called::Done(output, ends);
         }
-        if call.name == suggest::NAME {
-            let (active, shows) = (self.lifecycle.active(), ui.offers_suggestions());
-            let (commands, pending) = (&self.commands, &self.suggestion);
-            let (text, failed) =
-                match suggest::run(&call.arguments, commands, active, shows, pending) {
-                    Ok((suggested, text)) => {
-                        self.suggestion = suggest::Pending::Steps(suggested);
-                        (text, false)
-                    }
-                    Err(refused) => refused,
-                };
+        if call.name == status::NAME && self.lifecycle.active().is_some() {
+            let (text, failed, ends) = match self.lifecycle.report(&call.arguments) {
+                status::Reported::Answer(text, failed, ends) => (text, failed, ends),
+                status::Reported::Abandon(abandon) => {
+                    ui.question(&abandon.message());
+                    let choices = status::Abandon::choices();
+                    let chosen = ui.confirm(&abandon.title(), &choices, Some(1));
+                    self.lifecycle.abandon(&abandon, chosen)
+                }
+            };
             ui.tool_result(call.name, &text, None, failed);
             let output = Output {
                 text,
@@ -466,7 +465,27 @@ impl Agent {
                 failed,
                 images: Vec::new(),
             };
-            return Called::Done(output, false);
+            return Called::Done(output, ends);
+        }
+        if call.name == status::NAME {
+            let shows = ui.offers_suggestions();
+            let (commands, pending) = (&self.commands, &self.suggestion);
+            let (text, failed, ends) = match suggest::run(&call.arguments, commands, shows, pending)
+            {
+                Ok((suggested, text)) => {
+                    self.suggestion = suggest::Pending::Steps(suggested);
+                    (text, false, true)
+                }
+                Err((text, failed)) => (text, failed, false),
+            };
+            ui.tool_result(call.name, &text, None, failed);
+            let output = Output {
+                text,
+                detail: None,
+                failed,
+                images: Vec::new(),
+            };
+            return Called::Done(output, ends);
         }
         if call.name == switch::NAME {
             let (text, failed) = match self.switch_model(&call.arguments) {
@@ -511,25 +530,6 @@ impl Agent {
             let detail = output.detail.as_ref();
             ui.tool_result(call.name, &output.text, detail, output.failed);
             return Called::Done(output, false);
-        }
-        if call.name == status::NAME {
-            let (text, failed, ends) = match self.lifecycle.report(&call.arguments) {
-                status::Reported::Answer(text, failed, ends) => (text, failed, ends),
-                status::Reported::Abandon(abandon) => {
-                    ui.question(&abandon.message());
-                    let choices = status::Abandon::choices();
-                    let chosen = ui.confirm(&abandon.title(), &choices, Some(1));
-                    self.lifecycle.abandon(&abandon, chosen)
-                }
-            };
-            ui.tool_result(call.name, &text, None, failed);
-            let output = Output {
-                text,
-                detail: None,
-                failed,
-                images: Vec::new(),
-            };
-            return Called::Done(output, ends);
         }
         let answer = match self.question_for(&call) {
             Some(question) => {
@@ -887,7 +887,8 @@ pub(super) fn ended(item: &Value, output: &Value) -> bool {
                 .unwrap_or_default();
             answer["cancelled"] == true || answer.get("parked").is_some()
         }
-        Some(status::NAME) => true,
+        // Scramjet 1's suggestion tool left the turn going.
+        Some(name) => status::is_handoff(name) && name != status::OLD_NAMES[1],
         _ => false,
     }
 }
@@ -2471,15 +2472,14 @@ files is added or changed.",
                 delegate::NAME,
                 subagent::NAME,
                 switch::NAME,
-                suggest::NAME
             ]
         );
         let instructions = bodies[0]["instructions"].as_str().unwrap();
         for line in [
             "- read: Read file contents\n- grep: Search file contents for patterns (respects \
-.gitignore)\n- ls: List directory contents\n- report_scramjet_command_status:",
+.gitignore)\n- ls: List directory contents\n- handoff:",
             "Guidelines:\n- Use read to examine files instead of cat or sed.\n- When idle in an \
-interactive session, prefer `suggest_scramjet_next_steps`",
+interactive session, prefer `handoff`",
         ] {
             assert!(instructions.contains(line), "{instructions}");
         }
@@ -2493,9 +2493,9 @@ interactive session, prefer `suggest_scramjet_next_steps`",
             [
                 &*format!("src{}a.txt:1: a needle", std::path::MAIN_SEPARATOR),
                 "a.txt",
-                "Tool write not found. Available tools: read, grep, ls, \
-report_scramjet_command_status, create_issue, create_pr, add_issue_comment, add_pr_comment, \
-get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scramjet_next_steps"
+                "Tool write not found. Available tools: read, grep, ls, handoff, create_issue, \
+create_pr, add_issue_comment, add_pr_comment, get_scramjet_user_input, delegate, subagent, \
+switch_scramjet_model"
             ]
         );
         assert!(!agent.root().join("x.txt").exists());
@@ -2547,23 +2547,22 @@ get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scra
                 .collect()
         };
         let all = names(&agent);
-        assert!(all.contains(&status::NAME.to_owned()) && all.contains(&suggest::NAME.into()));
+        assert!(all.contains(&status::NAME.to_owned()));
         agent.leave_out_idle_tools(false);
         let left: Vec<_> = (all.iter())
-            .filter(|name| ![status::NAME, suggest::NAME].contains(&name.as_str()))
+            .filter(|name| name.as_str() != status::NAME)
             .cloned()
             .collect();
         assert_eq!(names(&agent), left);
         let instructions = agent.instructions();
         assert!(!instructions.contains(status::SNIPPET), "{instructions}");
-        assert!(!instructions.contains(suggest::NAME), "{instructions}");
+        assert!(!instructions.contains(suggest::GUIDELINE), "{instructions}");
         agent.leave_out_idle_tools(true);
         assert!(names(&agent).contains(&status::NAME.to_owned()));
         assert!(agent.instructions().contains(status::SNIPPET));
         agent.lifecycle.prompted(status::Prompt::Command("waiting"));
         agent.leave_out_idle_tools(false);
         assert!(names(&agent).contains(&status::NAME.to_owned()));
-        assert!(!names(&agent).contains(&suggest::NAME.to_owned()));
     }
 
     #[test]

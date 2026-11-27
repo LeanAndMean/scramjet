@@ -33,7 +33,7 @@ Tool output and the files the agent read can hold credentials; do not copy them 
 - The user: `{"role":"user","content":"…"}`; `_scramjet_typed` holds what was typed when a command expanded it.
 - The model: `{"type":"message","role":"assistant","content":[{"type":"output_text","text":…}]}`, `reasoning` items with a `summary`.
 - Tools: `function_call` (`name`, `arguments` as a JSON string, `call_id`) and `function_call_output` (`call_id`, `output`).
-- Commands: `command_state` names the command active from there on; a `function_call` named `report_scramjet_command_status` carries its `status` and `summary`: search these first.
+- Commands: `command_state` names the command active from there on; a `function_call` named `handoff` (before 2.440.0 `report_scramjet_command_status`) carries its `status` and `summary`: search these first.
 - `compaction` (`summary`, `first_kept`), `branch` (`parent`: the entry the next line continues; a session is a tree), `model_change`, `turn_stopped` (`error` when a turn failed).
 
 Subagents' conversations are not saved. Checked against this program's files, 2026-11-12.

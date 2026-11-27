@@ -11,11 +11,11 @@
     ],
     [
       {"text": "The first step is done."},
-      {"call": "report_scramjet_command_status", "arguments": {"status": "completed", "summary": "Ran the **first** step and checked its output.", "next_steps": [{"message": "/flow:step two", "fresh_session": true, "reason": "Do the second."}], "recommended_next_step": 0}}
+      {"call": "handoff", "arguments": {"status": "completed", "summary": "Ran the **first** step and checked its output.", "next_steps": [{"message": "/flow:step two", "fresh_session": true, "reason": "Do the second."}], "recommended_next_step": 0}}
     ],
     [
       {"text": "The second step is done."},
-      {"call": "report_scramjet_command_status", "arguments": {"status": "completed", "summary": "Ran the second step."}}
+      {"call": "handoff", "arguments": {"status": "completed", "summary": "Ran the second step."}}
     ]
   ],
   "steps": [

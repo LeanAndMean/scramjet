@@ -11,8 +11,8 @@ When prior-session lookup is appropriate:
  - This project's other sessions are the `.jsonl` files in the directory of the
    `Current session journal` path in your environment facts; exclude the current file.
  - Search command-status summaries first. Each line of a session file is a JSON object;
-   a status report is a `function_call` line named `report_scramjet_command_status` whose
-   `arguments` string holds its `status` and `summary`, and `command_state` lines name the
+   a status report is a `function_call` line named `handoff` (in older sessions
+   `report_scramjet_command_status`) whose `arguments` string holds its `status` and `summary`, and `command_state` lines name the
    command that was active. They are incremental progress records of the commands that ran.
  - Inspect full transcript entries only in likely candidates after narrowing.
  - For sessions of another harness used on this project (Scramjet 1, Pi, dreb, Claude Code,

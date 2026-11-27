@@ -850,7 +850,7 @@ Comment\\n\\n```\\nMe too.\\n```\")",
         };
         let answered = [
             "reply All three fixed.",
-            "call report_scramjet_command_status completed",
+            "call handoff completed",
             "reply ok",
         ];
         assert_eq!(shown(&ui.shown), answered);
@@ -870,10 +870,7 @@ Comment\\n\\n```\\nMe too.\\n```\")",
         show_items(&items, None, &mut replay);
         assert_eq!(
             shown(&replay.shown),
-            [
-                "reply Fixed.",
-                "call report_scramjet_command_status completed"
-            ]
+            ["reply Fixed.", "call handoff completed"]
         );
     }
 

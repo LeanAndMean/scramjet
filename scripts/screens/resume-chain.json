@@ -7,13 +7,13 @@
   "prompt": "/flow:step one",
   "replies": [
     [
-      {"call": "report_scramjet_command_status", "arguments": {"status": "completed", "summary": "Wrote the parser's first tests.", "next_steps": [{"message": "/flow:step two", "fresh_session": true, "reason": "Go on."}], "recommended_next_step": 0}}
+      {"call": "handoff", "arguments": {"status": "completed", "summary": "Wrote the parser's first tests.", "next_steps": [{"message": "/flow:step two", "fresh_session": true, "reason": "Go on."}], "recommended_next_step": 0}}
     ],
     [
-      {"call": "report_scramjet_command_status", "arguments": {"status": "completed", "summary": "Fixed the parser's escapes.", "next_steps": [{"message": "/flow:step three", "fresh_session": true, "reason": "Go on."}], "recommended_next_step": 0}}
+      {"call": "handoff", "arguments": {"status": "completed", "summary": "Fixed the parser's escapes.", "next_steps": [{"message": "/flow:step three", "fresh_session": true, "reason": "Go on."}], "recommended_next_step": 0}}
     ],
     [
-      {"call": "report_scramjet_command_status", "arguments": {"status": "completed", "summary": "Documented the parser."}}
+      {"call": "handoff", "arguments": {"status": "completed", "summary": "Documented the parser."}}
     ]
   ],
   "steps": [

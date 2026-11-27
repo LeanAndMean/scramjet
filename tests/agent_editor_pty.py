@@ -591,7 +591,7 @@ def report(call_id, steps=None, recommended=None):
                                    for text, fresh, reason in steps]
     if recommended is not None:
         arguments['recommended_next_step'] = recommended
-    return tool_call(call_id, 'report_scramjet_command_status', arguments)
+    return tool_call(call_id, 'handoff', arguments)
 
 
 class Screen:
@@ -3567,7 +3567,7 @@ assert '\n- grep: Search file contents' not in bodies[0]['instructions'], bodies
 assert tools(bodies[1]) == ['read', 'bash', 'edit', 'write', 'find'], bodies[1]['tools']
 assert '\n- ls: List directory contents' not in bodies[1]['instructions'], bodies[1]['instructions']
 assert all('switch_scramjet_model' not in str(body['tools']) for body in bodies), bodies[0]['tools']
-assert 'suggest_scramjet_next_steps' in str(bodies[0]['tools']), bodies[0]['tools']
+assert "'name': 'handoff'" in str(bodies[0]['tools']), bodies[0]['tools']
 assert saved(menu_home) == {
     'quietStartup': True, 'branchSummary': {'reserveTokens': 16384}, 'effortLevel': 'high',
     'hideThinkingBlock': True, 'steeringMode': 'one-at-a-time', 'collapseChangelog': True,
@@ -3660,7 +3660,7 @@ def command_sets(read, until, send, output):
     rows = on_screen('Greeted.')
     assert ' \u203a /demo:greet Ada "the reader"' in rows, rows
     # Without a report, Scramjet's status check follows, hidden; the model reports there.
-    rows = on_screen(' report_scramjet_command_status  completed')
+    rows = on_screen(' handoff  completed')
     assert 'Status check for' not in '\n'.join(rows), rows
     on_screen('status: completed')
     send(b'/tools:echo a  b\r')
@@ -3964,7 +3964,7 @@ def next_steps(read, until, send, output):
     shown, on_screen = full_screen(rows=50)(read, output)
     on_screen('\u2500' * 20)
     send(b'/flow:step one\r')
-    on_screen(' report_scramjet_command_status  completed')
+    on_screen(' handoff  completed')
     # The steps the model offered, the recommended one selected, each reason under it.
     rows = on_screen('Select next step')
     read(.6)
@@ -4041,7 +4041,7 @@ def suggested_steps(read, until, send, output):
     rows = on_screen(' \u203a /flow:step two')
     text = '\n'.join(rows)
     assert text.index('Agent-suggested next step:\n\u2192 /flow:step two \u2014 Go on.') < text.index(' \u203a /flow:step two'), text
-    on_screen(' report_scramjet_command_status  completed')
+    on_screen(' handoff  completed')
     send(b'again\r')
     on_screen('Agent suggests a next step')
     read(.6)
@@ -4087,7 +4087,7 @@ def parked_question_resumed(read, until, send, output):
     # The reply resumes the command the session saved as waiting for it: its turn gets the
     # status check, and the step the report offers is listed.
     on_screen('Used blue.')
-    on_screen(' report_scramjet_command_status  completed')
+    on_screen(' handoff  completed')
     rows = on_screen('Select next step')
     read(.6)
     assert '\u2192 0: /flow:step again' in rows, rows
@@ -4475,18 +4475,16 @@ assert 'scramjet_next_step_selection' not in kinds, kinds
 note = bodies[3]['input'][-2]['content']
 assert note.startswith('<system-reminder>') and '→ /flow:done' in note, note
 run(['--continue'], next_steps_resumed, rows=50)
-suggest = lambda call_id, steps, recommended: tool_call(call_id, 'suggest_scramjet_next_steps', {
+suggest = lambda call_id, steps, recommended: tool_call(call_id, 'handoff', {
     'next_steps': [{'message': text, 'fresh_session': False, 'reason': reason} for text, reason in steps],
     'recommended_next_step': recommended})
 known = set(session_files())
 run([], suggested_steps, serve_items([
-    [suggest('call_1', [('/flow:step two', 'Go on.')], 0)],
-    [message('Pick one.')],
+    # A handoff ends the turn, after the text of its response.
+    [message('Pick one.'), suggest('call_1', [('/flow:step two', 'Go on.')], 0)],
     [report('call_2')],
-    [suggest('call_3', [('/flow:done', 'Finish.'), ('Explain more', 'Ask.')], 0)],
-    [message('Or this.')],
-    [suggest('call_4', [('/flow:done', 'Finish.')], 0)],
-    [message('Last one.')],
+    [message('Or this.'), suggest('call_3', [('/flow:done', 'Finish.'), ('Explain more', 'Ask.')], 0)],
+    [message('Last one.'), suggest('call_4', [('/flow:done', 'Finish.')], 0)],
 ], models=route_models[:1]), rows=50)
 (suggested,) = set(session_files()) - known
 records = [json.loads(line['arguments']) for line in map(json.loads, open(suggested))
@@ -4510,8 +4508,8 @@ run(['--continue'], parked_question_resumed, serve_items([
 known = set(session_files())
 abandon = {'summary': 'Half done: the parser is in, its tests are not.', 'status': 'abandoned'}
 run([], abandoned_command, serve_items([
-    [tool_call('call_1', 'report_scramjet_command_status', abandon)],
-    [tool_call('call_2', 'report_scramjet_command_status', abandon)],
+    [tool_call('call_1', 'handoff', abandon)],
+    [tool_call('call_2', 'handoff', abandon)],
 ]))
 (abandoned,) = set(session_files()) - known
 lines = list(map(json.loads, open(abandoned)))

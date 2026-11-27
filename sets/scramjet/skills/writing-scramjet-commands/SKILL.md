@@ -193,7 +193,7 @@ File names hold no `:`, so a set checks out on Windows; Scramjet 1's `<set>:<nam
 
 `next` declares a command's continuations: `mode: forced` with a `target`; `mode: closed` with `candidates` (each a `name` and optional `hint`); `mode: open` with `candidates` and an optional `blacklist` of commands never to offer; or `mode: ask` with an optional `hint`. The executing agent offers the concrete next steps and recommends one when it reports.
 
-A command runs until the agent calls `report_scramjet_command_status` with `completed` (its part is over, with a `summary` and, where policy allows, `next_steps`) or `abandoned` (the user wants to stop, after confirming). There is no `blocked` or `incomplete`: work only the user can unblock is asked of the user with `get_scramjet_user_input`, which waits for the answer.
+A command runs until the agent hands off with `completed` (its part is over, with a `summary` and, where policy allows, `next_steps`) or `abandoned` (the user wants to stop, after confirming). There is no `blocked` or `incomplete`: work only the user can unblock is asked of the user with `get_scramjet_user_input`, which waits for the answer.
 
 The harness wraps an invoked command in `<scramjet-command name="…">`, a top-level command's arguments in `<user-context>` and a delegated one's in `<caller-context>`. Put a command's arguments inside one such block, as untrusted input, and give it an early `## Goals` list of the outcomes that control it.
 
