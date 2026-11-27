@@ -96,6 +96,8 @@ pub(super) enum Binding {
     TreeFoldOrUp,
     TreeUnfoldOrDown,
     TreeEditLabel,
+    TreeSummarize,
+    TreeSummarizeWithPrompt,
     TreeToggleLabelTimestamp,
     TreeFilterDefault,
     TreeFilterNoTools,
@@ -188,7 +190,7 @@ const SUSPEND: &[&str] = if cfg!(windows) { &[] } else { &["ctrl+z"] };
 /// (`docs/keybindings.md`) where scramjet-rs's action is Scramjet's; those Scramjet lacks are
 /// named in its manner.
 #[rustfmt::skip]
-const DEFINITIONS: [Definition; 99] = [
+const DEFINITIONS: [Definition; 101] = [
     define(B::CursorUp, "tui.editor.cursorUp", &["up"], S::Navigation, "Move cursor up / browse history"),
     define(B::CursorDown, "tui.editor.cursorDown", &["down", "ctrl+n"], S::Navigation, "Move cursor down / browse history"),
     define(B::CursorLeft, "tui.editor.cursorLeft", &["left", "ctrl+b"], S::Navigation, "Move cursor left"),
@@ -268,6 +270,8 @@ const DEFINITIONS: [Definition; 99] = [
     define(B::TreeFoldOrUp, "app.tree.foldOrUp", &["ctrl+left", "alt+left", "alt+b"], S::Tree, "Fold the branch, or up to the one before"),
     define(B::TreeUnfoldOrDown, "app.tree.unfoldOrDown", &["ctrl+right", "alt+right", "alt+f"], S::Tree, "Unfold the branch, or down to the next"),
     define(B::TreeEditLabel, "app.tree.editLabel", &["shift+l"], S::Tree, "Label the entry"),
+    define(B::TreeSummarize, "app.tree.summarize", &["shift+s"], S::Tree, "Go back with a summary of the branch left"),
+    define(B::TreeSummarizeWithPrompt, "app.tree.summarizeWithPrompt", &["shift+p"], S::Tree, "Go back with a summary, as you instruct"),
     define(B::TreeToggleLabelTimestamp, "app.tree.toggleLabelTimestamp", &["shift+t"], S::Tree, "Show when labels were given"),
     define(B::TreeFilterDefault, "app.tree.filter.default", &["ctrl+d"], S::Tree, "Filter: the default view"),
     define(B::TreeFilterNoTools, "app.tree.filter.noTools", &["ctrl+t"], S::Tree, "Filter: without tool results"),

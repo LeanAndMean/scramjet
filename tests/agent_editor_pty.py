@@ -314,11 +314,11 @@ def item_events(index, item):
     return events + [{'type': 'response.output_item.done', 'output_index': index, 'item': item}]
 
 
-def serve_items(responses, gate=None, models=(), bodies=None, gated=0, usages=()):
+def serve_items(responses, gate=None, models=(), bodies=None, gated=0, usages=(), held=False):
     """Answers the requests in turn with a response streaming the complete items in `responses`
     with the usage at the same index in `usages`, if any, the one at index `gated` once `gate`, if
     given, is set, offers `models` (`offering`), and adds each request's body to `bodies`, if
-    given."""
+    given. With `held`, the first request is never answered, and the others are answered so."""
     listener = socket.socket()
     listener.bind(('127.0.0.1', 0))
     listener.listen(8)
@@ -333,6 +333,9 @@ def serve_items(responses, gate=None, models=(), bodies=None, gated=0, usages=()
         streams.append(b''.join(b'data: %s\n\n' % json.dumps(event).encode() for event in events))
 
     def answer():
+        if held:
+            kept, _ = listener.accept()
+            receive(kept)
         for number, stream in enumerate(streams):
             connection, _ = listener.accept()
             request = receive(connection)
@@ -835,8 +838,9 @@ def suspend_without_job_control(read, until, send, output):
     send(b'\x1a')
     on_screen('Waiting for reply 2s')
     send(b'\x1b')
-    on_screen('(cancelled)')
-    send(b'\x04')
+    # Stopped before any reply, the prompt goes back in the editor.
+    ending(read, output, ['> go'])
+    send(b'\x03\x04')
 
 
 def cancel_retry(read, until, send, output):
@@ -853,8 +857,9 @@ def cancel_retry(read, until, send, output):
         read(.05)
         rows = shown()
     send(b'\x03')
-    on_screen('(cancelled)')
-    send(b'\x04')
+    # Stopped before any reply, the prompt goes back in the editor.
+    ending(read, output, ['> go'])
+    send(b'\x03\x04')
 
 
 def escape_cancels_command(read, until, send, output):
@@ -1124,9 +1129,9 @@ def waiting_counts_seconds(read, until, send, output):
     read(.3)
     assert '(cancelled)' not in '\n'.join(shown()), shown()
     send(b'\x03')
-    on_screen('(cancelled)')
-    ending(read, output, EMPTY)
-    send(b'\x04')
+    # Before any reply, the prompt goes back in the editor.
+    ending(read, output, ['> go'])
+    send(b'\x03\x04')
 
 
 def ctrl_t_hides_reasoning(read, until, send, output):
@@ -1225,8 +1230,9 @@ def hidden_from_the_start(read, until, send, output):
     assert '(cancelled)' not in '\n'.join(shown()), shown()
     on_screen('Thinking...')
     send(b'\x03')
-    on_screen('(cancelled)')
-    send(b'\x04')
+    # The reasoning never ended, so nothing was saved: the prompt goes back in the editor.
+    ending(read, output, ['> go'])
+    send(b'\x03\x04')
 
 
 def quiet_after_reasoning_shows_thinking(read, until, send, output):
@@ -1236,8 +1242,8 @@ def quiet_after_reasoning_shows_thinking(read, until, send, output):
     on_screen('the paragraph ends here.')
     on_screen('Thinking 1s')
     send(b'\x1b')
-    on_screen('(cancelled)')
-    send(b'\x04')
+    ending(read, output, ['> go'])
+    send(b'\x03\x04')
 
 
 def running_counts_seconds(read, until, send, output):
@@ -2388,23 +2394,13 @@ def tree_session(read, until, send, output):
     on_screen('Session Tree')
     send(b'\x1b[A')
     on_screen('\u203a \u2022 user: second')
-    # Leaving the reply, it asks about a summary; Escape goes back to the tree at the same row.
-    send(b'\r')
-    rows = on_screen('Summarize branch?')
-    assert '\u203a No summary' in rows, rows
+    # Shift+P asks for instructions; Escape there goes back to the tree at the same row.
+    send(b'P')
+    on_screen('Custom summarization instructions')
     send(b'\x1b')
     on_screen('Session Tree')
     on_screen('\u203a \u2022 user: second')
-    send(b'\r')
-    on_screen('Summarize branch?')
-    send(b'\x1b[B\x1b[B')
-    on_screen('\u203a Summarize with custom prompt')
-    # Escape in the instructions goes back to the question.
-    send(b'\r')
-    on_screen('Custom summarization instructions')
-    send(b'\x1b')
-    on_screen('Summarize branch?')
-    send(b'\x1b[B\x1b[B\r')
+    send(b'P')
     on_screen('Custom summarization instructions')
     # As in Scramjet, Enter without instructions gives the default summary.
     send(b'\r')
@@ -2930,7 +2926,7 @@ def settings_menu(read, until, send, output):
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
-    send(b'\x1b[B' * 13 + b'\r')
+    send(b'\x1b[B' * 12 + b'\r')
     rows = on_screen('Tools  \u2191\u2193 move \u00b7 Enter switch on or off \u00b7 Esc back')
     assert '\u203a [x] read' in rows and '  [x] grep' in rows and rows[-1] == '  Read file contents', rows
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
@@ -2952,7 +2948,7 @@ def settings_menu(read, until, send, output):
     assert 'Command: ' not in '\n'.join(rows), rows
     # A list the user opened leaves the status row on what the turn does.
     assert any(' Running ' in row for row in rows), rows
-    send(b'\x1b[B' * 24 + b'\r')
+    send(b'\x1b[B' * 23 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find; swi…'))
@@ -3184,7 +3180,7 @@ def double_escape_forks(read, until, send, output):
     assert '\u203a second' in rows, rows
     send(b'\x1b')
     ending(read, output, EMPTY)
-    # branchSummary.skipPrompt: leaving a branch asks nothing.
+    # Enter leaves a branch without asking about a summary.
     send(b'/tree\r')
     on_screen('Session Tree')
     send(b'\x1b[A')
@@ -4871,6 +4867,25 @@ def fullscreen_queue(read, until, send, output):
     send(b'\x03\x04')
 
 
+def escape_before_a_reply(read, until, send, output):
+    shown, on_screen = full_screen()(read, output)
+    on_screen('\u2500' * 20)
+    send(b'hello there\r')
+    on_screen('Waiting for reply')
+    send(b'queued too\r')
+    on_screen('Steering: queued too')
+    # Escape before any reply puts the prompt back in the editor, before what was queued, and
+    # takes it out of the conversation.
+    send(b'\x1b')
+    rows = ending(read, output, ['> hello there', '', '  queued too'])
+    text = '\n'.join(rows)
+    assert '\u203a hello there' not in text and '(cancelled)' not in text, text
+    send(b'\x03')
+    send(b'hello again\r')
+    on_screen('Answered.')
+    send(b'\x03\x04')
+
+
 def fullscreen_commands_during_turn(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -5484,6 +5499,15 @@ run([], fullscreen_queue, serve_items([
     [tool_call('call_2', 'bash', {'command': 'sleep 30'})],
 ]), rows=40)
 (queued,) = set(session_files()) - known
+known = set(session_files())
+taken_back = []
+run([], escape_before_a_reply, serve_items([[message('Answered.')]], bodies=taken_back, held=True))
+# The request sent after it carries the second prompt alone.
+sent = [item for item in taken_back[0]['input'] if item.get('role') == 'user']
+assert [item['content'] for item in sent] == ['hello again'], sent
+(back,) = set(session_files()) - known
+items = list(map(json.loads, open(back)))
+assert [item.get('type') for item in items if item.get('type') == 'turn_stopped'] == ['turn_stopped'], items
 users = [line for line in map(json.loads, open(queued)) if line.get('role') == 'user' and '_scramjet_probe' not in line]
 prompts = [line.get('_scramjet_typed', line['content']) for line in users]
 assert prompts == ['go', 'steer this', '/demo:greet Ann', 'after that', 'again'], prompts

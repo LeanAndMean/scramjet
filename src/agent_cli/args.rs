@@ -357,9 +357,10 @@ one of this session's prompts and continues in a new session from before it, wit
 prompt for editing; /branch [NAME] continues in a new session with the conversation as it is.
 /tree shows this session's branches and continues from the entry chosen, in the same session:
 from before a prompt, which is put in the prompt for editing, or from after a reply
-or tool result. When that leaves part of the conversation, it asks whether the model should
-summarize that branch, also with your own instructions, for the conversation to continue
-with; Shift+L there labels the selected entry. Escape twice on an empty prompt opens /tree too.
+or tool result. Enter goes there without a summary of the branch it leaves; Shift+S has the
+model summarize that branch for the conversation to continue with, and Shift+P does so with
+your own instructions; Shift+L labels the selected entry. Escape twice on an empty prompt opens
+/tree too. Escape before any reply puts the prompt back in the editor, out of the conversation.
 The lists of /resume, /fork, /tree and /model show in the prompt's place and take Up/Down,
 Page Up/Down, Home/End, Enter, and Escape or Ctrl-C to cancel; typed text filters the /resume
 and /model lists, best match first (a \"quoted phrase\" matches as written, and re:PATTERN is a
@@ -453,7 +454,7 @@ this also happens by itself when the context nears the model's window, unless th
 compaction.enabled is false (Auto-compact in /settings).
 Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramjet/),
 with the keys hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
-Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode
+Escape), treeFilterMode
 (the entries /tree opens with: default, no-tools, user-only, labeled-only or all) and
 effortLevel (else defaultThinkingLevel; Claude Code's alwaysThinkingEnabled: false starts at
 off); tools, the agent's coding tools among read, bash, edit, write, grep, find and ls (all seven by default); enabledModels, the patterns of the models Ctrl+P cycles through;

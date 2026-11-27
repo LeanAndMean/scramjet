@@ -176,7 +176,6 @@ pub(super) enum Row {
     AutoCompact,
     ResizeImages,
     BlockImages,
-    BranchSummary,
     TreeFilter,
     Tools,
     DefaultShell,
@@ -233,7 +232,6 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::AutoCompact,
             Row::ResizeImages,
             Row::BlockImages,
-            Row::BranchSummary,
             Row::TreeFilter,
         ],
     ),
@@ -291,7 +289,6 @@ impl Row {
             Self::AutoCompact => "Auto-compact",
             Self::ResizeImages => "Resize images",
             Self::BlockImages => "Block images",
-            Self::BranchSummary => "Leaving a branch",
             Self::TreeFilter => "Tree entries",
             Self::Tools => "Tools",
             Self::DefaultShell => "Shell of ! commands",
@@ -419,9 +416,6 @@ impl Row {
                 "No image goes to any model: each is replaced by a note saying image reading is \
                  disabled."
             }
-            Self::BranchSummary => {
-                "When /tree moves to another branch: ask whether to summarize the one left behind."
-            }
             Self::TreeFilter => {
                 let there = keymap::key(Binding::TreeFilterCycleForward)
                     .map_or_else(String::new, |key| {
@@ -495,8 +489,6 @@ pub(super) struct Settings {
     /// screen tells the terminal it is busy while the agent works (OSC 9;4); by default only in
     /// terminals known to show it (`shows_progress`).
     pub(super) terminal_progress: bool,
-    /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
-    pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
     pub(super) tree_filter: Filter,
     /// `resumeChains`: how `/resume` shows chains of sessions, the form last chosen there.
@@ -686,7 +678,6 @@ impl Settings {
             collapse_changelog: false,
             last_changelog_version: None,
             terminal_progress: shows_progress(|name| std::env::var(name).ok()),
-            skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             resume_chains: Chains::Flat,
             markdown_reads: MarkdownReads::Rendered,
@@ -831,7 +822,8 @@ impl Settings {
             .map(|value| value.get("skipPrompt"))
         {
             None | Some(None) => {}
-            Some(Some(Value::Bool(skip))) => self.skip_branch_summary_prompt = *skip,
+            // Read for earlier versions' files: `/tree` no longer asks.
+            Some(Some(Value::Bool(_))) => {}
             Some(Some(_)) => wrong("branchSummary.skipPrompt", "true or false"),
         }
         match object
@@ -2177,8 +2169,6 @@ impl Settings {
             Row::ResizeImages => "off".into(),
             Row::BlockImages if self.block_images => "on".into(),
             Row::BlockImages => "off".into(),
-            Row::BranchSummary if self.skip_branch_summary_prompt => "no summary".into(),
-            Row::BranchSummary => "asks for a summary".into(),
             Row::TreeFilter => match self.tree_filter {
                 Filter::Default => "all but model changes",
                 Filter::NoTools => "no tool results",
@@ -2338,11 +2328,6 @@ impl Settings {
             Row::AutoCompact => {
                 self.compacting.automatic = !self.compacting.automatic;
                 self.save_in("compaction", "enabled", json!(self.compacting.automatic))
-            }
-            Row::BranchSummary => {
-                self.skip_branch_summary_prompt = !self.skip_branch_summary_prompt;
-                let skip = self.skip_branch_summary_prompt;
-                self.save_in("branchSummary", "skipPrompt", json!(skip))
             }
             Row::TreeFilter => {
                 let at = Filter::CYCLE.iter().position(|&f| f == self.tree_filter);
@@ -3043,7 +3028,6 @@ mod tests {
         assert!(!settings.hide_thinking_block);
         assert_eq!(settings.double_escape, DoubleEscape::Tree);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
-        assert!(!settings.skip_branch_summary_prompt);
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.markdown_reads, MarkdownReads::Rendered);
         assert_eq!(settings.default_thinking_level, None);
@@ -3878,7 +3862,6 @@ or false; ignored"
         assert_eq!(settings.steering_mode, Delivery::OneAtATime);
         assert_eq!(settings.follow_up_mode, Delivery::All);
         assert_eq!(settings.double_escape, DoubleEscape::Fork);
-        assert!(settings.skip_branch_summary_prompt);
         assert_eq!(settings.default_thinking_level.as_deref(), Some("none"));
         assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
         let none = settings_with(&scratch, r#"{"doubleEscapeAction": "none"}"#);
@@ -4484,15 +4467,6 @@ or false; ignored"
             ]
         );
         assert_eq!(
-            seen(Row::BranchSummary, &mut settings),
-            [
-                "asks for a summary",
-                "no summary",
-                "asks for a summary",
-                "no summary"
-            ]
-        );
-        assert_eq!(
             seen(Row::ThinkingBlocks, &mut settings),
             ["shown", "hidden", "shown", "hidden"]
         );
@@ -4614,7 +4588,7 @@ or false; ignored"
         assert_eq!(
             saved(),
             json!({
-                "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
+                "branchSummary": {"reserveTokens": 1},
                 "compaction": {"enabled": false},
                 "images": {"autoResize": false, "blockImages": true},
                 "markdown": {"toolDisplay": "source"},

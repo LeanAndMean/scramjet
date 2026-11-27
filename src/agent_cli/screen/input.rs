@@ -390,6 +390,7 @@ impl App {
                 Picked::Read(place) => Answer::Read(place),
                 Picked::Placed(row, place) => Answer::Placed(row, place),
                 Picked::Label(entry) => Answer::Label(entry, None),
+                Picked::Summarize(entry, asks) => Answer::Summarize(entry, asks),
                 Picked::Typed(text) => Answer::Text(Some(text)),
             }),
             Shown::Approve(_) => match key {

@@ -94,6 +94,8 @@ enum ToScreen {
     /// The session waits for what the user enters next.
     Ready,
     SetText(String),
+    /// Puts the text before the editor's, as a prompt taken back (`Agent::take_back`).
+    Prepend(String),
     Remember(String),
     Note(Note),
     /// `/reload` or `/settings` read the commands and skills (the `/` list's rows after the
@@ -188,6 +190,8 @@ pub(super) enum Answer {
     /// Shift+L in `/tree`'s list on an entry, with the list as it was, to show again once the
     /// label is given; the screen puts the list in.
     Label(usize, Option<Box<Picker>>),
+    /// Shift+S or Shift+P in `/tree`'s list on an entry (`Picked::Summarize`).
+    Summarize(usize, bool),
     /// The row a picker's countdown chose.
     Expired(usize),
     Text(Option<String>),
@@ -682,6 +686,14 @@ impl App {
                 }
             }
             ToScreen::SetText(text) => self.draft.replace(text),
+            ToScreen::Prepend(text) => {
+                let text = [text, self.draft.text().to_owned()]
+                    .into_iter()
+                    .filter(|text| !text.trim().is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                self.draft.replace(text);
+            }
             ToScreen::Remember(prompt) => self.editor.remember(&prompt),
             ToScreen::Note(note) => self.draft.set_note(note),
             ToScreen::Reloaded {

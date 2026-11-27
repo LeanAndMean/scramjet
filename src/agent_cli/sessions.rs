@@ -264,6 +264,7 @@ impl Interactive {
                 }
                 // Not keys of this list (`Picker::tree`, `Picker::placing`).
                 select::Picked::Label(_)
+                | select::Picked::Summarize(..)
                 | select::Picked::Placed(..)
                 | select::Picked::Typed(_) => {
                     screen.dismiss();
@@ -404,7 +405,7 @@ impl Interactive {
     }
 
     pub(super) fn tree(&mut self, mut wanted: &str) {
-        // The entry the tree shows again at after its summary question or summary is cancelled.
+        // The entry the tree shows again at after its instructions or summary are cancelled.
         let mut reopen = None;
         loop {
             let session_tree = match self.session.agent.tree() {
@@ -449,29 +450,30 @@ impl Interactive {
                         ));
                         None
                     }
-                    Ok(number) => Some(rows[number - 1].0),
+                    Ok(number) => Some((rows[number - 1].0, select::Summary::Skip)),
                 },
             };
-            let Some(index) = chosen else {
+            let Some((index, how)) = chosen else {
                 return;
             };
             let line = lines[index];
-            // As Scramjet asks on the full screen, unless the settings skip the question; piped
-            // input moves without one.
-            let ask = self.interactive() && !self.session.settings.skip_branch_summary_prompt;
-            let summary = match ask.then(|| self.session.agent.leaves_branch(line)) {
-                Some(Ok(true)) => match self.ask_branch_summary() {
-                    Some(summary) => summary,
-                    None => {
-                        (wanted, reopen) = ("", Some(index));
-                        continue;
+            let summary = match how {
+                select::Summary::Skip => None,
+                select::Summary::Default => Some(String::new()),
+                select::Summary::Instructed => match self.session.agent.leaves_branch(line) {
+                    Ok(false) => None,
+                    Ok(true) => match self.branch_instructions() {
+                        Some(focus) => Some(focus),
+                        None => {
+                            (wanted, reopen) = ("", Some(index));
+                            continue;
+                        }
+                    },
+                    Err(error) => {
+                        self.say(&format!("Error: {error}"));
+                        return;
                     }
                 },
-                None | Some(Ok(false)) => None,
-                Some(Err(error)) => {
-                    self.say(&format!("Error: {error}"));
-                    return;
-                }
             };
             let result = match summary.as_deref() {
                 Some(focus) => self
@@ -503,7 +505,11 @@ impl Interactive {
 
     /// Shows `/tree`'s list until an entry is chosen or it is cancelled, giving the entries
     /// Shift+L asks to label their label (`lines`: each one's line), as Scramjet's tree does.
-    fn pick_entry(&mut self, mut picker: select::Picker, lines: &[usize]) -> Option<usize> {
+    fn pick_entry(
+        &mut self,
+        mut picker: select::Picker,
+        lines: &[usize],
+    ) -> Option<select::Chosen> {
         loop {
             let screen = self.screen.as_ref()?;
             let (entry, back) = match screen.pick_or_label(picker) {
@@ -531,34 +537,14 @@ impl Interactive {
         }
     }
 
-    /// Asks on the full screen whether to summarize the branch `/tree` leaves, as Scramjet does.
-    /// `None`: cancelled; otherwise no summary, or one with the additional focus given (empty
-    /// for none).
-    fn ask_branch_summary(&self) -> Option<Option<String>> {
-        const CHOICES: [&str; 3] = ["No summary", "Summarize", "Summarize with custom prompt"];
+    /// The instructions for summarizing the branch `/tree` leaves, asked on the full screen
+    /// (empty for none, as in Scramjet); `None`: cancelled.
+    fn branch_instructions(&self) -> Option<String> {
         const TITLE: &str = "Custom summarization instructions";
-        let screen = self.screen.as_ref()?;
-        loop {
-            let chosen = self.select(
-                "Summarize branch?",
-                select::VISIBLE,
-                CHOICES.len(),
-                0,
-                None,
-                |index, width| clip(CHOICES[index], width),
-            );
-            match chosen? {
-                0 => return Some(None),
-                1 => return Some(Some(String::new())),
-                _ => {
-                    // As in Scramjet, no instructions give the default summary.
-                    let dialog =
-                        screen::Dialog::Text(TITLE.into(), String::new(), screen::Optional::Yes);
-                    if let Some(screen::Answer::Text(Some(focus))) = screen.ask(dialog, None) {
-                        return Some(Some(focus));
-                    }
-                }
-            }
+        let dialog = screen::Dialog::Text(TITLE.into(), String::new(), screen::Optional::Yes);
+        match self.screen.as_ref()?.ask(dialog, None) {
+            Some(screen::Answer::Text(Some(focus))) => Some(focus),
+            _ => None,
         }
     }
 }

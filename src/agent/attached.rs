@@ -6,6 +6,7 @@ use super::{TYPED, image, tools};
 use serde_json::{Value, json};
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct Attached {
     /// The words shown before the prompt: `@path` for each file, `[Image #N]` for each image.
     shown: Vec<String>,

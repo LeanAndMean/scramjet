@@ -73,7 +73,7 @@ Built-in commands such as `/model`, `/usage` and `/context` run at once without 
 ## 7. Go back, undo and branch
 
 - **In the prompt**, Ctrl+_ (Ctrl+Shift+-; Ctrl+Z on native Windows) undoes your typing and Ctrl+6 redoes it. Ctrl+C clears the prompt, which undo brings back. A prompt you were typing survives Scramjet or the terminal closing: resuming the session brings it back.
-- **In the conversation**, Escape twice on an empty prompt (or `/tree`) shows the session as a tree and continues from the point you choose: from before one of your prompts, which comes back for you to edit and send again, or from after a reply. The branch you left stays in the tree, and Scramjet can summarize it for the conversation to carry on with. This changes the conversation only: files the agent changed stay as they are, so undo those with Git (`git diff`, `git restore`, `git stash`).
+- **In the conversation**, Escape twice on an empty prompt (or `/tree`) shows the session as a tree and continues from the point you choose: from before one of your prompts, which comes back for you to edit and send again, or from after a reply. The branch you left stays in the tree; Enter goes back without a summary, while Shift+S, or Shift+P with your own instructions, has the model summarize the branch for the conversation to carry on with. This changes the conversation only: files the agent changed stay as they are, so undo those with Git (`git diff`, `git restore`, `git stash`).
 - `/fork` continues from before an earlier prompt in a new session, and `/branch` copies the conversation as it is into a new one.
 
 [Sessions and keys](sessions.md).

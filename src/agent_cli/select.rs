@@ -57,6 +57,9 @@ fn tree_hint() -> String {
             &[Binding::TreeFoldOrUp, Binding::TreeUnfoldOrDown],
             "fold/branch",
         ),
+        keymap::part(&[Binding::SelectConfirm], "go back"),
+        keymap::part(&[Binding::TreeSummarize], "summarize"),
+        keymap::part(&[Binding::TreeSummarizeWithPrompt], "summarize with prompt"),
         keymap::part(&[Binding::TreeEditLabel], "label"),
         filters,
         keymap::part(&[Binding::TreeToggleLabelTimestamp], "label time"),
@@ -286,11 +289,28 @@ pub(super) enum Picked {
     Read(Spot),
     /// Shift+L in `/tree`, to label the entry, an index into the tree's entries.
     Label(usize),
+    /// Shift+S (`false`) or Shift+P (`true`, with the user's instructions) in `/tree`: go back to
+    /// the entry, summarizing the branch left.
+    Summarize(usize, bool),
     /// The row chosen with Enter in a list that is shown again after it (`Picker::placing`).
     Placed(usize, Spot),
     /// An answer typed in a question's last row (`Picker::typing`).
     Typed(String),
 }
+
+/// How `/tree` leaves the branch it goes back from.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Summary {
+    /// Enter: no summary.
+    Skip,
+    /// Shift+S: the default summary.
+    Default,
+    /// Shift+P: a summary with the instructions the user then gives.
+    Instructed,
+}
+
+/// The entry chosen in `/tree`'s list, and how to leave the branch.
+pub(super) type Chosen = (usize, Summary);
 
 /// A list for a screen that draws it and passes it the keys; it returns the row chosen with
 /// Enter, nothing when cancelled with Escape or Ctrl-C, or what one of its own keys asks for.
@@ -1055,8 +1075,9 @@ fn field_key(field: &mut Field, key: &Key) -> Option<Option<Picked>> {
 
 /// What a key does in Scramjet's tree selector: typing searches, Ctrl+D, Ctrl+T, Ctrl+U, Ctrl+L
 /// and Ctrl+A choose a filter and Ctrl+O cycles through them, Ctrl+Left and Ctrl+Right (or Alt)
-/// fold or jump between branches, Left and Right page, Shift+L asks to label the entry, Shift+T
-/// shows when labels were given, and Escape clears the query before it cancels.
+/// fold or jump between branches, Left and Right page, Shift+L asks to label the entry, Shift+S
+/// and Shift+P go back with a summary, Shift+T shows when labels were given, and Escape clears
+/// the query before it cancels.
 fn tree_key(
     view: &mut View,
     list: &mut List,
@@ -1070,6 +1091,10 @@ fn tree_key(
     match key {
         // As in Scramjet, where Shift+L and Shift+T are these keys, not text.
         _ if key.is(Binding::TreeEditLabel) => return shown.map(Picked::Label),
+        _ if key.is(Binding::TreeSummarize) => return shown.map(|e| Picked::Summarize(e, false)),
+        _ if key.is(Binding::TreeSummarizeWithPrompt) => {
+            return shown.map(|entry| Picked::Summarize(entry, true));
+        }
         _ if key.is(Binding::TreeToggleLabelTimestamp) => view.toggle_times(),
         Key::Text(text) | Key::Paste(text) => {
             let text = text
@@ -2633,8 +2658,8 @@ mod tests {
         assert!(asked[3].starts_with(mark) && asked[3].contains("other"));
         let view = View::new(super::super::tree::sample(), false, Filter::Default);
         let tree = Picker::tree(view, 4, Some(6)).lines((80, 24));
-        assert_eq!(banded(tree.clone()), [5]);
-        assert!(text::printable(&tree[5]).starts_with("› │     • assistant"));
+        assert_eq!(banded(tree.clone()), [6]);
+        assert!(text::printable(&tree[6]).starts_with("› │     • assistant"));
     }
 
     #[test]
@@ -2642,13 +2667,15 @@ mod tests {
         let view = View::new(super::super::tree::sample(), false, Filter::Default);
         let mut picker = Picker::tree(view, 4, Some(6));
         let text = |picker: &Picker| plain(picker.lines((80, 24)));
-        let keys = "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label · \
+        let keys = "↑↓ move · ←→ page · Ctrl+←→ fold/branch · Enter go back · \
+            Shift+S summarize · Shift+P summarize with prompt · Shift+L label · \
             Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel";
         assert_eq!(tree_hint(), keys);
         assert_eq!(
             text(&picker),
             [
-                "Session Tree  ↑↓ move · ←→ page · Ctrl+←→ fold/branch · Shift+L label",
+                "Session Tree  ↑↓ move · ←→ page · Ctrl+←→ fold/branch · Enter go back",
+                "  Shift+S summarize · Shift+P summarize with prompt · Shift+L label",
                 "  Ctrl+D/T/U/L/A filters (Ctrl+O cycle) · Shift+T label time · Esc cancel",
                 ">  ",
                 "  ├⊟ • user: add tests",
@@ -2661,7 +2688,7 @@ mod tests {
         assert!(picker.takes(&key("ctrl+o")) && picker.takes(&key("ctrl+t")));
         assert_eq!(picker.key(&key("ctrl+u")), None);
         assert_eq!(
-            text(&picker)[3..],
+            text(&picker)[4..],
             [
                 "  • user: fix the bug",
                 "› ├─ • user: add tests",
@@ -2672,7 +2699,7 @@ mod tests {
         // Through the labeled entries, none here, the selection stays on its entry.
         assert_eq!(picker.key(&key("ctrl+o")), None);
         assert_eq!(
-            text(&picker)[2..],
+            text(&picker)[3..],
             [">  ", "  No entries found", "  (0/0) [labeled]"]
         );
         assert_eq!(picker.key(&key("enter")), None);
@@ -2683,12 +2710,12 @@ mod tests {
             assert_eq!(picker.key(&Key::Text(key.into())), None);
         }
         assert_eq!(
-            text(&picker)[2..],
+            text(&picker)[3..],
             ["> oth ", "› user: other way", "  (1/1)"]
         );
         // Escape clears the query, keeping the row; again, it cancels.
         assert_eq!(picker.key(&key("escape")), None);
-        assert_eq!(text(&picker)[2], ">  ");
+        assert_eq!(text(&picker)[3], ">  ");
         assert_eq!(picker.key(&key("enter")), Some(Picked::Row(Some(7))));
         assert_eq!(picker.key(&key("alt+left")), None);
         assert_eq!(text(&picker).last().unwrap(), "  (7/7)");
@@ -2704,10 +2731,28 @@ mod tests {
             empty.key(&Key::Text(key.into()));
         }
         assert_eq!(
-            text(&empty)[2..],
+            text(&empty)[3..],
             ["> zz ", "  No entries found", "  (0/0)"]
         );
         assert_eq!(empty.key(&key("enter")), None);
+    }
+
+    #[test]
+    fn enter_goes_back_and_shift_s_and_shift_p_go_back_with_a_summary() {
+        let view = View::new(super::super::tree::sample(), false, Filter::Default);
+        let mut picker = Picker::tree(view, 4, Some(6));
+        assert_eq!(picker.key(&key("enter")), Some(Picked::Row(Some(6))));
+        let summarize = |text: &str| Some(Picked::Summarize(6, text == "P"));
+        assert_eq!(picker.key(&Key::Text("S".into())), summarize("S"));
+        assert_eq!(picker.key(&Key::Text("P".into())), summarize("P"));
+        let hint = plain(picker.lines((200, 24))).join("\n");
+        for part in [
+            "Enter go back",
+            "Shift+S summarize",
+            "Shift+P summarize with prompt",
+        ] {
+            assert!(hint.contains(part), "{part}: {hint}");
+        }
     }
 
     #[test]
@@ -2723,11 +2768,11 @@ mod tests {
         };
         picker.relabel(6, Some(Some(label)), None);
         assert_eq!(picker.tree_label(6), Some("green"));
-        assert_eq!(text(&picker)[5], "› │     • [green] assistant: tests pass");
+        assert_eq!(text(&picker)[6], "› │     • [green] assistant: tests pass");
         // Ctrl+L shows the labeled entries, and again the others.
         assert_eq!(picker.key(&key("ctrl+l")), None);
         assert_eq!(
-            text(&picker)[2..],
+            text(&picker)[3..],
             [
                 ">  ",
                 "› • [green] assistant: tests pass",
@@ -2735,16 +2780,16 @@ mod tests {
             ]
         );
         assert_eq!(picker.key(&Key::Text("T".into())), None);
-        assert_eq!(text(&picker)[4], "  (1/1) [labeled] [+label time]");
+        assert_eq!(text(&picker)[5], "  (1/1) [labeled] [+label time]");
         assert_eq!(picker.key(&key("ctrl+l")), None);
-        assert_eq!(text(&picker)[7], "  (6/8) [+label time]");
+        assert_eq!(text(&picker)[8], "  (6/8) [+label time]");
         // Taken away while the labeled entries show, the selection goes back to its entry after.
         picker.key(&key("ctrl+l"));
         picker.relabel(6, Some(None), None);
-        assert_eq!(text(&picker)[4], "  (0/0) [labeled] [+label time]");
+        assert_eq!(text(&picker)[5], "  (0/0) [labeled] [+label time]");
         assert_eq!(picker.key(&Key::Text("L".into())), None);
         picker.key(&key("ctrl+l"));
-        assert_eq!(text(&picker)[7], "  (6/8) [+label time]");
+        assert_eq!(text(&picker)[8], "  (6/8) [+label time]");
         // A label that could not be saved is not shown; why shows until the next key.
         picker.relabel(
             6,
@@ -2760,7 +2805,7 @@ mod tests {
         assert!(text(&picker)[0].starts_with("Session Tree  ↑↓ move"));
         // Lowercase is text, as in Scramjet.
         assert_eq!(picker.key(&Key::Text("l".into())), None);
-        assert_eq!(text(&picker)[2], "> l ");
+        assert_eq!(text(&picker)[3], "> l ");
     }
 
     #[test]

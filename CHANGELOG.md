@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.431.0 — Going back without a question
+
+### Changed
+
+- `/tree` no longer asks whether to summarize the branch it leaves: Enter goes back without a summary, Shift+S goes back with one, and Shift+P with your own instructions for it. Its `/settings` row goes, and `branchSummary.skipPrompt` is still read but changes nothing.
+- Escape (or Ctrl-C) before any reply puts the prompt back in the editor, before what was queued, and takes it out of the conversation, as Claude Code does; the stopped turn stays in `/tree` as a branch left.
+
 ## 2.430.1 — Compaction after a reasoning-only summary
 
 ### Fixed

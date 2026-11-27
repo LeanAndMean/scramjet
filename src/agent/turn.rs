@@ -26,6 +26,15 @@ pub(super) enum RuntimeWindow {
     },
 }
 
+/// A turn's prompt, and where the conversation was before it.
+pub(super) struct Unanswered {
+    parent: Option<usize>,
+    /// Its place in the conversation.
+    at: usize,
+    typed: String,
+    attached: Option<super::Attached>,
+}
+
 /// What a paused turn left running, shown in a thread of its own (`Agent::show_paused`).
 pub struct ShownPaused {
     stop: Arc<AtomicBool>,
@@ -51,6 +60,9 @@ impl Agent {
         self.completed = None;
         self.suggestion = suggest::Pending::Nothing;
         self.delegated.clear();
+        self.unanswered = None;
+        let parent = self.session.leaf();
+        let attached = self.attached.clone();
         // With files the text starts with them, so it is a reply even after a `/`, as in Scramjet.
         let (message, typed) = match self.attached.take() {
             Some(files) => {
@@ -68,10 +80,41 @@ impl Agent {
             }
         };
         self.add_shown(message, ui)?;
+        self.unanswered = Some(Unanswered {
+            parent,
+            at: self.conversation.len() - 1,
+            typed: prompt.to_owned(),
+            attached,
+        });
         self.save_command()?;
         self.say_saving(ui);
         self.prompts.push(typed);
         self.resume_turn(ui, cancel)
+    }
+
+    /// Takes the last turn's prompt out of the conversation, returning it as typed (its files
+    /// sent again with the next prompt), when the turn stopped before any reply: nothing the
+    /// model is sent follows the prompt. As Claude Code does on Escape before a reply, from 2.1.83. The turn
+    /// stays in the session as a branch left, as `/tree` leaves one.
+    pub fn take_back(&mut self) -> Result<Option<String>, AgentError> {
+        let Some(unanswered) = self.unanswered.take() else {
+            return Ok(None);
+        };
+        let after = self
+            .conversation
+            .get(unanswered.at + 1..)
+            .unwrap_or_default();
+        if after.iter().any(super::sent) {
+            return Ok(None);
+        }
+        self.conversation = self.session.move_to(unanswered.parent)?;
+        self.usage.context_tokens = self.session.context_tokens();
+        self.autopilot = self.session.autopilot().unwrap_or(self.autopilot);
+        self.restore_command();
+        self.interrupted = None;
+        self.prompts.pop();
+        self.attached = unanswered.attached;
+        Ok(Some(unanswered.typed))
     }
 
     /// The message `prompt` sends, typed or queued during a turn, starting the command it names

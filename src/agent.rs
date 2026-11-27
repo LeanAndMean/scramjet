@@ -672,6 +672,8 @@ pub struct Agent {
     compaction_failed: Option<(u64, u32)>,
     /// Files the next prompt sends.
     attached: Option<Attached>,
+    /// The prompt the turn started with, while it can be taken back (`take_back`).
+    unanswered: Option<turn::Unanswered>,
     /// Scramjet's global `autonomy.yaml`, and what was last said about the files.
     autonomy: Option<PathBuf>,
     autonomy_diagnostics: Vec<Problem>,
@@ -927,6 +929,7 @@ impl Agent {
             delegated: Vec::new(),
             compaction_failed: None,
             attached: None,
+            unanswered: None,
             autonomy: autonomy::global_path(),
             autonomy_diagnostics: Vec::new(),
             info: config.providers.info(&config.model),

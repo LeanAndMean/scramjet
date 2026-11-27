@@ -8,7 +8,7 @@ use crate::agent_cli::footer;
 use crate::agent_cli::keys::{Press, RawMode};
 use crate::agent_cli::record::Event;
 use crate::agent_cli::report::ReportView;
-use crate::agent_cli::select::{Picked, Picker, Routed, Spot};
+use crate::agent_cli::select::{self, Picked, Picker, Routed, Spot};
 use crate::agent_cli::settings::{Delivery, DoubleEscape, Settings};
 use crate::agent_cli::style::Style;
 use crate::agent_cli::theme::Watched;
@@ -161,6 +161,9 @@ impl Link {
     pub(in crate::agent_cli) fn set_text(&self, text: String) {
         self.send(ToScreen::SetText(text));
     }
+    pub(in crate::agent_cli) fn prepend_text(&self, text: String) {
+        self.send(ToScreen::Prepend(text));
+    }
     pub(in crate::agent_cli) fn remember(&self, prompt: &str) {
         self.send(ToScreen::Remember(prompt.to_owned()));
     }
@@ -302,14 +305,16 @@ impl Link {
         }
     }
 
-    /// As `pick`, or, when Shift+L asks to label an entry of `/tree`'s list, that entry with the
-    /// list as it was, to show again.
+    /// The entry chosen in `/tree`'s list and how to leave the branch, or, when Shift+L asks to
+    /// label an entry, that entry with the list as it was, to show again.
     pub(in crate::agent_cli) fn pick_or_label(
         &self,
         picker: Picker,
-    ) -> Result<Option<usize>, (usize, Box<Picker>)> {
+    ) -> Result<Option<select::Chosen>, (usize, Box<Picker>)> {
         match self.ask(Dialog::Pick(Box::new(picker)), None) {
-            Some(Answer::Picked(row)) => Ok(row),
+            Some(Answer::Picked(row)) => Ok(row.map(|row| (row, select::Summary::Skip))),
+            Some(Answer::Summarize(entry, false)) => Ok(Some((entry, select::Summary::Default))),
+            Some(Answer::Summarize(entry, true)) => Ok(Some((entry, select::Summary::Instructed))),
             Some(Answer::Label(entry, Some(picker))) => Err((entry, picker)),
             _ => Ok(None),
         }

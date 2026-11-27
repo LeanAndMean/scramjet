@@ -67,7 +67,7 @@ A number outside its range is taken as the nearest end. Keys themselves are boun
 | `compaction.enabled` | `true`, `false` | `true` | The older part of the conversation is summarized by itself as the context nears the model's window, and after a request exceeds it. `/compact` works either way. |
 | `compaction.reserveTokens` | a number of tokens | 16384 | What is kept free of the window for the next response: compaction starts once the context passes the rest. |
 | `compaction.keepRecentTokens` | a number of tokens | 20000 | About how much of the latest conversation compaction keeps whole. |
-| `branchSummary.skipPrompt` | `true`, `false` | `false` | Leaving a branch in `/tree` summarizes nothing, without asking. |
+| `branchSummary.skipPrompt` | `true`, `false` | `false` | Read and ignored since 2.431.0: `/tree` no longer asks whether to summarize (Enter goes back without a summary, Shift+S and Shift+P summarize). |
 | `branchSummary.reserveTokens` | a number of tokens | 16384 | What a branch summary keeps free of the window. |
 | `treeFilterMode` | `"default"`, `"no-tools"`, `"user-only"`, `"labeled-only"`, `"all"` | `"default"` | The entries `/tree` shows when it opens. |
 | `resumeChains` | `"flat"`, `"threaded"`, `"folded"` | `"flat"` | How `/resume` shows chains of sessions; Ctrl+X there changes it and saves the choice. |

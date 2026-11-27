@@ -546,6 +546,12 @@ pub(super) trait Front {
     fn offer(&mut self, offer: Offer) -> Option<Picked>;
     /// Starts the next prompt with `text`.
     fn edit(&mut self, text: String);
+    /// Puts the prompt of a turn stopped before any reply back before the editor's text, out
+    /// of the conversation (`Agent::take_back`), where the front has an editor to put it in;
+    /// whether it did.
+    fn take_back(&mut self) -> bool {
+        false
+    }
     /// Shows a message.
     fn say(&mut self, text: &str);
     /// Shows a message of less weight.
@@ -601,6 +607,10 @@ pub(super) fn run_turn(
         keep_grants(front);
     }
     front.turn_stops(result.is_ok());
+    if prompt.is_some() && matches!(result, Err(AgentError::Cancelled)) && front.take_back() {
+        front.turn_ended();
+        return None;
+    }
     // The agent's `switch_scramjet_model`, remembered as the user's choices are.
     if front.session().agent.model() != model {
         remember_model(front);

@@ -852,6 +852,28 @@ impl Front for Interactive {
         self.set_text(text);
     }
 
+    fn take_back(&mut self) -> bool {
+        if self.screen.is_none() {
+            return false;
+        }
+        let prompt = match self.session.agent.take_back() {
+            Ok(Some(prompt)) => prompt,
+            Ok(None) => return false,
+            Err(error) => {
+                self.say(&format!("Error: {error}"));
+                return false;
+            }
+        };
+        if let Some(screen) = &self.screen {
+            screen.clear();
+        }
+        self.show_resumed();
+        if let Some(screen) = &self.screen {
+            screen.prepend_text(prompt);
+        }
+        true
+    }
+
     fn say(&mut self, text: &str) {
         Interactive::say(self, text);
     }
