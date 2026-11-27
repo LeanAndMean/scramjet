@@ -284,6 +284,10 @@ fn agents_section(listing: &mut Listing, installed: &Installed) {
                     columns.push("user".to_owned());
                     "In your agent directory.".to_owned()
                 }
+                AgentSource::Given => {
+                    columns.push("--agents".to_owned());
+                    "Defined by --agents for this run.".to_owned()
+                }
                 AgentSource::Project(approval) => {
                     let enter = keymap::key(Binding::SelectConfirm);
                     let opens = |key: &String| format!("{key} opens it or forgets the approval");
@@ -322,7 +326,8 @@ fn agents_section(listing: &mut Listing, installed: &Installed) {
                 agent.description,
                 asks(agent)
             );
-            (columns, note, Some(agent.path.clone()))
+            let file = (agent.source != AgentSource::Given).then(|| agent.path.clone());
+            (columns, note, file)
         })
         .collect();
     let first = listing.rows.len() + 1;

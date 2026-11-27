@@ -66,7 +66,7 @@ Instructions and tools:
                            models.json and auth.json
   --skill PATH             a skill file, or a directory of skills (repeatable)
   -ns, --no-skills         no skills but those --skill names
-  --plugin-dir DIR         a command set or Claude Code plugin for this run (repeatable)
+  --plugin-dir DIR, --agents JSON  a set or Claude Code plugin, or subagents, for this run
   --mcp-config CONFIG..., --strict-mcp-config
                            MCP servers for this run, as Claude Code's; strict: only those
   --theme PATH             a theme file, or a directory of themes (repeatable)
@@ -135,7 +135,7 @@ pub(super) const HELP_ALL: &str =
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
 [--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [-n NAME] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
-[--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--mcp-config CONFIG...]... [--strict-mcp-config]
+[--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--agents JSON]... [--mcp-config CONFIG...]... [--strict-mcp-config]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
 [--permission-mode MODE] [--dangerously-skip-permissions] [--allowedTools LIST]... [--permission-prompts host|none]
 [-s MODE] [--offline] [--settings FILE|JSON]... [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
@@ -253,6 +253,10 @@ but to NO_PROXY's hosts and this machine.
   --plugin-dir DIR       as Claude Code's: load DIR for this run only (repeatable), as a
                          command set when it has a set.yaml, else as a Claude Code plugin,
                          in place of an installed set or plugin of its name
+  --agents JSON          as Claude Code's: subagents for this run (repeatable), JSON or a
+                         file holding it: {\"NAME\": {\"description\": ..., \"prompt\": ...}},
+                         with tools, disallowedTools, model and isolation as an agent file's
+                         frontmatter has them; each in place of a loose agent of its name
   --mcp-config CONFIG... as Claude Code's: MCP servers for this run (repeatable), each CONFIG
                          a JSON object with mcpServers, as in the settings, or a file holding
                          one; the words after it that are JSON objects or .json files are
@@ -615,6 +619,8 @@ pub(super) struct Options {
     pub(super) prompt: SystemPrompt,
     /// `--skill`: as typed, resolved once the session starts.
     pub(super) skills: Vec<String>,
+    /// `--agents`: as typed, read by `isolate`.
+    pub(super) agents: Vec<String>,
     /// `--plugin-dir`: as typed, resolved by `isolate`.
     pub(super) plugin_dirs: Vec<String>,
     /// `--mcp-config`: as typed, read once the session starts.
@@ -697,6 +703,17 @@ impl Options {
             }
             scramjet::agent::set_plugin_dirs(directories);
         }
+        if !self.agents.is_empty() {
+            let texts = (self.agents.iter())
+                .map(|given| match given.trim_start().starts_with('{') {
+                    true => Ok(given.clone()),
+                    false => std::fs::read_to_string(given).map_err(|error| {
+                        format!("--agents {given}: not JSON, nor a file ({error})")
+                    }),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            scramjet::agent::set_agents(&texts)?;
+        }
         if self.ephemeral {
             let failed = |error| format!("--ephemeral: no private temporary directory: {error}");
             scramjet::agent::keep_records_apart().map_err(failed)?;
@@ -721,6 +738,7 @@ impl Options {
             prompt: SystemPrompt::default(),
             skills: Vec::new(),
             plugin_dirs: Vec::new(),
+            agents: Vec::new(),
             mcp_configs: Vec::new(),
             strict_mcp: false,
             settings: Vec::new(),
@@ -911,6 +929,7 @@ and stream-json"
                 Some("--no-directives") => options.prompt.no_directives = true,
                 Some("--skill") => options.skills.push(value()?),
                 Some("--plugin-dir") => options.plugin_dirs.push(value()?),
+                Some("--agents") => options.agents.push(value()?),
                 Some("--mcp-config") => {
                     options.mcp_configs.push(value()?);
                     // Claude Code's takes several words: those after it that are configs too.

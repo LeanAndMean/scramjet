@@ -1,0 +1,61 @@
+{
+  "size": "100x40",
+  "config": {
+    "agents/reviewer.md": "---\nname: reviewer\ndescription: The file's reviewer\n---\n\nYou are the reviewer from the file.\n"
+  },
+  "files": {
+    "README.md": "Project\n"
+  },
+  "arguments": [
+    "--agents",
+    "{\"reviewer\": {\"description\": \"Reviews code for this run\", \"prompt\": \"You are the reviewer given by --agents.\", \"tools\": [\"Read\"]}}"
+  ],
+  "prompt": "Review the README",
+  "replies": [
+    [
+      {
+        "call": "subagent",
+        "arguments": {
+          "agent": "reviewer",
+          "task": "Review README.md"
+        }
+      }
+    ],
+    [
+      {
+        "text": "README.md is fine."
+      }
+    ],
+    [
+      {
+        "text": "The reviewer found nothing to change."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "found nothing to change"
+    },
+    {
+      "type": "\u000f"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "expanded"
+    },
+    {
+      "type": "/agents\r"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "agents"
+    },
+    {
+      "type": "\u0004"
+    }
+  ]
+}

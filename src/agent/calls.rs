@@ -687,6 +687,7 @@ impl Kit {
                 sources: subagent::Sources {
                     user: &self.user_agents,
                     sets: &self.sets,
+                    given: subagent::given(),
                 },
                 skills: &self.skills,
                 agent_directory: self.agent_directory.as_deref(),

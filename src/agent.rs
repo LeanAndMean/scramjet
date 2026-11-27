@@ -241,6 +241,12 @@ fn plugin_dirs() -> &'static [PathBuf] {
     PLUGIN_DIRS.get().map_or(&[], Vec::as_slice)
 }
 
+/// For `--agents`: subagents defined by Claude Code's JSON for this run, in place of loose agents
+/// of their names; what is wrong with a text stops the start.
+pub fn set_agents(texts: &[String]) -> Result<(), String> {
+    subagent::set_given(texts)
+}
+
 /// Ends what must not go on, or be cut short, when the process exits on a signal: kills the
 /// commands running and waits for lines being written to a session file. Neither starts again.
 pub fn end() {
@@ -812,6 +818,7 @@ pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inve
     let sources = subagent::Sources {
         user: &user,
         sets: &sets,
+        given: subagent::given(),
     };
     let discovery = subagent::discover(&sources, root, subagent::Scope::Both);
     let mut warnings = commands.warnings().to_vec();
@@ -870,6 +877,8 @@ pub enum AgentSource {
     Set(String),
     /// The user's agent directory.
     User,
+    /// `--agents`, for this run.
+    Given,
     /// The project's `.scramjet/agents`, with what the user's approval of them says of it.
     Project(ProjectApproval),
 }
@@ -1220,6 +1229,7 @@ impl Agent {
         let sources = subagent::Sources {
             user: &self.agents_directories,
             sets: &self.sets,
+            given: subagent::given(),
         };
         let agents = subagent::discover(&sources, &config.root, subagent::Scope::User).agents;
         let mcp = !self.enabled_mcp().is_empty();
@@ -1816,6 +1826,7 @@ impl Agent {
         let sources = subagent::Sources {
             user: &self.agents_directories,
             sets: &self.sets,
+            given: subagent::given(),
         };
         let discovery = subagent::discover(&sources, &self.config.root, subagent::Scope::Both);
         let approvals = approvals::Approvals::read(self.approvals.as_deref());
@@ -1824,6 +1835,7 @@ impl Agent {
                 source: match self.sets.owner(&agent.name) {
                     Some(set) => AgentSource::Set(set.name.clone()),
                     None if agent.source == "user" => AgentSource::User,
+                    None if agent.source == subagent::GIVEN => AgentSource::Given,
                     None if approvals.approved(&agent) => {
                         AgentSource::Project(ProjectApproval::Approved)
                     }

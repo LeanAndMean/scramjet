@@ -190,6 +190,101 @@ pub(super) struct Sources<'a> {
     pub user: &'a [PathBuf],
     /// The session's command sets, whose agents are registered.
     pub sets: &'a Sets,
+    /// The agents `--agents` defines (`given`), found under every scope.
+    pub given: &'a [Definition],
+}
+
+/// The source of the agents `--agents` defines.
+pub(super) const GIVEN: &str = "--agents";
+
+static GIVEN_AGENTS: std::sync::OnceLock<Vec<Definition>> = std::sync::OnceLock::new();
+
+/// The agents `--agents` defined for this run.
+pub(super) fn given() -> &'static [Definition] {
+    GIVEN_AGENTS.get().map_or(&[], Vec::as_slice)
+}
+
+/// For `--agents`: keeps for the run the agents each JSON text defines, a later one's agent
+/// replacing an earlier one's of its name.
+pub(super) fn set_given(texts: &[String]) -> Result<(), String> {
+    let mut agents: Vec<Definition> = Vec::new();
+    for text in texts {
+        for agent in from_json(text)? {
+            agents.retain(|known| known.name != agent.name);
+            agents.push(agent);
+        }
+    }
+    _ = GIVEN_AGENTS.set(agents);
+    Ok(())
+}
+
+/// The agents of Claude Code's `--agents` JSON: an object of names, each with a `description`
+/// and a `prompt`, and optionally `tools`, `disallowedTools`, `model` and `isolation` as an agent
+/// file's frontmatter has them. Other fields are ignored, as in a file.
+fn from_json(text: &str) -> Result<Vec<Definition>, String> {
+    let value: Value = serde_json::from_str(text.trim())
+        .map_err(|error| format!("--agents: not JSON ({error})"))?;
+    let Value::Object(entries) = value else {
+        return Err("--agents: not a JSON object of agents by name".into());
+    };
+    let mut agents = Vec::new();
+    for (name, entry) in entries {
+        let failed = |what: &str| format!("--agents: the agent \"{name}\" {what}");
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.starts_with('-') || name.contains(':') {
+            return Err(failed(
+                "needs a name that does not start with \"-\" or hold \":\"",
+            ));
+        }
+        if !entry.is_object() {
+            return Err(failed("is not an object"));
+        }
+        let text = |key: &str| match &entry[key] {
+            Value::String(text) if !text.trim().is_empty() => Ok(Some(text.trim().to_owned())),
+            Value::Null => Ok(None),
+            Value::String(_) => Ok(None),
+            _ => Err(failed(&format!("has a {key} that is not a string"))),
+        };
+        let (Some(description), Some(prompt)) = (text("description")?, text("prompt")?) else {
+            return Err(failed("needs a description and a prompt"));
+        };
+        let list = |key: &str| -> Result<Option<Vec<String>>, String> {
+            let items: Vec<&str> = match &entry[key] {
+                Value::Null => return Ok(None),
+                Value::String(list) => list.split(',').collect(),
+                Value::Array(items) => (items.iter())
+                    .map(|item| item.as_str())
+                    .collect::<Option<_>>()
+                    .ok_or_else(|| failed(&format!("has a {key} that is not a list of names")))?,
+                _ => return Err(failed(&format!("has a {key} that is not a list of names"))),
+            };
+            let tools: Vec<String> = (items.iter().map(|tool| tool.trim()))
+                .filter(|tool| !tool.is_empty())
+                .map(|tool| ours(tool).to_owned())
+                .collect();
+            Ok((!tools.is_empty() && !tools.iter().any(|tool| tool == "*")).then_some(tools))
+        };
+        let worktree = match text("isolation")?.as_deref() {
+            None => false,
+            Some(worktree::ISOLATION) => true,
+            Some(_) => return Err(failed("has an isolation other than \"worktree\"")),
+        };
+        let model = text("model")?.filter(|model| !model.eq_ignore_ascii_case("inherit"));
+        agents.push(Definition {
+            digest: approvals::digest(&entry.to_string()),
+            name,
+            description,
+            tools: list("tools")?,
+            disallowed: list("disallowedTools")?.unwrap_or_default(),
+            model,
+            worktree,
+            prompt,
+            source: GIVEN,
+            path: PathBuf::from(GIVEN),
+            diagnostics: Vec::new(),
+        });
+    }
+    Ok(agents)
 }
 
 /// The user's loose agent directories (none with `--bare`): Claude Code's, then Scramjet's.
@@ -251,7 +346,7 @@ pub(super) struct Discovery {
 /// the agents of the command sets, which replace loose ones. The project's are those of Claude
 /// Code's `.claude/agents` from `cwd`'s Git root down to it, then of the nearest
 /// `.scramjet/agents` above `cwd`; each directory's agent replaces an earlier one's of its name,
-/// a project's a user's. Unlike Scramjet, a loose agent whose name is in a set's namespace
+/// a project's a user's, and one `--agents` defines any of them. Unlike Scramjet, a loose agent whose name is in a set's namespace
 /// (`<set>:`) is skipped with a warning: such names belong to the set.
 pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery {
     let mut found = Discovery::default();
@@ -288,6 +383,10 @@ pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery
                 None => agents.push(agent),
             }
         }
+    }
+    for agent in sources.given {
+        agents.retain(|known| known.name != agent.name);
+        agents.push(agent.clone());
     }
     for agent in registered(sources.sets, &mut found.diagnostics) {
         agents.retain(|known| known.name != agent.name);
@@ -1985,6 +2084,90 @@ disallowedTools: [Write]\n---\n",
         );
     }
 
+    #[test]
+    fn agents_given_as_json_take_the_place_of_loose_agents_of_their_names() {
+        let base = std::env::temp_dir().join(format!("scramjet-given-{}", std::process::id()));
+        let _scratch = ScratchDir::new(base.clone());
+        let (user, root) = (base.join("user"), base.join("project"));
+        write(&user.join("reviewer.md"), &agent_file("reviewer", ""));
+        write(&user.join("kept.md"), &agent_file("kept", ""));
+        std::fs::create_dir_all(&root).unwrap();
+        let given = from_json(
+            r#"{"reviewer": {"description": "Reviews code", "prompt": "You review.",
+                "tools": ["Read", "Grep"], "disallowedTools": "Bash", "model": "inherit",
+                "isolation": "worktree", "maxTurns": 3},
+              "fixer": {"description": " Fixes ", "prompt": "Fix it.", "model": "haiku",
+                "tools": "*"}}"#,
+        )
+        .unwrap();
+        let named = |name: &str| given.iter().find(|agent| agent.name == name).unwrap();
+        let (reviewer, fixer) = (named("reviewer"), named("fixer"));
+        assert_eq!(
+            (reviewer.name.as_str(), reviewer.description.as_str()),
+            ("reviewer", "Reviews code")
+        );
+        assert_eq!(reviewer.prompt, "You review.");
+        assert_eq!(
+            reviewer.tools.as_deref(),
+            Some(&["read".into(), "grep".into()][..])
+        );
+        assert_eq!(reviewer.disallowed, ["bash"]);
+        assert_eq!((reviewer.model.as_deref(), reviewer.worktree), (None, true));
+        assert_eq!(fixer.description, "Fixes");
+        assert_eq!(
+            (fixer.tools.as_deref(), fixer.model.as_deref()),
+            (None, Some("haiku"))
+        );
+        let sets = Sets::find(&[], &root.join(".scramjet"));
+        let users = [user];
+        let sources = Sources {
+            user: &users,
+            sets: &sets,
+            given: &given,
+        };
+        for scope in [Scope::User, Scope::Project, Scope::Both] {
+            let found: Vec<String> = (discover(&sources, &root, scope).agents.iter())
+                .map(|agent| format!("{} {}", agent.name, agent.source))
+                .collect();
+            let expected = match scope {
+                Scope::Project => vec!["fixer --agents", "reviewer --agents"],
+                _ => vec!["kept user", "fixer --agents", "reviewer --agents"],
+            };
+            assert_eq!(found, expected, "{scope:?}");
+        }
+        for (text, error) in [
+            ("[]", "not a JSON object"),
+            ("{", "not JSON"),
+            (
+                r#"{"a:b": {"description": "d", "prompt": "p"}}"#,
+                "\"a:b\" needs a name",
+            ),
+            (r#"{"a": "x"}"#, "\"a\" is not an object"),
+            (
+                r#"{"a": {"description": "d"}}"#,
+                "needs a description and a prompt",
+            ),
+            (
+                r#"{"a": {"description": 1, "prompt": "p"}}"#,
+                "description that is not",
+            ),
+            (
+                r#"{"a": {"description": "d", "prompt": "p", "tools": [1]}}"#,
+                "tools that",
+            ),
+            (
+                r#"{"a": {"description": "d", "prompt": "p", "isolation": "x"}}"#,
+                "isolation",
+            ),
+        ] {
+            let failed = from_json(text).err().unwrap_or_default();
+            assert!(
+                failed.starts_with("--agents: ") && failed.contains(error),
+                "{text}: {failed}"
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn discovery_follows_the_scope_and_command_sets_replace_loose_agents() {
@@ -2035,6 +2218,7 @@ disallowedTools: [Write]\n---\n",
         let sources = Sources {
             user: &users,
             sets: &sets,
+            given: &[],
         };
         let cwd = root.join("src/deep");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -2199,6 +2383,7 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
         let sources = Sources {
             user: &users,
             sets: &sets,
+            given: &[],
         };
         let discovery = discover(&sources, &cwd, Scope::Both);
         let found: Vec<String> = (discovery.agents.iter())
