@@ -5,7 +5,7 @@ use super::interactive::{Interactive, completions};
 use super::palette::Background;
 use super::screen::{Answer, Dialog, Optional};
 use super::select::Spot;
-use super::settings::{Row, groups, scramjet_level};
+use super::settings::{CLAUDE_ROWS, Row, groups, scramjet_level};
 use super::text::clip;
 use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
 use super::theme_editor::ThemeEditor;
@@ -164,6 +164,16 @@ fn tool_note(tool: &str) -> &'static str {
 
 /// A row of Claude Code's files: whether they are read, and how many there are.
 fn claude_value(on: bool, row: Row, found: &ClaudeCodeFound) -> String {
+    let state = if on { "on" } else { "off" };
+    match claude_count(row, found, "") {
+        Some(count) => format!("{state}, {count} found"),
+        None => format!("{state}, none found"),
+    }
+}
+
+/// How many of a row's files there are, as "3 skills", its files' as "2 {kind}files"; `None`
+/// for none.
+fn claude_count(row: Row, found: &ClaudeCodeFound, kind: &str) -> Option<String> {
     let (count, one, more) = match row {
         Row::ClaudeSkills => (found.skills, "skill", "skills"),
         Row::ClaudeCommands => (found.commands, "command", "commands"),
@@ -172,15 +182,64 @@ fn claude_value(on: bool, row: Row, found: &ClaudeCodeFound) -> String {
         Row::ClaudeMemory => (found.memory, "file", "files"),
         _ => (found.plugins, "plugin", "plugins"),
     };
-    let state = if on { "on" } else { "off" };
+    let kind = if one == "file" { kind } else { "" };
+    let (one, more) = (format!("{kind}{one}"), format!("{kind}{more}"));
     match count {
-        0 => format!("{state}, none found"),
-        1 => format!("{state}, 1 {one} found"),
-        count => format!("{state}, {count} {more} found"),
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        count => Some(format!("{count} {more}")),
     }
 }
 
+/// What to tell the user at a start, once: which of Claude Code's files are here but not read,
+/// and where to turn them on; `None` when there are none, or it was said (`said` exists, made
+/// when it is said).
+fn claude_offer_in(
+    found: &ClaudeCodeFound,
+    on: impl Fn(Row) -> bool,
+    said: &std::path::Path,
+) -> Option<String> {
+    if said.exists() {
+        return None;
+    }
+    let off = (CLAUDE_ROWS.into_iter().filter(|row| !on(*row)))
+        .filter_map(|row| {
+            let kind = match row {
+                Row::ClaudeMemory => "memory ",
+                _ => "instructions ",
+            };
+            claude_count(row, found, kind)
+        })
+        .collect::<Vec<_>>();
+    if off.is_empty() {
+        return None;
+    }
+    let _ = std::fs::create_dir_all(said.parent()?);
+    std::fs::write(said, "").ok()?;
+    Some(format!(
+        "Claude Code's files are here but not read ({}): /settings → Claude Code's files turns \
+         each kind on.",
+        off.join(", ")
+    ))
+}
+
 impl Interactive {
+    /// Says once, at the first start that finds any, that Claude Code's files are off and where
+    /// to turn them on. Recorded as said in the state directory.
+    pub(super) fn claude_offer(&self) -> Option<String> {
+        let said = scramjet::agent::state_directory().ok()?;
+        let said = said.join("claude-code-files-offered");
+        if said.exists() {
+            return None;
+        }
+        let found = self.session.agent.claude_code_found();
+        claude_offer_in(
+            &found,
+            |row| self.session.settings.claude_code_of(row),
+            &said,
+        )
+    }
+
     /// `/settings`, as Scramjet's: the settings in a list, each changed with Enter, saved and
     /// used at once. Without the full screen they are printed.
     pub(super) fn settings(&mut self) {
@@ -1411,5 +1470,41 @@ fn steps_summary(steps: &NextSteps) -> String {
     match steps.suggested().len() {
         0 => summary,
         suggested => format!("{summary} · suggested: {suggested}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_codes_files_found_and_off_are_told_of_once() {
+        let scratch =
+            std::env::temp_dir().join(format!("scramjet-claude-offer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        let said = scratch.join("state/offered");
+        let none = ClaudeCodeFound::default();
+        assert_eq!(claude_offer_in(&none, |_| false, &said), None);
+        assert!(!said.exists());
+        let found = ClaudeCodeFound {
+            skills: 3,
+            instructions: 1,
+            memory: 1,
+            ..none
+        };
+        assert_eq!(claude_offer_in(&found, |_| true, &said), None);
+        let skills_on = |row| row == Row::ClaudeSkills;
+        let offer = claude_offer_in(&found, skills_on, &said).unwrap();
+        assert_eq!(
+            offer,
+            "Claude Code's files are here but not read (1 instructions file, 1 memory file): \
+             /settings → Claude Code's files turns each kind on."
+        );
+        assert_eq!(claude_offer_in(&found, |_| false, &said), None);
+        assert_eq!(
+            claude_value(true, Row::ClaudeInstructions, &found),
+            "on, 1 file found"
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 }

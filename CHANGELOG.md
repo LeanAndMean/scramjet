@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.437.0 — Claude Code's files told of once
+
+### Added
+
+- The first start that finds Claude Code's skills, commands, instructions, agents, plugins or memory while they are off says once which were found and that /settings → Claude Code's files turns them on.
+
 ## 2.436.0 — Claude Code's agents named by their source
 
 ### Changed

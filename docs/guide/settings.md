@@ -118,7 +118,7 @@ What each of these confines, and what it does not, is in [the sandbox](configura
 
 ## Claude Code's files
 
-Each is off by default, and `/settings` → Claude Code's files turns it on, saying how many it finds; changing one loads the files again at once. A project's `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md`, `.agents/skills`, and a plugin `--plugin-dir` gives load either way.
+Each is off by default, and `/settings` → Claude Code's files turns it on, saying how many it finds; changing one loads the files again at once. The first start that finds any of them off says so, once. A project's `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md`, `.agents/skills`, and a plugin `--plugin-dir` gives load either way.
 
 | Key | Values | Default | What it does |
 |---|---|---|---|

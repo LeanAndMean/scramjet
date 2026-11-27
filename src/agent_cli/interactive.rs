@@ -218,6 +218,7 @@ impl Interactive {
             notices.extend(update::start_check());
         }
         notices.extend(super::import::offer());
+        notices.extend(self.claude_offer());
         if !notices.is_empty() {
             if !std::mem::take(&mut self.spaced) {
                 self.blank();
