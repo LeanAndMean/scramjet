@@ -211,6 +211,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         messages.push(String::new());
     }
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
+    let name = options.name.clone();
     let (max_turns, max_budget) = (options.max_turns, options.max_budget);
     let output = options.output;
     let root = project_root(options.project.take())?;
@@ -267,7 +268,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         let mut interactive =
             interactive::Interactive::new(agent, ui, cancel, hide_thinking, settings, themes)?;
         interactive.session.scope = patterns;
-        return interactive.run(resume, messages, files, scope_warnings);
+        return interactive.run((resume, name), messages, files, scope_warnings);
     }
     let settings_warnings = std::mem::take(&mut settings.warnings);
     for warning in settings_warnings
@@ -687,6 +688,9 @@ local models), or add providers to {file} (see --help)"
     agent.set_subagents(settings.subagents());
     agent.set_offline(!settings.sandbox_network);
     agent.set_planning(options.plan);
+    if let Some(name) = &options.name {
+        agent.set_session_name(name).map_err(|e| e.to_string())?;
+    }
     agent.set_allowed(options.allowed.clone());
     warnings.extend(offline_notice(&agent));
     if agent.sandbox().is_none() {

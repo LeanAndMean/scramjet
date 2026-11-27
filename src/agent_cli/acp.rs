@@ -239,6 +239,10 @@ fn refuse_unfit(options: &Options) -> Result<(), String> {
             !matches!(options.start, Launch::New | Launch::Unsaved),
             "--continue, --resume, --session and --fork (sessions are opened by the client)",
         ),
+        (
+            options.name.is_some(),
+            "--name (the client names its sessions)",
+        ),
     ];
     match unfit.iter().find(|(given, _)| *given) {
         Some((_, what)) => Err(format!("acp: {what} cannot be used here")),

@@ -1,0 +1,20 @@
+{
+  "size": "100x24",
+  "arguments": ["-r", "-n", "Parser work", "--session-dir", "sessions"],
+  "files": {
+    "sessions/1795750847894-1.jsonl": "{\"created\":1795750847894,\"root\":\"/tmp\",\"type\":\"session\",\"version\":1}\n{\"content\":\"Fix the parser\",\"role\":\"user\"}\n{\"content\":[{\"annotations\":[],\"text\":\"Looking at it.\",\"type\":\"output_text\"}],\"id\":\"msg_0_0\",\"role\":\"assistant\",\"type\":\"message\"}\n"
+  },
+  "steps": [
+    {"until": "Resume session"},
+    {"sleep": 0.3},
+    {"shot": "name-picker"},
+    {"type": "\r"},
+    {"until": "Looking at it."},
+    {"sleep": 0.5},
+    {"shot": "name-resumed"},
+    {"type": "/resume\r"},
+    {"until": "Resume session"},
+    {"sleep": 0.3},
+    {"shot": "name-listed"}
+  ]
+}

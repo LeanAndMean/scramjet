@@ -28,10 +28,10 @@ Sessions:
   --session FILE|ID        resume that session
   --fork FILE|ID           continue a copy of that session in a new one
   --fork-session           with -c or --resume ID, continue a copy in a new session
+  -n, --name NAME          name the session, as /rename does
   --no-session, --no-session-persistence
                            save no session
-  --ephemeral              leave nothing behind: no session, and the settings' changes kept
-                           for the run only
+  --ephemeral              leave nothing behind: no session, settings changed for the run
   --session-dir DIR        save and find sessions in DIR
   --project DIR            the project's directory (default: the current one)
   -p, --print              send the messages, print the replies and exit (- reads stdin)
@@ -133,7 +133,7 @@ impl Help {
 pub(super) const HELP_ALL: &str =
     "Usage: scramjet [--project DIR] [--provider NAME] [--model PATTERN] [--models PATTERNS]
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
-[--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [--session-dir DIR]
+[--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [-n NAME] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--mcp-config CONFIG...]... [--strict-mcp-config]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
@@ -211,6 +211,8 @@ but to NO_PROXY's hosts and this machine.
                          new session of this project
   --fork-session         as Claude Code's: with -c, --resume ID or --session, continue a
                          copy of that session in a new one, as --fork does
+  -n, --name NAME        as Claude Code's: name the session, new or resumed, as /rename does
+                         (shown in the footer, the terminal's title and /resume)
   --no-session, --no-session-persistence
                          save no session (the second, Claude Code's name): those of this run (/clear, /fork,
                          /branch and /import too) are kept in a private temporary directory
@@ -608,6 +610,8 @@ pub(super) struct Options {
     pub(super) start: Start,
     /// `--session-dir`: as typed, resolved once the session starts.
     pub(super) session_dir: Option<String>,
+    /// `--name`: the session's name, trimmed and not empty.
+    pub(super) name: Option<String>,
     pub(super) prompt: SystemPrompt,
     /// `--skill`: as typed, resolved once the session starts.
     pub(super) skills: Vec<String>,
@@ -713,6 +717,7 @@ impl Options {
             max_output_tokens: None,
             start: Start::New,
             session_dir: None,
+            name: None,
             prompt: SystemPrompt::default(),
             skills: Vec::new(),
             plugin_dirs: Vec::new(),
@@ -893,6 +898,13 @@ and stream-json"
                 Some("--bare") => options.bare = true,
                 Some("--ephemeral") => options.ephemeral = true,
                 Some("--session-dir") => options.session_dir = Some(value()?),
+                Some("-n" | "--name") => {
+                    let name = value()?.trim().to_owned();
+                    if name.is_empty() {
+                        return Err(format!("--name needs a name\n\n{USAGE}"));
+                    }
+                    options.name = Some(name)
+                }
                 Some("--system-prompt") => options.prompt.system = Some(value()?),
                 Some("--append-system-prompt") => options.prompt.append.push(value()?),
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
@@ -1212,6 +1224,20 @@ mod tests {
             let error = parse(alone).err().unwrap();
             assert!(error.starts_with("--fork-session needs -c, --resume ID or --session\n"));
         }
+    }
+
+    #[test]
+    fn name_names_the_session_trimmed_as_claude_codes() {
+        let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
+        let name = |arguments: &[&str]| parse(arguments).unwrap().unwrap().name;
+        assert_eq!(
+            name(&["-n", " Parser work ", "hi"]).as_deref(),
+            Some("Parser work")
+        );
+        assert_eq!(name(&["-c", "--name", "Later"]).as_deref(), Some("Later"));
+        assert_eq!(name(&["hi"]), None);
+        let error = parse(&["--name", " "]).err().unwrap();
+        assert!(error.starts_with("--name needs a name\n"), "{error}");
     }
 
     #[test]

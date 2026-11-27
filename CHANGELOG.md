@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.417.0 — `--name`
+
+### Added
+
+- `-n NAME` or `--name NAME` names the session as `/rename` does, as Claude Code's: a new one, the one `-c` or `--resume ID` continues, or the one `-r`'s list picks. The name shows in the footer, the terminal's title and `/resume`.
+
 ## 2.416.0 — `--settings`
 
 ### Added

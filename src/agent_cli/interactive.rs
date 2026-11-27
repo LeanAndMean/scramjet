@@ -180,7 +180,7 @@ impl Interactive {
     /// `files`. `notices` are shown at the start, with the problems found.
     pub(super) fn run(
         mut self,
-        resume: bool,
+        resume: (bool, Option<String>),
         messages: Vec<String>,
         files: Option<Attached>,
         notices: Vec<String>,
@@ -204,7 +204,7 @@ impl Interactive {
 
     fn read_and_run(
         &mut self,
-        resume: bool,
+        (resume, name): (bool, Option<String>),
         messages: Vec<String>,
         files: Option<Attached>,
         mut notices: Vec<String>,
@@ -215,6 +215,10 @@ impl Interactive {
             true => return Ok(Ended::NothingResumed),
             false => false,
         };
+        // `--name` named the session the start made; the one chosen takes it instead.
+        if let Some(name) = name.filter(|_| resumed) {
+            (self.session.agent.set_session_name(&name)).map_err(|e| e.to_string())?;
+        }
         if !resumed {
             self.show_banner();
         }
