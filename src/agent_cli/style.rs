@@ -159,11 +159,6 @@ styles! {
     COMMAND_FAILED: [] Error;
     COMMAND_CANCELLED: [] Warning;
 
-    /// A `todo_write` list's items: done, the one being worked on, and those still to do.
-    TODO_DONE: [STRIKE] Muted;
-    TODO_ACTIVE: [BOLD] Accent;
-    TODO_PENDING: [] ToolOutput;
-
     DIFF_REMOVED: [] ToolDiffRemoved;
     DIFF_ADDED: [] ToolDiffAdded;
     DIFF_CONTEXT: [] ToolDiffContext;

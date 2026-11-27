@@ -134,7 +134,7 @@ pub fn missing_shells(tools: &[String]) -> Vec<String> {
 }
 
 /// The harness's own tools, which the model sees after the coding tools, in this order.
-pub const HARNESS_TOOLS: [&str; 15] = [
+pub const HARNESS_TOOLS: [&str; 13] = [
     super::status::NAME,
     super::publish::TOOLS[0],
     super::publish::TOOLS[1],
@@ -143,8 +143,6 @@ pub const HARNESS_TOOLS: [&str; 15] = [
     super::question::NAME,
     super::delegate::NAME,
     super::subagent::NAME,
-    super::todo::NAME,
-    super::web::NAME,
     super::switch::NAME,
     super::suggest::NAME,
     super::permissions::NAME,
@@ -195,8 +193,6 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     tools.push(super::question::definition());
     tools.push(super::delegate::definition());
     tools.push(super::subagent::definition());
-    tools.push(super::todo::definition());
-    tools.push(super::web::definition());
     tools.push(super::switch::definition());
     tools.push(super::suggest::definition());
     tools.push(super::permissions::definition());
@@ -239,8 +235,7 @@ the output.",
         }
         definition
     });
-    let web = (names.contains(&super::web::NAME)).then(super::web::definition);
-    Value::Array(tools.chain(web).collect())
+    Value::Array(tools.collect())
 }
 
 /// What a subagent's shell tools say of how they are confined on Windows.
@@ -397,8 +392,6 @@ impl<'a> Call<'a> {
             super::delegate::NAME => super::delegate::summary(&self.arguments),
             super::suggest::NAME => super::suggest::summary(&self.arguments),
             super::switch::NAME => super::switch::summary(&self.arguments),
-            super::todo::NAME => super::todo::summary(&self.arguments),
-            super::web::NAME => super::web::summary(&self.arguments),
             super::permissions::NAME => super::permissions::summary(&self.arguments),
             name if super::publish::TOOLS.contains(&name) => {
                 super::publish::summary(name, &self.arguments)
@@ -2460,7 +2453,7 @@ fn left_running(group: u32) -> Option<String> {
 /// A command that has ended: the end of its output, with a note when earlier output was left out,
 /// and how it ended.
 /// The file a command's output is saved to once it is too long to show whole.
-pub(super) struct Saved {
+struct Saved {
     path: PathBuf,
     file: std::fs::File,
     written: u64,
@@ -2470,7 +2463,7 @@ pub(super) struct Saved {
 
 impl Saved {
     /// A new file in the temporary directory holding `start`; none when it cannot be written.
-    pub(super) fn create(start: &[u8]) -> Option<Self> {
+    fn create(start: &[u8]) -> Option<Self> {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let number = NEXT.fetch_add(1, Ordering::Relaxed);
         let name = format!("scramjet-output-{}-{number}.log", std::process::id());
@@ -2507,7 +2500,7 @@ impl Saved {
     }
 
     /// What the truncation note says of the file, of a command that wrote `total` bytes.
-    pub(super) fn said(&self, total: usize) -> String {
+    fn said(&self, total: usize) -> String {
         let path = self.path.display();
         match self.written < total as u64 {
             true => format!("; its first {} bytes are in {path}", self.written),

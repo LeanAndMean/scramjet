@@ -2134,7 +2134,7 @@ def completes_paths_and_commands(read, until, send, output):
     # Commands are listed as soon as `/` starts the prompt, the built-in scramjet set's among
     # them; Escape closes the list.
     send(b'/')
-    on_screen('(1/40)')
+    on_screen('(1/39)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -2936,7 +2936,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\x1b[B\x1b[B\x1b[B\r')
     on_screen('\u203a [ ] grep')
     # The harness's own tools follow the coding tools.
-    send(b'\x1b[B' * 13 + b'\r')
+    send(b'\x1b[B' * 11 + b'\r')
     rows = on_screen('\u203a [ ] switch_scramjet_model')
     assert rows[-1] == '  Changes the session\'s model', rows
     send(b'\x1b')

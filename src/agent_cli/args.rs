@@ -390,8 +390,6 @@ under each part, and s the system prompt as /system-prompt does.
 /system-prompt shows, on the full screen, the instructions the last request sent, each part under
 a heading, then its tool definitions; before any request, those the next sends. Up and Down,
 PgUp and PgDn, Home and End scroll it, the mouse or Shift and the arrows select, Escape closes it.
-/todos shows the checklist the agent keeps for work of several steps (its todo_write tool, as
-Claude Code's TodoWrite), which the conversation shows each time it changes.
 /export [PATH] writes the session's current branch as a web page that runs no script and
 loads nothing (by default scramjet-session-<id>.html here), or, to a PATH ending in .jsonl,
 as a session file of its own; /import FILE.jsonl continues in a copy of such a file, saved
@@ -424,7 +422,7 @@ Code's; one due during a turn runs once the turn ends. It lasts while the sessio
 lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /todos, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

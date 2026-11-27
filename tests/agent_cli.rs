@@ -5261,25 +5261,6 @@ fn acp_call(
     input: &serde_json::Value,
     capabilities: serde_json::Value,
 ) -> (serde_json::Value, serde_json::Value) {
-    let updates = acp_call_updates(scratch, project, name, input, capabilities);
-    let update = |found: &dyn Fn(&serde_json::Value) -> bool| {
-        updates.iter().find(|update| found(update)).unwrap().clone()
-    };
-    (
-        update(&|update| update["sessionUpdate"] == "tool_call"),
-        update(&|update| update["status"] == "completed"),
-    )
-}
-
-/// The session updates of a turn with one call of tool `name` with `input`.
-#[cfg(unix)]
-fn acp_call_updates(
-    scratch: &std::path::Path,
-    project: &std::path::Path,
-    name: &str,
-    input: &serde_json::Value,
-    capabilities: serde_json::Value,
-) -> Vec<serde_json::Value> {
     let (port, _bodies) = serve_call(name, input.clone());
     let (mut child, mut stdin, messages) = acp(scratch, port);
     send(
@@ -5303,46 +5284,16 @@ fn acp_call_updates(
     assert_eq!(answer["result"]["stopReason"], "end_turn", "{answer}");
     drop(stdin);
     assert!(child.wait().unwrap().success());
-    (updates.iter())
-        .map(|message| message["params"]["update"].clone())
-        .collect()
-}
-
-#[test]
-#[cfg(unix)]
-fn acp_gives_the_todo_list_as_the_sessions_plan() {
-    let scratch =
-        Scratch(std::env::temp_dir().join(format!("scramjet-cli-acp-todo-{}", std::process::id())));
-    let project = scratch.0.join("project");
-    std::fs::create_dir_all(&project).unwrap();
-    let input = serde_json::json!({"todos": [{"content": "Read", "status": "completed"},
-        {"content": "Write", "status": "in_progress"}, {"content": "Test", "status": "pending"}]});
-    let updates = acp_call_updates(
-        &scratch.0,
-        &project,
-        "todo_write",
-        &input,
-        serde_json::json!({}),
-    );
-    let plan = (updates.iter())
-        .find(|update| update["sessionUpdate"] == "plan")
-        .expect("a plan update");
-    assert_eq!(
-        plan["entries"],
-        serde_json::json!([
-            {"content": "Read", "priority": "medium", "status": "completed"},
-            {"content": "Write", "priority": "medium", "status": "in_progress"},
-            {"content": "Test", "priority": "medium", "status": "pending"}
-        ])
-    );
-    let completed = (updates.iter())
-        .position(|update| update["status"] == "completed")
-        .unwrap();
-    let at = updates.iter().position(|update| update == plan).unwrap();
-    assert!(
-        completed < at,
-        "the call's result, then the plan: {updates:?}"
-    );
+    let update = |found: &dyn Fn(&serde_json::Value) -> bool| {
+        (updates.iter())
+            .map(|message| message["params"]["update"].clone())
+            .find(|update| found(update))
+            .unwrap()
+    };
+    (
+        update(&|update| update["sessionUpdate"] == "tool_call"),
+        update(&|update| update["status"] == "completed"),
+    )
 }
 
 #[test]

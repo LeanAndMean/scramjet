@@ -15,7 +15,7 @@ use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
     DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE, Reply,
     StreamProgress, TYPE_SOMETHING, ToolDetail, UserCommand, publication_choices,
-    read_line_too_long, todo,
+    read_line_too_long,
 };
 use std::{
     borrow::Cow,
@@ -509,7 +509,6 @@ impl Terminal {
                     rows.split('\n').map(str::to_owned).collect::<Vec<_>>()
                 })
                 .collect(),
-            (todo::NAME, None) if !failed => self.todo_rows(output, width),
             (_, Some(ToolDetail::Subagents(children))) => {
                 children::rows(children, &self.look(width))
             }
@@ -846,38 +845,6 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     /// `text`'s `style::mark`ed spans in the theme in use.
     pub(super) fn themed(&self, text: &str) -> String {
         style::themed(text, self.color)
-    }
-    /// A `todo_write` result's items, each with its box, wrapped under its text, in its
-    /// status's style; the line before them is the call line's already.
-    pub(super) fn todo_rows(&self, output: &str, width: usize) -> Vec<String> {
-        let items: Vec<todo::Todo> = output.lines().filter_map(todo::item).collect();
-        if items.is_empty() {
-            return vec![self.styled(style::TOOL_OUTPUT, &printable(output))];
-        }
-        let mut rows = Vec::new();
-        for item in items {
-            let (mark, style) = match item.status {
-                todo::Status::Completed => ("☒", style::TODO_DONE),
-                todo::Status::InProgress => ("☐", style::TODO_ACTIVE),
-                todo::Status::Pending => ("☐", style::TODO_PENDING),
-            };
-            let style = self.design.tone(style);
-            let mut wrap = self.wrapper(width.saturating_sub(2).max(10));
-            let mut content = printable(&item.content);
-            if !self.color && item.status == todo::Status::InProgress {
-                content.push_str(" (in progress)");
-            }
-            let wrapped = wrap.push(&content) + &wrap.finish();
-            for (index, row) in wrapped.split('\n').enumerate() {
-                let mark = match (index, item.status) {
-                    (0, todo::Status::Completed) => self.styled(style::MUTED, mark),
-                    (0, _) => self.styled(style, mark),
-                    _ => " ".into(),
-                };
-                rows.push(format!("{mark} {}", self.styled(style, row)));
-            }
-        }
-        rows
     }
     pub(super) fn styled(&self, style: Style, text: &str) -> String {
         if self.color {
@@ -2295,47 +2262,6 @@ to expand\n(exit 2)"
         assert!(!text.contains("more lines") && !text.contains("earlier lines"));
         assert!(at("Counted to 12.").is_some(), "{lines:?}");
         assert!(text.contains(style::REASONING.get()));
-    }
-
-    #[test]
-    fn a_todo_list_shows_as_boxes_each_in_its_statuss_style() {
-        let mut ui = Terminal::capture(30, Arc::new(AtomicBool::new(false)));
-        ui.tool_call(todo::NAME, "1 of 3 completed", None);
-        let output = "Todo list updated, 1 of 3 completed:\n[completed] Read it\n\
-[in_progress] Add the tool that keeps the list\n[pending] Ship";
-        ui.tool_result(todo::NAME, output, None, false);
-        let text = ui.captured();
-        let mut plain = String::new();
-        let mut escape = Escape::None;
-        plain.extend(text.chars().filter(|&c| !escape.step(c)));
-        let lines: Vec<&str> = plain.lines().collect();
-        let call = (lines.iter())
-            .position(|line| line.starts_with("● todo_write 1 of 3 completed"))
-            .expect("the call line");
-        assert_eq!(
-            lines[call + 1..call + 5],
-            [
-                "  ☒ Read it",
-                "  ☐ Add the tool that keeps",
-                "    the list",
-                "  ☐ Ship"
-            ],
-            "{lines:?}"
-        );
-        assert!(!plain.contains("Todo list updated"));
-        for style in [style::TODO_DONE, style::TODO_ACTIVE, style::TODO_PENDING] {
-            assert!(text.contains(style.get()), "{style:?}");
-        }
-        // Without colors the item being worked on says so.
-        let mut ui = Terminal::capture(80, Arc::new(AtomicBool::new(false)));
-        ui.color = false;
-        ui.tool_result(todo::NAME, output, None, false);
-        let text = ui.captured();
-        assert!(
-            text.contains("☐ Add the tool that keeps the list (in progress)\n"),
-            "{text}"
-        );
-        assert!(text.contains("☐ Ship\n"), "{text}");
     }
 
     #[test]

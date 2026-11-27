@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 35] = [
+const SLASH_COMMANDS: [(&str, &str); 34] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -31,7 +31,6 @@ const SLASH_COMMANDS: [(&str, &str); 35] = [
     ("copy", "Copy last agent message to clipboard"),
     ("rename", "Set session display name"),
     ("status", "Show session info and stats"),
-    ("todos", "Show the agent's todo list"),
     (
         "usage",
         "Show quota left and what was spent, or its details (/usage details)",
@@ -544,7 +543,6 @@ mod tests {
                 "/copy",
                 "/rename",
                 "/status",
-                "/todos",
                 "/usage",
                 "/context",
                 "/system-prompt",
@@ -592,7 +590,7 @@ mod tests {
         let rows = plain(list.rows(24, 5));
         assert_eq!(
             rows[..5],
-            ["  /import", "  /copy", "→ /rename", "  /status", "  /todos"]
+            ["  /import", "  /copy", "→ /rename", "  /status", "  /usage"]
         );
         assert_eq!(rows[5], format!("  (9/{count})"));
         for _ in 0..count - 8 {

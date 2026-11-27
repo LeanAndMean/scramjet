@@ -55,11 +55,9 @@ pub mod stream_json;
 mod subagent;
 mod suggest;
 mod switch;
-pub mod todo;
 mod tools;
 mod tree;
 mod turn;
-pub mod web;
 pub use subagent::ours as tool_named_as_claude_codes;
 pub use turn::ShownPaused;
 mod ui;
@@ -2343,11 +2341,6 @@ apply to it; only those whose cost is known count toward the ${most}",
 
     pub fn conversation(&self) -> &[Value] {
         &self.conversation
-    }
-
-    /// The agent's checklist as its latest `todo_write` call left it, if any.
-    pub fn todos(&self) -> Option<Vec<todo::Todo>> {
-        todo::latest(&self.conversation)
     }
 
     /// The text of the conversation's last reply that has any, trimmed, as Scramjet's `/copy`

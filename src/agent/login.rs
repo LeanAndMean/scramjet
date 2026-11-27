@@ -668,7 +668,6 @@ mod tests {
                 body,
                 location: None,
                 etag: None,
-                content_type: None,
                 secrets: Vec::new(),
             })
         };

@@ -9,8 +9,7 @@ use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
     Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, delegate,
-    forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest, switch, todo,
-    web,
+    forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest, switch,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -446,7 +445,7 @@ impl Agent {
         let compact = call.compact(&self.config.root);
         let runs = call.name == subagent::NAME
             || tools::CODING_TOOLS.contains(&call.name)
-            || [mcp::SEARCH, mcp::CALL, web::NAME].contains(&call.name);
+            || [mcp::SEARCH, mcp::CALL].contains(&call.name);
         // A call that runs in the background shows in its place, under what the session shows
         // while the turn pauses for the user's commands.
         let together = runs && self.offers(call.name) && ui.running_calls(1);
@@ -510,17 +509,6 @@ impl Agent {
                 before: None,
             };
             return Called::Done(output, false);
-        }
-        if call.name == todo::NAME {
-            let (text, failed) = todo::run(&call.arguments);
-            ui.tool_result(call.name, &text, None, failed);
-            return Called::Done(
-                Output {
-                    failed,
-                    ..Output::failure(text)
-                },
-                false,
-            );
         }
         if call.name == permissions::NAME {
             let output = self.request_permissions(&call.arguments, ui);
@@ -723,13 +711,6 @@ impl Tools<'_> {
                 (super::plan::refused(call.name), Usage::default())
             }
             subagent::NAME => subagent::run(&call.arguments, &self.parent, ui, cancel),
-            web::NAME => {
-                ui.tool_running(std::time::Instant::now());
-                let offline = self
-                    .sandbox
-                    .map_or(self.offline, |sandbox| !sandbox.network);
-                (web::run(&call.arguments, offline, cancel), Usage::default())
-            }
             mcp::SEARCH | mcp::CALL => {
                 ui.tool_running(std::time::Instant::now());
                 let servers = self
@@ -1298,138 +1279,6 @@ here (sandbox.subagents.mode)\n\nkept.txt says original";
         let instructions = |at: usize| bodies[at]["instructions"].as_str().unwrap().to_owned();
         assert!(instructions(0).contains(told), "{}", instructions(0));
         assert!(!instructions(2).contains(told), "{}", instructions(2));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn web_fetch_follows_a_redirect_and_reads_the_page_as_markdown_unless_offline() {
-        use std::io::{BufRead, Write};
-        let pages = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let site = format!("http://{}", pages.local_addr().unwrap());
-        let page_server = std::thread::spawn(move || {
-            let mut heads = Vec::new();
-            for answer in [
-                "HTTP/1.1 301 Moved\r\nLocation: /docs/\r\nContent-Length: 0\r\n\r\n".to_owned(),
-                format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n\
-                     Content-Length: {}\r\n\r\n{}",
-                    PAGE.len(),
-                    PAGE
-                ),
-            ] {
-                let (connection, _) = pages.accept().unwrap();
-                let mut reader = std::io::BufReader::new(connection);
-                let mut head = String::new();
-                while reader.read_line(&mut head).unwrap() > 2 && !head.ends_with("\r\n\r\n") {}
-                heads.push(head);
-                reader.get_mut().write_all(answer.as_bytes()).unwrap();
-            }
-            heads
-        });
-        const PAGE: &str = "<html><head><title>Docs</title><script>x()</script></head>\
-            <body><h2>Install</h2><p>Run <code>make</code>, then see <a href=\"next.html\">next</a>.\
-            </p></body></html>";
-        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
-        let url = format!("{site}/docs");
-        let (endpoint, server) = serve(vec![
-            tool_call("call_1", web::NAME, json!({ "url": url })),
-            reply("read"),
-            tool_call("call_2", web::NAME, json!({ "url": url })),
-            reply("refused"),
-        ]);
-        let (mut agent, _scratch) = agent(endpoint, "web-fetch");
-        let cancel = AtomicBool::new(false);
-        let mut ui = Recorder::default();
-        agent.turn("fetch", &mut ui, &cancel).unwrap();
-        agent.set_offline(true);
-        agent.turn("fetch offline", &mut ui, &cancel).unwrap();
-        let bodies = server.join().unwrap();
-        let heads = page_server.join().unwrap();
-        assert!(
-            heads[0].starts_with("GET /docs HTTP/1.1\r\n"),
-            "{}",
-            heads[0]
-        );
-        assert!(
-            heads[1].starts_with("GET /docs/ HTTP/1.1\r\n"),
-            "{}",
-            heads[1]
-        );
-        let expected = format!(
-            "[Redirected to {site}/docs/]\n# Docs\n\n## Install\n\n\
-             Run `make`, then see [next]({site}/docs/next.html)."
-        );
-        assert_eq!(last_output(&bodies[1]), expected);
-        let refused = last_output(&bodies[3]);
-        assert!(refused.contains("off the network"), "{refused}");
-    }
-
-    #[test]
-    fn a_subagent_listing_webfetch_fetches_where_children_reach_the_network() {
-        use std::io::{BufRead, Write};
-        let pages = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/notes.txt", pages.local_addr().unwrap());
-        let page_server = std::thread::spawn(move || {
-            let (connection, _) = pages.accept().unwrap();
-            let mut reader = std::io::BufReader::new(connection);
-            let mut head = String::new();
-            while reader.read_line(&mut head).unwrap() > 2 && !head.ends_with("\r\n\r\n") {}
-            let answer =
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 6\r\n\r\nnotes\n";
-            reader.get_mut().write_all(answer.as_bytes()).unwrap();
-        });
-        let reply = |text: &str| stream(&fixture::text_events(text, fixture::known_usage()));
-        let task = json!({"agent":"fetcher","task":"Fetch"});
-        let (endpoint, server) = serve(vec![
-            tool_call("call_1", subagent::NAME, task.clone()),
-            tool_call("call_2", web::NAME, json!({ "url": url })),
-            reply("fetched"),
-            reply("done"),
-            tool_call("call_3", subagent::NAME, task),
-            reply("could not"),
-            reply("done"),
-        ]);
-        let (mut agent, scratch) = agent(endpoint, "subagent-web-fetch");
-        let agents = scratch.0.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        std::fs::write(
-            agents.join("fetcher.md"),
-            "---\nname: fetcher\ndescription: Fetches\ntools: Read, WebFetch\n---\n\nFetch.\n",
-        )
-        .unwrap();
-        agent.agents_directories = vec![agents];
-        agent.set_subagents(sandbox::Subagents {
-            network: true,
-            ..Default::default()
-        });
-        let cancel = AtomicBool::new(false);
-        agent
-            .turn("fetch", &mut Recorder::default(), &cancel)
-            .unwrap();
-        agent.set_subagents(sandbox::Subagents::default());
-        agent
-            .turn("again", &mut Recorder::default(), &cancel)
-            .unwrap();
-        let bodies = server.join().unwrap();
-        page_server.join().unwrap();
-        let names = |body: &Value| -> Vec<String> {
-            (body["tools"].as_array().unwrap().iter())
-                .map(|tool| tool["name"].as_str().unwrap().to_owned())
-                .collect()
-        };
-        assert_eq!(names(&bodies[1]), ["read", web::NAME]);
-        let instructions = bodies[1]["instructions"].as_str().unwrap();
-        assert!(
-            instructions.contains(&format!("- {}: ", web::NAME)),
-            "{instructions}"
-        );
-        assert_eq!(last_output(&bodies[2]), "notes\n");
-        assert_eq!(names(&bodies[5]), ["read"]);
-        let result = last_output(&bodies[6]);
-        assert!(
-            result.contains("web_fetch: left out, as subagents are off the network"),
-            "{result}"
-        );
     }
 
     #[test]
@@ -2656,8 +2505,6 @@ files is added or changed.",
                 question::NAME,
                 delegate::NAME,
                 subagent::NAME,
-                todo::NAME,
-                web::NAME,
                 switch::NAME,
                 suggest::NAME
             ]
@@ -2683,7 +2530,7 @@ interactive session, prefer `suggest_scramjet_next_steps`",
                 "a.txt",
                 "Tool write not found. Available tools: read, grep, ls, \
 report_scramjet_command_status, create_issue, create_pr, add_issue_comment, add_pr_comment, \
-get_scramjet_user_input, delegate, subagent, todo_write, web_fetch, switch_scramjet_model, suggest_scramjet_next_steps"
+get_scramjet_user_input, delegate, subagent, switch_scramjet_model, suggest_scramjet_next_steps"
             ]
         );
         assert!(!agent.root().join("x.txt").exists());

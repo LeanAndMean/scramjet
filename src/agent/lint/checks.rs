@@ -224,7 +224,6 @@ fn claude_name(tool: &str) -> Option<&'static str> {
         "find" => "Glob",
         "ls" => "LS",
         "powershell" => "PowerShell",
-        "web_fetch" => "WebFetch",
         _ => return None,
     })
 }

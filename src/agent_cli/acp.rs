@@ -12,7 +12,7 @@ use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, Attached, Children, Choice, CompactRead, Compaction,
     Ending, KeyFrom, McpServer, McpState, McpTransport, ModelOption, Navigated, Purpose, Reopened,
     Reply, SessionChoice, Shell, StreamProgress, TYPE_SOMETHING, Times, Tokens, ToolDetail,
-    TreeEntry, TreeItem, UserCommand, todo,
+    TreeEntry, TreeItem, UserCommand,
 };
 use serde_json::{Value, json};
 use std::{
@@ -3838,7 +3838,6 @@ fn kind(name: &str) -> &'static str {
         "edit" | "write" => "edit",
         "grep" | "find" | "ls" => "search",
         "bash" | "powershell" | "cmd" => "execute",
-        "web_fetch" => "fetch",
         _ => "other",
     }
 }
@@ -4046,7 +4045,13 @@ impl AgentUi for Updates {
         let meta = json!({"io.github.leanandmean.scramjet": {"children": children}});
         self.call_update(json!({"content": content, "_meta": meta}));
     }
-    fn tool_result(&mut self, name: &str, output: &str, detail: Option<&ToolDetail>, failed: bool) {
+    fn tool_result(
+        &mut self,
+        _name: &str,
+        output: &str,
+        detail: Option<&ToolDetail>,
+        failed: bool,
+    ) {
         if self.terminal() {
             let mut update = self.terminal_output(output);
             update["status"] = json!(if failed { "failed" } else { "completed" });
@@ -4083,16 +4088,6 @@ impl AgentUi for Updates {
             update["_meta"] = json!({"io.github.leanandmean.scramjet": {"children": children}});
         }
         self.call_update(update);
-        // ACP's plan is the same checklist, each update the whole of it.
-        if name == todo::NAME && !failed {
-            let entries: Vec<Value> = (output.lines().filter_map(todo::item))
-                .map(|item| {
-                    json!({"content": item.content, "priority": "medium",
-                        "status": item.status.name()})
-                })
-                .collect();
-            self.update(json!({"sessionUpdate": "plan", "entries": entries}));
-        }
     }
     fn command_started(&mut self, _command: &str, _include: bool) {}
     /// Replayed, as `bash` tells it when it ends; live, `bash` itself tells it.

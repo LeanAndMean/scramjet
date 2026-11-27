@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.427.0 — Unreleased tools taken out
+
 ## 2.426.0 — Unreleased permission options taken out
 
 ## 2.425.0 — Unreleased background commands taken out
@@ -48,7 +50,7 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ### Changed
 
-- `--tools` takes Claude Code's tool names (`Bash`, `Read`, `Edit`, `Glob`, `WebFetch`…), names separated by spaces as well as commas, and `default` for the tools the agent has without it.
+- `--tools` takes Claude Code's tool names (`Bash`, `Read`, `Edit`, `Glob`…), names separated by spaces as well as commas, and `default` for the tools the agent has without it.
 
 ## 2.409.0 — `--max-budget-usd` for `-p`
 
@@ -92,12 +94,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - On a drive that ignores case (WSL's `/mnt/c`), a sandbox that starts (or `/sandbox` turning one on) warns that commands can change the project's `.git`, `.claude`, `.scramjet` or `.agents` through other spellings of their names; each spelling is tried in the sandbox first, so a drive where the protection holds gets no warning.
 
-## 2.403.0 — The todo item in progress on the status line
-
-### Added
-
-- While a turn runs, the full screen's status line names the agent's todo item in progress (`☐ Run the tests`), as Claude Code's spinner does; it goes with a list that has none in progress, and with `/clear`.
-
 ## 2.402.3 — Protected names under a grant above the project
 
 ### Fixed
@@ -121,12 +117,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 ### Changed
 
 - `workspace-write` keeps the project's `.claude` read-only, as its `.git`, `.scramjet` and `.agents`: the Claude Code commands, agents, skills, rules and plugin settings Scramjet reads from it can no longer be changed by a sandboxed command, `write` or `edit` (or a subagent that writes). `/add-dir` and `allowWrite` directories keep theirs too; grant `.claude` by name to let the agent change it.
-
-## 2.401.0 — Subagents read web pages
-
-### Added
-
-- A subagent whose agent lists `web_fetch` (or Claude Code's `WebFetch`, as feature-dev's agents do) can read web pages where `sandbox.subagents.network` is `true`; otherwise it is left out with a note, rather than said to be unavailable. One whose agent lists no tools has it too then.
 
 ## 2.400.0 — Claude Code's plugins
 
@@ -211,18 +201,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 ### Fixed
 
 - A skill kept twice with the same `SKILL.md`, as a project keeping copies for both Codex and Claude Code does, is no longer reported as a name already loaded.
-
-## 2.388.0 — The agent reads web pages
-
-### Added
-
-- The agent reads web pages, as Claude Code's `WebFetch`: its `web_fetch` tool fetches a URL and gives a page as Markdown (headings, lists, links, code and tables) and a text or JSON file as it is, the first 2000 lines or 50KB with the whole saved for `read`. It is refused while `sandbox.network` is `false`; `"tools": {"web_fetch": false}` turns it off.
-
-## 2.387.0 — The agent's todo list
-
-### Added
-
-- The agent keeps a checklist for work of several steps, as Claude Code's `TodoWrite` and Codex's plan: its `todo_write` tool shows each change as a list of boxes, the item being worked on in bold and those done struck through, and `/todos` shows the list as it stands. A compaction keeps it, and over ACP it is the session's plan. `"tools": {"todo_write": false}` turns it off.
 
 ## 2.385.0 — Claude Code's alwaysThinkingEnabled
 

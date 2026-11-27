@@ -153,8 +153,6 @@ fn tool_note(tool: &str) -> &'static str {
         "get_scramjet_user_input" => "Asks you a question mid-turn",
         "delegate" => "Runs another command as a subroutine",
         "subagent" => "Gives a task to a subagent",
-        "todo_write" => "Keeps a checklist of the agent's work, shown as it changes",
-        "web_fetch" => "Reads a web page or file by URL; not while off the network",
         "switch_scramjet_model" => "Changes the session's model",
         "suggest_scramjet_next_steps" => "Suggests a command to run next",
         "request_permissions" => "Asks you for more of the sandbox's reach; with the sandbox only",

@@ -9,7 +9,7 @@ use super::settings::{card_level, scramjet_level};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, export, keymap, style};
-use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode, todo};
+use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -27,8 +27,6 @@ pub(super) enum Builtin<'a> {
     Clear(&'a str),
     Rename(&'a str),
     Status,
-    /// Claude Code's `/todos`: the agent's checklist.
-    Todos,
     /// With whether the details come first.
     Usage(bool),
     Context,
@@ -85,7 +83,6 @@ impl<'a> Builtin<'a> {
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
             "status" if argument.is_empty() => Self::Status,
-            "todos" if argument.is_empty() => Self::Todos,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
@@ -131,7 +128,6 @@ impl<'a> Builtin<'a> {
                 | Self::Copy
                 | Self::Rename(_)
                 | Self::Status
-                | Self::Todos
                 | Self::Goal(_)
                 | Self::Loop(_)
                 | Self::Plan(_)
@@ -175,7 +171,6 @@ impl Interactive {
             }
             Some(Builtin::Rename(name)) => self.name(name),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
-            Some(Builtin::Todos) => self.todos(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
             Some(Builtin::SystemPrompt) => self.system_prompt(),
@@ -208,29 +203,6 @@ impl Interactive {
             Some(Builtin::Exit) | None => return false,
         }
         true
-    }
-
-    /// `/todos`, as Claude Code's: the checklist the agent's latest `todo_write` left.
-    fn todos(&mut self) {
-        let Some(todos) = self.session.agent.todos() else {
-            return self.say(
-                "No todo list. The agent keeps one (todo_write) while it works on a task of \
-                 several steps.",
-            );
-        };
-        let done = (todos.iter())
-            .filter(|todo| todo.status == todo::Status::Completed)
-            .count();
-        let mut text = format!("Todo list, {done} of {} completed:", todos.len());
-        for todo in &todos {
-            let line = match todo.status {
-                todo::Status::Completed => format!("\n☒ {}", todo.content),
-                todo::Status::InProgress => format!("\n☐ {} (in progress)", todo.content),
-                todo::Status::Pending => format!("\n☐ {}", todo.content),
-            };
-            text.push_str(&line);
-        }
-        self.say(&text);
     }
 
     pub(super) fn name(&mut self, name: &str) {

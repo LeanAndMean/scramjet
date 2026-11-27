@@ -313,8 +313,6 @@ struct App {
     ready: bool,
     /// A turn runs, with what it does now.
     activity: Option<Activity>,
-    /// The agent's todo item in progress, which the status line names while a turn runs.
-    task: Option<String>,
     /// The session runs a `!` command of its own, typed while no turn ran.
     session_shell: bool,
     /// Since the last turn ended, until the user sends or types something: `Waiting for you`,
@@ -404,7 +402,6 @@ impl App {
             efforts: EffortCycle::default(),
             ready: false,
             activity: None,
-            task: None,
             session_shell: false,
             handed: None,
             working: None,
@@ -613,7 +610,6 @@ impl App {
         match message {
             ToScreen::Event(event) => {
                 self.track(&event);
-                self.follow_todos(&event);
                 match event {
                     Event::CommandStarted(..) => self.session_shell = true,
                     Event::CommandResult(..) => self.session_shell = false,
@@ -637,22 +633,17 @@ impl App {
                 if !(others && matches!(event, Event::ToolResult(..))) {
                     self.track(&event);
                 }
-                self.follow_todos(&event);
                 if let Event::Subagents(children) = &event {
                     self.footer.subagents(index, children);
                 }
                 self.conversation_mut().push_call(index, event);
             }
             ToScreen::Clear => match &mut self.conversation {
-                Some(conversation) => {
-                    *conversation = (Transcript::default(), None);
-                    self.task = None;
-                }
+                Some(conversation) => *conversation = (Transcript::default(), None),
                 None => {
                     self.transcript = Transcript::default();
                     self.top = None;
                     (self.selection, self.edge) = (None, None);
-                    self.task = None;
                 }
             },
             ToScreen::Turn(efforts) => {
@@ -819,17 +810,6 @@ impl App {
             )),
         };
         self.draft.set_note(note);
-    }
-
-    /// Keeps the todo item in progress from each `todo_write` result.
-    fn follow_todos(&mut self, event: &Event) {
-        if let Event::ToolResult(name, output, _, false, _) = event
-            && name == agent::todo::NAME
-        {
-            self.task = (output.lines().filter_map(agent::todo::item))
-                .find(|todo| todo.status == agent::todo::Status::InProgress)
-                .map(|todo| todo.content);
-        }
     }
 
     /// Follows what the agent does for the status line.
@@ -1360,49 +1340,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    #[test]
-    fn the_status_line_names_the_todo_item_in_progress() {
-        use crate::agent_cli::text::plain;
-        let (mut app, _from) = app();
-        app.message(ToScreen::Turn(EffortCycle::default()));
-        let status = |app: &App| plain(&app.status(80)[0]);
-        let todos = |output: &str, failed| {
-            let result = Event::ToolResult(
-                "todo_write".into(),
-                output.into(),
-                None,
-                failed,
-                Instant::now(),
-            );
-            ToScreen::Call(0, result)
-        };
-        app.message(todos(
-            "Todo list updated, 1 of 3 completed:\n[completed] Read\n[in_progress] Run the tests\n[pending] Commit",
-            false,
-        ));
-        assert!(
-            status(&app).ends_with("Working (Esc to interrupt) · ☐ Run the tests"),
-            "{}",
-            status(&app)
-        );
-        // A failed call leaves the list as it was; one with nothing in progress names none.
-        app.message(todos("[in_progress] Other", true));
-        assert!(
-            status(&app).ends_with("☐ Run the tests"),
-            "{}",
-            status(&app)
-        );
-        app.message(todos("Todo list cleared.", false));
-        assert!(
-            status(&app).ends_with("Working (Esc to interrupt)"),
-            "{}",
-            status(&app)
-        );
-        app.message(todos("[in_progress] Again", false));
-        app.message(ToScreen::Clear);
-        assert!(!status(&app).contains("Again"), "{}", status(&app));
     }
 
     #[test]
