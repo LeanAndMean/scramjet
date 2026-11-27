@@ -85,8 +85,8 @@ mod writable;
 
 use args::{Options, Start};
 use scramjet::agent::{
-    self, Agent, AgentConfig, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS, ModelOption,
-    Next, Providers, Sandbox, Session, SessionChoice, SkillOptions, SystemPrompt,
+    self, Agent, AgentConfig, AgentError, AgentUi, Attached, CODING_TOOLS, Found, HARNESS_TOOLS,
+    ModelOption, Next, Providers, Sandbox, Session, SessionChoice, SkillOptions, SystemPrompt,
 };
 use settings::Settings;
 use std::{
@@ -207,7 +207,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         messages.push(String::new());
     }
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
-    let max_turns = options.max_turns;
+    let (max_turns, output_json) = (options.max_turns, options.output_json);
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
     settings.in_project(&root);
@@ -252,6 +252,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     handle_signals(&cancel, &hide_thinking)?;
     let mut ui = Terminal::new(hide_thinking.clone(), true);
     ui.markdown_reads = settings.markdown_reads;
+    ui.replies_on_stderr = output_json;
     if !print_only {
         let themes = (themes, theme_options);
         let mut interactive =
@@ -282,9 +283,19 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if let Some(files) = files {
         agent.attach(files);
     }
+    let started = std::time::Instant::now();
+    let replies = agent.replies().count();
+    let mut reached_max_turns = false;
     let result = (messages.into_iter()).try_for_each(|prompt| {
+        let prompt = match prompt.as_str() {
+            "-" => std::io::read_to_string(std::io::stdin()).map_err(|e| e.to_string())?,
+            _ => prompt,
+        };
         let model = agent.model().to_owned();
-        let result = print(&mut agent, &mut ui, prompt, &cancel);
+        let result = print(&mut agent, &mut ui, &prompt, &cancel).map_err(|error| {
+            reached_max_turns = matches!(error, AgentError::MaxTurns(_));
+            error.to_string()
+        });
         // The agent's `switch_scramjet_model`, remembered as the user's choices are.
         if agent.model() != model
             && let Err(error) =
@@ -297,8 +308,56 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if let Err(error) = settings.set_hide_thinking_block(hide_thinking.load(Ordering::Relaxed)) {
         eprintln!("Error: settings not saved: {error}");
     }
+    if output_json {
+        let replied = agent.replies().count() > replies;
+        println!(
+            "{}",
+            run_result(&agent, started, &result, reached_max_turns, replied)
+        );
+    }
     write_held_at_exit(&mut agent);
     result
+}
+
+/// `--output-format json`'s object, as Claude Code's `-p` prints it: what the run ended with,
+/// its last reply's text when it made one, and what it spent, subagents' included. Its
+/// `input_tokens` are those neither read from nor written to the cache, as Anthropic counts them.
+fn run_result(
+    agent: &Agent,
+    started: std::time::Instant,
+    result: &Result<(), String>,
+    reached_max_turns: bool,
+    replied: bool,
+) -> serde_json::Value {
+    let usage = agent.usage;
+    let cached = usage.cached_input_tokens + usage.cache_write_tokens;
+    let mut object = serde_json::json!({
+        "type": "result",
+        "subtype": match result {
+            Ok(()) => "success",
+            Err(_) if reached_max_turns => "error_max_turns",
+            Err(_) => "error_during_execution",
+        },
+        "is_error": result.is_err(),
+        "duration_ms": started.elapsed().as_millis() as u64,
+        "num_turns": agent.turns_made(),
+        "session_id": agent.session_id(),
+        "total_cost_usd": usage.cost,
+        "usage": {
+            "input_tokens": usage.input_tokens.saturating_sub(cached),
+            "cache_creation_input_tokens": usage.cache_write_tokens,
+            "cache_read_input_tokens": usage.cached_input_tokens,
+            "output_tokens": usage.output_tokens,
+        },
+    });
+    match result {
+        Ok(()) => {
+            let reply = agent.last_reply().filter(|_| replied).unwrap_or_default();
+            object["result"] = reply.into();
+        }
+        Err(error) => object["errors"] = serde_json::json!([error]),
+    }
+    object
 }
 
 /// The project directory `--project` names, else the current one, as an absolute path.
@@ -880,16 +939,11 @@ fn write_held_at_exit(agent: &mut Agent) {
 fn print(
     agent: &mut Agent,
     ui: &mut Terminal,
-    prompt: String,
+    prompt: &str,
     cancel: &AtomicBool,
-) -> Result<(), String> {
-    let prompt = if prompt == "-" {
-        std::io::read_to_string(std::io::stdin()).map_err(|e| e.to_string())?
-    } else {
-        prompt
-    };
+) -> Result<(), AgentError> {
     let mode = InputMode::turn();
-    let result = agent.turn(&prompt, ui, cancel);
+    let result = agent.turn(prompt, ui, cancel);
     drop(mode);
     ui.clear();
     if let Some(notice) = agent.take_interrupted() {
@@ -918,5 +972,5 @@ fn print(
             ui.notice(notice);
         }
     }
-    result.map_err(|e| e.to_string())
+    result
 }

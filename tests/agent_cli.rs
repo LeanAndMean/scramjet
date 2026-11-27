@@ -110,6 +110,21 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
     assert!(refused(&["-p"]).starts_with("scramjet: -p needs a message or an @FILE\n"));
     assert!(refused(&["-"]).starts_with("scramjet: the message - (read from stdin) needs -p\n"));
     assert!(refused(&["--max-turns", "3", "hi"]).starts_with("scramjet: --max-turns needs -p\n"));
+    let json = refused(&["--output-format", "json", "hi"]);
+    assert!(
+        json.starts_with("scramjet: --output-format json needs -p\n"),
+        "{json}"
+    );
+    let stream = refused(&["--output-format", "stream-json", "-p", "hi"]);
+    assert!(
+        stream.starts_with("scramjet: --output-format stream-json is not in"),
+        "{stream}"
+    );
+    let other = refused(&["--output-format", "xml", "-p", "hi"]);
+    assert!(
+        other.starts_with("scramjet: invalid --output-format \"xml\""),
+        "{other}"
+    );
     for most in ["0", "-1", "many"] {
         let refusal = refused(&["--max-turns", most, "-p", "hi"]);
         assert!(
@@ -2265,6 +2280,79 @@ fn max_turns_stops_the_run_before_a_request_past_the_limit() {
     let ran = std::fs::read_to_string(project.join("ran.txt")).unwrap();
     assert_eq!(ran, "ran\nran\n");
     assert_eq!(bodies.try_iter().count(), 2);
+}
+
+#[test]
+#[cfg(unix)]
+fn output_format_json_prints_the_runs_result_as_one_object() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-output-json-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    // A call, then "Done.", in turn.
+    let (port, _bodies) = serve_bash_call("echo ran >> ran.txt");
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [{"id": "claude-test"}],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let run = |arguments: &[&str]| {
+        let output = program(binary)
+            .args([
+                "--retries",
+                "0",
+                "--no-session",
+                "--output-format",
+                "json",
+                "-p",
+            ])
+            .args(arguments)
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(stdout.lines().count(), 1, "{stdout}\n{stderr}");
+        let result: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        (output.status.code(), result, stderr)
+    };
+    let (code, result, stderr) = run(&["hi"]);
+    assert_eq!(code, Some(0), "{stderr}");
+    assert_eq!(result["type"], "result");
+    assert_eq!(result["subtype"], "success");
+    assert_eq!(result["is_error"], false);
+    assert_eq!(result["result"], "Done.");
+    assert_eq!(result["num_turns"], 2);
+    assert!(
+        result["session_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
+    );
+    assert!(result["duration_ms"].is_u64());
+    assert!(result["total_cost_usd"].is_number());
+    assert_eq!(result["usage"]["input_tokens"], 6);
+    assert_eq!(result["usage"]["output_tokens"], 8);
+    assert!(result.get("errors").is_none());
+    // The reply shows on stderr, with the call.
+    assert!(stderr.contains("Done."), "{stderr}");
+    let (code, result, stderr) = run(&["--max-turns", "1", "again"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert_eq!(result["subtype"], "error_max_turns");
+    assert_eq!(result["is_error"], true);
+    assert_eq!(result["num_turns"], 1);
+    assert!(result.get("result").is_none());
+    let error = result["errors"][0].as_str().unwrap();
+    assert!(error.starts_with("reached max turns (1)"), "{error}");
+    let ran = std::fs::read_to_string(project.join("ran.txt")).unwrap();
+    assert_eq!(ran, "ran\nran\n");
 }
 
 #[test]

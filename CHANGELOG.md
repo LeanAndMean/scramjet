@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.407.0 — `--output-format json` for `-p`
+
+### Added
+
+- `-p --output-format json` prints the run's result as one JSON object on stdout once it ends, as Claude Code's does: `type` `result`, `subtype` (`success`, `error_max_turns` or `error_during_execution`), `is_error`, `duration_ms`, `num_turns`, `result` (the last reply's text) or `errors`, `session_id`, `total_cost_usd` and `usage`. The replies then show on stderr with the tool calls. `stream-json` is not in yet.
+
 ## 2.406.0 — `--max-turns` for `-p`
 
 ### Added

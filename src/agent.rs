@@ -2200,6 +2200,12 @@ impl Agent {
         (self.max_turns, self.turns_made) = (most, 0);
     }
 
+    /// The requests to the model the agent's turns made since `set_max_turns`, counted as it
+    /// counts them.
+    pub fn turns_made(&self) -> u32 {
+        self.turns_made
+    }
+
     /// Whether the user can keep a granted write always for the project; without, a grant
     /// lasts the session only.
     pub fn set_keeps_grants(&mut self, keeps: bool) {

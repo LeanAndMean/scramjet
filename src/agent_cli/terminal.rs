@@ -301,6 +301,8 @@ pub(super) struct Terminal {
     command: Option<(String, bool)>,
     pub(super) hide_thinking: Arc<AtomicBool>,
     pub(super) markdown_reads: MarkdownReads,
+    /// Replies go to stderr with the rest, leaving stdout to `--output-format json`'s result.
+    pub(super) replies_on_stderr: bool,
     /// The reasoning streamed in the current block, and whether only its marker is shown.
     reasoning: String,
     reasoning_hidden: bool,
@@ -627,7 +629,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
     fn out(&mut self, text: &str) {
         match &mut self.capture {
             Some((captured, _)) => captured.push_str(text),
-            None => print(true, text),
+            None => print(!self.replies_on_stderr, text),
         }
     }
     fn width(&self) -> usize {
@@ -717,7 +719,11 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         }
     }
     fn styled_replies(&self) -> bool {
-        self.capture.is_some() || std::io::stdout().is_terminal()
+        match self.replies_on_stderr {
+            _ if self.capture.is_some() => true,
+            true => self.color,
+            false => std::io::stdout().is_terminal(),
+        }
     }
     /// Whether the status line is drawn.
     fn live(&self) -> bool {
@@ -784,6 +790,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             command: None,
             hide_thinking,
             markdown_reads: MarkdownReads::Rendered,
+            replies_on_stderr: false,
             reasoning: String::new(),
             reasoning_hidden: false,
             capture: None,
