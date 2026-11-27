@@ -24,7 +24,8 @@ Sessions:
   -r, --resume             choose one of this project's sessions to resume
   --session FILE|ID        resume that session
   --fork FILE|ID           continue a copy of that session in a new one
-  --no-session             save no session
+  --no-session, --no-session-persistence
+                           save no session
   --ephemeral              leave nothing behind: no session, and the settings' changes kept
                            for the run only
   --session-dir DIR        save and find sessions in DIR
@@ -75,6 +76,10 @@ Instructions and tools:
 What the agent may do:
   --ask                    ask before each command, and each write or edit outside the
                            project
+  --permission-mode MODE   Claude Code's: plan starts in plan mode, bypassPermissions
+                           turns --ask off, and the others change nothing
+  --dangerously-skip-permissions, --allow-dangerously-skip-permissions
+                           Claude Code's: the first turns --ask off, the second does nothing
   -s, --sandbox MODE       confine the agent's commands: read-only, workspace-write, or
                            danger-full-access (the default); on Linux and macOS
   --add-dir DIR            let the sandbox's commands change DIR too (repeatable)
@@ -126,6 +131,7 @@ pub(super) const HELP_ALL: &str =
 [--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
+[--permission-mode MODE] [--dangerously-skip-permissions]
 [-s MODE] [--offline] [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
@@ -194,7 +200,8 @@ but to NO_PROXY's hosts and this machine.
                          agree
   --fork FILE|ID         continue a copy of that session, its branches and name included, in a
                          new session of this project
-  --no-session           save no session: those of this run (/clear, /fork,
+  --no-session, --no-session-persistence
+                         save no session (the second, Claude Code's name): those of this run (/clear, /fork,
                          /branch and /import too) are kept in a private temporary directory
                          removed at exit, and /resume lists only them
   --bare                 look for nothing in your own directories but the settings, models.json
@@ -255,6 +262,13 @@ but to NO_PROXY's hosts and this machine.
                          project (answer `a` to stop asking until exit); by default tool
                          calls run without asking. Bash is not sandboxed
                          unless --sandbox says so.
+  --permission-mode MODE Claude Code's permission modes: plan starts the session in plan mode,
+                         as /plan does; bypassPermissions turns --ask off; default,
+                         acceptEdits, auto and dontAsk change nothing, as nothing asks
+                         without --ask
+  --dangerously-skip-permissions, --allow-dangerously-skip-permissions
+                         taken as Claude Code's: the first turns --ask off, as
+                         --permission-mode bypassPermissions; the second changes nothing
   -s, --sandbox MODE     confine the agent's tools, as Codex's modes do (default: the
                          settings' sandbox, else danger-full-access): read-only runs bash with
                          every file read-only, a private /tmp (on macOS /tmp and TMPDIR
@@ -574,6 +588,8 @@ pub(super) struct Options {
     /// `--disallowedTools`, as Claude Code's: tools left out of the run's.
     pub(super) denied_tools: Vec<String>,
     pub(super) ask: bool,
+    /// `--permission-mode plan`: the session starts in plan mode.
+    pub(super) plan: bool,
     /// `--sandbox`: `Some(None)` for `danger-full-access`.
     pub(super) sandbox: Option<Option<SandboxMode>>,
     /// `--add-dir`: directories the sandbox makes writable too.
@@ -640,6 +656,7 @@ impl Options {
             only_tools: None,
             denied_tools: Vec::new(),
             ask: false,
+            plan: false,
             sandbox: None,
             add_dirs: Vec::new(),
             retries: None,
@@ -656,7 +673,7 @@ impl Options {
             list_credential_stores: false,
             version: false,
         };
-        let (mut fork, mut no_session) = (None, false);
+        let (mut fork, mut no_session, mut bypass) = (None, false, false);
         let (mut tools, mut no_tools, mut no_builtin_tools) = (None, false, false);
         // The other options naming the session to start in, which `--fork` cannot be given with.
         let mut chosen = Vec::new();
@@ -793,7 +810,7 @@ and stream-json"
                     options.start = Start::Session(value()?)
                 }
                 Some("--fork") => fork = Some(value()?),
-                Some("--no-session") => no_session = true,
+                Some("--no-session" | "--no-session-persistence") => no_session = true,
                 Some("--bare") => options.bare = true,
                 Some("--ephemeral") => options.ephemeral = true,
                 Some("--session-dir") => options.session_dir = Some(value()?),
@@ -834,6 +851,19 @@ built-in tools, not one tool's calls or an MCP server's tools\n\n{USAGE}"
                 Some("--list-credential-stores") => options.list_credential_stores = true,
                 Some("-v" | "--version") => options.version = true,
                 Some("--ask") => options.ask = true,
+                Some("--permission-mode") => match value()?.as_str() {
+                    "plan" => options.plan = true,
+                    "bypassPermissions" => bypass = true,
+                    "default" | "acceptEdits" | "auto" | "dontAsk" => {}
+                    other => {
+                        return Err(format!(
+                            "--permission-mode {other}: not one of Claude Code's modes: \
+default, acceptEdits, auto, dontAsk, bypassPermissions and plan\n\n{USAGE}"
+                        ));
+                    }
+                },
+                Some("--dangerously-skip-permissions") => bypass = true,
+                Some("--allow-dangerously-skip-permissions") => {}
                 Some("-s" | "--sandbox") => {
                     let mode = value()?;
                     options.sandbox = Some(SandboxMode::parse(&mode).ok_or(format!(
@@ -852,6 +882,7 @@ workspace-write and danger-full-access"
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
             }
         }
+        options.ask &= !bypass;
         // As Scramjet's, `--tools` wins over the other two.
         options.only_tools = tools
             .or_else(|| no_tools.then(Vec::new))
@@ -1036,6 +1067,31 @@ mod tests {
         assert!(error.starts_with("--ephemeral cannot be combined with --continue\n"));
         let error = refused(&["--fork", "abc", "--ephemeral"]);
         assert!(error.starts_with("--fork cannot be combined with --ephemeral\n"));
+        let options = parse(&["--no-session-persistence", "-p", "hi"])
+            .unwrap()
+            .unwrap();
+        assert!(matches!(options.start, Start::Unsaved));
+    }
+
+    #[test]
+    fn claude_codes_permission_options_plan_or_turn_ask_off() {
+        let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
+        let options = |arguments: &[&str]| parse(arguments).unwrap().unwrap();
+        let planned = options(&["--ask", "--permission-mode", "plan"]);
+        assert!(planned.plan && planned.ask);
+        for mode in ["default", "acceptEdits", "auto", "dontAsk"] {
+            let kept = options(&["--ask", "--permission-mode", mode]);
+            assert!(kept.ask && !kept.plan, "{mode}");
+        }
+        for bypass in [
+            &["--ask", "--permission-mode", "bypassPermissions"][..],
+            &["--dangerously-skip-permissions", "--ask"],
+        ] {
+            assert!(!options(bypass).ask, "{bypass:?}");
+        }
+        assert!(options(&["--allow-dangerously-skip-permissions", "--ask"]).ask);
+        let error = parse(&["--permission-mode", "yolo"]).err().unwrap();
+        assert!(error.starts_with("--permission-mode yolo: not one of Claude Code's modes"));
     }
 
     #[test]

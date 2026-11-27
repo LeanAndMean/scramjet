@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.411.0 — Claude Code's permission options
+
+### Added
+
+- `--permission-mode MODE` takes Claude Code's modes: `plan` starts the session in plan mode, as `/plan` does, and `bypassPermissions` turns `--ask` off; `default`, `acceptEdits`, `auto` and `dontAsk` change nothing, as Scramjet asks only with `--ask`. `--dangerously-skip-permissions` turns `--ask` off too, and `--allow-dangerously-skip-permissions` is taken and changes nothing, so Claude Code's `-p` invocations run unchanged.
+- `--no-session-persistence`, Claude Code's name for `--no-session`.
+
 ## 2.410.0 — `--disallowedTools`
 
 ### Added

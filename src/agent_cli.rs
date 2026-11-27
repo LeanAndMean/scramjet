@@ -643,6 +643,7 @@ local models), or add providers to {file} (see --help)"
     agent.set_reads(settings.reads());
     agent.set_subagents(settings.subagents());
     agent.set_offline(!settings.sandbox_network);
+    agent.set_planning(options.plan);
     warnings.extend(offline_notice(&agent));
     if agent.sandbox().is_none() {
         let said = agent.grant_writable_always(&settings.allow_write());
