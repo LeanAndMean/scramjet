@@ -4,6 +4,17 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.414.0 — `--allowedTools` and `--permission-prompts`
+
+### Added
+
+- `--allowedTools LIST` (or `--allowed-tools`) names the tools whose calls `--ask` lets run without asking, as Claude Code's: Scramjet's or Claude Code's names (`Bash`, `Write`), and MCP servers' tools as `mcp__SERVER__TOOL`, `mcp__SERVER` or `mcp__SERVER__*`. With `--tools`, naming an MCP tool keeps the MCP tools offered, as Claude Code's `--tools` lists only its own. Its rules for one tool's calls (`Bash(git *)`) are not kept, with a warning: those calls ask, or are refused, as without them.
+- `--permission-prompts none`, as Claude Code's: a call `--ask` would ask about is refused, and the model told why; `host`, the default, asks.
+
+### Changed
+
+- `--permission-mode dontAsk` refuses what `--ask` would ask about and `--allowedTools` does not allow, as Claude Code's, where it changed nothing before. Claude Code's `-p` research invocations with `--tools WebFetch --allowedTools mcp__…` run unchanged.
+
 ## 2.413.0 — `--plugin-dir`
 
 ### Added

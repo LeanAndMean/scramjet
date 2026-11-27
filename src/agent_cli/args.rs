@@ -1,7 +1,7 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
 use scramjet::agent::{
-    CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt, tool_named_as_claude_codes,
+    Allowed, CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt, tool_named_as_claude_codes,
 };
 use std::{ffi::OsString, path::PathBuf};
 
@@ -78,10 +78,10 @@ Instructions and tools:
 What the agent may do:
   --ask                    ask before each command, and each write or edit outside the
                            project
-  --permission-mode MODE   Claude Code's: plan starts in plan mode, bypassPermissions
-                           turns --ask off, and the others change nothing
-  --dangerously-skip-permissions, --allow-dangerously-skip-permissions
-                           Claude Code's: the first turns --ask off, the second does nothing
+  --permission-mode MODE, --permission-prompts host|none,
+  --allowedTools LIST, --allowed-tools LIST, --dangerously-skip-permissions,
+  --allow-dangerously-skip-permissions
+                           Claude Code's, over --ask (see --help-all)
   -s, --sandbox MODE       confine the agent's commands: read-only, workspace-write, or
                            danger-full-access (the default); on Linux and macOS
   --add-dir DIR            let the sandbox's commands change DIR too (repeatable)
@@ -133,7 +133,7 @@ pub(super) const HELP_ALL: &str =
 [--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
-[--permission-mode MODE] [--dangerously-skip-permissions]
+[--permission-mode MODE] [--dangerously-skip-permissions] [--allowedTools LIST]... [--permission-prompts host|none]
 [-s MODE] [--offline] [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
@@ -273,9 +273,20 @@ but to NO_PROXY's hosts and this machine.
                          calls run without asking. Bash is not sandboxed
                          unless --sandbox says so.
   --permission-mode MODE Claude Code's permission modes: plan starts the session in plan mode,
-                         as /plan does; bypassPermissions turns --ask off; default,
-                         acceptEdits, auto and dontAsk change nothing, as nothing asks
-                         without --ask
+                         as /plan does; bypassPermissions turns --ask off; dontAsk is --ask
+                         with --permission-prompts none, so what --allowedTools does not
+                         allow is refused; default, acceptEdits and auto change nothing, as
+                         nothing asks without --ask
+  --allowedTools LIST, --allowed-tools LIST
+                         tools whose calls run without --ask asking (repeatable), as Claude
+                         Code's: Scramjet's or Claude Code's names (Bash, Write), and MCP
+                         servers' tools as mcp__SERVER__TOOL, mcp__SERVER or mcp__SERVER__*;
+                         an MCP tool named keeps mcp_search and mcp_call in --tools' list.
+                         Claude Code's rules for one tool's calls, Bash(git *), are not kept:
+                         those calls ask, or are refused, as without them
+  --permission-prompts host|none
+                         Claude Code's: with none, a call --ask would ask about is refused,
+                         and the model told so; host, the default, asks
   --dangerously-skip-permissions, --allow-dangerously-skip-permissions
                          taken as Claude Code's: the first turns --ask off, as
                          --permission-mode bypassPermissions; the second changes nothing
@@ -601,6 +612,8 @@ pub(super) struct Options {
     pub(super) only_tools: Option<Vec<String>>,
     /// `--disallowedTools`, as Claude Code's: tools left out of the run's.
     pub(super) denied_tools: Vec<String>,
+    /// `--allowedTools` and `--permission-prompts none` (or `--permission-mode dontAsk`).
+    pub(super) allowed: Allowed,
     pub(super) ask: bool,
     /// `--permission-mode plan`: the session starts in plan mode.
     pub(super) plan: bool,
@@ -689,6 +702,7 @@ impl Options {
             no_themes: false,
             only_tools: None,
             denied_tools: Vec::new(),
+            allowed: Allowed::default(),
             ask: false,
             plan: false,
             sandbox: None,
@@ -708,6 +722,7 @@ impl Options {
             version: false,
         };
         let (mut fork, mut no_session, mut bypass) = (None, false, false);
+        let mut dont_ask = false;
         let mut fork_session = false;
         let (mut tools, mut no_tools, mut no_builtin_tools) = (None, false, false);
         // The other options naming the session to start in, which `--fork` cannot be given with.
@@ -879,6 +894,18 @@ built-in tools, not one tool's calls or an MCP server's tools\n\n{USAGE}"
                         options.denied_tools.push(name);
                     }
                 }
+                Some("--allowedTools" | "--allowed-tools") => {
+                    options.allowed.tools.extend(tool_list(&value()?))
+                }
+                Some("--permission-prompts") => match value()?.as_str() {
+                    "host" => options.allowed.refuse_asked = false,
+                    "none" => options.allowed.refuse_asked = true,
+                    other => {
+                        return Err(format!(
+                            "--permission-prompts {other}: host or none\n\n{USAGE}"
+                        ));
+                    }
+                },
                 Some("-nt" | "--no-tools") => no_tools = true,
                 Some("-nbt" | "--no-builtin-tools") => no_builtin_tools = true,
                 Some("--export") => options.export = Some(PathBuf::from(value()?)),
@@ -895,7 +922,8 @@ built-in tools, not one tool's calls or an MCP server's tools\n\n{USAGE}"
                 Some("--permission-mode") => match value()?.as_str() {
                     "plan" => options.plan = true,
                     "bypassPermissions" => bypass = true,
-                    "default" | "acceptEdits" | "auto" | "dontAsk" => {}
+                    "dontAsk" => dont_ask = true,
+                    "default" | "acceptEdits" | "auto" => {}
                     other => {
                         return Err(format!(
                             "--permission-mode {other}: not one of Claude Code's modes: \
@@ -922,6 +950,10 @@ workspace-write and danger-full-access"
                 }
                 _ => return Err(format!("unknown argument {argument:?}\n\n{USAGE}")),
             }
+        }
+        if dont_ask {
+            options.ask = true;
+            options.allowed.refuse_asked = true;
         }
         options.ask &= !bypass;
         // As Scramjet's, `--tools` wins over the other two.
@@ -1169,10 +1201,44 @@ mod tests {
         let options = |arguments: &[&str]| parse(arguments).unwrap().unwrap();
         let planned = options(&["--ask", "--permission-mode", "plan"]);
         assert!(planned.plan && planned.ask);
-        for mode in ["default", "acceptEdits", "auto", "dontAsk"] {
+        for mode in ["default", "acceptEdits", "auto"] {
             let kept = options(&["--ask", "--permission-mode", mode]);
-            assert!(kept.ask && !kept.plan, "{mode}");
+            assert!(
+                kept.ask && !kept.plan && !kept.allowed.refuse_asked,
+                "{mode}"
+            );
+            assert!(!options(&["--permission-mode", mode]).ask, "{mode}");
         }
+        let dont_ask = options(&["--permission-mode", "dontAsk"]);
+        assert!(dont_ask.ask && dont_ask.allowed.refuse_asked);
+        let bypassed = options(&[
+            "--permission-mode",
+            "dontAsk",
+            "--dangerously-skip-permissions",
+        ]);
+        assert!(!bypassed.ask);
+        let allowed = options(&[
+            "--allowedTools",
+            "mcp__tavily__search,WebFetch",
+            "--allowed-tools",
+            "Bash(git *) Write",
+            "--permission-prompts",
+            "none",
+        ]);
+        assert_eq!(
+            allowed.allowed.tools,
+            ["mcp__tavily__search", "web_fetch", "Bash(git *)", "write"]
+        );
+        assert!(allowed.allowed.refuse_asked && !allowed.ask);
+        let host = options(&[
+            "--permission-prompts",
+            "none",
+            "--permission-prompts",
+            "host",
+        ]);
+        assert!(!host.allowed.refuse_asked);
+        let error = parse(&["--permission-prompts", "sdk"]).err().unwrap();
+        assert!(error.starts_with("--permission-prompts sdk: host or none"));
         for bypass in [
             &["--ask", "--permission-mode", "bypassPermissions"][..],
             &["--dangerously-skip-permissions", "--ask"],

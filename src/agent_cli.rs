@@ -553,6 +553,37 @@ fn start(
         tools.retain(|tool| !options.denied_tools.contains(tool));
         options.only_tools = Some(tools);
     }
+    // As Claude Code's, whose --tools are only its built-in tools: an MCP server's tool allowed
+    // is offered.
+    if let Some(tools) = (options.only_tools.as_mut()).filter(|_| options.allowed.names_mcp()) {
+        for tool in [scramjet::agent::MCP_SEARCH, scramjet::agent::MCP_CALL] {
+            if !tools.iter().any(|named| named == tool) {
+                tools.push(tool.to_owned());
+            }
+        }
+    }
+    let allowed = &options.allowed;
+    let mut unknown_allowed: Vec<String> = (allowed.tools.iter())
+        .filter(|name| {
+            !name.contains('(')
+                && !name.starts_with("mcp__")
+                && !CODING_TOOLS.contains(&name.as_str())
+                && !HARNESS_TOOLS.contains(&name.as_str())
+        })
+        .map(|name| format!("--allowedTools: {name} is not one of Scramjet's tools; ignored"))
+        .collect();
+    if options.ask {
+        let then = match allowed.refuse_asked {
+            true => "refused",
+            false => "asked about",
+        };
+        unknown_allowed.extend(allowed.rules().map(|rule| {
+            format!(
+                "--allowedTools: {rule}: Scramjet allows only whole tools and MCP servers' \
+tools; the calls this rule names are {then}, as without it"
+            )
+        }));
+    }
     let unknown_tools: Vec<String> = (options.only_tools.iter().flatten())
         .filter(|name| {
             !CODING_TOOLS.contains(&name.as_str()) && !HARNESS_TOOLS.contains(&name.as_str())
@@ -648,6 +679,7 @@ local models), or add providers to {file} (see --help)"
     agent.set_subagents(settings.subagents());
     agent.set_offline(!settings.sandbox_network);
     agent.set_planning(options.plan);
+    agent.set_allowed(options.allowed.clone());
     warnings.extend(offline_notice(&agent));
     if agent.sandbox().is_none() {
         let said = agent.grant_writable_always(&settings.allow_write());
@@ -678,6 +710,7 @@ local models), or add providers to {file} (see --help)"
     warnings.extend((scope_warnings.iter()).map(|warning| format!("{source}: {warning}")));
     warnings.extend(unknown_tools);
     warnings.extend(unknown_denied);
+    warnings.extend(unknown_allowed);
     warnings.extend(missing_shells);
     agent.set_model_scope(scoped.iter().map(|scoped| scoped.model.clone()).collect());
     let new = !chosen && agent.last_model().is_none();
