@@ -42,8 +42,6 @@ pub(super) struct Shown {
     pub(super) sandbox: Option<&'static str>,
     /// Whether `/autopilot` is on.
     pub(super) autopilot: bool,
-    /// Whether `/plan`'s plan mode is on.
-    pub(super) plan: bool,
     /// The `/loop`'s interval, while one runs.
     pub(super) looping: Option<String>,
 }
@@ -68,7 +66,6 @@ impl Shown {
                 .map(str::to_owned),
             sandbox: agent.sandbox().map(|sandbox| sandbox.mode.name()),
             autopilot: agent.autopilot(),
-            plan: agent.planning(),
             looping: (agent.looping()).map(|looping| interval(looping.every)),
         }
     }
@@ -181,9 +178,6 @@ impl Footer {
         if let Some(name) = &self.shown.name {
             place += &format!(" • {name}");
         }
-        if self.shown.plan {
-            place += " • plan mode";
-        }
         if let Some(mode) = self.shown.sandbox {
             place += &format!(" • sandbox {mode}");
         }
@@ -217,7 +211,6 @@ impl Footer {
         let safe = |text: &str| visible(&one_line(text));
         let place = [Some(self.directory()), self.pull(), shown.name.clone()];
         let modes = [
-            shown.plan.then(|| "plan mode".to_owned()),
             shown.sandbox.map(|mode| format!("sandbox {mode}")),
             shown.autopilot.then(|| "autopilot".to_owned()),
             (shown.looping.as_ref()).map(|every| format!("loop every {every}")),
@@ -479,7 +472,6 @@ mod tests {
             effort: Some("high".into()),
             sandbox: None,
             autopilot: false,
-            plan: false,
             looping: None,
         }
     }
@@ -509,16 +501,6 @@ mod tests {
         };
         let [place, _] = footer(looping).lines(67).map(|line| plain(&line));
         assert_eq!(place, "~/repos/project (main) • Refactor • loop every 5m");
-        let planning = Shown {
-            plan: true,
-            sandbox: Some("workspace-write"),
-            ..opus()
-        };
-        let [place, _] = footer(planning).lines(80).map(|line| plain(&line));
-        assert_eq!(
-            place,
-            "~/repos/project (main) • Refactor • plan mode • sandbox workspace-write"
-        );
         // The branch's pull request follows it, in every bottom, and not another branch's.
         let pulled = footer(opus());
         pulled.pull_request.found("main", Some(72));

@@ -33,7 +33,6 @@ pub mod login;
 mod mcp;
 mod messages;
 mod permissions;
-mod plan;
 mod pricing;
 mod problem;
 mod providers;
@@ -756,9 +755,6 @@ pub struct Agent {
     left_out: Vec<&'static str>,
     /// Whether a completed command's recommended next step runs without the user choosing it.
     autopilot: bool,
-    /// Whether plan mode is on (`/plan`), and whether the model was last told it is.
-    planning: bool,
-    plan_told: bool,
     /// The `/loop`, while one runs.
     recurring: Option<recurring::Loop>,
     /// The MCP servers, while the model is offered their tools.
@@ -959,8 +955,6 @@ impl Agent {
             profile: None,
             left_out: Vec::new(),
             autopilot,
-            planning: false,
-            plan_told: false,
             recurring: None,
             mcp: None,
             scratch: Arc::default(),
@@ -1323,7 +1317,6 @@ impl Agent {
     /// holds. One left without a conversation was never written, as Scramjet would not have.
     fn replace_session(&mut self, session: Session) {
         self.sent = None;
-        self.plan_told = false;
         let left = std::mem::replace(&mut self.session, session);
         if left.holding() {
             self.left.push(left);

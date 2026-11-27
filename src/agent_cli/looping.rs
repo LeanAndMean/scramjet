@@ -2,6 +2,7 @@
 //! the prompt at once, then again each interval while the full screen waits for the user
 //! (`Agent::loop_due`, polled by `Interactive::read`). `/loop` says the loop, `/loop stop`
 //! ends it.
+use super::footer;
 use super::interactive::Interactive;
 use super::style;
 use scramjet::agent::recurring::{LIFETIME, interval};
@@ -75,6 +76,12 @@ impl Interactive {
             interval(every)
         );
         self.say_styled(style::MUTED, &said);
+    }
+
+    fn footer_changed(&self) {
+        if let Some(screen) = &self.screen {
+            screen.footer(footer::Shown::of(&self.session.agent));
+        }
     }
 }
 

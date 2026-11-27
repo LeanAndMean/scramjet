@@ -54,8 +54,6 @@ pub(super) enum Builtin<'a> {
     Goal(&'a str),
     /// Claude Code's `/loop [INTERVAL] PROMPT|stop`: a prompt sent again on an interval.
     Loop(&'a str),
-    /// Claude Code's and Codex's `/plan [PROMPT|off]`: plan mode.
-    Plan(&'a str),
     Autopilot(&'a str),
     /// With its argument: `reconnect`, `enable` or `disable`, with a server's name or `all`.
     Mcp(&'a str),
@@ -105,7 +103,6 @@ impl<'a> Builtin<'a> {
             "compact" => Self::Compact(argument),
             "goal" => Self::Goal(argument),
             "loop" => Self::Loop(argument),
-            "plan" => Self::Plan(argument),
             "autopilot" => Self::Autopilot(argument),
             "mcp" => Self::Mcp(argument),
             "sandbox" => Self::Sandbox(argument),
@@ -130,7 +127,6 @@ impl<'a> Builtin<'a> {
                 | Self::Status
                 | Self::Goal(_)
                 | Self::Loop(_)
-                | Self::Plan(_)
                 | Self::Usage(_)
                 | Self::Context
                 | Self::SystemPrompt
@@ -193,7 +189,6 @@ impl Interactive {
             Some(Builtin::Compact(focus)) => self.compact(focus),
             Some(Builtin::Goal(condition)) => self.goal(condition),
             Some(Builtin::Loop(argument)) => self.looping(argument),
-            Some(Builtin::Plan(argument)) => self.plan(argument),
             Some(Builtin::Autopilot(wanted)) => self.autopilot(wanted),
             Some(Builtin::Mcp(argument)) => self.mcp(argument),
             Some(Builtin::Sandbox("")) => self.sandbox_menu(),

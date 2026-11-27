@@ -52,7 +52,7 @@ impl Agent {
         self.suggestion = suggest::Pending::Nothing;
         self.delegated.clear();
         // With files the text starts with them, so it is a reply even after a `/`, as in Scramjet.
-        let (mut message, typed) = match self.attached.take() {
+        let (message, typed) = match self.attached.take() {
             Some(files) => {
                 self.lifecycle.prompted(status::Prompt::Reply);
                 (files.message(prompt), files.typed(prompt))
@@ -67,7 +67,6 @@ impl Agent {
                 (message, prompt.to_owned())
             }
         };
-        self.tell_plan(&mut message);
         self.add_shown(message, ui)?;
         self.save_command()?;
         self.say_saving(ui);

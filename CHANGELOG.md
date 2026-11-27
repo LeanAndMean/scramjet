@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.428.0 — Unreleased plan mode taken out
+
 ## 2.427.0 — Unreleased tools taken out
 
 ## 2.426.0 — Unreleased permission options taken out
@@ -231,12 +233,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 ### Added
 
 - `/rewind` (also `/checkpoint` and `/undo`) goes back to before one of your prompts, as Claude Code's does: it puts back the files the agent's `write` and `edit` changed since, moves the conversation there with the prompt in the editor, or both. What commands and subagents changed stays as it is. `/rewind N code` or `/rewind N conversation` does one at once.
-
-## 2.363.0 — /plan
-
-### Added
-
-- `/plan` starts plan mode, as in Claude Code and Codex: the agent explores and proposes a plan without changing files (`write` and `edit` refused, and in a sandbox commands and subagents read-only), then the full screen asks whether to implement it. `/plan PROMPT` starts it with a prompt, `/plan off` ends it; the footer says `plan mode`.
 
 ## 2.362.0 — /goal
 

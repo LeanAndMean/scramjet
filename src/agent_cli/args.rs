@@ -410,10 +410,6 @@ starts or stops them, saved in disabledMcpServers.
 that ends by itself the model is asked whether the conversation shows it met; until
 it does, the reason goes back to the agent and the work goes on. Escape stops it; /goal says the
 goal, /goal clear clears it, and a new or resumed session has none.
-/plan starts plan mode, as Claude Code's and Codex's: the agent explores and proposes a plan
-without changing files (write and edit are refused, and in a sandbox commands and subagents run
-read-only), then the full screen asks whether to implement it, which ends plan mode. /plan PROMPT
-starts it with that prompt, /plan off ends it.
 /loop [INTERVAL] PROMPT sends the prompt now, then again each INTERVAL (30s, 5m, 2h, 1d; 10m when
 none is given, and PROMPT every 20m works too) while the full screen waits for you, as Claude
 Code's; one due during a turn runs once the turn ends. It lasts while the session runs, at most
@@ -422,7 +418,7 @@ Code's; one due during a turn runs once the turn ends. It lasts while the sessio
 lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /goal, /loop, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 34] = [
+const SLASH_COMMANDS: [(&str, &str); 33] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -67,10 +67,6 @@ const SLASH_COMMANDS: [(&str, &str); 34] = [
     (
         "loop",
         "Send a prompt again on an interval while you are away: /loop [INTERVAL] PROMPT|stop",
-    ),
-    (
-        "plan",
-        "Plan without changing files, then choose to implement: /plan [PROMPT|off]",
     ),
     ("resume", "Resume a different session"),
     (
@@ -559,7 +555,6 @@ mod tests {
                 "/compact",
                 "/goal",
                 "/loop",
-                "/plan",
                 "/resume",
                 "/reload",
                 "/autopilot",
