@@ -2,8 +2,8 @@
 //! each check a line with what to do when it cannot. Nothing is sent to a provider; the only
 //! connections tried are to the providers' servers on this machine.
 use super::settings::Settings;
-use super::{keymap, theme, update, writable};
-use scramjet::agent::{McpState, Providers, Sandbox, SandboxMode};
+use super::{installed, keymap, theme, update, writable};
+use scramjet::agent::{McpState, Problem, Providers, Sandbox, SandboxMode};
 use std::{
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
@@ -59,6 +59,9 @@ pub(super) struct Setup<'a> {
     pub(super) root: &'a Path,
     /// What is wrong in the settings and in what they load, as said at start.
     pub(super) problems: Vec<String>,
+    /// What is wrong in Claude Code's plugins' files, which start does not say
+    /// (`installed::in_plugin`).
+    pub(super) in_plugins: Vec<String>,
     /// The session's model, in a session.
     pub(super) model: Option<String>,
     /// The MCP servers' states, once a session started them.
@@ -88,6 +91,9 @@ fn doctor() -> Result<(), String> {
     let providers = Providers::read(settings.sources(), scramjet::agent::login::Logins::user());
     let found = scramjet::agent::inventory(&settings.command_sets, &settings.skills, &root);
     let themes = theme::Themes::discover(&root, &settings.themes, &Default::default());
+    let (in_plugins, problems): (Vec<&Problem>, Vec<_>) = (found.warnings.iter())
+        .chain(found.skills.warnings())
+        .partition(|problem| installed::in_plugin(problem, found.sets.list()));
     let problems = (settings.warnings.iter())
         .map(|warning| format!("settings: {warning}"))
         .chain(
@@ -97,14 +103,14 @@ fn doctor() -> Result<(), String> {
                 .map(|p| p.text),
         )
         .chain(keymap::load(settings.path()).into_iter().map(|p| p.text))
-        .chain(found.warnings.iter().map(|p| p.text.clone()))
-        .chain(found.skills.warnings().iter().map(|p| p.text.clone()))
+        .chain(problems.into_iter().map(|p| p.text.clone()))
         .collect();
     let setup = Setup {
         settings: &settings,
         providers: &providers,
         root: &root,
         problems,
+        in_plugins: in_plugins.into_iter().map(|p| p.text.clone()).collect(),
         model: None,
         mcp: None,
     };
@@ -122,18 +128,35 @@ fn doctor() -> Result<(), String> {
 }
 
 pub(super) fn checks(setup: &Setup) -> Vec<Check> {
-    vec![
-        program(),
-        newer(),
-        files(),
-        settings(setup),
-        models(setup),
-        servers(setup.providers, starting(setup).0.as_deref()),
-        sandbox(setup.settings, setup.root),
-        tools(setup.root),
-        terminal(),
-        mcp(setup),
+    [
+        Some(program()),
+        Some(newer()),
+        Some(files()),
+        Some(settings(setup)),
+        plugins(setup),
+        Some(models(setup)),
+        Some(servers(setup.providers, starting(setup).0.as_deref())),
+        Some(sandbox(setup.settings, setup.root)),
+        Some(tools(setup.root)),
+        Some(terminal()),
+        Some(mcp(setup)),
     ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The files of Claude Code's plugins that were skipped, when any were: not a warning, as the
+/// user cannot fix a plugin's cache and Claude Code skips them too.
+fn plugins(setup: &Setup) -> Option<Check> {
+    let summary = match setup.in_plugins.len() {
+        0 => return None,
+        1 => "1 file of Claude Code's plugins is skipped, as Claude Code skips it".to_owned(),
+        n => format!("{n} files of Claude Code's plugins are skipped, as Claude Code skips them"),
+    };
+    let fix = "the plugin's author can fix it; /plugin in Claude Code turns a plugin off";
+    let details = setup.in_plugins.iter().cloned().chain([fix.to_owned()]);
+    Some(Check::new(Mark::Good, "plugins", summary).with(details))
 }
 
 /// The report: a heading, a line per check with its details under it, and a count of what

@@ -2,7 +2,7 @@
 //! wrong there, so that the user can find and fix it. Launch says at most one line about it.
 use super::keymap::{self, Binding};
 use scramjet::agent::{
-    AgentFile, AgentSource, Command, Installed, Origin, Problem, ProblemFile, ProjectApproval,
+    AgentFile, AgentSource, Command, Installed, Origin, Problem, ProblemFile, ProjectApproval, Set,
     Skill, shortened,
 };
 use std::path::{Path, PathBuf};
@@ -780,6 +780,16 @@ pub(super) fn summary(loaded: &Loaded) -> String {
 
 /// What the full screen says about `problems` at start and after `/reload`: the problem when
 /// there is one, else how many there are and where they are listed.
+/// Whether `problem` is in a file of one of Claude Code's plugins among `sets`: the user cannot
+/// fix its cache, and Claude Code skips such a file with a line in its debug log only, so start
+/// does not say it; `/settings`' Installed and `/doctor` do.
+pub(super) fn in_plugin(problem: &Problem, sets: &[Set]) -> bool {
+    let Some(ProblemFile::Path(file)) = &problem.file else {
+        return false;
+    };
+    (sets.iter()).any(|set| set.origin == Origin::ClaudeCode && file.starts_with(&set.directory))
+}
+
 pub(super) fn attention(problems: &[Problem]) -> Option<String> {
     match problems {
         [] => None,
@@ -827,6 +837,29 @@ mod tests {
     fn write(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, text).unwrap();
+    }
+
+    #[test]
+    fn only_problems_in_a_claude_code_plugins_files_are_the_plugins() {
+        let set = |name: &str, origin| Set {
+            name: name.into(),
+            directory: PathBuf::from("/cache").join(name),
+            origin,
+        };
+        let sets = [
+            set("toolkit", Origin::ClaudeCode),
+            set("mine", Origin::Installed),
+        ];
+        let at = |path: &str| Problem::in_file("skipping", Path::new(path));
+        assert!(in_plugin(&at("/cache/toolkit/agents/a.md"), &sets));
+        assert!(!in_plugin(&at("/cache/mine/agents/a.md"), &sets));
+        assert!(!in_plugin(&at("/cache/toolkit-2/agents/a.md"), &sets));
+        assert!(!in_plugin(
+            &at("/home/.claude/plugins/installed_plugins.json"),
+            &sets
+        ));
+        assert!(!in_plugin(&Problem::new("skipping"), &sets));
+        assert!(!in_plugin(&Problem::in_settings("skipping"), &sets));
     }
 
     #[test]

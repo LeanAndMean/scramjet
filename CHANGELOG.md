@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.405.0 — A Claude Code plugin's broken file no longer warned of at every start
+
+### Changed
+
+- A file in one of Claude Code's plugins that cannot be read (such as an agent whose frontmatter is not valid YAML) is no longer warned of at each start, as you cannot fix a plugin's cache and Claude Code skips such a file quietly too. `/doctor` and `scramjet doctor` list it under a `plugins` line that is not a warning, and `/settings`' Installed still shows it. A problem in Claude Code's own plugin lists is still said at start.
+
 ## 2.404.0 — Told when the sandbox cannot keep .git read-only
 
 ### Added

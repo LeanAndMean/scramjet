@@ -10,7 +10,7 @@ use super::settings::{card_level, scramjet_level};
 use super::terminal;
 use super::text::{clip, visible};
 use super::{changelog, clipboard, completion, doctor, export, installed, keymap, style};
-use scramjet::agent::{Agent, AgentError, AgentUi, McpState, Reach, SandboxMode, todo};
+use scramjet::agent::{Agent, AgentError, AgentUi, McpState, Problem, Reach, SandboxMode, todo};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
@@ -859,10 +859,9 @@ impl Interactive {
     /// its model and how its MCP servers are.
     fn doctor(&mut self) {
         let found = self.session.agent.installed();
-        let problems = self
-            .problems(&found)
-            .into_iter()
-            .map(|problem| problem.text);
+        let (in_plugins, problems): (Vec<_>, Vec<_>) = (self.problems(&found).into_iter())
+            .partition(|problem| installed::in_plugin(problem, &found.sets));
+        let text = |problems: Vec<Problem>| problems.into_iter().map(|p| p.text).collect();
         let agent = &self.session.agent;
         let mcp = (agent.mcp_servers().into_iter())
             .map(|(server, state)| (server.name, state))
@@ -871,7 +870,8 @@ impl Interactive {
             settings: &self.session.settings,
             providers: agent.providers(),
             root: agent.root(),
-            problems: problems.collect(),
+            problems: text(problems),
+            in_plugins: text(in_plugins),
             model: Some(agent.model().to_owned()),
             mcp: Some(mcp),
         };

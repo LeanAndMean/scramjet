@@ -554,9 +554,12 @@ impl Interactive {
     }
 
     /// What to say about the problems at start and after `/reload`: on the full screen one line
-    /// at most (`installed::attention`), else each problem.
+    /// at most (`installed::attention`), else each problem; neither says a Claude Code plugin's
+    /// (`installed::in_plugin`).
     pub(super) fn problem_notices(&self) -> Vec<String> {
-        let problems = self.problems(&self.session.agent.installed());
+        let found = self.session.agent.installed();
+        let mut problems = self.problems(&found);
+        problems.retain(|problem| !installed::in_plugin(problem, &found.sets));
         match self.screen {
             Some(_) => installed::attention(&problems).into_iter().collect(),
             None => problems.into_iter().map(|problem| problem.text).collect(),

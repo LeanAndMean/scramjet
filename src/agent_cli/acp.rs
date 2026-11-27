@@ -2376,9 +2376,8 @@ impl Acp {
         let problems = (settings.warnings.iter())
             .map(|warning| format!("settings: {warning}"))
             .chain(
-                installed
-                    .problems
-                    .iter()
+                (installed.problems.iter())
+                    .filter(|problem| !super::installed::in_plugin(problem, &installed.sets))
                     .map(|problem| problem.text.clone()),
             )
             .chain(self.session.agent.providers().problems().iter().cloned())
