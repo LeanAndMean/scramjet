@@ -66,6 +66,7 @@ Instructions and tools:
                            models.json and auth.json
   --skill PATH             a skill file, or a directory of skills (repeatable)
   -ns, --no-skills         no skills but those --skill names
+  --plugin-dir DIR         a command set or Claude Code plugin for this run (repeatable)
   --theme PATH             a theme file, or a directory of themes (repeatable)
   --no-themes              no themes but the built-in ones and those --theme names
   -t, --tools LIST         the only tools the agent has, comma-separated
@@ -131,7 +132,7 @@ pub(super) const HELP_ALL: &str =
 [--thinking LEVEL] [--max-output-tokens N] [--retries N] [--cache-retention short|long]
 [--api-key KEY] [-c | -r [ID] | --session FILE|ID | --fork FILE|ID | --no-session] [--fork-session] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
-[--skill PATH]... [--no-skills] [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
+[--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
 [--permission-mode MODE] [--dangerously-skip-permissions]
 [-s MODE] [--offline] [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
@@ -243,6 +244,9 @@ but to NO_PROXY's hosts and this machine.
                          (repeatable); a relative PATH is from the current directory
   -ns, --no-skills       no skills but those --skill names: none from the skill directories
                          or the settings' skills
+  --plugin-dir DIR       as Claude Code's: load DIR for this run only (repeatable), as a
+                         command set when it has a set.yaml, else as a Claude Code plugin,
+                         in place of an installed set or plugin of its name
   --theme PATH           a theme file, or a directory of themes, for /settings to offer after
                          the others (repeatable); a relative PATH is from the current
                          directory
@@ -581,6 +585,8 @@ pub(super) struct Options {
     pub(super) prompt: SystemPrompt,
     /// `--skill`: as typed, resolved once the session starts.
     pub(super) skills: Vec<String>,
+    /// `--plugin-dir`: as typed, resolved by `isolate`.
+    pub(super) plugin_dirs: Vec<String>,
     /// `--no-skills`.
     pub(super) no_skills: bool,
     /// `--bare`.
@@ -634,6 +640,25 @@ impl Options {
         if self.bare {
             scramjet::agent::set_bare();
         }
+        if !self.plugin_dirs.is_empty() {
+            let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+            let mut directories = Vec::new();
+            for given in &self.plugin_dirs {
+                let directory = super::given_path(given, &cwd);
+                if !directory.is_dir() {
+                    let what = match directory.exists() {
+                        true => "is not a directory (a .zip is not read: unpack it)",
+                        false => "does not exist",
+                    };
+                    return Err(format!(
+                        "--plugin-dir {given}: {} {what}",
+                        directory.display()
+                    ));
+                }
+                directories.push(scramjet::os::canonicalize(&directory).unwrap_or(directory));
+            }
+            scramjet::agent::set_plugin_dirs(directories);
+        }
         if self.ephemeral {
             let failed = |error| format!("--ephemeral: no private temporary directory: {error}");
             scramjet::agent::keep_records_apart().map_err(failed)?;
@@ -656,6 +681,7 @@ impl Options {
             session_dir: None,
             prompt: SystemPrompt::default(),
             skills: Vec::new(),
+            plugin_dirs: Vec::new(),
             no_skills: false,
             bare: false,
             ephemeral: false,
@@ -833,6 +859,7 @@ and stream-json"
                 Some("-nc" | "--no-context-files") => options.prompt.no_context_files = true,
                 Some("--no-directives") => options.prompt.no_directives = true,
                 Some("--skill") => options.skills.push(value()?),
+                Some("--plugin-dir") => options.plugin_dirs.push(value()?),
                 Some("-ns" | "--no-skills") => options.no_skills = true,
                 Some("--theme") => options.themes.push(value()?),
                 Some("--no-themes") => options.no_themes = true,

@@ -85,6 +85,30 @@ pub(super) fn enabled(claude: &Path, root: &Path, problems: &mut Vec<Problem>) -
     found
 }
 
+/// The plugin in `directory`, as `--plugin-dir` loads it: named by its `plugin.json`'s `name`,
+/// else by the directory's.
+pub(super) fn at(directory: &Path, problems: &mut Vec<Problem>) -> Option<Plugin> {
+    let manifest = directory.join(".claude-plugin").join("plugin.json");
+    let declared = read(&manifest, problems)
+        .and_then(|manifest| manifest.get("name")?.as_str().map(str::to_owned));
+    let name = declared.or_else(|| Some(directory.file_name()?.to_str()?.to_owned()));
+    let Some(name) = name.filter(|name| !name.is_empty() && !name.contains([':', '/', '\\', ' ']))
+    else {
+        let text = format!(
+            "--plugin-dir {}: its name is not usable here; not loaded",
+            directory.display()
+        );
+        problems.push(Problem::in_file(text, directory));
+        return None;
+    };
+    let skills = skill_directories(directory, None, problems);
+    Some(Plugin {
+        name,
+        directory: directory.to_path_buf(),
+        skills,
+    })
+}
+
 /// The entry naming `plugin` in the `.claude-plugin/marketplace.json` of the marketplace
 /// `market`, where `known_marketplaces.json` says it is.
 fn marketplace_entry(

@@ -277,7 +277,9 @@ impl Sets {
             }
             _ => Vec::new(),
         };
-        let mut sets = Self::find_besides(installed, &plugins, &project, scramjet_1.as_deref());
+        let (installed, plugins) =
+            with_given(super::plugin_dirs(), installed, plugins, &mut problems);
+        let mut sets = Self::find_besides(&installed, &plugins, &project, scramjet_1.as_deref());
         sets.warnings.extend(problems);
         if let Some(global) = global_root() {
             let unread = sets.unread(&global);
@@ -355,6 +357,42 @@ impl Sets {
         let (prefix, _) = name.split_once(':')?;
         self.list.iter().find(|set| set.name == prefix)
     }
+}
+
+/// The `given` directories (`--plugin-dir`) ahead of the `installed` sets and Claude Code's
+/// `plugins`: one with a `set.yaml` as a command set, any other as a Claude Code plugin. An
+/// installed set or a plugin of a given one's name is left out, so a checkout given replaces
+/// the release installed.
+fn with_given(
+    given: &[PathBuf],
+    installed: &[PathBuf],
+    plugins: Vec<claude_plugins::Plugin>,
+    problems: &mut Vec<Problem>,
+) -> (Vec<PathBuf>, Vec<claude_plugins::Plugin>) {
+    let (sets, others): (Vec<&PathBuf>, _) =
+        (given.iter()).partition(|directory| directory.join("set.yaml").is_file());
+    let others: Vec<_> = (others.into_iter())
+        .filter_map(|directory| claude_plugins::at(directory, problems))
+        .collect();
+    let names: Vec<String> = (sets.iter().filter_map(|set| Set::name_of(set)))
+        .chain(others.iter().map(|plugin| plugin.name.clone()))
+        .collect();
+    let unnamed = |name: Option<String>| name.is_none_or(|name| !names.contains(&name));
+    let installed = (sets.into_iter().cloned())
+        .chain(
+            (installed.iter())
+                .filter(|set| unnamed(Set::name_of(set)))
+                .cloned(),
+        )
+        .collect();
+    let plugins = (others.into_iter())
+        .chain(
+            plugins
+                .into_iter()
+                .filter(|plugin| unnamed(Some(plugin.name.clone()))),
+        )
+        .collect();
+    (installed, plugins)
 }
 
 /// A command a prompt can run.
@@ -1133,6 +1171,69 @@ mod tests {
     /// The sets of `project` alone, as a session without installed sets.
     fn project_sets(project: &Path) -> Sets {
         Sets::find(&[], project)
+    }
+
+    #[test]
+    fn plugin_dirs_given_go_first_and_replace_what_has_their_names() {
+        let scratch = Scratch::new("plugin-dirs");
+        scratch.file("checkout/set.yaml", "name: mach12\n");
+        scratch.file("checkout/commands/plan.md", "x");
+        scratch.file(
+            "checkout/.claude-plugin/plugin.json",
+            r#"{"name": "mach12"}"#,
+        );
+        scratch.file("tool/.claude-plugin/plugin.json", r#"{"name": "toolkit"}"#);
+        scratch.file("tool/commands/x.md", "x");
+        scratch.file("tool/skills/s/SKILL.md", "x");
+        scratch.file("bare-plugin/commands/y.md", "x");
+        scratch.file("installed/mach12/commands/old.md", "x");
+        scratch.file("installed/other/commands/z.md", "x");
+        let at = |path: &str| scratch.0.join(path);
+        let plugin = |name: &str, directory: &str| claude_plugins::Plugin {
+            name: name.into(),
+            directory: at(directory),
+            skills: None,
+        };
+        let given = [at("checkout"), at("tool"), at("bare-plugin")];
+        let installed = [at("installed/mach12"), at("installed/other")];
+        let enabled = vec![
+            plugin("toolkit", "cache/toolkit"),
+            plugin("lsp", "cache/lsp"),
+        ];
+        let mut problems = Vec::new();
+        let (installed, plugins) = with_given(&given, &installed, enabled, &mut problems);
+        assert_eq!(installed, [at("checkout"), at("installed/other")]);
+        let named: Vec<_> = (plugins.iter())
+            .map(|plugin| (plugin.name.as_str(), plugin.directory.clone()))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                ("toolkit", at("tool")),
+                ("bare-plugin", at("bare-plugin")),
+                ("lsp", at("cache/lsp")),
+            ]
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+        let sets = Sets::find_besides(&installed, &plugins, &at("none"), None);
+        let listed: Vec<_> = (sets.list().iter())
+            .map(|set| (set.name.as_str(), set.origin))
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                ("mach12", Origin::Installed),
+                ("other", Origin::Installed),
+                ("toolkit", Origin::ClaudeCode),
+                ("bare-plugin", Origin::ClaudeCode),
+                ("lsp", Origin::ClaudeCode),
+            ]
+        );
+        assert!(sets.warnings().is_empty());
+        scratch.file("bad/.claude-plugin/plugin.json", r#"{"name": "a b"}"#);
+        let (_, plugins) = with_given(&[at("bad")], &[], Vec::new(), &mut problems);
+        assert!(plugins.is_empty());
+        assert!(problems[0].text.contains("its name is not usable here"));
     }
 
     #[test]

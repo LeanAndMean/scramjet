@@ -227,6 +227,18 @@ pub(crate) fn bare() -> bool {
     BARE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static PLUGIN_DIRS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
+
+/// For `--plugin-dir`: directories loaded as command sets or Claude Code plugins for this run
+/// only, before the installed ones (`Sets::for_project`).
+pub fn set_plugin_dirs(directories: Vec<PathBuf>) {
+    _ = PLUGIN_DIRS.set(directories);
+}
+
+fn plugin_dirs() -> &'static [PathBuf] {
+    PLUGIN_DIRS.get().map_or(&[], Vec::as_slice)
+}
+
 /// Ends what must not go on, or be cut short, when the process exits on a signal: kills the
 /// commands running and waits for lines being written to a session file. Neither starts again.
 pub fn end() {

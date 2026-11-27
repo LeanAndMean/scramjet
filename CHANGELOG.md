@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.413.0 — `--plugin-dir`
+
+### Added
+
+- `--plugin-dir DIR`, Claude Code's: loads a directory for this run only (repeatable), as a command set when it has a `set.yaml`, else as a Claude Code plugin, in place of an installed set or plugin of the same name; `scramjet --plugin-dir ~/repos/mach12` tries a checkout without installing it.
+
 ## 2.412.0 — `--resume ID` and `--fork-session`
 
 ### Added
