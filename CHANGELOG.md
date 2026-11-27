@@ -4,6 +4,16 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.410.0 — `--disallowedTools`
+
+### Added
+
+- `--disallowedTools LIST` (or `--disallowed-tools`) leaves tools out of a run, as Claude Code's does: out of `--tools`' list, else out of the settings' tools, subagents' coding tools included. Claude Code's rules for one tool's calls (`Bash(git push *)`) and MCP servers' tools (`mcp__server__tool`) are refused with an error rather than ignored, as Scramjet cannot leave them out.
+
+### Changed
+
+- `--tools` takes Claude Code's tool names (`Bash`, `Read`, `Edit`, `Glob`, `WebFetch`…), names separated by spaces as well as commas, and `default` for the tools the agent has without it.
+
 ## 2.409.0 — `--max-budget-usd` for `-p`
 
 ### Added

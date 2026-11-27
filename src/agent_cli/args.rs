@@ -1,6 +1,8 @@
 //! The command line: its options and the usage text.
 use super::settings::{LEVELS, card_level};
-use scramjet::agent::{CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt};
+use scramjet::agent::{
+    CacheRetention, HARNESS_TOOLS, SandboxMode, SystemPrompt, tool_named_as_claude_codes,
+};
 use std::{ffi::OsString, path::PathBuf};
 
 /// What an argument error shows after it.
@@ -65,6 +67,8 @@ Instructions and tools:
   --theme PATH             a theme file, or a directory of themes (repeatable)
   --no-themes              no themes but the built-in ones and those --theme names
   -t, --tools LIST         the only tools the agent has, comma-separated
+  --disallowedTools, --disallowed-tools LIST
+                           tools the agent does not have, as Claude Code's
   -nt, --no-tools          no tools at all
   -nbt, --no-builtin-tools no coding tools; Scramjet's own stay
 
@@ -237,6 +241,13 @@ but to NO_PROXY's hosts and this machine.
                          report_scramjet_command_status…), left out unless named; without
                          report_scramjet_command_status a command cannot finish, and waits
                          for you after each reply
+                         Claude Code's names (Bash, Read, Glob…) are taken, and spaces
+                         between names; default is the tools the agent has without it
+  --disallowedTools LIST, --disallowed-tools LIST
+                         tools the agent does not have in this run, in --tools' or the
+                         settings' (repeatable), as Claude Code's; Claude Code's rules for
+                         one tool's calls, Bash(git push *), and MCP servers' tools are
+                         refused, as Scramjet cannot leave them out
   -nt, --no-tools        no tools at all, unless --tools names some
   -nbt, --no-builtin-tools
                          no coding tools, unless --tools names some; Scramjet's own stay
@@ -560,6 +571,8 @@ pub(super) struct Options {
     pub(super) no_themes: bool,
     /// `--tools`, `--no-tools` or `--no-builtin-tools`: the only tools of the run.
     pub(super) only_tools: Option<Vec<String>>,
+    /// `--disallowedTools`, as Claude Code's: tools left out of the run's.
+    pub(super) denied_tools: Vec<String>,
     pub(super) ask: bool,
     /// `--sandbox`: `Some(None)` for `danger-full-access`.
     pub(super) sandbox: Option<Option<SandboxMode>>,
@@ -625,6 +638,7 @@ impl Options {
             themes: Vec::new(),
             no_themes: false,
             only_tools: None,
+            denied_tools: Vec::new(),
             ask: false,
             sandbox: None,
             add_dirs: Vec::new(),
@@ -792,12 +806,20 @@ and stream-json"
                 Some("--theme") => options.themes.push(value()?),
                 Some("--no-themes") => options.no_themes = true,
                 Some("-t" | "--tools") => {
-                    let names = value()?;
-                    let names = names
-                        .split(',')
-                        .map(str::trim)
-                        .filter(|name| !name.is_empty());
-                    tools = Some(names.map(str::to_owned).collect())
+                    let names = tool_list(&value()?);
+                    // Claude Code's word for its default tools.
+                    tools = (names != ["default"]).then_some(names)
+                }
+                Some("--disallowedTools" | "--disallowed-tools") => {
+                    for name in tool_list(&value()?) {
+                        if name.contains('(') || name.starts_with("mcp__") {
+                            return Err(format!(
+                                "--disallowedTools {name}: Scramjet leaves out only whole \
+built-in tools, not one tool's calls or an MCP server's tools\n\n{USAGE}"
+                            ));
+                        }
+                        options.denied_tools.push(name);
+                    }
                 }
                 Some("-nt" | "--no-tools") => no_tools = true,
                 Some("-nbt" | "--no-builtin-tools") => no_builtin_tools = true,
@@ -886,6 +908,28 @@ workspace-write and danger-full-access"
     }
 }
 
+/// The tools a `--tools` or `--disallowedTools` value names, separated by commas or spaces outside
+/// parentheses (`Bash(git *)`), with Claude Code's names (`Bash`, `Read`) as Scramjet's.
+fn tool_list(value: &str) -> Vec<String> {
+    let (mut names, mut name, mut depth) = (Vec::new(), String::new(), 0usize);
+    for c in value.chars().chain([',']) {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if depth == 0 && (c == ',' || c.is_whitespace()) {
+            if !name.is_empty() {
+                names.push(tool_named_as_claude_codes(&name).to_owned());
+            }
+            name.clear();
+        } else {
+            name.push(c);
+        }
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -935,6 +979,41 @@ mod tests {
         }
         let missing = Options::parse(["--tools"].into_iter().map(OsString::from));
         assert!(missing.is_err_and(|error| error.starts_with("--tools requires a value")));
+    }
+
+    #[test]
+    fn tools_and_disallowed_tools_take_claude_codes_names_and_lists() {
+        assert_eq!(
+            only_tools(&["--tools", "Bash,Edit Read"]),
+            Some(vec!["bash".into(), "edit".into(), "read".into()])
+        );
+        assert_eq!(only_tools(&["--tools", "default"]), None);
+        assert_eq!(only_tools(&["--tools", ""]), Some(Vec::new()));
+        let parse = |arguments: &[&str]| Options::parse(arguments.iter().map(OsString::from));
+        let denied = |arguments: &[&str]| parse(arguments).unwrap().unwrap().denied_tools;
+        assert_eq!(
+            denied(&[
+                "--disallowedTools",
+                "WebFetch, Glob",
+                "--disallowed-tools",
+                "subagent"
+            ]),
+            ["web_fetch", "find", "subagent"]
+        );
+        for refused in ["Bash(git push *) Edit", "mcp__tavily__search"] {
+            let error = parse(&["--disallowedTools", refused]).err().unwrap();
+            assert!(
+                error.contains("leaves out only whole built-in tools"),
+                "{error}"
+            );
+        }
+        let error = parse(&["--disallowedTools", "Bash(git push *) Edit"])
+            .err()
+            .unwrap();
+        assert!(
+            error.starts_with("--disallowedTools Bash(git push *):"),
+            "{error}"
+        );
     }
 
     #[test]

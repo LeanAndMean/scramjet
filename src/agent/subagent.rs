@@ -123,7 +123,7 @@ pub(super) fn sweep_worktrees(root: &Path) -> Vec<String> {
 }
 
 /// The name here of a tool an agent file names as Claude Code does, so that one file serves both.
-pub(super) fn ours(tool: &str) -> &str {
+pub fn ours(tool: &str) -> &str {
     match tool {
         "Read" => "read",
         "Write" => "write",

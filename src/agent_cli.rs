@@ -507,7 +507,7 @@ a new session of this one",
 /// option or setting they come from, the models remembered that the providers lack, and what is
 /// wrong in the providers' files.
 fn start(
-    options: Options,
+    mut options: Options,
     (root, session_dir): (PathBuf, Option<PathBuf>),
     choice: SessionChoice,
     settings: &Settings,
@@ -534,6 +534,21 @@ fn start(
     };
     let chosen = named.is_some();
     let chosen_effort = (options.effort.clone()).or_else(|| named.as_ref()?.level.clone());
+    let unknown_denied: Vec<String> = (options.denied_tools.iter())
+        .filter(|name| {
+            !CODING_TOOLS.contains(&name.as_str()) && !HARNESS_TOOLS.contains(&name.as_str())
+        })
+        .map(|name| format!("--disallowedTools: {name} is not one of Scramjet's tools; ignored"))
+        .collect();
+    if !options.denied_tools.is_empty() {
+        let mut tools = options.only_tools.take().unwrap_or_else(|| {
+            let on = |tool: &&str| !settings.harness_off.iter().any(|off| off == tool);
+            let harness = HARNESS_TOOLS.into_iter().filter(on).map(String::from);
+            settings.tools.iter().cloned().chain(harness).collect()
+        });
+        tools.retain(|tool| !options.denied_tools.contains(tool));
+        options.only_tools = Some(tools);
+    }
     let unknown_tools: Vec<String> = (options.only_tools.iter().flatten())
         .filter(|name| {
             !CODING_TOOLS.contains(&name.as_str()) && !HARNESS_TOOLS.contains(&name.as_str())
@@ -657,6 +672,7 @@ local models), or add providers to {file} (see --help)"
     };
     warnings.extend((scope_warnings.iter()).map(|warning| format!("{source}: {warning}")));
     warnings.extend(unknown_tools);
+    warnings.extend(unknown_denied);
     warnings.extend(missing_shells);
     agent.set_model_scope(scoped.iter().map(|scoped| scoped.model.clone()).collect());
     let new = !chosen && agent.last_model().is_none();

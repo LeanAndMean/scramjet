@@ -63,6 +63,7 @@ mod tools;
 mod tree;
 mod turn;
 pub mod web;
+pub use subagent::ours as tool_named_as_claude_codes;
 pub use turn::ShownPaused;
 mod ui;
 pub mod usage;
