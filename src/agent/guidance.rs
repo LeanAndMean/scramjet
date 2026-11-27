@@ -78,7 +78,7 @@ impl Agent {
         calls: &[Value],
         ui: &mut dyn AgentUi,
     ) -> Result<(), AgentError> {
-        if self.config.prompt.no_context_files {
+        if self.config.prompt.no_context_files || !self.config.claude_code.instructions {
             return Ok(());
         }
         let succeeded = |call: &Value| {

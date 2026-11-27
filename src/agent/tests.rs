@@ -579,6 +579,7 @@ pub(super) fn config(endpoint: SocketAddr, root: &Path) -> AgentConfig {
         command_sets: Vec::new(),
         skills: Vec::new(),
         skill_options: Default::default(),
+        claude_code: crate::agent::ClaudeCode::ALL,
         prompt: Default::default(),
         mcp_servers: Vec::new(),
         mcp_disabled: Vec::new(),
@@ -1415,6 +1416,7 @@ fn a_session_name_and_stats_stay_out_of_the_conversation() {
         command_sets: Vec::new(),
         skills: Vec::new(),
         skill_options: Default::default(),
+        claude_code: crate::agent::ClaudeCode::ALL,
         prompt: Default::default(),
         mcp_servers: Vec::new(),
         mcp_disabled: Vec::new(),
@@ -3027,6 +3029,7 @@ fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
             &SystemPrompt::default(),
             &project,
             None,
+            true,
             &sandbox::Hidden::default(),
         );
         let sets = Sets::find(&[], &project.join(".scramjet"));
@@ -3035,9 +3038,10 @@ fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
         let sources = subagent::Sources {
             user: &[],
             sets: &sets,
+            claude: crate::agent::ClaudeCode::ALL,
         };
         let agents = subagent::discover(&sources, &project, subagent::Scope::Both);
-        let skills = Skills::discover(&[], sets.list(), &SkillOptions::default(), &project);
+        let skills = Skills::discover(&[], sets.list(), &SkillOptions::default(), &project, true);
         let mut said: Vec<String> = (loaded.problems.iter())
             .chain(sets.warnings())
             .chain(&edges.diagnostics)

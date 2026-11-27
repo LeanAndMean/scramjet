@@ -263,16 +263,16 @@ impl Sets {
     }
 
     /// The sets of a session in `root`: the `installed` ones, then Claude Code's plugins on
-    /// there (not with `--bare`), then those in the project's `.scramjet` directory, then the
+    /// there when `claude_plugins` (not with `--bare`), then those in the project's `.scramjet` directory, then the
     /// program's own `scramjet` set unless one of them has its name, as one installed from a
     /// checkout does. Sets left in Scramjet 1's global root are not read, each said in a
     /// warning.
-    pub fn for_project(installed: &[PathBuf], root: &Path) -> Self {
+    pub fn for_project(installed: &[PathBuf], root: &Path, claude_plugins: bool) -> Self {
         let project = root.join(".scramjet");
         let scramjet_1 = scramjet_1_directory();
         let mut problems = Vec::new();
         let plugins = match super::login::claude_directory() {
-            Some(claude) if !cfg!(test) && !super::bare() => {
+            Some(claude) if claude_plugins && !cfg!(test) && !super::bare() => {
                 claude_plugins::enabled(&claude, root, &mut problems)
             }
             _ => Vec::new(),

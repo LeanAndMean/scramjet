@@ -129,6 +129,7 @@ impl Agent {
             root: self.config.root.clone(),
             cache_key: self.session.id(),
             user_agents: self.agents_directories.clone(),
+            claude: self.config.claude_code,
             sets: self.sets.clone(),
             skills: self.skills.clone(),
             agent_directory: self.agent_directory.clone(),
@@ -576,6 +577,7 @@ struct Kit {
     root: PathBuf,
     cache_key: String,
     user_agents: Vec<PathBuf>,
+    claude: super::ClaudeCode,
     sets: Sets,
     skills: Skills,
     agent_directory: Option<PathBuf>,
@@ -614,6 +616,7 @@ impl Kit {
                 sources: subagent::Sources {
                     user: &self.user_agents,
                     sets: &self.sets,
+                    claude: self.claude,
                 },
                 skills: &self.skills,
                 agent_directory: self.agent_directory.as_deref(),

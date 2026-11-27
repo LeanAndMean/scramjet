@@ -187,6 +187,9 @@ pub(super) struct Sources<'a> {
     pub user: &'a [PathBuf],
     /// The session's command sets, whose agents are registered.
     pub sets: &'a Sets,
+    /// Which of Claude Code's files are read: its project agents with `agents`, and its
+    /// instructions in a child's with `instructions`.
+    pub claude: super::ClaudeCode,
 }
 
 /// The user's loose agent directories (none with `--bare`): Claude Code's, then Scramjet's.
@@ -237,6 +240,22 @@ fn claude_project_directories(cwd: &Path, user: &[PathBuf]) -> Vec<PathBuf> {
     places
 }
 
+/// The names of Claude Code's own agents a session in `cwd` would have with them read: the user's
+/// (not with `--bare`) and the project's.
+pub(super) fn claude_code_agents(cwd: &Path) -> Vec<String> {
+    let user = user_directories();
+    let users = user.iter().filter(|directory| claude_code(directory));
+    let mut names: Vec<String> = Vec::new();
+    for directory in users.chain(&claude_project_directories(cwd, &user)) {
+        for agent in claude_loose(directory, "user", &mut Vec::new()) {
+            if !names.contains(&agent.name) {
+                names.push(agent.name);
+            }
+        }
+    }
+    names
+}
+
 /// The agents a call can use, and what was wrong with the files skipped.
 #[derive(Debug, Default)]
 pub(super) struct Discovery {
@@ -252,7 +271,10 @@ pub(super) struct Discovery {
 /// (`<set>:`) is skipped with a warning: such names belong to the set.
 pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery {
     let mut found = Discovery::default();
-    let mut projects = claude_project_directories(cwd, sources.user);
+    let mut projects = match sources.claude.agents {
+        true => claude_project_directories(cwd, sources.user),
+        false => Vec::new(),
+    };
     projects.extend(project_directory(cwd));
     projects.retain(|directory| match crate::os::stranger(directory) {
         Some(owner) => {
@@ -264,7 +286,10 @@ pub(super) fn discover(sources: &Sources, cwd: &Path, scope: Scope) -> Discovery
     });
     let mut places: Vec<(&Path, &'static str)> = Vec::new();
     if scope != Scope::Project {
-        places.extend(sources.user.iter().map(|user| (user.as_path(), "user")));
+        let users = (sources.user.iter())
+            .filter(|user| sources.claude.agents || !claude_code(user))
+            .map(|user| (user.as_path(), "user"));
+        places.extend(users);
     }
     if scope != Scope::User {
         places.extend(
@@ -1623,22 +1648,26 @@ fn run_child(
     );
     let instruction_hidden =
         sandbox::Hidden::stores(parent.providers.credential_files(), &reads.without_reach());
+    let claude = parent.sources.claude.instructions;
+    let context = instructions::context_files(
+        &job.cwd,
+        parent.agent_directory,
+        claude,
+        &instruction_hidden,
+        &mut Vec::new(),
+    );
     let instructions = instructions::child(
         &job.cwd,
         tools,
         &agent.prompt,
         parent.skills,
-        parent.agent_directory,
-        &instruction_hidden,
+        &context,
         network,
         writer,
     );
-    let directory = parent.agent_directory;
-    let mut loaded: Vec<PathBuf> =
-        (instructions::context_files(&job.cwd, directory, &instruction_hidden, &mut Vec::new()))
-            .into_iter()
-            .map(|(path, _)| guidance::real(&path))
-            .collect();
+    let mut loaded: Vec<PathBuf> = (context.iter())
+        .map(|(path, _)| guidance::real(path))
+        .collect();
     let mut task = format!("Task: {}", job.task);
     if let Some(worktree) = &job.worktree {
         let whose = match job.shared {
@@ -1757,6 +1786,7 @@ uncommitted.",
                     };
                     if let Ok(output) = &ran
                         && !output.failed
+                        && claude
                     {
                         touched.extend(guidance::touched(&call, &job.cwd));
                     }
@@ -1957,6 +1987,7 @@ disallowedTools: [Write]\n---\n",
         let sources = Sources {
             user: &users,
             sets: &sets,
+            claude: crate::agent::ClaudeCode::ALL,
         };
         let cwd = root.join("src/deep");
         std::fs::create_dir_all(&cwd).unwrap();
@@ -2121,12 +2152,28 @@ tool:\n\n- mach12:reviewer: mach12:reviewer agent\n- x:c: x:c agent\n- x:e: e ag
         let sources = Sources {
             user: &users,
             sets: &sets,
+            claude: crate::agent::ClaudeCode::ALL,
         };
         let discovery = discover(&sources, &cwd, Scope::Both);
         let found: Vec<String> = (discovery.agents.iter())
             .map(|agent| format!("{} {} {}", agent.name, agent.source, agent.path.display()))
             .collect();
         let path = |path: PathBuf| path.display().to_string();
+        // Without Claude Code's agents, only Scramjet's.
+        let without = Sources {
+            claude: crate::agent::ClaudeCode::default(),
+            ..sources
+        };
+        let names: Vec<String> = (discover(&without, &cwd, Scope::Both).agents.into_iter())
+            .map(|agent| format!("{} {}", agent.name, agent.path.display()))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                format!("both {}", path(ours.join("both.md"))),
+                format!("near {}", path(root.join(".scramjet/agents/near.md"))),
+            ]
+        );
         assert_eq!(
             found,
             [

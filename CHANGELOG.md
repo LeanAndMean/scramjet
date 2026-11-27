@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.433.0 — Claude Code's files, off until turned on
+
+### Changed
+
+- Claude Code's own files are no longer read unless you turn them on: its skills, commands, instructions (`~/.claude/CLAUDE.md`, `.claude/CLAUDE.md`, rules, `@` imports and the files a file worked on brings in), agents and enabled plugins each have a row in `/settings` → Claude Code's files, saying how many it finds, and changing one loads them at once (`claudeCode` in the settings). A project's `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md`, `.agents/skills` and `--plugin-dir` load as before; with instructions off, a `CLAUDE.md` is sent as it is, its `@` lines and comments included.
+
 ## 2.432.0 — Copying a selection as markdown
 
 ### Added

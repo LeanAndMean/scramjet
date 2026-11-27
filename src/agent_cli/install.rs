@@ -531,7 +531,8 @@ fn origin(settings: &Settings, set: &Set) -> String {
 /// What a session in the current directory would load.
 fn here(settings: &Settings) -> Result<Inventory, String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
-    Ok(inventory(&settings.command_sets, &settings.skills, &root))
+    let (sets, skills) = (&settings.command_sets, &settings.skills);
+    Ok(inventory(sets, skills, &root, settings.claude_code))
 }
 
 /// How many of `found`'s commands, agents and skills come from `set`.

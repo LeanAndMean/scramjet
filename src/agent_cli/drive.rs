@@ -56,13 +56,8 @@ impl Session {
         scramjet::agent::set_user_shell(settings.default_shell);
         scramjet::agent::set_launcher(settings.sandbox_launcher.clone());
         scramjet::agent::set_images(settings.resize_images, settings.block_images);
-        self.agent.reload(
-            (settings.tools.clone(), settings.harness_off.clone()),
-            settings.command_sets.clone(),
-            settings.skills.clone(),
-            settings.mcp_servers.clone(),
-            settings.disabled_mcp_servers.clone(),
-        );
+        self.load_files();
+        let settings = &self.settings;
         self.agent.set_retries(settings.retries());
         self.agent.set_compacting(settings.compacting);
         self.agent.set_reads(settings.reads());
@@ -72,6 +67,20 @@ impl Session {
             scramjet::agent::login::Logins::user(),
         ));
         self.allow_write_again(&listed)
+    }
+
+    /// The command sets, commands, agents, skills, context files and MCP servers loaded again,
+    /// as the settings now say.
+    pub(super) fn load_files(&mut self) {
+        let settings = &self.settings;
+        self.agent.set_claude_code(settings.claude_code);
+        self.agent.reload(
+            (settings.tools.clone(), settings.harness_off.clone()),
+            settings.command_sets.clone(),
+            settings.skills.clone(),
+            settings.mcp_servers.clone(),
+            settings.disabled_mcp_servers.clone(),
+        );
     }
 
     /// Grants `allowWrite`'s directories as the settings list them now, after `listed` was

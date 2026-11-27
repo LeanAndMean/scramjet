@@ -10,8 +10,9 @@ use super::sessions::Chains;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet::agent::{
-    CODING_TOOLS, Compacting, DEFAULT_TOOLS, HARNESS_TOOLS, McpServer, McpTransport, Origin, Reach,
-    Retries, SandboxMode, Set, UserShell, offline, sets_in, shortened, write_replacing,
+    CODING_TOOLS, ClaudeCode, Compacting, DEFAULT_TOOLS, HARNESS_TOOLS, McpServer, McpTransport,
+    Origin, Reach, Retries, SandboxMode, Set, UserShell, offline, sets_in, shortened,
+    write_replacing,
 };
 use serde_json::{Map, Value, json};
 
@@ -186,6 +187,11 @@ pub(super) enum Row {
     NextSteps,
     Publishing,
     Installed,
+    ClaudeSkills,
+    ClaudeCommands,
+    ClaudeInstructions,
+    ClaudeAgents,
+    ClaudePlugins,
 }
 
 /// A list of paths `/sandbox` edits: `sandbox.filesystem`'s `allowWrite`, `denyRead` and
@@ -198,7 +204,7 @@ pub(super) enum PathList {
 }
 
 /// `/settings`' headings, each over its rows, in the order shown.
-pub(super) const GROUPS: [(&str, &[Row]); 6] = [
+pub(super) const GROUPS: [(&str, &[Row]); 7] = [
     ("Model", &[Row::ThinkingLevel, Row::StartupModel]),
     (
         "Display",
@@ -255,6 +261,27 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::Installed,
         ],
     ),
+    ("Claude Code's files", &CLAUDE_ROWS),
+];
+
+/// The flag of `claude` that `row`, one of `CLAUDE_ROWS`, turns on.
+fn claude_flag(claude: &mut ClaudeCode, row: Row) -> &mut bool {
+    match row {
+        Row::ClaudeSkills => &mut claude.skills,
+        Row::ClaudeCommands => &mut claude.commands,
+        Row::ClaudeInstructions => &mut claude.instructions,
+        Row::ClaudeAgents => &mut claude.agents,
+        _ => &mut claude.plugins,
+    }
+}
+
+/// The rows of Claude Code's files, each one of `claudeCode`'s keys.
+pub(super) const CLAUDE_ROWS: [Row; 5] = [
+    Row::ClaudeSkills,
+    Row::ClaudeCommands,
+    Row::ClaudeInstructions,
+    Row::ClaudeAgents,
+    Row::ClaudePlugins,
 ];
 
 /// The groups `/settings` lists here: `GROUPS` without the rows for another system.
@@ -301,7 +328,24 @@ impl Row {
             Self::NextSteps => "Next steps",
             Self::Publishing => "Publishing",
             Self::Installed => "Installed",
+            Self::ClaudeSkills => "Skills",
+            Self::ClaudeCommands => "Commands",
+            Self::ClaudeInstructions => "Instructions",
+            Self::ClaudeAgents => "Agents",
+            Self::ClaudePlugins => "Plugins",
         }
+    }
+
+    /// The key of `claudeCode` a row of Claude Code's files turns on.
+    pub(super) fn claude_key(self) -> Option<&'static str> {
+        Some(match self {
+            Self::ClaudeSkills => "skills",
+            Self::ClaudeCommands => "commands",
+            Self::ClaudeInstructions => "instructions",
+            Self::ClaudeAgents => "agents",
+            Self::ClaudePlugins => "plugins",
+            _ => return None,
+        })
     }
 
     /// What the row is about, shown under the list while it is selected.
@@ -466,6 +510,29 @@ impl Row {
                 "What this session loaded: command sets, commands, agents, skills, system prompt, \
                  context and settings files, where each comes from, and what is wrong there."
             }
+            Self::ClaudeSkills => {
+                "Claude Code's skills, in ~/.claude/skills and a project's .claude/skills: listed \
+                 for the model and run with /skill:NAME, as Claude Code runs them. Those in \
+                 .agents/skills load either way."
+            }
+            Self::ClaudeCommands => {
+                "Claude Code's commands, in ~/.claude/commands and a project's .claude/commands: \
+                 typing one sends its text, and runs the shell commands its ! lines hold."
+            }
+            Self::ClaudeInstructions => {
+                "Claude Code's own instructions: ~/.claude/CLAUDE.md, a project's \
+                 .claude/CLAUDE.md, the rules in their rules directories, the @ imports in \
+                 CLAUDE.md files, and the CLAUDE.md files and rules a file worked on brings in. \
+                 A project's CLAUDE.md, CLAUDE.local.md and AGENTS.md load either way."
+            }
+            Self::ClaudeAgents => {
+                "Claude Code's agents, in ~/.claude/agents and a project's .claude/agents, as \
+                 subagents the agent can give tasks to."
+            }
+            Self::ClaudePlugins => {
+                "The plugins Claude Code's settings enable, with their commands, skills and \
+                 agents. One --plugin-dir gives loads either way."
+            }
         };
         text.to_owned()
     }
@@ -482,6 +549,8 @@ pub(super) struct Settings {
     pub(super) copy_on_select: bool,
     /// `copyMarkdown`: a selection in a reply copies its markdown, rather than the text shown.
     pub(super) copy_markdown: bool,
+    /// `claudeCode`: which of Claude Code's own files are read.
+    pub(super) claude_code: ClaudeCode,
     /// `spellCheck`: misspelled words in the prompt are underlined.
     pub(super) spell_check: bool,
     /// `images.autoResize`: images too large to send are scaled down, as Scramjet's.
@@ -682,6 +751,7 @@ impl Settings {
             double_escape: DoubleEscape::Tree,
             copy_on_select: cfg!(target_os = "macos"),
             copy_markdown: true,
+            claude_code: ClaudeCode::default(),
             spell_check: true,
             resize_images: true,
             block_images: false,
@@ -773,6 +843,20 @@ impl Settings {
             None => {}
             Some(Value::Bool(markdown)) => self.copy_markdown = *markdown,
             Some(_) => wrong("copyMarkdown", "true or false"),
+        }
+        match object.get("claudeCode") {
+            None => {}
+            Some(Value::Object(claude)) => {
+                for row in CLAUDE_ROWS {
+                    let key = row.claude_key().expect("a row of Claude Code's files");
+                    match claude.get(key) {
+                        None => {}
+                        Some(Value::Bool(on)) => *claude_flag(&mut self.claude_code, row) = *on,
+                        Some(_) => wrong(&format!("claudeCode.{key}"), "true or false"),
+                    }
+                }
+            }
+            Some(_) => wrong("claudeCode", "an object"),
         }
         match object.get("retainTranscriptOnExit") {
             None => {}
@@ -2168,6 +2252,14 @@ impl Settings {
             Row::CopyOnSelect => "off".into(),
             Row::CopyMarkdown if self.copy_markdown => "on".into(),
             Row::CopyMarkdown => "off".into(),
+            row @ (Row::ClaudeSkills
+            | Row::ClaudeCommands
+            | Row::ClaudeInstructions
+            | Row::ClaudeAgents
+            | Row::ClaudePlugins) => match self.claude_code_of(row) {
+                true => "on".into(),
+                false => "off".into(),
+            },
             Row::WheelStep => match self.layout.wheel_step {
                 1 => "1 line".into(),
                 lines => format!("{lines} lines"),
@@ -2306,6 +2398,16 @@ impl Settings {
             Row::CopyMarkdown => {
                 self.copy_markdown = !self.copy_markdown;
                 self.save("copyMarkdown", json!(self.copy_markdown))
+            }
+            row @ (Row::ClaudeSkills
+            | Row::ClaudeCommands
+            | Row::ClaudeInstructions
+            | Row::ClaudeAgents
+            | Row::ClaudePlugins) => {
+                let on = !self.claude_code_of(row);
+                *claude_flag(&mut self.claude_code, row) = on;
+                let key = row.claude_key().expect("a row of Claude Code's files");
+                self.save_in("claudeCode", key, json!(on))
             }
             Row::RetainTranscript => {
                 self.retain_transcript = !self.retain_transcript;
@@ -2589,6 +2691,12 @@ impl Settings {
         self.save("tools", Value::Object(saved))
     }
 
+    /// Whether the files of `row`, one of Claude Code's, are read.
+    pub(super) fn claude_code_of(&self, row: Row) -> bool {
+        let mut claude = self.claude_code;
+        *claude_flag(&mut claude, row)
+    }
+
     /// Sets `key` in the file as it is now, keeping the rest of it; a file that cannot be read
     /// is left as it is.
     fn save(&self, key: &str, value: Value) -> io::Result<()> {
@@ -2758,6 +2866,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "doubleEscapeAction",
             "copyOnSelect",
             "copyMarkdown",
+            "claudeCode",
             "retainTranscriptOnExit",
             "collapseChangelog",
             "lastChangelogVersion",
@@ -2828,6 +2937,10 @@ const KEYS: &[(&str, &[&str])] = &[
         &["showTerminalProgress", "showImages", "imageWidthCells"],
     ),
     ("branchSummary", &["skipPrompt", "reserveTokens"]),
+    (
+        "claudeCode",
+        &["skills", "commands", "instructions", "agents", "plugins"],
+    ),
     (
         "compaction",
         &["enabled", "reserveTokens", "keepRecentTokens"],
@@ -3876,10 +3989,13 @@ or false; ignored"
                 "defaultThinkingLevel": "off", "theme": "pi-light", "treeFilterMode": "labeled-only",
                 "resumeChains": "folded", "steeringMode": "one-at-a-time", "followUpMode": "all",
                 "markdown": {"toolDisplay": "source"}, "copyOnSelect": true,
-                "copyMarkdown": false}"#,
+                "copyMarkdown": false, "claudeCode": {"skills": true, "plugins": true}}"#,
         );
         assert!(settings.copy_on_select);
         assert!(!settings.copy_markdown);
+        let claude = settings.claude_code;
+        assert!(claude.skills && claude.plugins);
+        assert!(!claude.commands && !claude.instructions && !claude.agents);
         assert_eq!(settings.tree_filter, Filter::Labeled);
         assert_eq!(settings.resume_chains, Chains::Folded);
         assert_eq!(settings.markdown_reads, MarkdownReads::Source);
@@ -4035,8 +4151,9 @@ or false; ignored"
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
                 "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big", "bottom": "tall",
-                "defaultShell": "zsh", "copyMarkdown": "no"}"#,
+                "defaultShell": "zsh", "copyMarkdown": "no", "claudeCode": {"agents": "yes"}}"#,
         );
+        assert_eq!(settings.claude_code, ClaudeCode::default());
         assert_eq!(settings.banner, Banner::Header);
         assert_eq!(settings.bottom, Bottom::Bar);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
@@ -4056,6 +4173,7 @@ or false; ignored"
                 format!("{path}: hideThinkingBlock must be true or false; ignored"),
                 format!("{path}: copyOnSelect must be true or false; ignored"),
                 format!("{path}: copyMarkdown must be true or false; ignored"),
+                format!("{path}: claudeCode.agents must be true or false; ignored"),
                 format!("{path}: branchSummary.skipPrompt must be true or false; ignored"),
                 format!(
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
@@ -4528,6 +4646,10 @@ or false; ignored"
             seen(Row::CopyMarkdown, &mut settings),
             ["on", "off", "on", "off"]
         );
+        for row in CLAUDE_ROWS {
+            assert_eq!(seen(row, &mut settings), ["off", "on", "off", "on"]);
+        }
+        assert_eq!(settings.claude_code, ClaudeCode::ALL);
         assert_eq!(
             seen(Row::SpellCheck, &mut settings),
             ["on", "off", "on", "off"]
@@ -4631,6 +4753,8 @@ or false; ignored"
                 "hideThinkingBlock": true,
                 "copyOnSelect": !cfg!(target_os = "macos"),
                 "copyMarkdown": false,
+                "claudeCode": {"skills": true, "commands": true, "instructions": true,
+                    "agents": true, "plugins": true},
                 "spellCheck": false,
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,

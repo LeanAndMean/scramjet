@@ -603,6 +603,7 @@ local models), or add providers to {file} (see --help)"
         command_sets: settings.command_sets.clone(),
         skills: settings.skills.clone(),
         skill_options,
+        claude_code: settings.claude_code,
         prompt: SystemPrompt {
             no_directives: options.prompt.no_directives || !settings.directives,
             ..options.prompt

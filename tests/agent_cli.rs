@@ -764,6 +764,18 @@ fn claude_codes_instructions_and_rules_are_read_but_rules_for_some_paths() {
             .map(|part| part["text"].as_str().unwrap())
             .collect::<String>()
     };
+    // Off by default: only the project's CLAUDE.md.
+    let off = system(&[]);
+    assert!(off.contains("Project instructions."), "{off}");
+    let own = [
+        "User instructions.",
+        "User rule.",
+        "Dot instructions.",
+        "Project rule.",
+    ];
+    assert!(!own.iter().any(|text| off.contains(text)), "{off}");
+    let settings = r#"{"claudeCode": {"instructions": true}}"#;
+    std::fs::write(config.join("scramjet/settings.json"), settings).unwrap();
     let text = system(&[]);
     let at = |needle: &str| text.find(needle);
     let order = [
@@ -3561,7 +3573,9 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
     let fix = "---\nargument-hint: \"[issue]\"\n---\nFix issue $ARGUMENTS";
     std::fs::write(project.join(".claude/commands/fix.md"), fix).unwrap();
     let (port, bodies) = serve_bash_call("sleep 2; echo from-acp");
-    let (mut child, mut stdin, messages) = acp(&scratch.0, port);
+    let settings =
+        serde_json::json!({"hideCredentials": "never", "claudeCode": {"commands": true}});
+    let (mut child, mut stdin, messages) = acp_with(&scratch.0, port, settings, &[]);
     // Framing: a line that is not JSON, a request before `initialize`.
     writeln!(stdin, "not json").unwrap();
     assert_eq!(next(&messages)["error"]["code"], -32700);

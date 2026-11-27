@@ -1,0 +1,86 @@
+{
+  "size": "100x40",
+  "files": {
+    ".claude/commands/quality-review.md": "---\ndescription: \"Audit the selection.\"\n---\n\nAudit $ARGUMENTS.\n",
+    ".claude/skills/changelog/SKILL.md": "---\nname: changelog\ndescription: Writes changelog entries.\n---\n\nWrite an entry.\n",
+    ".claude/CLAUDE.md": "Dot instructions.\n",
+    ".claude/agents/reviewer.md": "---\nname: reviewer\ndescription: Reviews code.\n---\n\nReview it.\n",
+    "CLAUDE.md": "Project instructions.\n"
+  },
+  "claude": {
+    "CLAUDE.md": "User instructions.\n",
+    "rules/style.md": "Keep it short.\n"
+  },
+  "replies": [
+    [
+      {
+        "text": "Audited."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "until": "gpt-6-luna"
+    },
+    {
+      "type": "/qu"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-files-off-list"
+    },
+    {
+      "type": "\u0015/settings\r"
+    },
+    {
+      "until": "Settings"
+    },
+    {
+      "type": "\u001b[A"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-files-rows"
+    },
+    {
+      "type": "\u001b[A\u001b[A\u001b[A\r"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-files-commands-on"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "/qu"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-files-on-list"
+    },
+    {
+      "type": "\u0015/quality-review src\r"
+    },
+    {
+      "until": "Audited."
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-files-ran"
+    }
+  ]
+}

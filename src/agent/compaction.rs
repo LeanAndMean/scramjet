@@ -1778,6 +1778,7 @@ mod tests {
             command_sets: Vec::new(),
             skills: Vec::new(),
             skill_options: Default::default(),
+            claude_code: crate::agent::ClaudeCode::ALL,
             prompt: Default::default(),
             mcp_servers: Vec::new(),
             mcp_disabled: Vec::new(),

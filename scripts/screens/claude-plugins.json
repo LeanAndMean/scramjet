@@ -1,5 +1,10 @@
 {
   "size": "100x30",
+  "settings": {
+    "claudeCode": {
+      "plugins": true
+    }
+  },
   "claude": {
     "settings.json": "{\"enabledPlugins\": {\"dev@market\": true, \"off@market\": false}}\n",
     "plugins/installed_plugins.json": "{\"version\": 2, \"plugins\": {\"dev@market\": [{\"scope\": \"user\", \"installPath\": \"{claude}/plugins/cache/market/dev/1.0.0\", \"version\": \"1.0.0\"}], \"off@market\": [{\"scope\": \"user\", \"installPath\": \"{claude}/plugins/cache/market/off/1.0.0\"}]}}\n",
@@ -51,13 +56,19 @@
       "type": "\u000f"
     },
     {
-      "type": "/agents\r"
+      "type": "/settings\r"
+    },
+    {
+      "until": "Settings"
+    },
+    {
+      "type": "\u001b[A\u001b[A\u001b[A\u001b[A\u001b[A\u001b[A\r"
     },
     {
       "sleep": 0.5
     },
     {
-      "shot": "claude-plugins-agents"
+      "shot": "claude-plugins-installed"
     }
   ]
 }

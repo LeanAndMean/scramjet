@@ -74,9 +74,13 @@ fn places(root: &Path, claude: Option<&Path>) -> Vec<Place> {
 }
 
 impl ClaudeCommands {
-    /// The commands of a session in `root`, then those of the Claude Code plugins among `sets`.
-    pub fn discover(root: &Path, sets: &[Set]) -> Self {
-        let mut places = places(root, super::login::claude_directory().as_deref());
+    /// The commands of a session in `root` when `own` (Claude Code's own directories are read),
+    /// then those of the Claude Code plugins among `sets`.
+    pub fn discover(root: &Path, sets: &[Set], own: bool) -> Self {
+        let mut places = match own {
+            true => places(root, super::login::claude_directory().as_deref()),
+            false => Vec::new(),
+        };
         places.extend(plugins(sets));
         Self::load(&places)
     }
@@ -639,6 +643,12 @@ mod tests {
         let found = ClaudeCommands::load(&places(&root, Some(&home.join(".claude"))));
         let names: Vec<_> = found.list().iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["ops:deploy", "review", "top", "mine"]);
+        // Not read, none of them is found.
+        assert!(
+            ClaudeCommands::discover(&root, &[], false)
+                .list()
+                .is_empty()
+        );
         let review = &found.list()[1];
         assert_eq!(review.description, "Project review");
         assert_eq!(review.argument_hint.as_deref(), Some("[issue]"));

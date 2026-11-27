@@ -1199,6 +1199,7 @@ mod tests {
             command_sets: Vec::new(),
             skills: Vec::new(),
             skill_options: Default::default(),
+            claude_code: crate::agent::ClaudeCode::ALL,
             prompt: Default::default(),
             mcp_servers: Vec::new(),
             mcp_disabled: Vec::new(),
@@ -1264,7 +1265,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let text = "---\ndescription: Fix an issue\n---\nFix issue $0, then $ARGUMENTS[1].\n!`echo \"${CLAUDE_PROJECT_DIR}\"` ${CLAUDE_SESSION_ID} ${CLAUDE_EFFORT}";
         std::fs::write(directory.join("fix.md"), text).unwrap();
-        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[]);
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[], true);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("/fix 42 test", &mut ui, &cancel).unwrap();
@@ -1295,7 +1296,7 @@ mod tests {
         let text = "Branch: !`printf main`\n```!\necho one\necho two >&2\n```\nEmpty: !`true`.\nAsk: $ARGUMENTS";
         std::fs::write(directory.join("state.md"), text).unwrap();
         std::fs::write(directory.join("broken.md"), "Never: !`echo no; exit 3`").unwrap();
-        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[]);
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[], true);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent
@@ -1395,8 +1396,9 @@ In: state\nAsk: \\! `touch\n</skill>",
             origin: super::super::Origin::ClaudeCode,
             skills: None,
         }];
-        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &sets);
-        agent.skills = super::super::Skills::discover(&[], &sets, &Default::default(), &scratch.0);
+        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &sets, true);
+        agent.skills =
+            super::super::Skills::discover(&[], &sets, &Default::default(), &scratch.0, true);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("/dev:feature login", &mut ui, &cancel).unwrap();
@@ -1596,6 +1598,7 @@ Scramjet\n",
                 command_sets: Vec::new(),
                 skills: Vec::new(),
                 skill_options: Default::default(),
+                claude_code: crate::agent::ClaudeCode::ALL,
                 prompt: Default::default(),
                 mcp_servers: Vec::new(),
                 mcp_disabled: Vec::new(),

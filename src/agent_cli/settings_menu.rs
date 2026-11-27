@@ -11,8 +11,9 @@ use super::theme::{Color, Listed, Mode, TERMINAL_COLORS};
 use super::theme_editor::ThemeEditor;
 use super::{background, editor, installed, palette, select, style};
 use scramjet::agent::{
-    Approval, Approvals, CODING_TOOLS, Choice, Edge, HARNESS_TOOLS, Installed, NextStep, NextSteps,
-    Problem, Publication, Scope, Setting, config_directory, shortened, write_replacing,
+    Approval, Approvals, CODING_TOOLS, Choice, ClaudeCodeFound, Edge, HARNESS_TOOLS, Installed,
+    NextStep, NextSteps, Problem, Publication, Scope, Setting, config_directory, shortened,
+    write_replacing,
 };
 use std::{
     path::{Path, PathBuf},
@@ -161,6 +162,23 @@ fn tool_note(tool: &str) -> &'static str {
     }
 }
 
+/// A row of Claude Code's files: whether they are read, and how many there are.
+fn claude_value(on: bool, row: Row, found: &ClaudeCodeFound) -> String {
+    let (count, one, more) = match row {
+        Row::ClaudeSkills => (found.skills, "skill", "skills"),
+        Row::ClaudeCommands => (found.commands, "command", "commands"),
+        Row::ClaudeInstructions => (found.instructions, "file", "files"),
+        Row::ClaudeAgents => (found.agents, "agent", "agents"),
+        _ => (found.plugins, "plugin", "plugins"),
+    };
+    let state = if on { "on" } else { "off" };
+    match count {
+        0 => format!("{state}, none found"),
+        1 => format!("{state}, 1 {one} found"),
+        count => format!("{state}, {count} {more} found"),
+    }
+}
+
 impl Interactive {
     /// `/settings`, as Scramjet's: the settings in a list, each changed with Enter, saved and
     /// used at once. Without the full screen they are printed.
@@ -269,6 +287,12 @@ impl Interactive {
                     if let Err(error) = self.session.settings.cycle(row) {
                         self.say(&format!("Error: settings not saved: {error}"));
                     }
+                    if row.claude_key().is_some() {
+                        match self.in_turn {
+                            true => self.say_styled(style::MUTED, "Run /reload once the turn ends"),
+                            false => self.session.load_files(),
+                        }
+                    }
                 }
             }
             self.hide_thinking
@@ -299,7 +323,16 @@ impl Interactive {
             .map(|row| row.label().len())
             .max()
             .unwrap_or(0);
-        let value = |row| match row {
+        let found = std::cell::OnceCell::new();
+        let value = |row: Row| match row {
+            Row::ClaudeSkills
+            | Row::ClaudeCommands
+            | Row::ClaudeInstructions
+            | Row::ClaudeAgents
+            | Row::ClaudePlugins => {
+                let found = found.get_or_init(|| self.session.agent.claude_code_found());
+                claude_value(self.session.settings.claude_code_of(row), row, found)
+            }
             Row::ThinkingLevel => (self.session.agent.effort().map(scramjet_level))
                 .unwrap_or("model default")
                 .to_owned(),

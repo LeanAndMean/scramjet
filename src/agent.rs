@@ -217,6 +217,47 @@ pub(crate) fn bare() -> bool {
     BARE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Which of Claude Code's own files a session reads (the settings' `claudeCode`), each off unless
+/// turned on. A project's `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md` are read either way, and
+/// a plugin `--plugin-dir` gives is loaded either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClaudeCode {
+    /// The `skills` of `~/.claude` and of a project's `.claude`.
+    pub skills: bool,
+    /// The `commands` of `~/.claude` and of a project's `.claude`.
+    pub commands: bool,
+    /// `~/.claude/CLAUDE.md`, a project's `.claude/CLAUDE.md`, the rules in their `rules`, the
+    /// `@` imports and comments of the `CLAUDE.md` files, and the instructions files worked on
+    /// bring in.
+    pub instructions: bool,
+    /// The `agents` of `~/.claude` and of a project's `.claude`.
+    pub agents: bool,
+    /// The plugins Claude Code's settings enable.
+    pub plugins: bool,
+}
+
+/// How many of each of Claude Code's own files a session would read with them on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ClaudeCodeFound {
+    pub skills: usize,
+    pub commands: usize,
+    /// Instructions files, imports included.
+    pub instructions: usize,
+    pub agents: usize,
+    pub plugins: usize,
+}
+
+impl ClaudeCode {
+    /// Every one read.
+    pub const ALL: Self = Self {
+        skills: true,
+        commands: true,
+        instructions: true,
+        agents: true,
+        plugins: true,
+    };
+}
+
 static PLUGIN_DIRS: std::sync::OnceLock<Vec<PathBuf>> = std::sync::OnceLock::new();
 
 /// For `--plugin-dir`: directories loaded as command sets or Claude Code plugins for this run
@@ -322,6 +363,8 @@ pub struct AgentConfig {
     pub skills: Vec<PathBuf>,
     /// `--skill` and `--no-skills`.
     pub skill_options: SkillOptions,
+    /// Which of Claude Code's files are read (`claudeCode`).
+    pub claude_code: ClaudeCode,
     pub prompt: SystemPrompt,
     /// The MCP servers the settings list (`mcpServers`).
     pub mcp_servers: Vec<McpServer>,
@@ -773,13 +816,19 @@ pub struct Agent {
 /// What a session in `root` with the `installed` command sets and the `listed` skills would load
 /// from them and from the agent and skill directories, and what is wrong there, loose project
 /// agents included.
-pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inventory {
-    let sets = Sets::for_project(installed, root);
+pub fn inventory(
+    installed: &[PathBuf],
+    listed: &[PathBuf],
+    root: &Path,
+    claude: ClaudeCode,
+) -> Inventory {
+    let sets = Sets::for_project(installed, root, claude.plugins);
     let commands = Commands::discover(&sets);
     let user = subagent::user_directories();
     let sources = subagent::Sources {
         user: &user,
         sets: &sets,
+        claude,
     };
     let discovery = subagent::discover(&sources, root, subagent::Scope::Both);
     let mut warnings = commands.warnings().to_vec();
@@ -787,8 +836,9 @@ pub fn inventory(installed: &[PathBuf], listed: &[PathBuf], root: &Path) -> Inve
     let agents = (discovery.agents.into_iter())
         .map(|agent| (agent.name, agent.path))
         .collect();
-    let skills = Skills::discover(listed, sets.list(), &SkillOptions::default(), root);
-    let claude_commands = ClaudeCommands::discover(root, sets.list());
+    let options = SkillOptions::default();
+    let skills = Skills::discover(listed, sets.list(), &options, root, claude.skills);
+    let claude_commands = ClaudeCommands::discover(root, sets.list(), claude.commands);
     Inventory {
         sets,
         commands,
@@ -1005,6 +1055,40 @@ impl Agent {
         self.start_mcp();
     }
 
+    /// What of Claude Code's own files this session's project and the user's `~/.claude` hold,
+    /// read or not.
+    pub fn claude_code_found(&self) -> ClaudeCodeFound {
+        let root = &self.config.root;
+        let options = SkillOptions::default();
+        let skills = Skills::discover(&[], &[], &options, root, true);
+        let hidden = self.instruction_hidden();
+        let files = |claude| {
+            let files = instructions::context_files(root, None, claude, &hidden, &mut Vec::new());
+            files.into_iter().map(|(path, _)| path).collect::<Vec<_>>()
+        };
+        let without = files(false);
+        let plugins = match login::claude_directory() {
+            Some(claude) if !cfg!(test) && !bare() => {
+                claude_plugins::enabled(&claude, root, &mut Vec::new()).len()
+            }
+            _ => 0,
+        };
+        ClaudeCodeFound {
+            skills: skills.list().iter().filter(|skill| skill.claude).count(),
+            commands: ClaudeCommands::discover(root, &[], true).list().len(),
+            instructions: (files(true).iter())
+                .filter(|path| !without.contains(path))
+                .count(),
+            agents: subagent::claude_code_agents(root).len(),
+            plugins,
+        }
+    }
+
+    /// Which of Claude Code's files are read, from the next `reload`.
+    pub fn set_claude_code(&mut self, claude: ClaudeCode) {
+        self.config.claude_code = claude;
+    }
+
     /// The retry settings, read again at `/reload`; a request already waiting keeps its own.
     pub fn set_retries(&mut self, retries: Retries) {
         self.config.retries = retries;
@@ -1145,14 +1229,17 @@ impl Agent {
 
     fn load(&mut self) {
         let config = &self.config;
-        self.sets = Sets::for_project(&config.command_sets, &config.root);
+        let claude = config.claude_code;
+        self.sets = Sets::for_project(&config.command_sets, &config.root, claude.plugins);
         self.commands = Commands::discover(&self.sets);
-        self.claude_commands = ClaudeCommands::discover(&config.root, self.sets.list());
+        self.claude_commands =
+            ClaudeCommands::discover(&config.root, self.sets.list(), claude.commands);
         self.skills = Skills::discover(
             &config.skills,
             self.sets.list(),
             &config.skill_options,
             &config.root,
+            claude.skills,
         );
         self.agents_directories = subagent::user_directories();
         self.agent_directory = login::config_directory().filter(|_| !bare());
@@ -1173,10 +1260,18 @@ impl Agent {
         let config = &self.config;
         let directory = self.agent_directory.as_deref();
         let hidden = self.instruction_hidden();
-        let loaded = instructions::load(&config.prompt, &config.root, directory, &hidden);
+        let claude = config.claude_code;
+        let loaded = instructions::load(
+            &config.prompt,
+            &config.root,
+            directory,
+            claude.instructions,
+            &hidden,
+        );
         let sources = subagent::Sources {
             user: &self.agents_directories,
             sets: &self.sets,
+            claude,
         };
         let agents = subagent::discover(&sources, &config.root, subagent::Scope::User).agents;
         let mcp = !self.enabled_mcp().is_empty();
@@ -1758,6 +1853,7 @@ impl Agent {
         let sources = subagent::Sources {
             user: &self.agents_directories,
             sets: &self.sets,
+            claude: self.config.claude_code,
         };
         let discovery = subagent::discover(&sources, &self.config.root, subagent::Scope::Both);
         let approvals = approvals::Approvals::read(self.approvals.as_deref());

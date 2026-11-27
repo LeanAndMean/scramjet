@@ -116,6 +116,18 @@ What each of these confines, and what it does not, is in [the sandbox](configura
 | `skills` | a list of files and directories | none | Skills besides those found in the skill directories and the packages ([context files and skills](configuration.md#context-files-and-skills)). |
 | `themes` | a list of files and directories | none | Themes besides those in `~/.config/scramjet/themes` and the packages. |
 
+## Claude Code's files
+
+Each is off by default, and `/settings` → Claude Code's files turns it on, saying how many it finds; changing one loads the files again at once. A project's `CLAUDE.md`, `CLAUDE.local.md` and `AGENTS.md`, `.agents/skills`, and a plugin `--plugin-dir` gives load either way.
+
+| Key | Values | Default | What it does |
+|---|---|---|---|
+| `claudeCode.skills` | `true`, `false` | `false` | The skills in `~/.claude/skills` and a project's `.claude/skills`. |
+| `claudeCode.commands` | `true`, `false` | `false` | The commands in `~/.claude/commands` and a project's `.claude/commands`, their `!` lines run when typed. |
+| `claudeCode.instructions` | `true`, `false` | `false` | `~/.claude/CLAUDE.md`, a project's `.claude/CLAUDE.md`, the rules in their `rules` directories, the `@` imports and HTML comments of the `CLAUDE.md` files read as Claude Code reads them, and the `CLAUDE.md` files and rules a file the agent reads, writes or edits brings in. Off, a `CLAUDE.md` is read as it is. |
+| `claudeCode.agents` | `true`, `false` | `false` | The agents in `~/.claude/agents` and a project's `.claude/agents`, as subagents. |
+| `claudeCode.plugins` | `true`, `false` | `false` | The plugins Claude Code's settings enable, with their commands, skills and agents. |
+
 ## MCP servers
 
 | Key | Values | Default | What it does |

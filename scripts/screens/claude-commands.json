@@ -1,5 +1,10 @@
 {
   "size": "100x30",
+  "settings": {
+    "claudeCode": {
+      "commands": true
+    }
+  },
   "files": {
     ".claude/commands/quality-review.md": "---\ndescription: \"Audit the selection against the engineering standards.\"\nargument-hint: \"[files]\"\n---\n\n# Review: Quality\n\nAudit $ARGUMENTS against our rules: small functions, no dead code.\n",
     ".claude/commands/docs/wiki-review.md": "# Review the wiki branch\n\nReview the changes on this branch.\n",

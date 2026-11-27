@@ -84,7 +84,7 @@ fn places(
     let sets: Vec<(Vec<PathBuf>, Option<String>)> = (sets.iter())
         .map(|set| (vec![crate::os::join(set, "skills")], None))
         .collect();
-    places_of(listed, &sets, options, root, agent_directory, user)
+    places_of(listed, &sets, options, root, agent_directory, user, true)
 }
 
 /// The user's home directory and Claude Code's, `~/.claude` unless `CLAUDE_CONFIG_DIR` moves it.
@@ -101,6 +101,7 @@ struct User<'a> {
 /// says, named with a plugin's name), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
 /// and the `skills` of Claude Code's directory (with `--bare`, none of them, and never as a
 /// project's); then, as Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
+/// Without `claude`, none of Claude Code's own `skills` directories.
 fn places_of(
     listed: &[PathBuf],
     sets: &[(Vec<PathBuf>, Option<String>)],
@@ -108,6 +109,7 @@ fn places_of(
     root: &Path,
     agent_directory: Option<&Path>,
     user: User,
+    claude: bool,
 ) -> Vec<(PathBuf, Place)> {
     let given = (options.paths.iter()).map(|path| (path.clone(), Place::Given));
     if options.no_skills {
@@ -163,6 +165,9 @@ fn places_of(
         places.extend(users.into_iter().zip(places_of));
     }
     places.extend(given);
+    if !claude {
+        places.retain(|(_, place)| *place != Place::Claude);
+    }
     places
 }
 
@@ -172,8 +177,15 @@ fn nested_place() -> Place {
 
 impl Skills {
     /// The skills of a session in `root`, with the settings' `listed` files and directories,
-    /// the command `sets`' own and the command line's `options`.
-    pub fn discover(listed: &[PathBuf], sets: &[Set], options: &SkillOptions, root: &Path) -> Self {
+    /// the command `sets`' own and the command line's `options`, and with `claude` those of
+    /// Claude Code's own `skills` directories.
+    pub fn discover(
+        listed: &[PathBuf],
+        sets: &[Set],
+        options: &SkillOptions,
+        root: &Path,
+        own: bool,
+    ) -> Self {
         let agent_directory = super::login::config_directory().filter(|_| !super::bare());
         let (home, claude) = (std::env::home_dir(), super::login::claude_directory());
         let sets: Vec<(Vec<PathBuf>, Option<String>)> = (sets.iter())
@@ -195,6 +207,7 @@ impl Skills {
             root,
             agent_directory.as_deref(),
             user,
+            own,
         ))
     }
 
@@ -629,6 +642,24 @@ mod tests {
                 (PathBuf::from("/home/u/.claude/skills"), Place::Claude),
             ]
         );
+        // Claude Code's own skills only when they are read.
+        let user = User {
+            home: Some(Path::new("/home/u")),
+            claude: Some(Path::new("/home/u/.claude")),
+        };
+        let sets = [(vec![PathBuf::from("/plugin/skills")], Some("p".to_owned()))];
+        let without = places_of(
+            &[],
+            &sets,
+            &SkillOptions::default(),
+            root,
+            None,
+            user,
+            false,
+        );
+        assert!(without.iter().all(|(_, place)| *place != Place::Claude));
+        assert!(without.contains(&(PathBuf::from("/home/u/.agents/skills"), nested())));
+        assert!(without.contains(&(PathBuf::from("/plugin/skills"), Place::Plugin("p".into()))));
 
         let scratch = scratch("places");
         let home = scratch.0.join("home");
@@ -1121,7 +1152,7 @@ Do it.\n</skill>",
         };
         let options = SkillOptions::default();
         let names = |set: Set| -> Vec<String> {
-            let found = Skills::discover(&[], &[set], &options, &scratch.0);
+            let found = Skills::discover(&[], &[set], &options, &scratch.0, true);
             (found.list.into_iter())
                 .filter(|skill| skill.path.starts_with(&plugin))
                 .map(|skill| skill.name)

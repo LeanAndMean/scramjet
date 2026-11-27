@@ -1,5 +1,10 @@
 {
   "size": "100x30",
+  "settings": {
+    "claudeCode": {
+      "skills": true
+    }
+  },
   "files": {
     ".claude/skills/brief/SKILL.md": "---\ndescription: \"Brief me on the branch\"\narguments: [audience]\n---\n\nBranch: !`git branch --show-current`\n\nSkill: !`basename \"${CLAUDE_SKILL_DIR}\"`, project ${CLAUDE_PROJECT_DIR}, effort ${CLAUDE_EFFORT}.\n\nSummarize for $audience.\n",
     ".claude/skills/broken/SKILL.md": "---\ndescription: \"Broken\"\n---\nMissing: !`cat no-such-file`\n"

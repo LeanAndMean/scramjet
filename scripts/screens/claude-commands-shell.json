@@ -1,5 +1,10 @@
 {
   "size": "100x30",
+  "settings": {
+    "claudeCode": {
+      "commands": true
+    }
+  },
   "files": {
     ".claude/commands/brief.md": "---\ndescription: \"Brief me on the branch\"\n---\n\nBranch: !`git branch --show-current`\n\nLast commit:\n```!\ngit log --format=%s -1\n```\n\nProject: !`basename \"${CLAUDE_PROJECT_DIR}\"`, session ${CLAUDE_SESSION_ID}, effort ${CLAUDE_EFFORT}.\n\nSummarize for $ARGUMENTS.\n",
     ".claude/commands/broken.md": "Missing: !`cat no-such-file`\n"
