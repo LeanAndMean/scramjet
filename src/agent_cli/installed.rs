@@ -180,9 +180,9 @@ pub(super) fn listing(loaded: &Loaded) -> Listing {
         .map(|skill| {
             let path = shown(&skill.path);
             let note = format!(
-                "{path}\n{}; /{} runs it. {}",
+                "{path}\n{}; /skill:{} runs it. {}",
                 offered(skill),
-                super::interactive::skill_call(&skill.name, loaded.commands),
+                skill.name,
                 skill.description
             );
             (
@@ -710,7 +710,10 @@ mod tests {
                 shown(&scramjet::os::join(&set, "commands/inner.md"))
             )
         );
-        assert!(list.notes[12].ends_with("\nOffered to the model; /pdf runs it. Fills PDF forms."));
+        assert!(
+            list.notes[12]
+                .ends_with("\nOffered to the model; /skill:pdf runs it. Fills PDF forms.")
+        );
         // The settings file is there; the autonomy.yaml files are not yet.
         assert!(list.notes[19].ends_with("saved as you change them."));
         assert!(list.notes[20].ends_with(

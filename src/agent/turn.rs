@@ -88,19 +88,18 @@ impl Agent {
     ) -> Option<Value> {
         self.commands.refresh(prompt);
         let command = (self.commands.named(prompt)).map(|command| command.name.clone());
-        // A skill before one of Claude Code's commands of its name, as Claude Code runs them;
-        // shell commands' notices name it as typed.
-        let typed = prompt.split(char::is_whitespace).next().unwrap_or(prompt);
-        let typed = typed.strip_prefix('/').unwrap_or(typed).to_owned();
-        let claude = match (&command, self.skills.named(prompt)) {
-            (Some(_), _) => None,
-            (None, Some(skill)) => skill.claude.then_some(typed),
-            (None, None) => self.claude_commands.named(prompt).map(|_| typed),
-        };
+        let claude = (command.is_none())
+            .then(|| self.claude_commands.named(prompt))
+            .flatten()
+            .map(|command| command.name.clone());
+        let claude = claude.or_else(|| {
+            let skill = self.skills.named(prompt).filter(|skill| skill.claude)?;
+            command.is_none().then(|| format!("skill:{}", skill.name))
+        });
         let skill = command.is_none().then(|| {
             let variables = self.claude_variables();
-            (self.skills.expand(prompt, &variables))
-                .or_else(|| self.claude_commands.expand(prompt, &variables))
+            (self.claude_commands.expand(prompt, &variables))
+                .or_else(|| self.skills.expand(prompt, &variables))
         });
         let skill = skill.flatten();
         self.lifecycle.prompted(match (&command, &skill) {
@@ -1302,15 +1301,10 @@ mod tests {
         std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
         std::fs::write(&broken, "---\ndescription: B.\n---\nNever: !`exit 3`").unwrap();
         agent.skills = super::super::Skills::of_claude(&skills);
-        // As in Claude Code, `/<name>` runs the skill rather than a command of its name.
-        let commands = scratch.0.join(".claude").join("commands");
-        std::fs::create_dir_all(&commands).unwrap();
-        std::fs::write(commands.join("state.md"), "The command").unwrap();
-        agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[]);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent
-            .turn("/state !`touch made`", &mut ui, &cancel)
+            .turn("/skill:state !`touch made`", &mut ui, &cancel)
             .unwrap();
         agent.turn("/skill:broken", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
@@ -1328,11 +1322,11 @@ In: state\nAsk: \\! `touch\n</skill>",
             .collect();
         assert_eq!(notices.len(), 1, "{:?}", ui.shown);
         assert!(notices[0].starts_with("notice /skill:broken was not sent: its command `exit 3`"));
-        assert_eq!(agent.prompts(), ["/state !`touch made`"]);
+        assert_eq!(agent.prompts(), ["/skill:state !`touch made`"]);
     }
 
     #[test]
-    fn a_claude_code_plugins_command_and_skill_run_by_its_name() {
+    fn a_claude_code_plugins_command_runs_by_its_name_and_its_skill_as_skill_name() {
         let (endpoint, server) = serve(vec![
             stream(&fixture::text_events("one", fixture::known_usage())),
             stream(&fixture::text_events("two", fixture::known_usage())),
@@ -1363,7 +1357,9 @@ In: state\nAsk: \\! `touch\n</skill>",
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("/dev:feature login", &mut ui, &cancel).unwrap();
-        agent.turn("/dev:pdf form.pdf", &mut ui, &cancel).unwrap();
+        agent
+            .turn("/skill:dev:pdf form.pdf", &mut ui, &cancel)
+            .unwrap();
         let bodies = server.join().unwrap();
         assert_eq!(bodies.len(), 2);
         let sent = |body: &Value| body["input"].as_array().unwrap()[0]["content"].clone();

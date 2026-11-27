@@ -108,7 +108,7 @@ The agent looks into the code, drafts the issue and shows it to you whole before
 
 After the plan come `/mach12:issue-implement 42 1` (stage 1 of issue 42) and the next stages, `/mach12:pr-create`, `/mach12:pr-review` (whose findings are then assessed, and fixed if you choose), `/mach12:pr-pre-merge` and `/mach12:pr-merge`, each offered by the one before. `/settings` → Next steps sets, for each step, whether it continues automatically, asks you, or lets autopilot decide (the default); its first row applies what Mach 12 suggests, such as going on from one implemented stage to the next. Where the steps are left to autopilot, `/autopilot on` runs the recommended one after 3 seconds, and with it off you are asked.
 
-Your own commands are files in a set of your own: [Concepts](concepts.md) explains the parts and builds a first set step by step, and the built-in `writing-scramjet-commands` skill helps the agent write them with you (`/writing-scramjet-commands`). [Command sets](command-sets.md).
+Your own commands are files in a set of your own: [Concepts](concepts.md) explains the parts and builds a first set step by step, and the built-in `writing-scramjet-commands` skill helps the agent write them with you (`/skill:writing-scramjet-commands`). [Command sets](command-sets.md).
 
 ## Where next
 

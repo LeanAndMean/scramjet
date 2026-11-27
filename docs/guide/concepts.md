@@ -32,7 +32,7 @@ An agent is a file in a set's `agents/` (or your own `~/.config/scramjet/agents/
 
 ## Skills
 
-A skill is a directory with a `SKILL.md` whose frontmatter has a `name` and a `description`. The agent sees the descriptions and reads a skill when its task matches; `/NAME` (or `/skill:NAME`) loads one now. Skills come from sets, the project's `.scramjet/skills`, `.agents/skills` and `.claude/skills`, and your `~/.config/scramjet/skills`, `~/.agents/skills` and `~/.claude/skills`. A skill is reference knowledge; a command is a task to carry out.
+A skill is a directory with a `SKILL.md` whose frontmatter has a `name` and a `description`. The agent sees the descriptions and reads a skill when its task matches; `/skill:NAME` loads one now. Skills come from sets, the project's `.scramjet/skills`, `.agents/skills` and `.claude/skills`, and your `~/.config/scramjet/skills`, `~/.agents/skills` and `~/.claude/skills`. A skill is reference knowledge; a command is a task to carry out.
 
 ## Next steps
 

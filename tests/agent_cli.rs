@@ -6101,7 +6101,7 @@ fn acp_shows_compactions_and_what_commands_sent() {
                 .map(|message| message["params"]["update"].clone())
                 .collect::<Vec<_>>()
         };
-        let first = turn(3, "/greet world");
+        let first = turn(3, "/skill:greet world");
         let sent = (first.iter())
             .find(|update| update["sessionUpdate"] == "user_message_chunk")
             .unwrap_or_else(|| panic!("no expansion in {first:?}"));
@@ -6114,7 +6114,7 @@ fn acp_shows_compactions_and_what_commands_sent() {
         );
         assert_eq!(
             sent["_meta"]["io.github.leanandmean.scramjet"]["expands"],
-            "/greet world"
+            "/skill:greet world"
         );
         let second = turn(4, "more");
         let compactions: Vec<_> = (second.iter())
@@ -6367,7 +6367,7 @@ fn acp_reloads_the_settings_commands_and_models_through_the_extension() {
     let commands = &next(&messages)["params"]["update"];
     assert_eq!(commands["sessionUpdate"], "available_commands_update");
     let greets = |listed: &serde_json::Value| {
-        (listed.as_array().unwrap().iter()).any(|command| command["name"] == "greet")
+        (listed.as_array().unwrap().iter()).any(|command| command["name"] == "skill:greet")
     };
     assert!(!greets(&commands["availableCommands"]), "{commands}");
     let reload = |id: u64| {

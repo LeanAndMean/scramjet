@@ -718,12 +718,6 @@ impl Commands {
 const SHORT: [(&str, &[&str]); 1] = [("scramjet:bug", &["bug", "feedback", "report-issue"])];
 
 impl Command {
-    /// Whether `/<name>` runs it, by its name or a short one.
-    pub fn answers_to(&self, name: &str) -> bool {
-        self.name == name
-            || (SHORT.iter()).any(|(command, names)| *command == self.name && names.contains(&name))
-    }
-
     /// The name the `/` list shows it by: its first name in `SHORT`, else its own.
     pub fn listed_name(&self) -> &str {
         SHORT
@@ -1657,9 +1651,6 @@ or agents directory, nor a models.json",
         let listed = |name| commands.get(name).unwrap().listed_name();
         assert_eq!(listed("scramjet:bug"), "bug");
         assert_eq!(listed("scramjet:troubleshoot"), "scramjet:troubleshoot");
-        let bug = commands.get("scramjet:bug").unwrap();
-        assert!(bug.answers_to("scramjet:bug") && bug.answers_to("feedback"));
-        assert!(!bug.answers_to("troubleshoot"));
         assert_eq!(Commands::default().expand("/bug"), None);
     }
 

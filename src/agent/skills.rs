@@ -327,22 +327,14 @@ SKILL.md / dirname of the path) and use that absolute path in tool commands.
         )
     }
 
-    /// The skill `/<name> args` names, as Claude Code runs one, or `/skill:<name> args`, as Pi
-    /// does, and the arguments.
-    fn called<'a>(&self, prompt: &'a str) -> Option<(&Skill, &'a str)> {
-        let rest = prompt.strip_prefix('/')?;
-        let rest = rest.strip_prefix("skill:").unwrap_or(rest);
-        let (name, args) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-        let skill = self.list.iter().find(|skill| skill.name == name)?;
-        Some((skill, args))
-    }
-
-    /// The skill `/<name> args` or `/skill:<name> args` names.
+    /// The skill `/skill:<name> args` names.
     pub(super) fn named(&self, prompt: &str) -> Option<&Skill> {
-        self.called(prompt).map(|(skill, _)| skill)
+        let rest = prompt.strip_prefix("/skill:")?;
+        let name = rest.split(char::is_whitespace).next().unwrap_or(rest);
+        self.list.iter().find(|skill| skill.name == name)
     }
 
-    /// The text `/<name> args` or `/skill:<name> args` sends, as Pi's: the skill's instructions, read now, then
+    /// The text `/skill:<name> args` sends, as Pi's: the skill's instructions, read now, then
     /// the arguments. One of Claude Code's has them substituted as Claude Code does, then its
     /// `${CLAUDE_SKILL_DIR}` and `session`'s variables; its shell commands are left for the
     /// caller to run. `None` when the prompt names no skill; an error when its file cannot be
@@ -352,8 +344,12 @@ SKILL.md / dirname of the path) and use that absolute path in tool commands.
         prompt: &str,
         session: &Variables,
     ) -> Option<Result<String, String>> {
-        let (skill, args) = self.called(prompt)?;
+        let skill = self.named(prompt)?;
         let name = &skill.name;
+        let rest = &prompt["/skill:".len()..];
+        let args = rest
+            .split_once(char::is_whitespace)
+            .map_or("", |(_, args)| args);
         let path = skill.path.display();
         let content = match fs::read_to_string(&skill.path) {
             Ok(content) => content,
@@ -1087,11 +1083,6 @@ Do it.\n</skill>",
             found.expand_now("/skill:pdf  fill form.pdf\n"),
             Some(Ok(format!("{block}\n\nfill form.pdf")))
         );
-        // Claude Code's `/<name>` runs it too.
-        assert_eq!(
-            found.expand_now("/pdf  fill form.pdf\n"),
-            Some(Ok(format!("{block}\n\nfill form.pdf")))
-        );
         // A skill left out of the instructions still runs; others are not skill prompts.
         assert!(
             found
@@ -1103,8 +1094,8 @@ Do it.\n</skill>",
         assert_eq!(found.expand_now("/skill:other"), None);
         assert_eq!(found.expand_now("skill:pdf"), None);
         assert_eq!(found.expand_now("/skill:pdfx"), None);
-        assert_eq!(found.expand_now("/pdfx"), None);
-        assert_eq!(found.expand_now("/"), None);
+        // Nothing runs a skill by its bare name.
+        assert_eq!(found.expand_now("/pdf fill form.pdf"), None);
 
         fs::remove_file(&pdf).unwrap();
         let error = found.expand_now("/skill:pdf").unwrap().unwrap_err();
