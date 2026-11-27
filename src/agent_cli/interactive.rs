@@ -949,8 +949,7 @@ fn add_shells(agent: &mut Agent, screen: &mut Handle) {
 }
 
 /// What the loaded settings complete: in the `/` list after the built-in commands, the loaded
-/// commands that are not only delegated, Claude Code's commands that neither a built-in nor one
-/// of those takes, then the skills as `skill:<name>`; and the MCP servers.
+/// commands that are not only delegated, Claude Code's commands that none of those takes, then the skills as `skill:<name>`; and the MCP servers.
 pub(super) fn completions(agent: &Agent) -> Completions {
     let commands = (agent.commands().list().iter())
         .filter(|command| !command.delegate_only)
@@ -967,13 +966,9 @@ pub(super) fn completions(agent: &Agent) -> Completions {
     }
 }
 
-/// Claude Code's commands that `/<name>` runs: those whose names no built-in command and no
-/// command set's command takes.
+/// Claude Code's commands that `/<name>` runs: those whose names no command set's command takes.
 pub(super) fn claude_commands(agent: &Agent) -> impl Iterator<Item = &ClaudeCommand> {
-    (agent.claude_commands().list().iter()).filter(|command| {
-        Builtin::parse(&format!("/{}", command.name)).is_none()
-            && !agent.commands().takes(&command.name)
-    })
+    (agent.claude_commands().list().iter()).filter(|command| !agent.commands().takes(&command.name))
 }
 
 fn claude_entry(command: &ClaudeCommand) -> (String, String) {

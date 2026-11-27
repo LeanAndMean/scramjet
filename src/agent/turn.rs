@@ -1268,7 +1268,7 @@ mod tests {
         agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &[], true);
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
-        agent.turn("/fix 42 test", &mut ui, &cancel).unwrap();
+        agent.turn("/claude:fix 42 test", &mut ui, &cancel).unwrap();
         // One request: no status check follows, as no command ran.
         let bodies = server.join().unwrap();
         assert_eq!(agent.effort(), None);
@@ -1278,10 +1278,13 @@ mod tests {
             agent.session_id()
         );
         assert_eq!(bodies[0]["input"], json!([{"role":"user","content":sent}]));
-        assert_eq!(agent.prompts(), ["/fix 42 test"]);
+        assert_eq!(agent.prompts(), ["/claude:fix 42 test"]);
         let mut shown = Recorder::default();
         agent.show_conversation(&mut shown);
-        assert_eq!(shown.shown[0], format!("command /fix 42 test sent {sent}"));
+        assert_eq!(
+            shown.shown[0],
+            format!("command /claude:fix 42 test sent {sent}")
+        );
     }
 
     #[test]
@@ -1300,13 +1303,13 @@ mod tests {
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent
-            .turn("/state !`touch made`", &mut ui, &cancel)
+            .turn("/claude:state !`touch made`", &mut ui, &cancel)
             .unwrap();
         assert!(!scratch.0.join("made").exists());
-        agent.turn("/broken", &mut ui, &cancel).unwrap();
+        agent.turn("/claude:broken", &mut ui, &cancel).unwrap();
         // Under --ask, a denied command stops its prompt as well.
         agent.config.ask = true;
-        agent.turn("/state", &mut ui, &cancel).unwrap();
+        agent.turn("/claude:state", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
         assert_eq!(bodies.len(), 1);
         let sent = "Branch: main\none\ntwo\nEmpty: .\nAsk: \\! `touch made`";
@@ -1316,7 +1319,7 @@ mod tests {
             .collect();
         assert_eq!(notices.len(), 2, "{:?}", ui.shown);
         assert!(notices[0].starts_with(
-            "notice /broken was not sent: its command `echo no; exit 3` failed: no\n"
+            "notice /claude:broken was not sent: its command `echo no; exit 3` failed: no\n"
         ));
         assert!(notices[0].contains('3'), "{notices:?}");
         assert!(
@@ -1325,7 +1328,7 @@ mod tests {
         );
         assert_eq!(ui.questions, 1);
         assert!(!ui.shown.iter().any(|shown| shown.starts_with("call ")));
-        assert_eq!(agent.prompts(), ["/state !`touch made`"]);
+        assert_eq!(agent.prompts(), ["/claude:state !`touch made`"]);
     }
 
     #[test]

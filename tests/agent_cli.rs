@@ -3612,7 +3612,7 @@ fn acp_runs_prompt_turns_with_their_updates_queues_prompts_and_cancels() {
     let listed = commands["params"]["update"]["availableCommands"]
         .as_array()
         .unwrap();
-    let claude = serde_json::json!({"name": "fix", "description": "Fix issue $ARGUMENTS",
+    let claude = serde_json::json!({"name": "claude:fix", "description": "Fix issue $ARGUMENTS",
         "input": {"hint": "[issue]"}});
     assert!(listed.contains(&claude), "{commands}");
     // The window shows from the start, before any reply.

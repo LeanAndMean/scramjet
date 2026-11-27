@@ -21,7 +21,7 @@
       "until": "gpt-6-luna"
     },
     {
-      "type": "/brief the team !`touch made`\r"
+      "type": "/claude:brief the team !`touch made`\r"
     },
     {
       "until": "You are on main"
@@ -45,7 +45,7 @@
       "type": "\u000f"
     },
     {
-      "type": "/broken\r"
+      "type": "/claude:broken\r"
     },
     {
       "until": "was not sent"

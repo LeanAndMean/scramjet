@@ -1,5 +1,6 @@
 //! Claude Code's custom commands: the `.md` files of a `.claude/commands` directory, which a
-//! prompt runs as `/NAME args` (a file in a subdirectory as `/DIR:NAME`). Unlike a command
+//! prompt runs as `/claude:NAME args` (a file in a subdirectory as `/claude:DIR:NAME`), named so
+//! that where it comes from shows. Unlike a command
 //! set's, one is sent as the user's prompt, with Claude Code's argument substitution, and starts
 //! no command: no next steps, no status report. A Claude Code plugin's commands are its
 //! `commands` directory's, named `/PLUGIN:NAME`.
@@ -36,7 +37,7 @@ impl Place {
     fn plain(directory: PathBuf) -> Self {
         Self {
             directory,
-            prefix: String::new(),
+            prefix: "claude:".to_owned(),
             plugin: None,
         }
     }
@@ -642,7 +643,15 @@ mod tests {
         );
         let found = ClaudeCommands::load(&places(&root, Some(&home.join(".claude"))));
         let names: Vec<_> = found.list().iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(names, ["ops:deploy", "review", "top", "mine"]);
+        assert_eq!(
+            names,
+            [
+                "claude:ops:deploy",
+                "claude:review",
+                "claude:top",
+                "claude:mine"
+            ]
+        );
         // Not read, none of them is found.
         assert!(
             ClaudeCommands::discover(&root, &[], false)
@@ -660,19 +669,21 @@ mod tests {
         assert!(warnings[0].contains("name already loaded"), "{warnings:?}");
         assert!(warnings[1].contains("frontmatter ignored"), "{warnings:?}");
         assert_eq!(
-            found.expand("/review  42 now\n", &none()),
+            found.expand("/claude:review  42 now\n", &none()),
             Some(Ok("Review 42 now".to_owned()))
         );
         assert_eq!(
-            found.expand("/top 7", &none()),
+            found.expand("/claude:top 7", &none()),
             Some(Ok("From the top\n\nARGUMENTS: 7".to_owned()))
         );
-        assert_eq!(found.expand("/reviews", &none()), None);
-        assert_eq!(found.expand("review", &none()), None);
+        assert_eq!(found.expand("/claude:reviews", &none()), None);
+        assert_eq!(found.expand("claude:review", &none()), None);
+        // Never by the bare name, which hides where it comes from.
+        assert_eq!(found.expand("/review 42", &none()), None);
         fs::remove_file(root.join(COMMANDS).join("review.md")).unwrap();
         assert!(
             found
-                .expand("/review", &none())
+                .expand("/claude:review", &none())
                 .unwrap()
                 .unwrap_err()
                 .contains("cannot read")
@@ -734,7 +745,7 @@ mod tests {
         fs::write(directory.join("fix.md"), text).unwrap();
         let found = ClaudeCommands::load(&[Place::plain(directory)]);
         assert_eq!(
-            found.expand("/fix 12 main", &none()),
+            found.expand("/claude:fix 12 main", &none()),
             Some(Ok("Fix 12 on main".to_owned()))
         );
     }

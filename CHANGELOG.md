@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.435.0 — Claude Code's commands named by their source
+
+### Changed
+
+- Claude Code's commands from `.claude/commands` and `~/.claude/commands` are now `/claude:NAME` (one in a subdirectory `/claude:DIR:NAME`), so the `/` list shows where each comes from; typing `/NAME` still finds it there, and Tab takes it. A plugin's stay `/PLUGIN:NAME`.
+
 ## 2.434.0 — Claude Code's memory of the project
 
 ### Added
