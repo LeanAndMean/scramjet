@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.416.0 — `--settings`
+
+### Added
+
+- `--settings FILE|JSON` gives settings for one run, as Claude Code's: a JSON object, or a file holding one, its keys over your settings file's (objects merged key by key), `env` included. It is read again at `/reload` and never saved into your file.
+
 ## 2.415.0 — `--mcp-config` and `--strict-mcp-config`
 
 ### Added

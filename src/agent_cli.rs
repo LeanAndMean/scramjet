@@ -158,6 +158,10 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         return Ok(());
     }
     options.isolate()?;
+    if !options.settings.is_empty() {
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        settings::give(&options.settings, &cwd)?;
+    }
     if !checked {
         writable::check()?;
     }

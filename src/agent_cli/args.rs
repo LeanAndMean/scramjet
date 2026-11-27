@@ -36,8 +36,7 @@ Sessions:
   --project DIR            the project's directory (default: the current one)
   -p, --print              send the messages, print the replies and exit (- reads stdin)
   --max-turns N            with -p, stop with an error before a model request past the Nth
-  --max-budget-usd AMOUNT  with -p, stop with an error before a model request once AMOUNT
-                           dollars are spent
+  --max-budget-usd AMOUNT  with -p, stop with an error once AMOUNT dollars are spent
   --output-format FORMAT   with -p, text (the replies, by default), json (the run's result
                            as one JSON object) or stream-json (a JSON line per message), as
                            Claude Code's
@@ -91,6 +90,7 @@ What the agent may do:
   --list-credential-stores list the credential files and directories hidden from subagents
                            and exit
   --offline                no network at start: nothing cloned, no newer release looked for
+  --settings FILE|JSON     settings over the settings file's, for this run (repeatable)
 
 Other:
   --export FILE [OUTPUT]   write a session file as a web page, or text, and exit
@@ -138,7 +138,7 @@ pub(super) const HELP_ALL: &str =
 [--skill PATH]... [--no-skills] [--plugin-dir DIR]... [--mcp-config CONFIG...]... [--strict-mcp-config]
 [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
 [--permission-mode MODE] [--dangerously-skip-permissions] [--allowedTools LIST]... [--permission-prompts host|none]
-[-s MODE] [--offline] [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
+[-s MODE] [--offline] [--settings FILE|JSON]... [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
        scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
@@ -317,6 +317,11 @@ but to NO_PROXY's hosts and this machine.
                          would hide it
   --offline              no network at start, as SCRAMJET_OFFLINE=1: packages not cloned
                          yet are not cloned, and no newer release is looked for
+  --settings FILE|JSON   as Claude Code's: settings for this run only (repeatable), a JSON
+                         object or a file holding one, its keys over the settings file's
+                         (objects merged key by key, a later --settings' over an earlier's),
+                         read again at /reload and never written to the file; relative
+                         paths in it are from its file's directory, or the current one
   --verbose, --mode text, -ne, --no-extensions, -np, --no-prompt-templates
                          taken as Scramjet 1 takes them, changing nothing: the start always
                          shows what it loaded, and Scramjet has no extensions or prompt
@@ -612,6 +617,8 @@ pub(super) struct Options {
     pub(super) mcp_configs: Vec<String>,
     /// `--strict-mcp-config`: no MCP servers but `--mcp-config`'s.
     pub(super) strict_mcp: bool,
+    /// `--settings`: as typed, read before the settings are.
+    pub(super) settings: Vec<String>,
     /// `--no-skills`.
     pub(super) no_skills: bool,
     /// `--bare`.
@@ -711,6 +718,7 @@ impl Options {
             plugin_dirs: Vec::new(),
             mcp_configs: Vec::new(),
             strict_mcp: false,
+            settings: Vec::new(),
             no_skills: false,
             bare: false,
             ephemeral: false,
@@ -902,6 +910,7 @@ and stream-json"
                     }
                 }
                 Some("--strict-mcp-config") => options.strict_mcp = true,
+                Some("--settings") => options.settings.push(value()?),
                 Some("-ns" | "--no-skills") => options.no_skills = true,
                 Some("--theme") => options.themes.push(value()?),
                 Some("--no-themes") => options.no_themes = true,
