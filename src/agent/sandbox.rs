@@ -601,13 +601,13 @@ pub(super) fn linked_git(root: &Path, granted: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// The common Git directory, with the config and hooks, that a worktree's Git directory names.
-fn common_dir(gitdir: &Path) -> Option<PathBuf> {
+pub(super) fn common_dir(gitdir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
     std::fs::canonicalize(gitdir.join(text.trim())).ok()
 }
 
 /// The Git directory that the `.git` file `dotgit` names.
-fn pointed_to(dotgit: &Path) -> Option<PathBuf> {
+pub(super) fn pointed_to(dotgit: &Path) -> Option<PathBuf> {
     if dotgit.file_name()? != ".git" {
         return None;
     }

@@ -127,6 +127,7 @@ Each is off by default, and `/settings` → Claude Code's files turns it on, say
 | `claudeCode.instructions` | `true`, `false` | `false` | `~/.claude/CLAUDE.md`, a project's `.claude/CLAUDE.md`, the rules in their `rules` directories, the `@` imports and HTML comments of the `CLAUDE.md` files read as Claude Code reads them, and the `CLAUDE.md` files and rules a file the agent reads, writes or edits brings in. Off, a `CLAUDE.md` is read as it is. |
 | `claudeCode.agents` | `true`, `false` | `false` | The agents in `~/.claude/agents` and a project's `.claude/agents`, as subagents. |
 | `claudeCode.plugins` | `true`, `false` | `false` | The plugins Claude Code's settings enable, with their commands, skills and agents. |
+| `claudeCode.memory` | `true`, `false` | `false` | Claude Code's memory of the project, the `MEMORY.md` in `~/.claude/projects/<project>/memory` (`<project>` named for the repository's main worktree, else the project's directory): its first 200 lines, within 25,000 bytes, given as instructions. Read only. |
 
 ## MCP servers
 

@@ -545,13 +545,14 @@ impl Loaded {
 /// Reads what `prompt` names for the instructions of an agent in `root`, as Scramjet does: its
 /// opening's text or file, else the project's `.scramjet/SYSTEM.md`, else the agent directory's;
 /// the texts or files it appends, else an `APPEND_SYSTEM.md` found the same way; and, unless it
-/// leaves them out, the context files, with Claude Code's own when `claude`. A file in one of the `hidden` stores, also through a
+/// leaves them out, the context files, with those of Claude Code's own that `claude` turns on,
+/// its memory of the project last. A file in one of the `hidden` stores, also through a
 /// symlink, is left out with a problem: nobody chose to send it.
 pub(super) fn load(
     prompt: &SystemPrompt,
     root: &Path,
     agent_directory: Option<&Path>,
-    claude: bool,
+    claude: super::ClaudeCode,
     hidden: &Hidden,
 ) -> Loaded {
     let mut loaded = Loaded {
@@ -560,7 +561,12 @@ pub(super) fn load(
     };
     if !prompt.no_context_files {
         let problems = &mut loaded.problems;
-        loaded.context = context_files(root, agent_directory, claude, hidden, problems);
+        loaded.context =
+            context_files(root, agent_directory, claude.instructions, hidden, problems);
+        let memory = claude.memory.then(|| claude_memory(root)).flatten();
+        if let Some((path, text)) = memory.and_then(|file| context_file(&file, hidden, problems)) {
+            loaded.context.push((path, memory_index(&text)));
+        }
     }
     let found = |name: &str, problems: &mut Vec<Problem>| {
         let directories = [
@@ -652,6 +658,92 @@ pub(super) fn context_files(
         new
     });
     files
+}
+
+/// Claude Code's memory of the project in `root`, its `MEMORY.md`, where Claude Code keeps it:
+/// under `~/.claude/projects`, in the directory named for the main worktree of the repository
+/// `root` is in, else for `root`. None with `--bare` or when there is none.
+pub(super) fn claude_memory(root: &Path) -> Option<PathBuf> {
+    let claude = super::login::claude_directory().filter(|_| !super::bare())?;
+    let root = crate::os::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let project = (root.ancestors())
+        .find(|directory| directory.join(".git").exists())
+        .map_or(root.clone(), |top| {
+            let common = super::sandbox::pointed_to(&top.join(".git"))
+                .and_then(|gitdir| super::sandbox::common_dir(&gitdir));
+            match common {
+                Some(common) if common.file_name().is_some_and(|name| name == ".git") => {
+                    common.parent().map_or(top.to_path_buf(), Path::to_path_buf)
+                }
+                _ => top.to_path_buf(),
+            }
+        });
+    let file = (claude.join("projects"))
+        .join(claude_project_key(&project.to_string_lossy()))
+        .join("memory/MEMORY.md");
+    file.is_file().then_some(file)
+}
+
+/// The name Claude Code gives a project's directory: each character of `path` but an ASCII
+/// letter or digit as `-` (two for one outside the BMP, as JavaScript counts), and past 200, cut
+/// with a hash of the path after it.
+fn claude_project_key(path: &str) -> String {
+    let key: String = (path.chars())
+        .flat_map(|c| match c.is_ascii_alphanumeric() {
+            true => vec![c],
+            false => vec!['-'; c.len_utf16()],
+        })
+        .collect();
+    if key.len() <= 200 {
+        return key;
+    }
+    let hash = (path.encode_utf16()).fold(0i32, |hash, unit| {
+        (hash << 5).wrapping_sub(hash).wrapping_add(i32::from(unit))
+    });
+    let mut hash = u64::from(hash.unsigned_abs());
+    let mut digits = Vec::new();
+    loop {
+        digits.push(char::from_digit((hash % 36) as u32, 36).expect("a base-36 digit"));
+        hash /= 36;
+        if hash == 0 {
+            break;
+        }
+    }
+    format!(
+        "{}-{}",
+        &key[..200],
+        digits.iter().rev().collect::<String>()
+    )
+}
+
+/// What Claude Code loads of a `MEMORY.md`: its first 200 lines within 25,000 bytes, with a
+/// warning when that leaves some out.
+fn memory_index(text: &str) -> String {
+    const LINES: usize = 200;
+    const BYTES: usize = 25_000;
+    let text = text.trim();
+    let mut kept = String::new();
+    let mut count = 0;
+    for line in text.lines().take(LINES) {
+        let joined = kept.len() + usize::from(count > 0) + line.len();
+        if joined > BYTES {
+            break;
+        }
+        if count > 0 {
+            kept.push('\n');
+        }
+        kept.push_str(line);
+        count += 1;
+    }
+    let lines = text.lines().count();
+    if count < lines {
+        kept.push_str(&format!(
+            "\n\n> WARNING: MEMORY.md is {lines} lines and {} bytes (limits: {LINES} lines, \
+             {BYTES} bytes). Only its first {count} lines were loaded.",
+            text.len()
+        ));
+    }
+    kept
 }
 
 /// The `CLAUDE.md` and `AGENTS.md` (or `.MD`) of `directory`, as Scramjet reads them, then its
@@ -1153,6 +1245,70 @@ fn today() -> String {
 mod tests {
     use super::super::ProblemFile;
     use super::*;
+    use crate::agent::ClaudeCode;
+
+    #[test]
+    fn a_project_s_key_is_claude_code_s_with_a_hash_past_200() {
+        assert_eq!(
+            claude_project_key("/home/u/my repo.é\u{1F600}x"),
+            "-home-u-my-repo----x"
+        );
+        let long = claude_project_key(&format!("/home/u/{}", "a".repeat(250)));
+        // From Claude Code's own function, run in Node.
+        assert_eq!(&long[195..], "aaaaa-bkw3mj");
+    }
+
+    #[test]
+    fn memory_is_its_first_200_lines_within_25000_bytes_with_a_warning() {
+        let short = "# Memory\n- [A](a.md)\n";
+        assert_eq!(memory_index(short), "# Memory\n- [A](a.md)");
+        let many: String = (0..250).map(|n| format!("- line {n}\n")).collect();
+        let index = memory_index(&many);
+        assert!(index.contains("- line 199\n\n> WARNING: MEMORY.md is 250 lines"));
+        assert!(index.ends_with("Only its first 200 lines were loaded."));
+        let wide = format!("{}\n{}\n", "x".repeat(20_000), "y".repeat(10_000));
+        assert!(memory_index(&wide).starts_with(&format!("{}\n\n> WARNING", "x".repeat(20_000))));
+    }
+
+    #[test]
+    fn claude_code_s_memory_is_the_main_worktree_s_and_read_only_when_on() {
+        let scratch = std::env::temp_dir().join(format!("sjrs-memory-{}", std::process::id()));
+        let _scratch = super::super::tests::ScratchDir::new(scratch.clone());
+        let main = crate::os::canonicalize(&scratch).unwrap().join("main");
+        let worktree = scratch.join("wt");
+        std::fs::create_dir_all(main.join(".git/worktrees/wt")).unwrap();
+        std::fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
+        std::fs::create_dir_all(worktree.join("sub")).unwrap();
+        std::fs::write(worktree.join(".git"), "gitdir: ../main/.git/worktrees/wt\n").unwrap();
+        let claude = super::super::login::claude_directory().unwrap();
+        let directory = (claude.join("projects"))
+            .join(claude_project_key(&main.to_string_lossy()))
+            .join("memory");
+        let _projects = super::super::tests::ScratchDir::new(directory.parent().unwrap().into());
+        std::fs::create_dir_all(&directory).unwrap();
+        assert_eq!(claude_memory(&worktree), None);
+        std::fs::write(
+            directory.join("MEMORY.md"),
+            "- [Tests](tests.md) run slow\n",
+        )
+        .unwrap();
+        let file = directory.join("MEMORY.md");
+        assert_eq!(claude_memory(&worktree.join("sub")), Some(file.clone()));
+        assert_eq!(claude_memory(&main), Some(file.clone()));
+        let prompt = SystemPrompt::default();
+        let hidden = Hidden::default();
+        let off = load(&prompt, &worktree, None, ClaudeCode::default(), &hidden);
+        assert!(!off.context.iter().any(|(path, _)| *path == file));
+        let on = ClaudeCode {
+            memory: true,
+            ..ClaudeCode::default()
+        };
+        let loaded = load(&prompt, &worktree, None, on, &hidden);
+        assert_eq!(
+            loaded.context.last(),
+            Some(&(file, "- [Tests](tests.md) run slow".to_owned()))
+        );
+    }
 
     fn agent(
         root: &Path,
@@ -1413,18 +1569,36 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             std::fs::write(path, text).unwrap();
         };
         let prompt = SystemPrompt::default();
-        let loaded = load(&prompt, &root, Some(&home), true, &Hidden::default());
+        let loaded = load(
+            &prompt,
+            &root,
+            Some(&home),
+            ClaudeCode::ALL,
+            &Hidden::default(),
+        );
         assert_eq!(
             (loaded.opening, loaded.appended),
             (None, Vec::<String>::new())
         );
         write(&home.join("SYSTEM.md"), "Global.");
         write(&home.join("APPEND_SYSTEM.md"), "Global after.");
-        let loaded = load(&prompt, &root, Some(&home), true, &Hidden::default());
+        let loaded = load(
+            &prompt,
+            &root,
+            Some(&home),
+            ClaudeCode::ALL,
+            &Hidden::default(),
+        );
         assert_eq!(loaded.opening.as_deref(), Some("Global."));
         assert_eq!(loaded.appended, ["Global after."]);
         write(&root.join(".scramjet/SYSTEM.md"), "Project.");
-        let loaded = load(&prompt, &root, Some(&home), true, &Hidden::default());
+        let loaded = load(
+            &prompt,
+            &root,
+            Some(&home),
+            ClaudeCode::ALL,
+            &Hidden::default(),
+        );
         assert_eq!(loaded.opening.as_deref(), Some("Project."));
         assert_eq!(
             loaded.files,
@@ -1442,7 +1616,13 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             no_context_files: false,
             ..SystemPrompt::default()
         };
-        let loaded = load(&prompt, &root, Some(&home), true, &Hidden::default());
+        let loaded = load(
+            &prompt,
+            &root,
+            Some(&home),
+            ClaudeCode::ALL,
+            &Hidden::default(),
+        );
         assert_eq!(loaded.opening.as_deref(), Some("Be terse."));
         assert_eq!(loaded.appended, ["From a file.", "Inline."]);
         assert_eq!(loaded.files, [(given, false)]);
@@ -1451,7 +1631,14 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             ..SystemPrompt::default()
         };
         assert_eq!(
-            load(&prompt, &root, Some(&home), true, &Hidden::default()).opening,
+            load(
+                &prompt,
+                &root,
+                Some(&home),
+                ClaudeCode::ALL,
+                &Hidden::default()
+            )
+            .opening,
             None
         );
         // A file that cannot be read is a problem, and left out.
@@ -1460,7 +1647,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             &SystemPrompt::default(),
             &root,
             Some(&home),
-            true,
+            ClaudeCode::ALL,
             &Hidden::default(),
         );
         assert!(loaded.appended.is_empty());
@@ -1489,7 +1676,7 @@ next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`
             no_context_files: false,
             ..SystemPrompt::default()
         };
-        let loaded = load(&prompt, &scratch, None, true, &Hidden::default());
+        let loaded = load(&prompt, &scratch, None, ClaudeCode::ALL, &Hidden::default());
         let tools = super::super::tools::offered(
             &super::super::tools::DEFAULT_TOOLS.map(String::from),
             &[],
@@ -1517,7 +1704,7 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
             no_context_files: true,
             ..SystemPrompt::default()
         };
-        let loaded = load(&prompt, &scratch, None, true, &Hidden::default());
+        let loaded = load(&prompt, &scratch, None, ClaudeCode::ALL, &Hidden::default());
         assert!(loaded.context.is_empty());
         let text = agent(
             &scratch,
@@ -1707,7 +1894,13 @@ instructions and guidelines:\n\n## {}\n\nBe careful.\n\n# Scramjet\n",
         link("CLAUDE.md");
         link(".scramjet/SYSTEM.md");
         let hidden = Hidden::under(&home, Vec::new());
-        let loaded = load(&SystemPrompt::default(), &root, None, true, &hidden);
+        let loaded = load(
+            &SystemPrompt::default(),
+            &root,
+            None,
+            ClaudeCode::ALL,
+            &hidden,
+        );
         let context: Vec<&str> = (loaded.context.iter())
             .filter(|(path, _)| path.starts_with(&scratch))
             .map(|(_, text)| text.as_str())

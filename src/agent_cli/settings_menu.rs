@@ -169,6 +169,7 @@ fn claude_value(on: bool, row: Row, found: &ClaudeCodeFound) -> String {
         Row::ClaudeCommands => (found.commands, "command", "commands"),
         Row::ClaudeInstructions => (found.instructions, "file", "files"),
         Row::ClaudeAgents => (found.agents, "agent", "agents"),
+        Row::ClaudeMemory => (found.memory, "file", "files"),
         _ => (found.plugins, "plugin", "plugins"),
     };
     let state = if on { "on" } else { "off" };
@@ -329,7 +330,8 @@ impl Interactive {
             | Row::ClaudeCommands
             | Row::ClaudeInstructions
             | Row::ClaudeAgents
-            | Row::ClaudePlugins => {
+            | Row::ClaudePlugins
+            | Row::ClaudeMemory => {
                 let found = found.get_or_init(|| self.session.agent.claude_code_found());
                 claude_value(self.session.settings.claude_code_of(row), row, found)
             }

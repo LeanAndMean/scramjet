@@ -1197,7 +1197,7 @@ def remapped_keys(read, until, send, output):
     on_screen('/scoped-models', gone=True)
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move \u00b7 F6 change')
-    send(b'\x1b[A' * 6)
+    send(b'\x1b[A' * 7)
     on_screen('\u203a   Installed')
     send(b'\x1b[17~')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 F6 edit \u00b7 Esc back')
@@ -3748,7 +3748,7 @@ def installed_view(read, until, send, output):
     assert attention in rows and not any('followUpMode' in row for row in rows), rows
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A' * 6)
+    send(b'\x1b[A' * 7)
     rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 4 commands, 8 agents, 3 skills'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
@@ -3840,7 +3840,7 @@ def project_agent_approval(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A' * 6 + b'\r')
+    send(b'\x1b[A' * 7 + b'\r')
     on_screen('Installed  \u2191\u2193 move')
     rows = select_row(read, shown, send, 'helper', b'\x1b[B')
     (selected,) = [row for row in rows if row.startswith('\u203a')]
@@ -3878,7 +3878,7 @@ def installed_edited_during_turn(read, until, send, output):
     # Opened before the turn's next request, which waits for it; what changed is read once it ends.
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A' * 6 + b'\r')
+    send(b'\x1b[A' * 7 + b'\r')
     on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
     select_row(read, shown, send, '/demo:greet', b'\x1b[B')
     send(b'\r')
@@ -4190,7 +4190,7 @@ def next_step_settings(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A' * 8)
+    send(b'\x1b[A' * 9)
     rows = on_screen('\u203a ' + setting(
         'Next steps', 'continue automatically: 1 \u00b7 ask me: 2 \u00b7 suggested: 1'))
     assert '  ' + setting('Autopilot', 'off') in rows, rows
@@ -4649,7 +4649,7 @@ def publications(read, until, send, output):
     # /settings: each publishing command's tools under it, whether each asks and who says so.
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
-    send(b'\x1b[A' * 7)
+    send(b'\x1b[A' * 8)
     on_screen('\u203a ' + setting('Publishing', 'ask me: 1'))
     send(b'\r')
     rows = on_screen('Publishing  \u2191\u2193 move \u00b7 Enter change \u00b7 Esc back')

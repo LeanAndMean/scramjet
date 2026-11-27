@@ -27,7 +27,8 @@ A scenario (scripts/screens/*.json) holds:
     "config":   more files beside the settings, by name, such as "words.txt" or "agents/x.md";
     "claude":   files in Claude Code's directory (CLAUDE_CONFIG_DIR, a scratch one, empty without
                 them), by name, such as "plugins/installed_plugins.json", `{claude}` in a text
-                being that directory;
+                being that directory and `{project}` in a name the project's as Claude Code names
+                it under "projects";
     "model":    the scripted server's model (default gpt-6-luna);
     "window":   its context window, unknown unless given;
     "total":    the total tokens each response reports, so the context's size is known, its input
@@ -404,6 +405,7 @@ def main():
         claude = os.path.join(work, 'claude')
         os.makedirs(claude)
         for name, text in scenario.get('claude', {}).items():
+            name = name.replace('{project}', re.sub('[^a-zA-Z0-9]', '-', os.path.realpath(project)))
             os.makedirs(os.path.dirname(os.path.join(claude, name)), exist_ok=True)
             with open(os.path.join(claude, name), 'w') as file:
                 file.write(text.replace('{claude}', claude))

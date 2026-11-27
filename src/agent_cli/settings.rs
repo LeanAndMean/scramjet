@@ -192,6 +192,7 @@ pub(super) enum Row {
     ClaudeInstructions,
     ClaudeAgents,
     ClaudePlugins,
+    ClaudeMemory,
 }
 
 /// A list of paths `/sandbox` edits: `sandbox.filesystem`'s `allowWrite`, `denyRead` and
@@ -271,17 +272,19 @@ fn claude_flag(claude: &mut ClaudeCode, row: Row) -> &mut bool {
         Row::ClaudeCommands => &mut claude.commands,
         Row::ClaudeInstructions => &mut claude.instructions,
         Row::ClaudeAgents => &mut claude.agents,
+        Row::ClaudeMemory => &mut claude.memory,
         _ => &mut claude.plugins,
     }
 }
 
 /// The rows of Claude Code's files, each one of `claudeCode`'s keys.
-pub(super) const CLAUDE_ROWS: [Row; 5] = [
+pub(super) const CLAUDE_ROWS: [Row; 6] = [
     Row::ClaudeSkills,
     Row::ClaudeCommands,
     Row::ClaudeInstructions,
     Row::ClaudeAgents,
     Row::ClaudePlugins,
+    Row::ClaudeMemory,
 ];
 
 /// The groups `/settings` lists here: `GROUPS` without the rows for another system.
@@ -333,6 +336,7 @@ impl Row {
             Self::ClaudeInstructions => "Instructions",
             Self::ClaudeAgents => "Agents",
             Self::ClaudePlugins => "Plugins",
+            Self::ClaudeMemory => "Memory",
         }
     }
 
@@ -344,6 +348,7 @@ impl Row {
             Self::ClaudeInstructions => "instructions",
             Self::ClaudeAgents => "agents",
             Self::ClaudePlugins => "plugins",
+            Self::ClaudeMemory => "memory",
             _ => return None,
         })
     }
@@ -532,6 +537,11 @@ impl Row {
             Self::ClaudePlugins => {
                 "The plugins Claude Code's settings enable, with their commands, skills and \
                  agents. One --plugin-dir gives loads either way."
+            }
+            Self::ClaudeMemory => {
+                "Claude Code's memory of this project, the MEMORY.md it keeps in \
+                 ~/.claude/projects: given to the agent as instructions, as Claude Code loads \
+                 it, and never written unless you ask."
             }
         };
         text.to_owned()
@@ -2256,7 +2266,8 @@ impl Settings {
             | Row::ClaudeCommands
             | Row::ClaudeInstructions
             | Row::ClaudeAgents
-            | Row::ClaudePlugins) => match self.claude_code_of(row) {
+            | Row::ClaudePlugins
+            | Row::ClaudeMemory) => match self.claude_code_of(row) {
                 true => "on".into(),
                 false => "off".into(),
             },
@@ -2403,7 +2414,8 @@ impl Settings {
             | Row::ClaudeCommands
             | Row::ClaudeInstructions
             | Row::ClaudeAgents
-            | Row::ClaudePlugins) => {
+            | Row::ClaudePlugins
+            | Row::ClaudeMemory) => {
                 let on = !self.claude_code_of(row);
                 *claude_flag(&mut self.claude_code, row) = on;
                 let key = row.claude_key().expect("a row of Claude Code's files");
@@ -2939,7 +2951,14 @@ const KEYS: &[(&str, &[&str])] = &[
     ("branchSummary", &["skipPrompt", "reserveTokens"]),
     (
         "claudeCode",
-        &["skills", "commands", "instructions", "agents", "plugins"],
+        &[
+            "skills",
+            "commands",
+            "instructions",
+            "agents",
+            "plugins",
+            "memory",
+        ],
     ),
     (
         "compaction",
@@ -4754,7 +4773,7 @@ or false; ignored"
                 "copyOnSelect": !cfg!(target_os = "macos"),
                 "copyMarkdown": false,
                 "claudeCode": {"skills": true, "commands": true, "instructions": true,
-                    "agents": true, "plugins": true},
+                    "agents": true, "plugins": true, "memory": true},
                 "spellCheck": false,
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,

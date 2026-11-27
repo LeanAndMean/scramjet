@@ -3029,7 +3029,7 @@ fn what_another_user_owns_where_the_project_looks_is_left_out_and_said() {
             &SystemPrompt::default(),
             &project,
             None,
-            true,
+            crate::agent::ClaudeCode::ALL,
             &sandbox::Hidden::default(),
         );
         let sets = Sets::find(&[], &project.join(".scramjet"));

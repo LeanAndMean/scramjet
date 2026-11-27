@@ -234,6 +234,8 @@ pub struct ClaudeCode {
     pub agents: bool,
     /// The plugins Claude Code's settings enable.
     pub plugins: bool,
+    /// Its memory of the project, `~/.claude/projects/<project>/memory/MEMORY.md`, read only.
+    pub memory: bool,
 }
 
 /// How many of each of Claude Code's own files a session would read with them on.
@@ -245,6 +247,7 @@ pub struct ClaudeCodeFound {
     pub instructions: usize,
     pub agents: usize,
     pub plugins: usize,
+    pub memory: usize,
 }
 
 impl ClaudeCode {
@@ -255,6 +258,7 @@ impl ClaudeCode {
         instructions: true,
         agents: true,
         plugins: true,
+        memory: true,
     };
 }
 
@@ -1081,6 +1085,7 @@ impl Agent {
                 .count(),
             agents: subagent::claude_code_agents(root).len(),
             plugins,
+            memory: usize::from(instructions::claude_memory(root).is_some()),
         }
     }
 
@@ -1261,13 +1266,7 @@ impl Agent {
         let directory = self.agent_directory.as_deref();
         let hidden = self.instruction_hidden();
         let claude = config.claude_code;
-        let loaded = instructions::load(
-            &config.prompt,
-            &config.root,
-            directory,
-            claude.instructions,
-            &hidden,
-        );
+        let loaded = instructions::load(&config.prompt, &config.root, directory, claude, &hidden);
         let sources = subagent::Sources {
             user: &self.agents_directories,
             sets: &self.sets,

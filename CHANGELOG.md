@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.434.0 — Claude Code's memory of the project
+
+### Added
+
+- `/settings` → Claude Code's files → Memory (`claudeCode.memory`, off by default) gives the agent the `MEMORY.md` Claude Code keeps for the project in `~/.claude/projects`, as Claude Code loads it: its first 200 lines, within 25,000 bytes, with a warning when more is left out. A worktree shares its repository's. Scramjet only reads it.
+
 ## 2.433.0 — Claude Code's files, off until turned on
 
 ### Changed

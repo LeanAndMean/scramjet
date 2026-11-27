@@ -9,12 +9,18 @@
   },
   "claude": {
     "CLAUDE.md": "User instructions.\n",
-    "rules/style.md": "Keep it short.\n"
+    "rules/style.md": "Keep it short.\n",
+    "projects/{project}/memory/MEMORY.md": "- [Builds](builds.md) take a minute\n"
   },
   "replies": [
     [
       {
         "text": "Audited."
+      }
+    ],
+    [
+      {
+        "text": "Noted."
       }
     ]
   ],
@@ -47,7 +53,7 @@
       "shot": "claude-files-rows"
     },
     {
-      "type": "\u001b[A\u001b[A\u001b[A\r"
+      "type": "\u001b[A\u001b[A\u001b[A\u001b[A\r"
     },
     {
       "sleep": 0.5
@@ -81,6 +87,39 @@
     },
     {
       "shot": "claude-files-ran"
+    },
+    {
+      "type": "/settings\r"
+    },
+    {
+      "until": "Settings"
+    },
+    {
+      "type": "\u001b[A\r"
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "shot": "claude-files-memory-on"
+    },
+    {
+      "type": "\u001b"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "How long do builds take?\r"
+    },
+    {
+      "until": "Noted."
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "claude-files-memory-asked"
     }
   ]
 }
