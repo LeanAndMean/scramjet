@@ -51,13 +51,15 @@ A scenario (scripts/screens/*.json) holds:
                 "headers";
     "steps":    {"until": TEXT} waits for TEXT on screen, however it wraps, {"type": KEYS} types them,
                 {"sleep": SECONDS}, {"size": COLUMNSxROWS} resizes the terminal, {"shot": NAME} writes
-                NAME.ansi and NAME.png.
+                NAME.ansi and NAME.png, {"copied": NAME} writes NAME.txt, what the last OSC 52
+                sequence copied (waiting for one; an "env" with SSH_CONNECTION makes every copy one).
 
 Each request's body is written to requests.jsonl in OUTDIR, a line each.
 
 Nothing reaches a provider or the user's settings, sessions, packages, clipboard or browser: the
 pages scramjet-rs opens are written to opened.txt in the scratch directory."""
 import argparse
+import base64
 import fcntl
 import json
 import os
@@ -469,6 +471,7 @@ def main():
         screen = Screen(columns, rows)
         feed = pyte.ByteStream(screen)
         lock = threading.Lock()
+        copies = []
 
         def read():
             while True:
@@ -483,6 +486,7 @@ def main():
                         if question in answers:
                             os.write(master, answers[question])
                 with lock:
+                    copies.extend(re.findall(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)(?:\x07|\x1b\\)', data))
                     # The full screen starts on the alternate screen, which pyte does not keep apart.
                     start = data.rfind(b'\x1b[?1049h')
                     if start >= 0:
@@ -521,6 +525,19 @@ def main():
                     screen.resize(rows, columns)
                 # Until the next frame, drawn at the new size.
                 time.sleep(.5)
+            elif 'copied' in step:
+                deadline = time.monotonic() + options.timeout
+                while not copies:
+                    if time.monotonic() > deadline or process.poll() is not None:
+                        sys.exit('screens: nothing was copied for %r' % step['copied'])
+                    time.sleep(.05)
+                with lock:
+                    text = base64.b64decode(copies[-1]).decode()
+                    copies.clear()
+                path = os.path.join(options.outdir, options.name + step['copied'] + '.txt')
+                with open(path, 'w') as file:
+                    file.write(text)
+                print(path)
             elif 'shot' in step:
                 base = os.path.join(options.outdir, options.name + step['shot'])
                 with lock:

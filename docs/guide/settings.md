@@ -53,6 +53,7 @@ There is no project settings file: what `/sandbox` changes for one project is ke
 | `followUpMode` | `"all"`, `"one-at-a-time"` | `"one-at-a-time"` | Messages queued with Alt+Enter: how many the model gets each time it would stop. |
 | `doubleEscapeAction` | `"tree"`, `"fork"`, `"none"` | `"tree"` | Escape twice on an empty prompt opens `/tree`, `/fork` or nothing. |
 | `copyOnSelect` | `true`, `false` | `true` on macOS, else `false` | Text selected with the mouse is copied at once; a right click copies a selection either way. |
+| `copyMarkdown` | `true`, `false` | `true` | Text selected in a reply is copied as its markdown: the marks within it, and those of a list, heading, code block or table selected whole. `false` copies it as shown. Prompts and tool output copy as shown either way. |
 | `scrollWheelStep` | 1 to 20 | 3 | The lines a notch of the mouse wheel scrolls. |
 | `editorMaxHeightPercent` | 10 to 50 | 30 | The most rows the prompt takes, as a share of the screen's. |
 | `autocompleteMaxVisible` | 3 to 20 | 5 | The most entries a completion list shows at once. |

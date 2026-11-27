@@ -65,6 +65,7 @@ mod sessions;
 mod settings;
 mod settings_menu;
 mod slash;
+mod source;
 mod spelling;
 mod style;
 mod system_prompt;

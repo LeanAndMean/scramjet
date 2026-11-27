@@ -10,7 +10,7 @@ use super::keymap::{self, Binding};
 use super::settings::MarkdownReads;
 use super::style::{self, Style};
 use super::text::{FROM, RULE, Wrap, call_line, clip, columns, printable, style_at, visible};
-use super::{children, console, diff, editor, job, markdown, record};
+use super::{children, console, diff, editor, job, markdown, record, selection};
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
     DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE, Reply,
@@ -315,6 +315,9 @@ pub(super) struct Terminal {
     full: bool,
     /// The output marks gutters and wrapped lines for the full screen's copy (`text::FROM`).
     marked: bool,
+    /// In a marked capture, where each reply's rows are in the buffer, from and before (while
+    /// it streams, none), with its markdown.
+    replies: Vec<(usize, Option<usize>, String)>,
     /// How prompts, reasoning, calls and replies look; the classic look but on the full screen.
     pub(super) design: Design,
     /// The banner a session starts with (`banner`).
@@ -611,12 +614,35 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
         terminal
     }
     /// What was rendered into the buffer, after ending any streamed block.
-    pub(super) fn captured(mut self) -> String {
+    #[cfg(test)]
+    pub(super) fn captured(self) -> String {
+        self.captured_replies().0
+    }
+    /// As `captured`, with the lines each reply takes in it and the reply's markdown.
+    pub(super) fn captured_replies(mut self) -> (String, selection::Replies) {
         self.clear();
-        self.capture
-            .take()
-            .map(|(text, _)| text)
-            .unwrap_or_default()
+        let text = (self.capture.take()).map_or_else(String::new, |(text, _)| text);
+        let line = |at: usize| text[..at].matches('\n').count();
+        let replies = (self.replies.drain(..))
+            .filter_map(|(start, end, source)| {
+                let end = end?.min(text.len());
+                let last = line(end) + usize::from(end > start && !text[..end].ends_with('\n'));
+                Some((line(start.min(end))..last, Arc::from(source)))
+            })
+            .collect();
+        (text, replies)
+    }
+    /// In a marked capture, where the buffer ends now.
+    fn reply_mark(&self) -> Option<usize> {
+        let (captured, _) = self.capture.as_ref().filter(|_| self.marked)?;
+        Some(captured.len())
+    }
+    /// The reply streaming ends here.
+    fn end_reply(&mut self) {
+        let at = self.reply_mark();
+        if let Some((_, end @ None, _)) = self.replies.last_mut() {
+            *end = at;
+        }
     }
     /// Writes to stderr, or the capture buffer.
     fn err(&mut self, text: &str) {
@@ -785,6 +811,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             expandable: false,
             full: false,
             marked: false,
+            replies: Vec::new(),
             design: Design::Classic,
             banner: Banner::Plain,
             outcomes: VecDeque::new(),
@@ -893,8 +920,14 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
             self.text_rows =
                 (kind == Streaming::Text && styled && self.streamed.is_empty()).then_some(0);
             self.text_stops = job::stops();
+            if let Some(at) = self.reply_mark().filter(|_| kind == Streaming::Text) {
+                self.replies.push((at, None, String::new()));
+            }
             let reopen = self.markdown.reopen();
             self.print_streamed(&reopen);
+        }
+        if let (Streaming::Text, Some((_, None, source))) = (kind, self.replies.last_mut()) {
+            source.push_str(delta);
         }
         let trimmed = delta.trim_end_matches('\n');
         if !trimmed.is_empty() {
@@ -991,6 +1024,7 @@ overlap; tool calls outside them are not blocked. Widen the caller scope or abor
                 ));
             }
             Streaming::Text => {
+                self.end_reply();
                 self.text_rows = self.text_rows.map(|rows| rows + 2);
                 self.out("\n\n");
             }
@@ -1099,6 +1133,8 @@ impl AgentUi for Terminal {
                 .filter(|_| captured || job::stops() == self.text_stops);
             if let Some(rows) = rows {
                 self.rewind(rows);
+                let kept = self.reply_mark().unwrap_or(usize::MAX);
+                self.replies.retain(|&(start, ..)| start < kept);
                 text = self.streamed[..self.consumed].to_owned() + &text;
             }
             self.streamed.clear();
@@ -1116,7 +1152,8 @@ impl AgentUi for Terminal {
                 (true, None) => self.width(),
             };
             let mut markdown = self.markdown(width > 0, "", width);
-            let text = self.shown(Streaming::Text, text.trim_end());
+            let source = text.trim_end().to_owned();
+            let text = self.shown(Streaming::Text, &source);
             let text = markdown.push(&text) + &markdown.finish();
             let mut wrap = self.markdown_wrapper(width);
             let text = wrap.push(&text) + &wrap.finish();
@@ -1128,7 +1165,12 @@ impl AgentUi for Terminal {
                 .apply(&text),
                 None => text,
             };
-            self.out(&format!("{text}\n\n"));
+            let start = self.reply_mark();
+            self.out(&text);
+            if let (Some(start), Some(end)) = (start, self.reply_mark()) {
+                self.replies.push((start, Some(end), source));
+            }
+            self.out("\n\n");
         }
     }
     fn tool_call(&mut self, name: &str, summary: &str, compact: Option<&CompactRead>) {

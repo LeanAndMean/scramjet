@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.432.0 — Copying a selection as markdown
+
+### Added
+
+- Text selected in a reply is copied as the markdown it was written in: the marks for bold, code and links within it, and those of a heading, list, code block or table selected whole (a table's pipes rather than its box drawing). Prompts and tool output copy as shown. `copyMarkdown: false`, or Copy as markdown in `/settings`, copies the text as shown.
+
 ## 2.431.0 — Going back without a question
 
 ### Changed

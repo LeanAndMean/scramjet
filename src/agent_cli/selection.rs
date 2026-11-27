@@ -5,6 +5,8 @@
 
 use super::style::{self, Band};
 use super::text::{FROM, JOINED, RULE, SPACE, UNTIL};
+use std::ops::Range;
+use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -23,6 +25,8 @@ pub(super) struct Line {
     rule: bool,
     /// The background it is drawn on across the screen, if not the base.
     pub(super) band: Option<Band>,
+    /// The markdown of the reply it shows, which its other lines share.
+    pub(super) source: Option<Arc<str>>,
 }
 
 impl Line {
@@ -44,6 +48,31 @@ impl Line {
     /// space its wrapping took, which a selection then shows as one cell.
     pub(super) fn breaks(&self) -> bool {
         !self.rule && self.joined.as_ref().is_none_or(|joined| !joined.is_empty())
+    }
+
+    /// Whether it shows the same reply as `other`, or as it, none.
+    pub(super) fn same_reply(&self, other: &Line) -> bool {
+        match (&self.source, &other.source) {
+            (Some(one), Some(other)) => Arc::ptr_eq(one, other),
+            (one, other) => one.is_none() && other.is_none(),
+        }
+    }
+}
+
+/// The lines each reply of a rendering takes, and the reply's markdown.
+pub(super) type Replies = Vec<(Range<usize>, Arc<str>)>;
+
+/// Gives the lines of `lines` in each of `replies`' ranges that reply's markdown.
+pub(super) fn sourced(lines: &mut [Line], replies: &Replies) {
+    for (range, source) in replies {
+        let end = range.end.min(lines.len());
+        for line in lines
+            .get_mut(range.start.min(end)..end)
+            .into_iter()
+            .flatten()
+        {
+            line.source = Some(source.clone());
+        }
     }
 }
 
@@ -153,6 +182,7 @@ fn split_open<'a>(rows: impl Iterator<Item = &'a str>) -> (Vec<Line>, String) {
             joined: None,
             rule,
             band,
+            source: None,
         });
     }
     (lines, active)

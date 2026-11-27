@@ -179,6 +179,7 @@ impl Link {
             double_escape: settings.double_escape != DoubleEscape::Nothing,
             markdown_reads: settings.markdown_reads,
             copy_on_select: settings.copy_on_select,
+            copy_markdown: settings.copy_markdown,
             layout: settings.layout,
             retain_transcript: settings.retain_transcript,
             terminal_progress: settings.terminal_progress,
@@ -379,6 +380,7 @@ impl Handle {
         let modes = (settings.steering_mode, settings.follow_up_mode);
         spelling::configure(settings.spell_check, settings.words().as_deref());
         let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
+        let copy_markdown = settings.copy_markdown;
         let (layout, terminal_progress) = (settings.layout, settings.terminal_progress);
         let retain_transcript = settings.retain_transcript;
         let (design, banner, bottom) = (settings.look, settings.banner, settings.bottom);
@@ -406,6 +408,7 @@ impl Handle {
                 let app = App {
                     markdown_reads,
                     copy_on_select,
+                    copy_markdown,
                     layout,
                     retain_transcript,
                     terminal_progress,

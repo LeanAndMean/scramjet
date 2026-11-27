@@ -106,6 +106,7 @@ enum ToScreen {
         double_escape: bool,
         markdown_reads: MarkdownReads,
         copy_on_select: bool,
+        copy_markdown: bool,
         layout: Layout,
         retain_transcript: bool,
         terminal_progress: bool,
@@ -347,6 +348,8 @@ struct App {
     bottom: Bottom,
     /// A completed mouse selection is copied (`copyOnSelect`).
     copy_on_select: bool,
+    /// A selection in a reply copies its markdown (`copyMarkdown`).
+    copy_markdown: bool,
     /// The wheel's step, the prompt's height and the completion list's rows.
     layout: Layout,
     /// Leaving for good writes the conversation into the terminal's scrollback
@@ -421,6 +424,7 @@ impl App {
             banner: Banner::Plain,
             bottom: Bottom::Pi,
             copy_on_select: false,
+            copy_markdown: true,
             layout: Layout::default(),
             retain_transcript: false,
             terminal_progress: false,
@@ -701,6 +705,7 @@ impl App {
                 double_escape,
                 markdown_reads,
                 copy_on_select,
+                copy_markdown,
                 layout,
                 retain_transcript,
                 terminal_progress,
@@ -711,6 +716,7 @@ impl App {
                 self.editor.reloaded(completions, double_escape);
                 self.markdown_reads = markdown_reads;
                 self.copy_on_select = copy_on_select;
+                self.copy_markdown = copy_markdown;
                 self.layout = layout;
                 self.retain_transcript = retain_transcript;
                 self.terminal_progress = terminal_progress;

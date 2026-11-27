@@ -113,8 +113,10 @@ impl Part {
         self.lines.truncate(rows);
         let cut = cut(&self.events, events);
         if cut > events {
-            let text = captured(&self.events[events..cut], look, hide_thinking.clone(), now);
-            if let Some((more, count)) = selection::settled(&text) {
+            let (text, replies) =
+                captured(&self.events[events..cut], look, hide_thinking.clone(), now);
+            if let Some((mut more, count)) = selection::settled(&text) {
+                selection::sourced(&mut more, &replies);
                 if count > 0 {
                     self.lines.append(&mut pad);
                 }
@@ -124,8 +126,9 @@ impl Part {
                 (events, rows) = (cut, self.lines.len());
             }
         }
-        let text = captured(&self.events[events..], look, hide_thinking.clone(), now);
-        let shown = selection::lines(&text);
+        let (text, replies) = captured(&self.events[events..], look, hide_thinking.clone(), now);
+        let mut shown = selection::lines(&text);
+        selection::sourced(&mut shown, &replies);
         if !shown.is_empty() {
             self.lines.extend(pad.iter().cloned());
             self.lines.extend(shown);
@@ -318,6 +321,24 @@ impl Transcript {
         lines.skip(top).take(count).cloned().collect()
     }
 
+    /// The lines of the reply line `line` shows, and the first's number.
+    pub(super) fn reply(&self, line: usize) -> (usize, Vec<Line>) {
+        let lines: Vec<&Line> = self.all().flat_map(|part| &part.lines).collect();
+        let Some(&shown) = lines.get(line) else {
+            return (line, Vec::new());
+        };
+        let first = (lines[..line].iter())
+            .rposition(|other| !other.same_reply(shown))
+            .map_or(0, |before| before + 1);
+        let end = (lines[line..].iter())
+            .position(|other| !other.same_reply(shown))
+            .map_or(lines.len(), |after| line + after);
+        (
+            first,
+            lines[first..end].iter().map(|&line| line.clone()).collect(),
+        )
+    }
+
     /// Line `line` as drawn, empty past the end.
     pub(super) fn shown(&self, line: usize) -> String {
         let line = self.window(line, 1).pop();
@@ -362,7 +383,9 @@ fn cut(events: &[Event], from: usize) -> usize {
 /// The lines of `events` as `Terminal` renders them at the look's width.
 #[cfg(test)]
 fn render(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>, now: Instant) -> Vec<Line> {
-    let mut lines = selection::lines(&captured(events, look, hide_thinking, now));
+    let (text, replies) = captured(events, look, hide_thinking, now);
+    let mut lines = selection::lines(&text);
+    selection::sourced(&mut lines, &replies);
     // Each block ends with a blank line, which separates it from the next part.
     if !lines.is_empty() {
         lines.push(Line::default());
@@ -389,8 +412,14 @@ fn spined(lines: &mut [Line]) {
     }
 }
 
-/// `events` as `Terminal` renders them at the look's width.
-fn captured(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>, now: Instant) -> String {
+/// `events` as `Terminal` renders them at the look's width, with the lines each reply takes
+/// and its markdown.
+fn captured(
+    events: &[Event],
+    look: Look,
+    hide_thinking: Arc<AtomicBool>,
+    now: Instant,
+) -> (String, selection::Replies) {
     let mut ui = Terminal::capture_shown(look.width, hide_thinking, look.whole);
     ui.markdown_reads = look.markdown_reads;
     ui.design = look.design;
@@ -408,7 +437,7 @@ fn captured(events: &[Event], look: Look, hide_thinking: Arc<AtomicBool>, now: I
         }
     }
     record::running(events.last(), &mut ui);
-    ui.captured()
+    ui.captured_replies()
 }
 
 #[cfg(test)]
@@ -645,6 +674,32 @@ mod tests {
         transcript.render(look(40, false), &hide);
         assert_eq!(transcript.line(done), cut.len() - 2);
         assert_eq!(window(&transcript, transcript.line(done), 1), ["✓ done"]);
+    }
+
+    #[test]
+    fn a_replys_lines_carry_its_markdown_streamed_or_whole() {
+        let hide = Arc::new(AtomicBool::new(false));
+        let reply = "Use **bold** text.\n\n- one";
+        for streamed in [true, false] {
+            let mut transcript = Transcript::default();
+            transcript.push(Event::UserPrompt("go".into()));
+            if streamed {
+                transcript.push(Event::Progress(StreamProgress::Text(reply.into())));
+            }
+            transcript.push(Event::Assistant(reply.into()));
+            transcript.push(Event::UserPrompt("next".into()));
+            transcript.render(look(40, true), &hide);
+            let lines = transcript.window(0, 100);
+            let sourced: Vec<String> = (lines.iter())
+                .filter(|line| line.source.as_deref() == Some(reply))
+                .map(|line| plain(&line.shown))
+                .collect();
+            assert_eq!(sourced, ["Use bold text.", "", "- one"], "{lines:?}");
+            let first = lines.iter().position(|line| line.source.is_some()).unwrap();
+            let (from, whole) = transcript.reply(first + 2);
+            assert_eq!((from, whole.len()), (first, 3));
+            assert_eq!(transcript.reply(first - 1).1.len(), first);
+        }
     }
 
     #[test]

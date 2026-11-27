@@ -1,0 +1,90 @@
+{
+  "size": "80x40",
+  "settings": {
+    "theme": "scramjet-dark"
+  },
+  "env": {
+    "SSH_CONNECTION": "127.0.0.1 1 127.0.0.1 2"
+  },
+  "replies": [
+    [
+      {
+        "text": "## Plan\n\nUse **bold `x` text** and [the docs](https://example.com/d).\n\n- **one**\n- two\n\n```rust\nlet x = 1;\n```\n\n| Name | Size |\n|------|------|\n| a.rs | 12 |\n| b.rs | 7 |\n\nDone."
+      }
+    ]
+  ],
+  "steps": [
+    {
+      "sleep": 1.0
+    },
+    {
+      "type": "Show the plan\r"
+    },
+    {
+      "until": "Done."
+    },
+    {
+      "sleep": 0.5
+    },
+    {
+      "type": "\u001b[<0;3;14M\u001b[<32;8;33M\u001b[<0;8;33m"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[<2;8;33M\u001b[<2;8;33m"
+    },
+    {
+      "copied": "whole"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "shot": "after"
+    },
+    {
+      "type": "\u001b[<0;7;16M\u001b[<32;13;16M\u001b[<0;13;16m"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[<2;13;16M\u001b[<2;13;16m"
+    },
+    {
+      "copied": "span"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[<0;5;28M\u001b[<32;14;28M\u001b[<0;14;28m"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[<2;14;28M\u001b[<2;14;28m"
+    },
+    {
+      "copied": "cells"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[<0;5;11M\u001b[<32;26;16M\u001b[<0;26;16m"
+    },
+    {
+      "sleep": 0.3
+    },
+    {
+      "type": "\u001b[<2;26;16M\u001b[<2;26;16m"
+    },
+    {
+      "copied": "mixed"
+    }
+  ]
+}

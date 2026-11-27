@@ -166,6 +166,7 @@ pub(super) enum Row {
     FollowUp,
     DoubleEscape,
     CopyOnSelect,
+    CopyMarkdown,
     WheelStep,
     RetainTranscript,
     Changelog,
@@ -220,6 +221,7 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::FollowUp,
             Row::DoubleEscape,
             Row::CopyOnSelect,
+            Row::CopyMarkdown,
             Row::WheelStep,
             Row::PromptHeight,
             Row::CompletionRows,
@@ -279,6 +281,7 @@ impl Row {
             Self::FollowUp => "Follow-up messages",
             Self::DoubleEscape => "Escape twice",
             Self::CopyOnSelect => "Copy on select",
+            Self::CopyMarkdown => "Copy as markdown",
             Self::WheelStep => "Wheel scrolls",
             Self::RetainTranscript => "Retain transcript",
             Self::Changelog => "Changelog",
@@ -374,6 +377,12 @@ impl Row {
                      paste anywhere (Command+V on a Mac). A right click{with} copies a selection \
                      either way."
                 );
+            }
+            Self::CopyMarkdown => {
+                "Text selected in a reply is copied as the markdown it was written in: the marks \
+                 for bold, code and links within it, and those of a list, heading, code block or \
+                 table selected whole. Off, it is copied as shown. Prompts and tool output are \
+                 copied as shown either way."
             }
             Self::WheelStep => "The lines of the conversation a notch of the mouse wheel scrolls.",
             Self::RetainTranscript => {
@@ -471,6 +480,8 @@ pub(super) struct Settings {
     /// `copyOnSelect`: a completed mouse selection is copied; by default only on macOS, whose
     /// terminals keep Command+C to themselves.
     pub(super) copy_on_select: bool,
+    /// `copyMarkdown`: a selection in a reply copies its markdown, rather than the text shown.
+    pub(super) copy_markdown: bool,
     /// `spellCheck`: misspelled words in the prompt are underlined.
     pub(super) spell_check: bool,
     /// `images.autoResize`: images too large to send are scaled down, as Scramjet's.
@@ -670,6 +681,7 @@ impl Settings {
             hide_thinking_block: false,
             double_escape: DoubleEscape::Tree,
             copy_on_select: cfg!(target_os = "macos"),
+            copy_markdown: true,
             spell_check: true,
             resize_images: true,
             block_images: false,
@@ -756,6 +768,11 @@ impl Settings {
             None => {}
             Some(Value::Bool(copy)) => self.copy_on_select = *copy,
             Some(_) => wrong("copyOnSelect", "true or false"),
+        }
+        match object.get("copyMarkdown") {
+            None => {}
+            Some(Value::Bool(markdown)) => self.copy_markdown = *markdown,
+            Some(_) => wrong("copyMarkdown", "true or false"),
         }
         match object.get("retainTranscriptOnExit") {
             None => {}
@@ -2149,6 +2166,8 @@ impl Settings {
             .into(),
             Row::CopyOnSelect if self.copy_on_select => "on".into(),
             Row::CopyOnSelect => "off".into(),
+            Row::CopyMarkdown if self.copy_markdown => "on".into(),
+            Row::CopyMarkdown => "off".into(),
             Row::WheelStep => match self.layout.wheel_step {
                 1 => "1 line".into(),
                 lines => format!("{lines} lines"),
@@ -2283,6 +2302,10 @@ impl Settings {
             Row::CopyOnSelect => {
                 self.copy_on_select = !self.copy_on_select;
                 self.save("copyOnSelect", json!(self.copy_on_select))
+            }
+            Row::CopyMarkdown => {
+                self.copy_markdown = !self.copy_markdown;
+                self.save("copyMarkdown", json!(self.copy_markdown))
             }
             Row::RetainTranscript => {
                 self.retain_transcript = !self.retain_transcript;
@@ -2734,6 +2757,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "hideThinkingBlock",
             "doubleEscapeAction",
             "copyOnSelect",
+            "copyMarkdown",
             "retainTranscriptOnExit",
             "collapseChangelog",
             "lastChangelogVersion",
@@ -3851,9 +3875,11 @@ or false; ignored"
                 "branchSummary": {"reserveTokens": 1, "skipPrompt": true},
                 "defaultThinkingLevel": "off", "theme": "pi-light", "treeFilterMode": "labeled-only",
                 "resumeChains": "folded", "steeringMode": "one-at-a-time", "followUpMode": "all",
-                "markdown": {"toolDisplay": "source"}, "copyOnSelect": true}"#,
+                "markdown": {"toolDisplay": "source"}, "copyOnSelect": true,
+                "copyMarkdown": false}"#,
         );
         assert!(settings.copy_on_select);
+        assert!(!settings.copy_markdown);
         assert_eq!(settings.tree_filter, Filter::Labeled);
         assert_eq!(settings.resume_chains, Chains::Folded);
         assert_eq!(settings.markdown_reads, MarkdownReads::Source);
@@ -4009,11 +4035,12 @@ or false; ignored"
             r#"{"hideThinkingBlock": "yes", "doubleEscapeAction": "tree", "defaultThinkingLevel": "hgih",
                 "branchSummary": {"skipPrompt": 1}, "followUpMode": "each", "treeFilterMode": "user",
                 "resumeChains": "tree", "markdown": {"toolDisplay": "raw"}, "theme": 1, "copyOnSelect": "on", "banner": "big", "bottom": "tall",
-                "defaultShell": "zsh"}"#,
+                "defaultShell": "zsh", "copyMarkdown": "no"}"#,
         );
         assert_eq!(settings.banner, Banner::Header);
         assert_eq!(settings.bottom, Bottom::Bar);
         assert_eq!(settings.copy_on_select, cfg!(target_os = "macos"));
+        assert!(settings.copy_markdown);
         assert_eq!(settings.tree_filter, Filter::Default);
         assert_eq!(settings.resume_chains, Chains::Flat);
         assert_eq!(settings.theme, None);
@@ -4028,6 +4055,7 @@ or false; ignored"
             [
                 format!("{path}: hideThinkingBlock must be true or false; ignored"),
                 format!("{path}: copyOnSelect must be true or false; ignored"),
+                format!("{path}: copyMarkdown must be true or false; ignored"),
                 format!("{path}: branchSummary.skipPrompt must be true or false; ignored"),
                 format!(
                     r#"{path}: treeFilterMode must be "default", "no-tools", "user-only", "labeled-only", "all"; ignored"#
@@ -4497,6 +4525,10 @@ or false; ignored"
             [default, other, default, other]
         );
         assert_eq!(
+            seen(Row::CopyMarkdown, &mut settings),
+            ["on", "off", "on", "off"]
+        );
+        assert_eq!(
             seen(Row::SpellCheck, &mut settings),
             ["on", "off", "on", "off"]
         );
@@ -4598,6 +4630,7 @@ or false; ignored"
                 "steeringMode": "one-at-a-time",
                 "hideThinkingBlock": true,
                 "copyOnSelect": !cfg!(target_os = "macos"),
+                "copyMarkdown": false,
                 "spellCheck": false,
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,

@@ -4,8 +4,8 @@ use super::transcript::Place;
 use super::{App, CLICKS, DRAG, LEFT, Open, RIGHT, Shown, WHEEL_DOWN, WHEEL_UP, to_terminal};
 use crate::agent_cli::editor::{Draft, Editor, Note};
 use crate::agent_cli::keys::{Key, Mouse};
-use crate::agent_cli::selection;
-use crate::agent_cli::{clipboard, keys};
+use crate::agent_cli::selection::{self, Line};
+use crate::agent_cli::{clipboard, keys, source};
 use std::{
     io,
     sync::mpsc::{self, TryRecvError},
@@ -652,12 +652,49 @@ impl App {
             true => start.1,
             false => 0,
         };
-        let text = selection::text(&lines, left, end.1);
+        let text = match self.copy_markdown {
+            true => self.markdown_text(&lines, shown.start, left, end.1),
+            false => selection::text(&lines, left, end.1),
+        };
         if text.is_empty() {
             return;
         }
         self.edge = None;
         self.copy_text(text, Some(id));
+    }
+
+    /// The text selected in `lines`, the conversation's from line `top` on, as `selection::text`
+    /// holds it, but for a reply's part of it, which is the reply's markdown there.
+    fn markdown_text(&self, lines: &[Line], top: usize, left: usize, right: usize) -> String {
+        let mut pieces = Vec::new();
+        let mut at = 0;
+        while at < lines.len() {
+            let run = (lines[at..].iter())
+                .take_while(|line| line.same_reply(&lines[at]))
+                .count();
+            let from = if at == 0 { left } else { 0 };
+            let to = if at + run == lines.len() {
+                right
+            } else {
+                usize::MAX
+            };
+            let part = &lines[at..at + run];
+            let shown = || selection::text(part, from, to);
+            pieces.push(match &lines[at].source {
+                None => shown(),
+                Some(source) => {
+                    let (first, whole) = self.transcript.reply(top + at);
+                    let within = top + at - first;
+                    let all = selection::text(&whole, 0, usize::MAX);
+                    let after = selection::text(&whole[within..], from, usize::MAX);
+                    let before = selection::text(&whole[..within + run], 0, to);
+                    let start = all.len().saturating_sub(after.len());
+                    source::copied(source, &all, start, before.len()).unwrap_or_else(shown)
+                }
+            });
+            at += run;
+        }
+        pieces.join("\n")
     }
 
     /// Copies `text`, that of the selection `selection` or the prompt's, as `copy` does.
