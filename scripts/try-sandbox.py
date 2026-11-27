@@ -217,7 +217,7 @@ def main():
              lambda o: 'HOME-WROTE' not in o, None),
             ('a missing .git cannot be made', 'mkdir .git 2>&1 && echo GIT-""MADE',
              lambda o: 'GIT-MADE' not in o,
-             None if MAC else 'Linux protects .git, .scramjet, .agents and .claude only when they exist (item 27)'),
+             None if MAC else 'Linux protects .git, .scramjet and .agents only when they exist (item 27)'),
             ('a missing .Scramjet cannot be made where names fold case' if folded
              else '.Scramjet is another name where names keep case',
              'mkdir .Scramjet 2>&1 && echo FOLD-""MADE',

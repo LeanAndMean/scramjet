@@ -148,9 +148,8 @@ const CREDENTIAL_WORDS: [&str; 6] = [
 
 /// What stays read-only inside a writable project, as in Codex's `workspace-write`
 /// (`default_read_only_subpaths_for_writable_root`): Git's history and hooks, and the agents'
-/// own settings and commands, through which a command would act beyond the sandbox's next turn;
-/// `.claude` too, whose commands, agents, skills, rules and settings are read as Claude Code's.
-const PROTECTED: [&str; 4] = [".git", ".scramjet", ".agents", ".claude"];
+/// own settings and commands, through which a command would act beyond the sandbox's next turn.
+const PROTECTED: [&str; 3] = [".git", ".scramjet", ".agents"];
 
 /// What the sandbox has of its own, which a grant may neither be nor hold: binding the host's
 /// would bring back its sockets (the session bus, agents in `/tmp`), which lead out of the
@@ -435,7 +434,7 @@ drive (in WSL, outside /mnt) they cannot"
             })
         });
         // What exists is compared by its file too, which other spellings of its name reach where
-        // the filesystem folds case or keeps Windows' short names (`CLAUDE~1`).
+        // the filesystem folds case or keeps Windows' short names (`SCRAMJ~1`).
         let kept = self.protected_paths(root);
         let files: Vec<_> = kept.iter().filter_map(|kept| file_id(kept)).collect();
         let reached = (real.ancestors())
@@ -2254,7 +2253,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         };
         let linux = std::env::temp_dir().join(format!("scramjet-case-{}", std::process::id()));
         let _linux = crate::agent::tests::ScratchDir::new(linux.clone());
-        std::fs::create_dir_all(linux.join(".claude")).unwrap();
+        std::fs::create_dir_all(linux.join(".scramjet")).unwrap();
         assert_eq!(
             sandbox.other_spellings(&linux),
             Vec::<std::path::PathBuf>::new()
@@ -2267,27 +2266,27 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         }
         let root = windows.join(format!("scramjet-case-{}", std::process::id()));
         let _windows = crate::agent::tests::ScratchDir::new(root.clone());
-        for directory in [".claude/commands", ".git", "src"] {
+        for directory in [".scramjet/commands", ".git", "src"] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
         let real = std::fs::canonicalize(&root).unwrap();
         assert_eq!(
             sandbox.other_spellings(&root),
-            [real.join(".claude"), real.join(".git")]
+            [real.join(".git"), real.join(".scramjet")]
         );
         let warning = sandbox.spelling_warning(&root).unwrap();
         assert!(
-            warning.starts_with("Sandbox: this drive ignores case, so commands can change .claude and .git, read-only only as spelled, through other spellings (.CLAUDE,"),
+            warning.starts_with("Sandbox: this drive ignores case, so commands can change .git and .scramjet, read-only only as spelled, through other spellings (.GIT,"),
             "{warning}"
         );
         // What it says holds: in the sandbox, the other spelling writes the protected directory.
         let hidden = super::Hidden::current(&[], &Default::default());
-        let output = super::sandboxed(&root, "touch .CLAUDE/commands/x.md", &hidden, &sandbox)
+        let output = super::sandboxed(&root, "touch .SCRAMJET/commands/x.md", &hidden, &sandbox)
             .unwrap()
             .output()
             .unwrap();
         assert!(output.status.success(), "{output:?}");
-        assert!(root.join(".claude/commands/x.md").exists());
+        assert!(root.join(".scramjet/commands/x.md").exists());
     }
 
     #[test]
@@ -2341,18 +2340,15 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
             );
             // macOS's temporary directory, which holds this project, stays writable, as Codex's.
             let outside = cfg!(not(target_os = "macos")).then_some("../outside");
-            for left in [
-                ".git/hooks/pre-commit",
-                ".scramjet/autonomy.yaml",
-                ".claude/commands/x.md",
-            ]
-            .into_iter()
-            .chain(outside)
+            for left in [".git/hooks/pre-commit", ".scramjet/autonomy.yaml"]
+                .into_iter()
+                .chain(outside)
             {
                 assert!(!root.join(left).exists(), "{mode:?}: {left}");
             }
         }
         assert!(root.join("src/made.txt").exists());
+        assert!(root.join(".claude/commands/x.md").exists());
     }
 
     #[test]
@@ -2481,13 +2477,15 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
             );
         }
         assert!(refused(&write, ".git/config").contains("kept read-only"));
-        for path in [".claude/commands/x.md", ".scramjet/agents/a.md", ".agents"] {
+        for path in [".scramjet/agents/a.md", ".agents"] {
             assert!(refused(&write, path).contains("kept read-only"), "{path}");
         }
-        for path in [".Git/config", ".CLAUDE/commands/x.md", ".Agents"] {
+        for path in [".Git/config", ".SCRAMJET/agents/a.md", ".Agents"] {
             assert!(refused(&write, path).contains("kept read-only"), "{path}");
         }
-        assert!(write.check_write(&root, &root.join("src/.claude")).is_ok());
+        for path in [".claude/commands/x.md", "src/.agents"] {
+            assert!(write.check_write(&root, &root.join(path)).is_ok(), "{path}");
+        }
         for path in ["hook", "away", "away/a.rs", "loop"] {
             assert!(refused(&write, path).contains("points nowhere"), "{path}");
         }

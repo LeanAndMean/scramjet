@@ -263,13 +263,13 @@ but to NO_PROXY's hosts and this machine.
                          shared), its own processes and the credential stores hidden, and
                          refuses write and edit;
                          workspace-write lets both change the project but its .git,
-                         .scramjet, .agents and .claude. Commands reach the network unless
-                         the setting sandbox.network is false. It needs bubblewrap (bwrap) and
+                         .scramjet and .agents. Commands reach the network unless the
+                         setting sandbox.network is false. It needs bubblewrap (bwrap) and
                          refuses to start without it; on macOS it runs under Seatbelt
                          (sandbox-exec). `!` commands you type and MCP servers stay outside
   --add-dir DIR          let the sandbox's commands, write and edit change DIR too (its
-                         .git, .scramjet, .agents and .claude kept read-only); repeatable.
-                         /sandbox and /add-dir grant more while working. Without a sandbox, keeps
+                         .git, .scramjet and .agents kept read-only); repeatable. /sandbox
+                         and /add-dir grant more while working. Without a sandbox, keeps
                          DIR readable and writable where blockReadsOutsideWorkingDirectories
                          would hide it
   --offline              no network at start, as SCRAMJET_OFFLINE=1: packages not cloned

@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.438.0 — The sandbox no longer keeps `.claude` read-only
+
+### Changed
+
+- In `workspace-write`, commands, `write` and `edit` may change the project's `.claude` again (and that of a directory added with `--add-dir`, and a writing subagent's); `.git`, `.scramjet` and `.agents` stay read-only. Claude Code's files are read only once turned on in `/settings`, and SECURITY.md says what a command writing there can do then.
+
 ## 2.437.0 — Claude Code's files told of once
 
 ### Added

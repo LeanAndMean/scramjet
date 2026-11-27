@@ -439,9 +439,8 @@ mod tests {
             format!("(require-not (literal \"{path}\")) (require-not (subpath \"{path}\"))")
         };
         let build = format!(
-            "(allow file-write* (require-all (subpath \"/Users/u/p/build\") {} {} {} {}))",
+            "(allow file-write* (require-all (subpath \"/Users/u/p/build\") {} {} {}))",
             not("/Users/u/p/build/.agents"),
-            not("/Users/u/p/build/.claude"),
             not("/Users/u/p/build/.git"),
             not("/Users/u/p/build/.scramjet"),
         );
