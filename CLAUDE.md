@@ -49,7 +49,7 @@ Keep the genuinely important safety properties: never execute tool calls from fa
 
 Development runs as a closed loop (`/rs:loop`, with `/rs:review` when a change warrants it); `/rs:steer` is where the user reviews direction and answers the loop's open questions. Stop or ask only for what the user owns:
 
-- **Scope or direction:** adding product scope, dropping something the user asked for, or choosing between product behaviors the user would care about.
+- **Scope or direction:** adding product scope, dropping something the user asked for, or choosing between product behaviors the user would care about. A new user-facing feature (a command, tool, setting, key, CLI option, or files read from another program) is built only from an item the user agreed at a steer; what other harnesses have is evidence for a steer, not a backlog. When no agreed item can move, fix, test and document within agreed items, or recommend `/rs:steer`, rather than inventing work (steer of 2026-11-27, after the loop built about 70 unrequested features in two days; [design](docs/DESIGN.md#scope-reset-steer-of-2026-11-27)).
 - **Permission:** anything in the authorization list below that needs asking, including `sudo` or installing system packages.
 - **Information only the user has:** access, accounts, environment details or preferences that local investigation cannot establish.
 
