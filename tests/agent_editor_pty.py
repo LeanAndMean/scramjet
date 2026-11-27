@@ -2184,7 +2184,7 @@ def completes_paths_and_commands(read, until, send, output):
     # Commands are listed as soon as `/` starts the prompt, the built-in scramjet set's among
     # them; Escape closes the list.
     send(b'/')
-    on_screen('(1/48)')
+    on_screen('(1/42)')
     send(b'mdl')
     on_screen('\u2192 /model')
     # On an empty prompt Tab lists the project; the Escape that closes the list does not count
@@ -3802,7 +3802,7 @@ def installed_view(read, until, send, output):
     send(b'/settings\r')
     on_screen('Settings  \u2191\u2193 move')
     send(b'\x1b[A')
-    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 7 commands, 8 agents, 3 skills'))
+    rows = on_screen('\u203a ' + setting('Installed', '3 problems \u00b7 3 command sets, 4 commands, 8 agents, 3 skills'))
     assert 'What this session loaded: command sets, commands, agents, skills' in rows[-2], rows
     send(b'\r')
     rows = on_screen('Installed  \u2191\u2193 move \u00b7 Enter edit \u00b7 Esc back')
@@ -3840,7 +3840,7 @@ def installed_view(read, until, send, output):
     # On a command, it opens the command's file in the editor, and the session reads what changed.
     select_row(read, shown, send, '/demo:greet', b'\x1b[A')
     send(b'\r')
-    rows = on_screen('\u203a   /demo:greet                Greet someone kindly')
+    rows = on_screen('\u203a   /demo:greet             Greet someone kindly')
     assert ' Reloaded settings, keybindings, themes, providers, command sets, agents, skills and context files' in rows, rows
     assert rows.count(attention) == 2, rows
     # On a link that leads nowhere, it asks before removing the link; Escape keeps it.

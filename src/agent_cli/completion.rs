@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 40] = [
+const SLASH_COMMANDS: [(&str, &str); 37] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -92,18 +92,6 @@ const SLASH_COMMANDS: [(&str, &str); 40] = [
     (
         "mcp",
         "Show the MCP servers and their tools: /mcp [reconnect|enable|disable [SERVER|all]]",
-    ),
-    (
-        "agents",
-        "Show the agents subagent calls can name, and open their files",
-    ),
-    (
-        "skills",
-        "Show the skills, where each comes from, and open their files",
-    ),
-    (
-        "memory",
-        "Show the context files (AGENTS.md, CLAUDE.md), and edit or create them",
     ),
     (
         "hooks",
@@ -592,9 +580,6 @@ mod tests {
                 "/reload",
                 "/autopilot",
                 "/mcp",
-                "/agents",
-                "/skills",
-                "/memory",
                 "/hooks",
                 "/sandbox",
                 "/add-dir",

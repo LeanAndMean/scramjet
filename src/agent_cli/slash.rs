@@ -33,9 +33,6 @@ pub(super) enum Builtin<'a> {
     Tasks(&'a str),
     /// Claude Code's `/todos`: the agent's checklist.
     Todos,
-    Agents,
-    Skills,
-    Memory,
     /// Claude Code's `/hooks`: the hooks the settings run.
     Hooks,
     /// With whether the details come first.
@@ -96,9 +93,6 @@ impl<'a> Builtin<'a> {
             "status" if argument.is_empty() => Self::Status,
             "tasks" => Self::Tasks(argument),
             "todos" if argument.is_empty() => Self::Todos,
-            "agents" if argument.is_empty() => Self::Agents,
-            "skills" if argument.is_empty() => Self::Skills,
-            "memory" if argument.is_empty() => Self::Memory,
             "hooks" if argument.is_empty() => Self::Hooks,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
@@ -147,9 +141,6 @@ impl<'a> Builtin<'a> {
                 | Self::Status
                 | Self::Tasks(_)
                 | Self::Todos
-                | Self::Agents
-                | Self::Skills
-                | Self::Memory
                 | Self::Hooks
                 | Self::Goal(_)
                 | Self::Loop(_)
@@ -196,9 +187,6 @@ impl Interactive {
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
             Some(Builtin::Tasks(argument)) => self.tasks(argument),
             Some(Builtin::Todos) => self.todos(),
-            Some(Builtin::Agents) => self.agents(),
-            Some(Builtin::Skills) => self.skills(),
-            Some(Builtin::Memory) => self.memory(),
             Some(Builtin::Hooks) => self.hooks(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
@@ -644,81 +632,6 @@ impl Interactive {
             }
             screen.show_report(task_output(task));
         }
-    }
-
-    /// `/agents`, as Claude Code's: the agents a subagent call can name, each with where it
-    /// comes from and what its file asks for; on the full screen in a list whose Enter opens the
-    /// file, as `/settings`' Installed does.
-    fn agents(&mut self) {
-        let found = self.session.agent.installed();
-        let problems = self.problems(&found);
-        let listing = installed::agents(&self.loaded(&found, &problems));
-        if listing.rows.is_empty() {
-            let user = scramjet::agent::config_directory()
-                .map(|config| scramjet::os::tilde(&config.join("agents")))
-                .unwrap_or_else(|| "your agent directory".to_owned());
-            let note = format!(
-                "No agents: a markdown file in {user} or in this project's .scramjet/agents \
-                 adds one"
-            );
-            return self.say_styled(style::MUTED, &note);
-        }
-        if self.screen.is_some() {
-            return self.show_listing("Agents", installed::agents);
-        }
-        let text = installed::agents_text(&self.loaded(&found, &problems));
-        self.say(text.trim_end());
-    }
-
-    /// `/skills`, as Claude Code's: the skills the session found, each with where it comes from
-    /// and whether the model is offered it; on the full screen in a list whose Enter opens its
-    /// file.
-    fn skills(&mut self) {
-        let agent = &self.session.agent;
-        let user = agent.agent_directory().map(Path::to_path_buf);
-        let root = agent.root().to_path_buf();
-        let places = installed::Places {
-            user: user.as_deref(),
-            root: &root,
-        };
-        let found = self.session.agent.installed();
-        let problems = self.problems(&found);
-        let loaded = self.loaded(&found, &problems);
-        if installed::skills(&loaded, &places).rows.is_empty() {
-            let user = (user.as_deref())
-                .map(|config| scramjet::os::tilde(&config.join("skills")))
-                .unwrap_or_else(|| "your skills directory".to_owned());
-            let note = format!(
-                "No skills: a directory with a SKILL.md in {user} or in this project's \
-                 .scramjet/skills adds one"
-            );
-            return self.say_styled(style::MUTED, &note);
-        }
-        if self.screen.is_some() {
-            return self.show_listing("Skills", |loaded| installed::skills(loaded, &places));
-        }
-        let text = installed::skills_text(&loaded, &places);
-        self.say(text.trim_end());
-    }
-
-    /// `/memory`, as Claude Code's: the context files read, and where the user's and the
-    /// project's would go; on the full screen in a list whose Enter opens one in the editor,
-    /// creating it when it is not there, and reads them again once it changed.
-    fn memory(&mut self) {
-        let agent = &self.session.agent;
-        let user = agent.agent_directory().map(Path::to_path_buf);
-        let root = agent.root().to_path_buf();
-        let places = installed::Places {
-            user: user.as_deref(),
-            root: &root,
-        };
-        if self.screen.is_some() {
-            return self.show_listing("Memory", |loaded| installed::memory(loaded, &places));
-        }
-        let found = self.session.agent.installed();
-        let problems = self.problems(&found);
-        let text = installed::memory_text(&self.loaded(&found, &problems), &places);
-        self.say(text.trim_end());
     }
 
     /// `/hooks`, as Claude Code's: the hooks the settings run, by event, after what is wrong in
@@ -1526,9 +1439,6 @@ mod tests {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
             "/status",
-            "/agents",
-            "/skills",
-            "/memory",
             "/context",
             "/system-prompt",
             "/export",

@@ -4,13 +4,15 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.420.0 — Unreleased commands taken out
+
 ## 2.419.0 — Unreleased commands taken out
 
 ## 2.418.0 — `--agents`
 
 ### Added
 
-- `--agents JSON` defines subagents for one run, as Claude Code's: `{"NAME": {"description": ..., "prompt": ...}}`, with `tools`, `disallowedTools`, `model` and `isolation` as an agent file's frontmatter has them, or a file holding that JSON. They are listed to the agent and in `/agents`, need no approval, and take the place of your own or a project's agent of their name.
+- `--agents JSON` defines subagents for one run, as Claude Code's: `{"NAME": {"description": ..., "prompt": ...}}`, with `tools`, `disallowedTools`, `model` and `isolation` as an agent file's frontmatter has them, or a file holding that JSON. They are listed to the agent, need no approval, and take the place of your own or a project's agent of their name.
 
 ## 2.417.0 — `--name`
 
@@ -163,7 +165,7 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ### Changed
 
-- A skill now runs as `/NAME`, as in Claude Code, and the `/` list, `/skills` and ACP's command list show it so; `/skill:NAME` still works, and is the name shown when a built-in or a command has the skill's name. A skill goes before a `.claude/commands` command of the same name, as in Claude Code.
+- A skill now runs as `/NAME`, as in Claude Code, and the `/` list and ACP's command list show it so; `/skill:NAME` still works, and is the name shown when a built-in or a command has the skill's name. A skill goes before a `.claude/commands` command of the same name, as in Claude Code.
 
 ## 2.398.0 — Claude Code's skills as Claude Code runs them
 
@@ -207,14 +209,14 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ### Added
 
-- `@path` imports in `CLAUDE.md`, `CLAUDE.local.md` and Claude Code's rules are followed as Claude Code follows them: the file named (relative to the importing file, absolute or `~/`) is read right after the file importing it, with its own imports, up to four hops, and each file once. A `CLAUDE.md` holding only `@AGENTS.md` no longer adds anything twice. `/memory` lists imported files as "imported".
+- `@path` imports in `CLAUDE.md`, `CLAUDE.local.md` and Claude Code's rules are followed as Claude Code follows them: the file named (relative to the importing file, absolute or `~/`) is read right after the file importing it, with its own imports, up to four hops, and each file once. A `CLAUDE.md` holding only `@AGENTS.md` no longer adds anything twice.
 - Block-level HTML comments (`<!-- … -->` on lines of their own, outside code) are left out of those files, as Claude Code leaves them out, so notes for maintainers cost no context.
 
 ## 2.391.0 — Claude Code's instructions files
 
 ### Added
 
-- Claude Code's other instruction files are read as context files: your `~/.claude/CLAUDE.md` and the rules in `~/.claude/rules`, then in the project and each directory above it `.claude/CLAUDE.md` after its `CLAUDE.md`, and the `.md` files under its `.claude/rules` (frontmatter left out) last. A rule whose frontmatter gives `paths` is not read yet. `/memory` lists them; `--bare` leaves out `~/.claude`, `--no-context-files` all of them.
+- Claude Code's other instruction files are read as context files: your `~/.claude/CLAUDE.md` and the rules in `~/.claude/rules`, then in the project and each directory above it `.claude/CLAUDE.md` after its `CLAUDE.md`, and the `.md` files under its `.claude/rules` (frontmatter left out) last. A rule whose frontmatter gives `paths` is not read yet. `--bare` leaves out `~/.claude`, `--no-context-files` all of them.
 - Claude Code's `CLAUDE_CONFIG_DIR` is followed: where it is set, its directory is read in place of `~/.claude` (skills, commands, `CLAUDE.md`, rules), and its `.credentials.json` is hidden with the other credential stores.
 
 ## 2.390.0 — Claude Code's commands
@@ -227,7 +229,7 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ### Added
 
-- Skills are also read from Claude Code's places: the project's `.claude/skills` (and those of the directories above it up to the Git root) and your `~/.claude/skills`, after `.agents/skills` at each level. `/skills` says where each comes from; `--bare` leaves out `~/.claude/skills`.
+- Skills are also read from Claude Code's places: the project's `.claude/skills` (and those of the directories above it up to the Git root) and your `~/.claude/skills`, after `.agents/skills` at each level. `--bare` leaves out `~/.claude/skills`.
 
 ### Fixed
 
@@ -395,47 +397,11 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - `/theme` changes the theme, as Claude Code's does: alone it opens the list of themes `/settings` has (New theme… among them), and `/theme NAME` uses one by name. Either saves it as your `theme`.
 
-## 2.359.0 — /skills
-
-### Added
-
-- `/skills` lists the skills, as Claude Code's `/skills` does: each with where it comes from (a command set, yours, the project's, or a path the settings or `--skill` give) and whether the model is offered it, after any problem in skill files. On the full screen Enter opens a skill's file in your editor; without one it prints them.
-
 ## 2.358.0 — /effort
 
 ### Added
 
 - `/effort LEVEL` sets the thinking level by name, as in Claude Code, and saves it as the default, as Shift+Tab does; `/effort` alone lists the levels the model takes, on the full screen to pick one.
-
-## 2.357.0 — /security-review
-
-### Added
-
-- `/security-review` has the agent review your changes for security vulnerabilities only, as Claude Code's does: the same changes `/review` looks at, or what you name after it. It reports only what someone could exploit that the change introduces, checking each candidate (in a fresh subagent where it can) before reporting it with its severity, file and line, how it would be exploited and the fix, and changes nothing.
-
-## 2.354.0 — /memory
-
-### Added
-
-- `/memory` lists the context files the agent reads (`AGENTS.md`, `CLAUDE.md`, `CLAUDE.local.md`), as Claude Code's `/memory` does: those read in this session, those there but not read, and where your own, the project's and your notes for the project would go. On the full screen Enter opens one in your editor, creating it if it is not there, and the instructions are read again once you save it; without one it prints them.
-
-## 2.353.0 — /agents
-
-### Added
-
-- `/agents` lists the agents subagent calls can name, as Claude Code's `/agents` does: the built-in ones, yours, the command sets' and the project's, each with where it comes from, whether you approved a project agent, the tools and model its file asks for and whether each task gets a worktree of its own, after any problem in agent files. On the full screen Enter opens an agent's file in your editor; without one it prints them.
-
-## 2.352.0 — /review
-
-### Added
-
-- `/review` has the agent review your changes, as Codex's and Claude Code's `/review` do: what is uncommitted, else the current branch against its default branch, or the commit, range, branch or pull request you name after it, with any focus you add. It reports the defects first, most severe first, each with its file and line and the fix it needs, then open questions, and changes nothing.
-
-## 2.350.0 — /init
-
-### Added
-
-- `/init` has the agent write an `AGENTS.md` for the project, as Codex's and Claude Code's `/init` do: what the project is, its layout, the commands that build, test and lint it (each one run or taken from the project's files), and its conventions and pitfalls, left uncommitted for you to review. Text after it says what else to cover. A project that already has an `AGENTS.md` or `CLAUDE.md` gets proposed changes to it instead, made only once you approve them.
 
 ## 2.349.1 — A timed-out command's orphans named
 

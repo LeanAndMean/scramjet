@@ -1907,11 +1907,6 @@ impl Agent {
         &self.context_files
     }
 
-    /// The user's directory of context files, `None` with `--bare`.
-    pub fn agent_directory(&self) -> Option<&Path> {
-        self.agent_directory.as_deref()
-    }
-
     pub fn session_path(&self) -> &Path {
         self.session.path()
     }

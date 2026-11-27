@@ -469,12 +469,6 @@ skills and context files again, and starts the MCP servers whose entries changed
 /mcp shows the settings' MCP servers (mcpServers), each with its tools or why it is not
 available; /mcp reconnect [SERVER|all] starts them again, and /mcp enable|disable [SERVER|all]
 starts or stops them, saved in disabledMcpServers.
-/agents lists the agents subagent calls can name, each with where it comes from, the tools and
-model its file asks for and any problem in agent files; on the full screen Enter opens one's file.
-/skills lists the skills, each with where it comes from and whether the model is offered it, and
-any problem in skill files; on the full screen Enter opens one's SKILL.md.
-/memory lists the context files read, those not read, and where your AGENTS.md, the project's and
-its CLAUDE.local.md would go; on the full screen Enter opens one in your editor, creating it.
 /hooks lists the hooks the settings run, by event with their matchers, after any problem in
 them, as Claude Code's; on the full screen Enter opens the settings file.
 /goal CONDITION sets a goal, as Claude Code's: the agent works toward it, and after each turn
@@ -493,7 +487,7 @@ Code's; one due during a turn runs once the turn ends. It lasts while the sessio
 lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /tasks, /todos, /agents, /skills, /memory, /hooks, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+Typed while a turn runs, /status, /tasks, /todos, /hooks, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
 /model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,

@@ -60,10 +60,6 @@ The test in tests/parse.rs fails since the last commit. Find out why and fix it.
 
 The agent reads the code, runs commands and edits files, and each step shows as it happens: a tool call with its output cut to a few lines (Ctrl+O shows it whole), its reasoning (Ctrl+T hides or shows it), then its reply. Type `@` and part of a path to name a file in the prompt; Shift+Enter starts a new line. `!git diff` runs a command yourself and gives its output to the agent with your next prompt (`!!` keeps it out).
 
-`/init` has the agent write an `AGENTS.md` describing the project, its commands and conventions, which it reads at the start of each session; review it and commit it as your own.
-
-`/review` has the agent review what is uncommitted, or a commit, branch or pull request you name after it, and report bugs and risks with their file and line, changing nothing. `/security-review` does the same for security vulnerabilities only.
-
 ## 6. Steer and queue while it works
 
 The prompt stays usable during a turn:
