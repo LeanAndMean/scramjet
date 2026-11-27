@@ -236,3 +236,17 @@ User decisions from the second `/rs:steer` of 2026-11-18:
 ## /clear (2026-11-19)
 
 User decision from `/rs:steer` on 2026-11-19: **`/clear` (`/new`, `/reset`) lands on the screen `scramjet` opens with:** the launch banner and nothing else, not "New session started" and the session file's path (`/status` has the path). Line mode prints the plain banner. Notices shown only at start (the update check, import offer) are not repeated.
+
+## Scope reset: removed and kept (steer of 2026-11-27)
+
+Built (2.419.0–2.430.0); the principles and the agreed designs stay in [DESIGN.md](DESIGN.md#scope-reset-steer-of-2026-11-27).
+
+Out, removed from `main`: Claude Code's permission options (`--permission-mode`, `--dangerously-skip-permissions`, `--allowedTools`, `--permission-prompts`), `--disallowedTools`, `--settings`, `--mcp-config`, `--agents`, `--fork-session`; hooks and `/hooks`; background commands and `/tasks`; `todo_write`; `web_fetch`; plan mode; `/rewind`; `/btw`, `/recap`, `/color`, `/autocompact`, `/diff`, `/doctor`, `/init`, `/review`, `/security-review`; the `/agents`, `/memory` and `/skills` lists (`/settings` → Installed shows them); `/copy N` and its list; `.txt` export; the status line script; the notifications when the agent waits and the title's ○/● (the progress indicator, OSC 9;4, does it better); Ctrl+R's prompt search (the keys decision of 2026-11-16 stands); the `env` setting. Not built: native background subagents, a session in a new worktree, vim mode. Not a goal: drop-in compatibility with `claude -p`'s options.
+
+Kept: `grep`, `find` and `ls` built in (they work without ripgrep, on Windows, and with bash off); `/copy` (every harness has it, and line mode has no selection of Scramjet's); `/effort` (for those who don't know Shift+Tab) and `/theme` (`/settings`' themes); the settings keys by Claude Code's names (`effortLevel`, `model`, `alwaysThinkingEnabled`); headless JSON in Claude Code's form (`--output-format json|stream-json`), with `--max-turns`, `--max-budget-usd`, `-n`/`--name`, `--resume ID`, `--plugin-dir` and `--no-session-persistence`.
+
+Its agreed designs, built:
+
+- **Copying a selection as markdown** (a setting, on by default): a selection in a reply copies that part of its markdown source, the markers within it included (`**`, backticks, link targets), and a block selected whole with its own (fences with the language, bullets, `#`, `>`, table pipes); prompts and tool output copy as shown. Off: the rendered text, as before.
+- **Going back without a question:** in `/tree` (Escape twice), Enter goes back with no summary; two other keys, shown in its hints, summarize, or summarize with the user's instructions.
+- **Escape before any reply** puts the prompt back in the editor and takes it out of the conversation, as Claude Code does since 2.1.83. Before any reply: no text or tool call saved yet. Any prompt is taken back, not only typed ones: a next step's, a `/loop` run's and a `/goal` continuation's too (confirmed at the second steer of 2026-11-27).
