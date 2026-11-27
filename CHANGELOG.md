@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.439.0 — Commits in the sandbox
+
+### Changed
+
+- In `workspace-write`, commands can commit, switch branches and stash: the project's `.git` is writable but for `.git/hooks` and `.git/config`, which stay read-only as in Claude Code's sandbox, with `.scramjet` and `.agents` (the same for a directory added with `--add-dir`, and a writing subagent's). `git config`, `git remote add` and `git branch -u` are still refused; `/add-dir .git` allows them, as it allowed commits before. Where `.git` has no `hooks` or `config`, all of it stays read-only. SECURITY.md says what this gives up: the history is no longer protected, and Git can still run what a command leaves in the project.
+
 ## 2.438.0 — The sandbox no longer keeps `.claude` read-only
 
 ### Changed

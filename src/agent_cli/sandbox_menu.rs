@@ -55,7 +55,7 @@ const CHANGES: [(Option<SandboxMode>, &str); 3] = [
     ),
     (
         Some(SandboxMode::WorkspaceWrite),
-        "The project and Also writable's directories, but their .git, .scramjet and .agents.",
+        "The project and Also writable's directories, but Git's hooks and config, .scramjet, .agents.",
     ),
     (
         None,
@@ -378,8 +378,8 @@ impl Interactive {
         let note = match mode {
             None => "No sandbox: the agent's tools run with your access. Enter chooses.",
             Some(_) => {
-                "What commands, write and edit may change; .git, .scramjet and .agents stay \
-                 read-only. Enter chooses."
+                "What commands, write and edit may change; Git's hooks and config, .scramjet and \
+                 .agents stay read-only. Enter chooses."
             }
         };
         let (change, note) = here(change, note.to_owned(), now.mode != default.mode);

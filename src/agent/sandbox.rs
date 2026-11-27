@@ -146,10 +146,14 @@ const CREDENTIAL_WORDS: [&str; 6] = [
     "KEY",
 ];
 
-/// What stays read-only inside a writable project, as in Codex's `workspace-write`
-/// (`default_read_only_subpaths_for_writable_root`): Git's history and hooks, and the agents'
-/// own settings and commands, through which a command would act beyond the sandbox's next turn.
+/// What stays read-only inside a writable project, through which a command would act beyond the
+/// sandbox: the agents' own settings and commands, and of a `.git` that is a directory what
+/// `GIT_RUNS` names (`protected`); the rest of it is writable, so that commands can commit.
 const PROTECTED: [&str; 3] = [".git", ".scramjet", ".agents"];
+
+/// What Git runs programs from in its directory, kept read-only as Claude Code's sandbox keeps
+/// them: the hooks, and the configuration, which names programs (`core.fsmonitor`, an alias).
+const GIT_RUNS: [&str; 2] = ["hooks", "config"];
 
 /// What the sandbox has of its own, which a grant may neither be nor hold: binding the host's
 /// would bring back its sockets (the session bus, agents in `/tmp`), which lead out of the
@@ -222,8 +226,10 @@ impl Sandbox {
         // A grant inside what stays read-only would be covered by it.
         let mut with = self.clone();
         with.writable.push(real.clone());
-        let named: Vec<PathBuf> = (with.writable_roots(root).iter())
+        let roots = with.writable_roots(root);
+        let named: Vec<PathBuf> = (roots.iter())
             .flat_map(|writable| PROTECTED.map(|name| writable.join(name)))
+            .filter(|named| !in_part(named))
             .chain(with.protected_paths(root))
             .collect();
         for granted in &with.writable {
@@ -236,7 +242,10 @@ impl Sandbox {
                 ));
             }
         }
-        if self.check_write(root, &real).is_ok() {
+        // A Git directory is writable but in part: its grant by name makes the rest so.
+        let frees = (roots.iter().flat_map(|writable| protected(writable)))
+            .any(|(kept, named)| named == real && kept != real);
+        if self.check_write(root, &real).is_ok() && !frees {
             return Err(format!("{}: already writable", real.display()));
         }
         self.writable.push(real.clone());
@@ -287,13 +296,14 @@ impl Sandbox {
         (self.mode == SandboxMode::ReadOnly && !self.writable.contains(&project)).then_some(project)
     }
 
-    /// What stays read-only in the writable directories (`PROTECTED`, where it exists), but what
-    /// is granted by name, such as a `.git` the user made writable.
+    /// What stays read-only in the writable directories (`protected`), but what is granted by
+    /// name, such as a `.git` the user made writable, whose hooks and configuration then are too.
     pub fn protected_paths(&self, root: &Path) -> Vec<PathBuf> {
-        let granted = |kept: &PathBuf| self.writable.contains(kept);
+        let granted = |path: &PathBuf| self.writable.contains(path);
         let mut kept: Vec<PathBuf> = (self.writable_roots(root).iter())
             .flat_map(|writable| protected(writable))
-            .filter(|kept| !granted(kept))
+            .filter(|(kept, named)| !granted(kept) && !granted(named))
+            .map(|(kept, _)| kept)
             .collect();
         kept.sort();
         kept.dedup();
@@ -367,7 +377,10 @@ impl Sandbox {
             [one] => one.clone(),
             [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
         };
-        let upper = found[0].file_name()?.to_string_lossy().to_uppercase();
+        let upper = match found[0].strip_prefix(&real) {
+            Ok(inside) => inside.display().to_string().to_uppercase(),
+            Err(_) => found[0].file_name()?.to_string_lossy().to_uppercase(),
+        };
         Some(format!(
             "Sandbox: this drive ignores case, so commands can change {named}, read-only only \
 as spelled, through other spellings ({upper}, or a Windows short name); on a case-sensitive \
@@ -415,7 +428,8 @@ drive (in WSL, outside /mnt) they cannot"
         };
         // A protected name not made yet is refused too, as Seatbelt refuses it to commands, in
         // any case, for a filesystem that folds it (WSL's `/mnt/c`); a root is found by its file
-        // too, as the path may spell it otherwise (`PROJ` for `proj`, from a grant above it).
+        // too, as the path may spell it otherwise (`PROJ` for `proj`, from a grant above it). A
+        // `.git` that is a directory is kept only in part, which is found by its files below.
         let roots: Vec<_> = (self.writable_roots(root).into_iter())
             .map(|writable| (file_id(&writable), writable))
             .collect();
@@ -429,6 +443,7 @@ drive (in WSL, outside /mnt) they cannot"
                 (above == writable || id.is_some() && id == *root_id)
                     && PROTECTED.iter().any(|name| {
                         first.eq_ignore_ascii_case(name)
+                            && !in_part(below)
                             && !self.writable.contains(&writable.join(name))
                     })
             })
@@ -564,23 +579,48 @@ pub(super) fn real_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// What stays read-only in the real directory `root`, as Codex keeps it: what exists of
-/// `PROTECTED` at its top, and the Git directory a top-level `.git` file points to (a worktree's
-/// or a submodule's) with the common one it names. Repositories nested in it stay writable, so
-/// that removing a build directory holding a checkout works. Each by its real place, and only in
+/// What stays read-only in the real directory `root`, each with the path whose grant by name
+/// makes it writable: what exists of `PROTECTED` at its top, of a `.git` directory only what Git
+/// runs (`git_runs`), and the Git directory a top-level `.git` file points to (a worktree's or a
+/// submodule's) with the common one it names. Repositories nested in it stay writable, so that
+/// removing a build directory holding a checkout works. Each by its real place, and only in
 /// `root`: what is outside is read-only already, and binding it could bring back what the
 /// sandbox's empty `/run` and `/tmp` leave out.
-fn protected(root: &Path) -> Vec<PathBuf> {
+fn protected(root: &Path) -> Vec<(PathBuf, PathBuf)> {
     let mut found: Vec<PathBuf> = PROTECTED.iter().map(|name| root.join(name)).collect();
     let pointed: Vec<PathBuf> = found.iter().filter_map(|path| pointed_to(path)).collect();
     let common = pointed.iter().filter_map(|gitdir| common_dir(gitdir));
     found.extend(common.collect::<Vec<_>>());
     found.extend(pointed);
-    found
-        .into_iter()
-        .filter_map(|path| std::fs::canonicalize(path).ok())
-        .filter(|real| real.starts_with(root))
+    let real = |path: PathBuf| std::fs::canonicalize(path).ok();
+    let real = |path: PathBuf| real(path).filter(|real| real.starts_with(root));
+    let dotgit = Some(root.join(".git")).filter(|dotgit| dotgit.is_dir());
+    let dotgit = dotgit.and_then(real);
+    (found.into_iter().filter_map(real))
+        .flat_map(|path| match Some(&path) == dotgit.as_ref() {
+            true => git_runs(&path).into_iter().zip(std::iter::repeat(path)),
+            false => vec![path.clone()].into_iter().zip(std::iter::repeat(path)),
+        })
         .collect()
+}
+
+/// What Git runs programs from in the Git directory `git` (`GIT_RUNS`). All of `git` where one is
+/// missing or a symlink: a command could put its own there, where no mount holds the name.
+fn git_runs(git: &Path) -> Vec<PathBuf> {
+    let parts = GIT_RUNS.map(|name| git.join(name));
+    let held =
+        |part: &PathBuf| std::fs::symlink_metadata(part).is_ok_and(|part| !part.is_symlink());
+    match parts.iter().all(held) {
+        true => parts.into(),
+        false => vec![git.to_owned()],
+    }
+}
+
+/// Whether `path`, which `PROTECTED` names, is a `.git` directory, kept read-only only in part.
+fn in_part(path: &Path) -> bool {
+    let named = path.file_name().and_then(|name| name.to_str());
+    named.is_some_and(|name| name.eq_ignore_ascii_case(".git"))
+        && std::fs::symlink_metadata(path).is_ok_and(|path| path.is_dir())
 }
 
 /// The Git directories outside `root` that the `.git` file of it or a directory above names, as
@@ -846,7 +886,7 @@ impl Subagents {
             main.is_none_or(|main| main.check_write(root, path).is_ok())
                 && (kept.iter()).all(|kept| {
                     !kept.starts_with(path)
-                        || (protected(path).iter()).any(|own| kept.starts_with(own))
+                        || (protected(path).iter()).any(|(own, _)| kept.starts_with(own))
                 })
         };
         let mut capped = false;
@@ -1847,9 +1887,10 @@ fn closed(
         .into_iter()
         .chain(granted)
         .collect();
-    // Also where it does not exist yet, but where granted by name.
+    // Also where it does not exist yet, but where granted by name; a `.git` directory by what
+    // `kept` holds of it.
     let named = (roots.iter()).flat_map(|root| PROTECTED.iter().map(|name| root.join(name)));
-    let named = named.filter(|path| !granted.contains(path));
+    let named = named.filter(|path| !granted.contains(path) && !in_part(path));
     closed.protected = named.chain(kept.iter().cloned()).collect();
     closed.protected.sort();
     closed.protected.dedup();
@@ -2290,7 +2331,7 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
     }
 
     #[test]
-    fn the_main_agents_sandbox_writes_only_the_project_but_its_history() {
+    fn the_main_agents_sandbox_writes_only_the_project_but_what_git_runs() {
         use super::{Sandbox, SandboxMode};
         let home = std::env::temp_dir().join(format!("scramjet-workspace-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
@@ -2298,15 +2339,16 @@ touch ~/.scramjet-sandbox-probe; echo private > /tmp/x && cat /tmp/x; \
         for directory in [".git/hooks", ".scramjet", ".claude/commands", "src"] {
             std::fs::create_dir_all(root.join(directory)).unwrap();
         }
-        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(root.join(".git/config"), "[core]\n").unwrap();
         std::fs::write(home.join(".netrc"), "SECRET-netrc\n").unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let windows = std::path::Path::new("/mnt/c/Users/Public");
         let probe = windows.join(format!("scramjet-sandbox-{}", std::process::id()));
         let script = format!(
-            "echo made > src/made.txt && echo wrote; rm -rf .git && echo removed; \
-rm .git/HEAD; touch .git/hooks/pre-commit .scramjet/autonomy.yaml .claude/commands/x.md ../outside {probe}; \
+            "echo made > src/made.txt && echo wrote; echo staged > .git/index; \
+mv .git moved; echo '[alias]' >> .git/config; rm .git/config; mv .git/hooks .git/h2; \
+touch .git/hooks/pre-commit .scramjet/autonomy.yaml .claude/commands/x.md ../outside {probe}; \
 cat ../.netrc; echo private > /tmp/x && cat /tmp/x; \
 (exec 3<>/dev/tcp/127.0.0.1/{port}) 2>/dev/null && echo connected || echo no network; \
 echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; true",
@@ -2335,14 +2377,22 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
             );
             assert!(!errors.contains("SECRET"), "{errors}");
             assert_eq!(
-                std::fs::read_to_string(root.join(".git/HEAD")).unwrap(),
-                "ref: refs/heads/main\n"
+                std::fs::read_to_string(root.join(".git/config")).unwrap(),
+                "[core]\n"
             );
+            // The rest of the Git directory is the project's, for commands to commit.
+            let staged = std::fs::remove_file(root.join(".git/index")).is_ok();
+            assert_eq!(staged, mode == SandboxMode::WorkspaceWrite);
             // macOS's temporary directory, which holds this project, stays writable, as Codex's.
             let outside = cfg!(not(target_os = "macos")).then_some("../outside");
-            for left in [".git/hooks/pre-commit", ".scramjet/autonomy.yaml"]
-                .into_iter()
-                .chain(outside)
+            for left in [
+                ".git/hooks/pre-commit",
+                ".git/h2",
+                "moved",
+                ".scramjet/autonomy.yaml",
+            ]
+            .into_iter()
+            .chain(outside)
             {
                 assert!(!root.join(left).exists(), "{mode:?}: {left}");
             }
@@ -2448,7 +2498,8 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
         let home = std::env::temp_dir().join(format!("scramjet-writes-{}", std::process::id()));
         let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
         let root = home.join("project");
-        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(root.join(".git/hooks")).unwrap();
+        std::fs::write(root.join(".git/config"), "").unwrap();
         std::fs::create_dir_all(home.join("elsewhere")).unwrap();
         std::os::unix::fs::symlink(home.join("elsewhere"), root.join("out")).unwrap();
         std::os::unix::fs::symlink(root.join(".git/hooks/pre-commit"), root.join("hook")).unwrap();
@@ -2476,19 +2527,91 @@ echo $(ls /run/WSL 2>/dev/null | wc -l); cmd.exe /c echo windows 2>/dev/null; tr
                 "{path}"
             );
         }
-        assert!(refused(&write, ".git/config").contains("kept read-only"));
+        for path in [".git/config", ".git/hooks/pre-commit"] {
+            assert!(refused(&write, path).contains("kept read-only"), "{path}");
+        }
         for path in [".scramjet/agents/a.md", ".agents"] {
             assert!(refused(&write, path).contains("kept read-only"), "{path}");
         }
         for path in [".Git/config", ".SCRAMJET/agents/a.md", ".Agents"] {
             assert!(refused(&write, path).contains("kept read-only"), "{path}");
         }
-        for path in [".claude/commands/x.md", "src/.agents"] {
+        for path in [
+            ".git/info/exclude",
+            ".git/config.lock",
+            ".claude/commands/x.md",
+            "src/.agents",
+        ] {
             assert!(write.check_write(&root, &root.join(path)).is_ok(), "{path}");
         }
         for path in ["hook", "away", "away/a.rs", "loop"] {
             assert!(refused(&write, path).contains("points nowhere"), "{path}");
         }
+    }
+
+    #[test]
+    fn a_git_directory_is_writable_but_its_hooks_and_configuration() {
+        use super::{Sandbox, SandboxMode};
+        let home = std::env::temp_dir().join(format!("scramjet-gitdir-{}", std::process::id()));
+        let _scratch = crate::agent::tests::ScratchDir::new(home.clone());
+        let root = home.join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            let mut git = std::process::Command::new("git");
+            let output = git.args(args).current_dir(&root).output().unwrap();
+            assert!(output.status.success(), "{args:?}: {output:?}");
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        };
+        git(&["init", "-q"]);
+        let root = std::fs::canonicalize(&root).unwrap();
+        let mut sandbox = Sandbox {
+            mode: SandboxMode::WorkspaceWrite,
+            network: false,
+            writable: Vec::new(),
+        };
+        let (config, hooks) = (root.join(".git/config"), root.join(".git/hooks"));
+        assert_eq!(
+            sandbox.protected_paths(&root),
+            [config.clone(), hooks.clone()]
+        );
+        if super::available().is_ok() {
+            let before = std::fs::read_to_string(&config).unwrap();
+            let script = "echo one > a && git add a && \
+git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -qm one && \
+git checkout -qb next && echo committed; git config core.fsmonitor /tmp/run; \
+echo exit > .git/hooks/pre-commit; mv .git/hooks .git/h2; mv .git moved; true";
+            let hidden = super::Hidden::under(&home, Vec::new());
+            let output = super::sandboxed(&root, script, &hidden, &sandbox)
+                .unwrap()
+                .output()
+                .unwrap();
+            let errors = String::from_utf8_lossy(&output.stderr);
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "committed\n",
+                "{errors}"
+            );
+            assert_eq!(git(&["log", "--format=%s"]), "one");
+            assert_eq!(git(&["rev-parse", "--abbrev-ref", "HEAD"]), "next");
+            assert_eq!(std::fs::read_to_string(&config).unwrap(), before);
+            for left in [".git/hooks/pre-commit", ".git/h2", "moved"] {
+                assert!(!root.join(left).exists(), "{left}");
+            }
+        }
+        // Granted by name, all of it is writable; a directory in it already is.
+        let already = sandbox.grant(&root, ".git/info").unwrap_err();
+        assert!(already.ends_with("already writable"), "{already}");
+        assert_eq!(sandbox.grant(&root, ".git"), Ok(root.join(".git")));
+        assert!(sandbox.protected_paths(&root).is_empty());
+        assert!(sandbox.check_write(&root, &config).is_ok());
+        assert_eq!(sandbox.revoke(&root, ".git"), Some(root.join(".git")));
+        // Without its hooks, or with a symlink for them, no mount would hold the name.
+        std::fs::rename(&hooks, root.join("hooks")).unwrap();
+        assert_eq!(sandbox.protected_paths(&root), [root.join(".git")]);
+        std::os::unix::fs::symlink(root.join("hooks"), &hooks).unwrap();
+        assert_eq!(sandbox.protected_paths(&root), [root.join(".git")]);
+        let refused = sandbox.check_write(&root, &root.join(".git/index"));
+        assert!(refused.unwrap_err().contains("kept read-only"));
     }
 
     #[test]

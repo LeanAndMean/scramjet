@@ -44,7 +44,7 @@ Logins and keys are saved in `~/.config/scramjet/auth.json`, readable by you onl
 
 By default the agent's tool calls run without asking: it reads, edits and writes files and runs commands with your own access, outside any sandbox. Before a first task in a project you care about, choose how much to allow:
 
-- `/sandbox` opens a screen for it. **Can change: this project** lets its commands, writes and edits change only the project (not its `.git`), and **Network** keeps them off the network. Each change applies at once and is remembered for this project; Ctrl+S makes it every project's default. On Linux this runs under Bubblewrap, on macOS under Seatbelt; Windows has no sandbox for the main agent.
+- `/sandbox` opens a screen for it. **Can change: this project** lets its commands, writes and edits change only the project (they can commit, but not change Git's hooks or configuration), and **Network** keeps them off the network. Each change applies at once and is remembered for this project; Ctrl+S makes it every project's default. On Linux this runs under Bubblewrap, on macOS under Seatbelt; Windows has no sandbox for the main agent.
 - `scramjet -s workspace-write` (or `-s read-only`) does the same for one run.
 - `scramjet --ask` asks before each command and each write or edit outside the project. It is a way to watch, not to contain.
 

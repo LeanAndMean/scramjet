@@ -343,9 +343,13 @@ merged or dropped: git worktree remove --force {path} && git branch -D {}",
             .map(|place| place.display().to_string())
             .collect();
         if !read_only.is_empty() {
+            let them = match read_only.len() {
+                1 => "it",
+                _ => "them",
+            };
             note.push_str(&format!(
                 "\nYour sandbox keeps {} read-only, so that command fails in it: ask the user to \
-make them writable (request_permissions), or leave the removal to them.",
+make {them} writable (request_permissions), or leave the removal to them.",
                 read_only.join(" and ")
             ));
         }
@@ -514,24 +518,32 @@ mod tests {
         );
         assert!(note.contains(&changed.branch), "{note}");
         assert!(!note.contains("Your sandbox"), "{note}");
-        // A main agent in workspace-write can write neither the worktree nor the project's .git;
-        // granted both, it can remove the worktree itself.
+        // A main agent in workspace-write can write the project's .git but not the worktree;
+        // granted it, it can remove the worktree itself. In read-only it can write neither.
         let mut sandbox = Sandbox {
             mode: crate::agent::sandbox::SandboxMode::WorkspaceWrite,
             network: false,
             writable: Vec::new(),
         };
         let note = changed.finish(Some((&sandbox, &project))).unwrap();
+        let read_only = format!(
+            "\nYour sandbox keeps {} read-only, so that command fails in it: ask the user to \
+make it writable",
+            changed.path.display()
+        );
+        assert!(note.contains(&read_only), "{note}");
+        sandbox.writable = vec![changed.path.clone()];
+        let note = changed.finish(Some((&sandbox, &project))).unwrap();
+        assert!(!note.contains("Your sandbox"), "{note}");
+        sandbox.mode = crate::agent::sandbox::SandboxMode::ReadOnly;
+        let note = changed.finish(Some((&sandbox, &project))).unwrap();
         let git_dir = crate::os::canonicalize(&project.join(".git")).unwrap();
         let read_only = format!(
-            "\nYour sandbox keeps {} and {} read-only, so that command fails in it",
-            changed.path.display(),
+            "\nYour sandbox keeps {} read-only, so that command fails in it: ask the user to \
+make it writable",
             git_dir.display()
         );
         assert!(note.contains(&read_only), "{note}");
-        sandbox.writable = vec![changed.path.clone(), git_dir];
-        let note = changed.finish(Some((&sandbox, &project))).unwrap();
-        assert!(!note.contains("Your sandbox"), "{note}");
         assert!(changed.path.join("new.txt").exists());
         assert!(!project.join("new.txt").exists());
 

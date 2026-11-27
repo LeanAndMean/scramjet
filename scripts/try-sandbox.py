@@ -12,7 +12,7 @@ settings or credential stores: the home directory is a scratch one (default
 with fake stores holding a marker. Network checks reach a second local server only.
 
 With --toolchains it instead tries the project-only reach on the user's own home directory and
-tools, in a scratch clone of this repository with `.git` made writable: cargo build and test, node,
+tools, in a scratch clone of this repository: cargo build and test, node,
 codex, claude, uv, python3, a git commit as the user, and a subagent's read of a skill. Scramjet's
 own settings stay scratch ones; the commands get the user's XDG directories back. It builds the
 clone in debug (a few minutes, about 2 GB, removed after).
@@ -231,10 +231,15 @@ def main():
         ]),
         ('--sandbox workspace-write in a Git repository', ['--sandbox', 'workspace-write'], {}, True, False, [
             ('git status works', 'git status --short 2>&1 && echo GIT-""OK', lambda o: 'GIT-OK' in o, None),
-            ('.git is not writable', 'touch .git/hooks/x 2>&1 && echo HOOK-""MADE',
+            ('a Git hook cannot be added', 'touch .git/hooks/x 2>&1 && echo HOOK-""MADE',
              lambda o: 'HOOK-MADE' not in o, None),
-            ('git commit is refused', 'git add -A 2>&1; git commit -qm x 2>&1 && echo COM""MITTED',
-             lambda o: 'COMMITTED' not in o, None),
+            ('Git\'s configuration cannot be changed',
+             'git config core.fsmonitor /tmp/run 2>&1; git config core.fsmonitor; echo CONFIG-""$?',
+             lambda o: 'CONFIG-1' in o, None),
+            ('.git cannot be moved away', 'mv .git moved 2>&1 && echo GIT-""MOVED',
+             lambda o: 'GIT-MOVED' not in o, None),
+            ('git commit works', 'echo x > x && git add -A 2>&1; git commit -qm x 2>&1 && echo COM""MITTED',
+             lambda o: 'COMMITTED' in o, None),
         ]),
         ('sandbox.filesystem: denyRead, allowRead, allowWrite', [], {'sandbox': denied}, False, False, [
             ('a denied directory\'s file is unreadable', 'cat ~/private/secret.txt 2>&1', secret_hidden, None),
@@ -398,7 +403,7 @@ def toolchains(elsewhere, secret_hidden, shown):
     config = os.environ.get('XDG_CONFIG_HOME') or '~/.config'
     data = os.environ.get('XDG_DATA_HOME') or '~/.local/share'
     reach = {'sandbox': {'mode': 'workspace-write', 'filesystem': {
-                'allowWrite': ['{project}/.git'], 'allowRead': [config + '/git', data + '/uv']}},
+                'allowRead': [config + '/git', data + '/uv']}},
              'blockReadsOutsideWorkingDirectories': True}
     skill = os.path.join(ROOT, 'sets/scramjet/skills/writing-scramjet-commands/SKILL.md')
 
@@ -408,7 +413,7 @@ def toolchains(elsewhere, secret_hidden, shown):
     uv = "uv run --no-project python -c \"print('UV'+'-OK')\" 2>&1"
     cache = os.environ.get('UV_CACHE_DIR') or os.path.join(os.environ.get('XDG_CACHE_HOME') or '~/.cache', 'uv')
     uv_writes = json.loads(json.dumps(reach))
-    uv_writes['sandbox']['filesystem']['allowWrite'].append(cache)
+    uv_writes['sandbox']['filesystem']['allowWrite'] = [cache]
 
     return [
         ('the project-only reach with the user\'s own tools, in a clone', [], reach, False, False, [

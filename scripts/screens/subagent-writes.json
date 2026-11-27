@@ -16,7 +16,7 @@
         "call": "subagent",
         "arguments": {
           "agent": "fixer",
-          "task": "Write NOTES.md and fill .git/description"
+          "task": "Write NOTES.md and change .git/config"
         }
       }
     ],
@@ -33,13 +33,13 @@
       {
         "call": "bash",
         "arguments": {
-          "command": "echo more >> NOTES.md; cat NOTES.md; echo x > .git/description"
+          "command": "echo more >> NOTES.md; cat NOTES.md; echo x >> .git/config"
         }
       }
     ],
     [
       {
-        "text": "Wrote NOTES.md; .git/description stays read-only."
+        "text": "Wrote NOTES.md; .git/config stays read-only."
       }
     ],
     [

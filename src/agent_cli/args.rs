@@ -262,13 +262,15 @@ but to NO_PROXY's hosts and this machine.
                          every file read-only, a private /tmp (on macOS /tmp and TMPDIR
                          shared), its own processes and the credential stores hidden, and
                          refuses write and edit;
-                         workspace-write lets both change the project but its .git,
-                         .scramjet and .agents. Commands reach the network unless the
+                         workspace-write lets both change the project, so commands can
+                         commit, but its .git/hooks, .git/config, .scramjet and .agents.
+                         Commands reach the network unless the
                          setting sandbox.network is false. It needs bubblewrap (bwrap) and
                          refuses to start without it; on macOS it runs under Seatbelt
                          (sandbox-exec). `!` commands you type and MCP servers stay outside
   --add-dir DIR          let the sandbox's commands, write and edit change DIR too (its
-                         .git, .scramjet and .agents kept read-only); repeatable. /sandbox
+                         .git/hooks, .git/config, .scramjet and .agents kept read-only;
+                         add its .git to change those); repeatable. /sandbox
                          and /add-dir grant more while working. Without a sandbox, keeps
                          DIR readable and writable where blockReadsOutsideWorkingDirectories
                          would hide it

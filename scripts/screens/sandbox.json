@@ -12,7 +12,7 @@
       {
         "call": "bash",
         "arguments": {
-          "command": "echo notes > notes.txt && cat notes.txt; rm -rf .git; git log --oneline | wc -l; touch ~/.scramjet-screens-probe; cmd.exe /c echo windows; echo private > /tmp/x && cat /tmp/x"
+          "command": "echo notes > notes.txt && cat notes.txt; echo exit > .git/hooks/pre-commit; git config core.fsmonitor /tmp/run; git log --oneline | wc -l; touch ~/.scramjet-screens-probe; cmd.exe /c echo windows; echo private > /tmp/x && cat /tmp/x"
         }
       }
     ],
@@ -27,13 +27,13 @@
     ],
     [
       {
-        "text": "The sandbox kept the history and the home directory."
+        "text": "The sandbox kept Git's hooks and configuration, and the home directory."
       }
     ]
   ],
   "steps": [
     {
-      "until": "kept the history"
+      "until": "kept Git's hooks"
     },
     {
       "sleep": 0.3
