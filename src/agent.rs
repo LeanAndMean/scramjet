@@ -51,7 +51,6 @@ pub mod rewind;
 mod sandbox;
 mod session;
 mod shell;
-mod side;
 mod skills;
 mod status;
 pub mod stream_json;
@@ -106,7 +105,6 @@ pub use session::{
     read_branch, read_conversation, read_profile, records_directory, state_directory,
 };
 pub use shell::Shell;
-pub use side::Aside;
 pub use skills::{Skill, SkillOptions, Skills};
 pub use status::{Completed, FRESH_MARK, Next, Reopened, Routing, Source, Step};
 pub use suggest::Suggested;
@@ -194,8 +192,7 @@ pub(super) const PROBE: &str = "_scramjet_probe";
 /// The response items a model is sent, besides user messages; replies hold only these. Other
 /// items of the conversation are only shown, as Scramjet keeps its failed replies and `!!` output
 /// out of the context: how a turn stopped (`turn_stopped`, with the `error` unless it was
-/// cancelled), a `!!` command (`bang_excluded`, with its `command` and the `output` shown), a
-/// `/btw` side question (`side_question`, with its `question` and `answer`) and a `/goal` check
+/// cancelled), a `!!` command (`bang_excluded`, with its `command` and the `output` shown) and a `/goal` check
 /// (`goal_check`, with its `condition`, whether it was `met` and the `reason`).
 /// So is an entry of a type this build does not know, as Scramjet's `convertToLlm` drops one.
 const SENT: [&str; 4] = [
@@ -1534,16 +1531,6 @@ impl Agent {
     /// Names the current session `name`, saved at once; empty clears the name.
     pub fn set_session_name(&mut self, name: &str) -> Result<(), AgentError> {
         Ok(self.session.set_name(name)?)
-    }
-
-    /// The current session's color, as `/color` sets it; `None` for the default.
-    pub fn session_color(&self) -> Option<&str> {
-        self.session.color()
-    }
-
-    /// Sets the current session's color, saved at once; `None` for the default.
-    pub fn set_session_color(&mut self, color: Option<&str>) -> Result<(), AgentError> {
-        Ok(self.session.set_color(color)?)
     }
 
     /// The current session's id, its file name without the extension.

@@ -2112,30 +2112,6 @@ impl Settings {
         })
     }
 
-    /// `/autocompact on|off`: `compaction.enabled`.
-    pub(super) fn set_auto_compact(&mut self, automatic: bool) -> io::Result<()> {
-        self.compacting.automatic = automatic;
-        self.save_in("compaction", "enabled", json!(automatic))
-    }
-
-    /// `/autocompact TOKENS`, and `auto` with `None`: `compaction.reserveTokens`, removed for
-    /// its default.
-    pub(super) fn set_compaction_reserve(&mut self, reserve: Option<u64>) -> io::Result<()> {
-        self.compacting.reserve = reserve.unwrap_or(Compacting::default().reserve);
-        self.update(|object| {
-            let Some(Value::Object(compaction)) = object.get_mut("compaction") else {
-                if let Some(reserve) = reserve {
-                    object.insert("compaction".into(), json!({"reserveTokens": reserve}));
-                }
-                return;
-            };
-            match reserve {
-                Some(reserve) => compaction.insert("reserveTokens".into(), json!(reserve)),
-                None => compaction.remove("reserveTokens"),
-            };
-        })
-    }
-
     /// The models chosen before that a launch in the project `root` may start a new session
     /// with, as Scramjet's, by reference (`provider/id`): the one last chosen there (with
     /// `startupModel` `per-directory`), and Claude Code's `model` (as `claude_pattern` reads it),

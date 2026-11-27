@@ -254,44 +254,6 @@ styles! {
     QUESTION_SELECTED: [] Accent;
     /// No style.
     NONE: [];
-    /// The prompt's border in the colors `/color` gives a session, set from `SESSION_COLORS`
-    /// rather than from a theme's tokens.
-    SESSION_RED: [];
-    SESSION_BLUE: [];
-    SESSION_GREEN: [];
-    SESSION_YELLOW: [];
-    SESSION_PURPLE: [];
-    SESSION_ORANGE: [];
-    SESSION_PINK: [];
-    SESSION_CYAN: [];
-}
-
-/// The colors `/color` gives a session, as Claude Code's: each name with its style, its color in
-/// the terminal's palette for a theme of palette colors only, and its exact one for the others.
-const SESSION_COLORS: [SessionColor; 8] = [
-    ("red", SESSION_RED, 1, (220, 38, 38)),
-    ("blue", SESSION_BLUE, 4, (106, 155, 204)),
-    ("green", SESSION_GREEN, 2, (22, 163, 74)),
-    ("yellow", SESSION_YELLOW, 3, (202, 138, 4)),
-    ("purple", SESSION_PURPLE, 5, (130, 125, 189)),
-    ("orange", SESSION_ORANGE, 9, (217, 119, 87)),
-    ("pink", SESSION_PINK, 13, (196, 102, 134)),
-    ("cyan", SESSION_CYAN, 6, (8, 145, 178)),
-];
-
-/// A session color's name, style, palette color and exact color.
-type SessionColor = (&'static str, Style, u8, (u8, u8, u8));
-
-/// The names `/color` takes, in Claude Code's order.
-pub(super) fn session_colors() -> impl Iterator<Item = &'static str> {
-    SESSION_COLORS.iter().map(|(name, ..)| *name)
-}
-
-/// The style of the session color `name`; `None` for a name `/color` does not give.
-pub(super) fn session_color(name: &str) -> Option<Style> {
-    (SESSION_COLORS.iter())
-        .find(|(known, ..)| *known == name)
-        .map(|(_, style, ..)| *style)
 }
 
 impl Style {
@@ -437,15 +399,6 @@ fn table(theme: &Theme, mode: Mode) -> Vec<String> {
     let base = on(theme.background()).unwrap_or_default();
     let bands = BANDS.map(|(_, token, _)| on(theme.color(token)).unwrap_or_else(|| base.clone()));
     let mut table: Vec<String> = SPECS.iter().map(sequence).collect();
-    let palette = theme.palette_only();
-    for (_, style, index, (r, g, b)) in SESSION_COLORS {
-        let color = match palette {
-            true => Color::Index(index),
-            false => Color::Rgb(r, g, b),
-        };
-        let color = color.foreground(mode).unwrap_or_default();
-        table[style.0 as usize] = format!("\x1b[{color}m");
-    }
     table.push(base);
     table.extend(bands);
     table

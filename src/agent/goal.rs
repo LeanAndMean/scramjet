@@ -1,5 +1,5 @@
 //! `/goal`, as Claude Code's: a condition checked after each turn, the agent going on until a
-//! check finds it met. The check is a side request, as `/btw`'s: the turn's own request, so the
+//! check finds it met. The check is a side request: the turn's own request, so the
 //! prompt cache holds, with the condition after it, asking for a verdict in JSON; no call its
 //! reply makes runs. Each check is saved in a `goal_check` line with what it spent: never sent,
 //! but counted.

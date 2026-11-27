@@ -19,7 +19,6 @@ mod banner;
 mod bottom;
 mod catalog;
 mod changelog;
-mod changes;
 mod children;
 mod clipboard;
 mod completion;
@@ -27,7 +26,6 @@ mod console;
 mod context;
 mod design;
 mod diff;
-mod doctor;
 mod drive;
 mod editor;
 mod exit;
@@ -125,9 +123,6 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
             return result;
         }
         if let Some(result) = lint::run(command, &rest) {
-            return result;
-        }
-        if let Some(result) = doctor::run(command, &rest) {
             return result;
         }
         if !command.starts_with('-') {

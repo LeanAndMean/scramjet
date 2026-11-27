@@ -1,6 +1,0 @@
-{
-  "app.model.select": "ctrl+shift+l",
-  "app.message.followUp": ["alt+enter", "ctrl+q"],
-  "tui.editor.undo": ["ctrl+z", "ctrl+-"],
-  "tui.input.newLine": ["shift+enter", "ctrl+j"]
-}

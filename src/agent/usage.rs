@@ -168,7 +168,7 @@ impl History {
             let Ok(item) = serde_json::from_str::<Value>(text) else {
                 continue;
             };
-            // A compaction's, branch summary's or side question's requests name their model in `model`.
+            // A compaction's, branch summary's or goal check's requests name their model in `model`.
             let model = (item[PRODUCER].as_str())
                 .or_else(|| item["model"].as_str())
                 .unwrap_or("");

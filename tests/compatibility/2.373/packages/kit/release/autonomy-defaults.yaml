@@ -1,6 +1,0 @@
-edges:
-  release:tag:
-    release:tag: pause
-publications:
-  release:tag:
-    add_issue_comment: require-approval

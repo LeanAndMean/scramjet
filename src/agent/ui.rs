@@ -23,10 +23,6 @@ pub enum Purpose {
     Compaction(Option<AutoCompaction>),
     /// The summary of a branch that `/tree` leaves.
     BranchSummary,
-    /// The answer to a `/btw` side question.
-    SideQuestion,
-    /// The answer to `/recap`, asked as a side question.
-    Recap,
     /// Whether the `/goal` is met.
     GoalCheck,
 }

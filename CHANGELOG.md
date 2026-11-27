@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.419.0 — Unreleased commands taken out
+
 ## 2.418.0 — `--agents`
 
 ### Added
@@ -103,13 +105,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ### Changed
 
-- A file in one of Claude Code's plugins that cannot be read (such as an agent whose frontmatter is not valid YAML) is no longer warned of at each start, as you cannot fix a plugin's cache and Claude Code skips such a file quietly too. `/doctor` and `scramjet doctor` list it under a `plugins` line that is not a warning, and `/settings`' Installed still shows it. A problem in Claude Code's own plugin lists is still said at start.
+- A file in one of Claude Code's plugins that cannot be read (such as an agent whose frontmatter is not valid YAML) is no longer warned of at each start, as you cannot fix a plugin's cache and Claude Code skips such a file quietly too. `/settings`' Installed still shows it. A problem in Claude Code's own plugin lists is still said at start.
 
 ## 2.404.0 — Told when the sandbox cannot keep .git read-only
 
 ### Added
 
-- On a drive that ignores case (WSL's `/mnt/c`), a sandbox that starts (or `/sandbox` turning one on) warns that commands can change the project's `.git`, `.claude`, `.scramjet` or `.agents` through other spellings of their names, and `/doctor` says so too; each spelling is tried in the sandbox first, so a drive where the protection holds gets no warning.
+- On a drive that ignores case (WSL's `/mnt/c`), a sandbox that starts (or `/sandbox` turning one on) warns that commands can change the project's `.git`, `.claude`, `.scramjet` or `.agents` through other spellings of their names; each spelling is tried in the sandbox first, so a drive where the protection holds gets no warning.
 
 ## 2.403.0 — The todo item in progress on the status line
 
@@ -322,12 +324,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - `/copy N` copies the Nth-latest reply (of the last 20), as Claude Code's. On the full screen a reply with code blocks opens a list to copy the whole reply or one block (its language and lines shown); its last entry, "Always copy full response", turns on the new `copyFullResponse` setting (a row in `/settings`), which skips the list. "Copied to clipboard" now says how many characters and lines.
 
-## 2.373.0 — /color
-
-### Added
-
-- `/color [red|blue|green|yellow|purple|orange|pink|cyan|default]` draws the prompt's border in a color of the session's own, as Claude Code's, to tell sessions running side by side apart: a color at random without a name, `default` (or `reset`, `none`, `gray`) back to the thinking level's. It is saved with the session, kept on resume and by `/branch`, and completed as you type it. A `!` command's border keeps its own color.
-
 ## 2.372.0 — The status line
 
 ### Added
@@ -339,12 +335,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 ### Added
 
 - `/loop [INTERVAL] PROMPT` sends a prompt now and again each interval while the full screen waits for you, as Claude Code's does: `/loop 5m check the deploy`, or `/loop run the tests every 20m`, 10 minutes when no interval is given. The footer says `loop every 5m`; `/loop` says when it runs next, `/loop stop` ends it, and it ends with the session or after 7 days.
-
-## 2.370.0 — /recap
-
-### Added
-
-- `/recap` asks the model where the session stands, as Claude Code's does: the goal, where the work is and the next action, in a sentence or two shown as a note. Like `/btw`, it runs also during a turn, and the model never sees the question or the answer again.
 
 ## 2.369.0 — /tasks is a list on the full screen
 
@@ -399,12 +389,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - `/goal CONDITION` gives the agent a goal, as Claude Code's does: after each turn that ends by itself, the model is asked whether the conversation shows it met, and until it is, the reason goes back to the agent and the work goes on. `/goal` says the goal, `/goal clear` clears it, and Escape stops the work.
 
-## 2.361.0 — /autocompact
-
-### Added
-
-- `/autocompact` sets when the conversation compacts by itself, as Claude Code's does: `on` and `off`, a number of tokens to keep free of the model's window (such as `30k`), or `auto` for the default. It saves your settings' `compaction`; alone it says where compaction starts for the current model.
-
 ## 2.360.0 — /theme
 
 ### Added
@@ -429,18 +413,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - `/security-review` has the agent review your changes for security vulnerabilities only, as Claude Code's does: the same changes `/review` looks at, or what you name after it. It reports only what someone could exploit that the change introduces, checking each candidate (in a fresh subagent where it can) before reporting it with its severity, file and line, how it would be exploited and the fix, and changes nothing.
 
-## 2.356.0 — /btw
-
-### Added
-
-- `/btw QUESTION` asks a side question, as in Claude Code: the model answers from the conversation so far without running any tool, the answer shows in a view of its own, and neither the question nor the answer goes to the model again. Typed while a turn runs, it is asked at once and the turn goes on meanwhile; a call still running is told to the model as still running. The request is the turn's own, so the provider's prompt cache serves it, and what it spent counts in the session and `/usage`.
-
-## 2.355.0 — scramjet doctor
-
-### Added
-
-- `scramjet doctor`, and `/doctor` in a session, as in Claude Code and Codex: a line per check of whether Scramjet can work here, with what to do when it cannot. It says which `scramjet` your `PATH` runs (Scramjet 1's marked), whether a newer release is out, the room on the disk, problems in the settings and what they load, the models and the one a session starts with, whether anything answers at a provider's server on this machine (a local proxy or a runtime for local models), whether the sandbox can start, git, the shell and `gh`, the terminal, and in a session how the MCP servers are. Nothing is sent to a provider; `scramjet doctor` exits with an error when a check fails.
-
 ## 2.354.0 — /memory
 
 ### Added
@@ -458,12 +430,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 ### Added
 
 - `/review` has the agent review your changes, as Codex's and Claude Code's `/review` do: what is uncommitted, else the current branch against its default branch, or the commit, range, branch or pull request you name after it, with any focus you add. It reports the defects first, most severe first, each with its file and line and the fix it needs, then open questions, and changes nothing.
-
-## 2.351.0 — /diff
-
-### Added
-
-- `/diff` shows the project's uncommitted changes against `HEAD`, untracked files as new ones, without a model turn, as Codex's and Claude Code's `/diff` do: the whole diff in a view of its own, `d` listing the files changed with their lines added and removed. Without a full screen it prints them.
 
 ## 2.350.0 — /init
 

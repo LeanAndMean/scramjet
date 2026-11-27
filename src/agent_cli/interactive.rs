@@ -16,7 +16,7 @@ use super::{
     editor, footer, installed, keymap, scope, select, settings, style, terminal, tree, update,
 };
 use scramjet::agent::{
-    Agent, AgentError, AgentUi, Aside, Attached, Choice, ClaudeCommand, Command, EarlierSession,
+    Agent, AgentError, AgentUi, Attached, Choice, ClaudeCommand, Command, EarlierSession,
     Installed, Problem,
 };
 use std::{
@@ -55,8 +55,6 @@ pub(super) struct Interactive {
     pub(super) keybindings: Vec<Problem>,
     /// A turn waits for the built-in commands typed during it (`typed_during_turn`).
     pub(super) in_turn: bool,
-    /// The side questions answered while a turn paused, kept once it has ended.
-    pub(super) asides: Vec<Aside>,
     /// The `/goal`, checked after each turn that ends by itself.
     pub(super) goal: Option<super::goal::Goal>,
     /// Whether the last turn ended by itself, neither cancelled nor failed.
@@ -145,7 +143,6 @@ impl Interactive {
             theme_options,
             keybindings,
             in_turn: false,
-            asides: Vec::new(),
             goal: None,
             finished: false,
             effort_at_start: None,
@@ -298,11 +295,6 @@ impl Interactive {
             // Those that ended during the turn go before the next prompt, as Scramjet adds them
             // when the turn ends.
             add_shells(&mut self.session.agent, screen);
-            for aside in std::mem::take(&mut self.asides) {
-                if let Err(error) = self.session.agent.keep_aside(aside) {
-                    screen.say(&format!("Error: {error}"));
-                }
-            }
             if let Some(prompt) = dispatched {
                 return Ok(Read::Prompt(prompt));
             }
@@ -433,7 +425,7 @@ impl Interactive {
 
     /// Runs `run` with the full screen showing that a turn runs, Shift+Tab cycling the current
     /// model's levels; without it, printed.
-    pub(super) fn on_screen<T>(
+    fn on_screen<T>(
         &mut self,
         run: impl FnOnce(&mut Agent, &mut dyn AgentUi, &AtomicBool) -> T,
     ) -> T {

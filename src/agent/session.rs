@@ -221,8 +221,6 @@ pub struct Session {
     changes: ModelChanges,
     /// The latest `session_info` name in the file, which applies to the whole session.
     name: Option<String>,
-    /// The latest `session_info` color in the file, as `/color` sets it, for the whole session.
-    color: Option<String>,
     /// The latest thinking level change on the path, which a resume restores.
     effort: Option<String>,
     /// The file lists of the latest compaction on the path, which the next one carries on.
@@ -294,9 +292,6 @@ struct Entries {
     entries: Vec<Entry>,
     /// The latest `session_info` name in the file; an empty one clears it.
     name: Option<String>,
-    /// The latest `session_info` color in the file; an empty one clears it, and a line without
-    /// one leaves it as it was, as older versions name a session.
-    color: Option<String>,
     /// Each labeled entry's latest label (`{"type":"label","target":N,"label":…,"time":…}`),
     /// by its line; one without `label` clears it.
     labels: HashMap<usize, Label>,
@@ -340,7 +335,6 @@ fn parse(path: &Path, mut reader: impl BufRead) -> io::Result<Entries> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut tail = None;
     let mut name = None;
-    let mut color = None;
     let mut labels = HashMap::new();
     let mut parent = None;
     let mut header = Value::Null;
@@ -391,11 +385,6 @@ fn parse(path: &Path, mut reader: impl BufRead) -> io::Result<Entries> {
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
                 .map(str::to_owned);
-            if let Some(given) = value.get("color") {
-                color = (given.as_str())
-                    .filter(|color| !color.is_empty())
-                    .map(str::to_owned);
-            }
         } else if value["type"] == "label" {
             // As Scramjet's, a label of no entry is not an error; it shows nowhere.
             let target = (value["target"].as_u64()).and_then(|line| usize::try_from(line).ok());
@@ -440,7 +429,6 @@ fn parse(path: &Path, mut reader: impl BufRead) -> io::Result<Entries> {
     Ok(Entries {
         entries,
         name,
-        color,
         labels,
         tail,
         lines,
@@ -654,14 +642,14 @@ impl Entries {
     }
 
     /// The lines of `file` (this session's bytes) on the path to `leaf`, for a file of their own
-    /// after its header, then their labels, as Scramjet's branched sessions keep them, and with
-    /// `info` a `session_info` line with the session's name and color, when it has either.
+    /// after its header, then their labels, as Scramjet's branched sessions keep them, and a
+    /// `session_info` line naming it `name` when given.
     fn history(
         &self,
         file: &Path,
         source: &[u8],
         leaf: Option<usize>,
-        info: bool,
+        name: Option<&str>,
     ) -> io::Result<Vec<u8>> {
         let mut history = Vec::new();
         let mut labels = Vec::new();
@@ -681,24 +669,14 @@ impl Entries {
             history.extend(serde_json::to_vec(&label)?);
             history.push(b'\n');
         }
-        if info && (self.name.is_some() || self.color.is_some()) {
-            history.extend(serde_json::to_vec(&info_line(
-                self.name.as_deref(),
-                self.color.as_deref(),
-            ))?);
+        if let Some(name) = name {
+            history.extend(serde_json::to_vec(
+                &json!({"type":"session_info","name":name}),
+            )?);
             history.push(b'\n');
         }
         Ok(history)
     }
-}
-
-/// A `session_info` line with `name`, and `color` when given; an empty name clears it.
-fn info_line(name: Option<&str>, color: Option<&str>) -> Value {
-    let mut line = json!({"type":"session_info","name":name.unwrap_or_default()});
-    if let Some(color) = color {
-        line["color"] = json!(color);
-    }
-    line
 }
 
 fn label_line(target: usize, text: Option<&str>, time: u64) -> Value {
@@ -1260,7 +1238,6 @@ impl Session {
             contributors: Vec::new(),
             changes: ModelChanges::default(),
             name: None,
-            color: None,
             effort: None,
             files: FileLists::default(),
             context_tokens: None,
@@ -1345,7 +1322,6 @@ impl Session {
                 contributors: context.contributors,
                 changes: context.changes,
                 name: entries.name.clone(),
-                color: entries.color.clone(),
                 effort: context.effort,
                 files: context.files,
                 context_tokens: context.context_tokens,
@@ -1403,29 +1379,29 @@ impl Session {
         };
         let prompt = prompt_text(&fork.value).to_owned();
         let leaf = leaf(&entries.entries, fork.parent);
-        let opened = self.branch_file(&entries, leaf, root, false)?;
+        let opened = self.branch_file(&entries, leaf, root, None)?;
         Ok(Some((opened, prompt)))
     }
 
     /// Starts a session for the project `root` next to this one with the entries on the path to
-    /// the leaf and the session's name and color, as Scramjet's `/clone` duplicates a session at its
+    /// the leaf and the session's name, as Scramjet's `/clone` duplicates a session at its
     /// current position, and opens it.
     pub fn clone_at_leaf(&self, root: &Path) -> io::Result<Opened> {
         let entries = self.read()?;
-        self.branch_file(&entries, self.leaf, root, true)
+        self.branch_file(&entries, self.leaf, root, entries.name.as_deref())
     }
 
     /// Starts a session next to this one, forked from it, with the entries of `entries` (this
-    /// file's) on the path to `leaf`, then with `info` its name and color, and opens it.
+    /// file's) on the path to `leaf`, then `name` when given, and opens it.
     fn branch_file(
         &self,
         entries: &Entries,
         leaf: Option<usize>,
         root: &Path,
-        info: bool,
+        name: Option<&str>,
     ) -> io::Result<Opened> {
         let source = self.bytes()?;
-        let history = entries.history(&self.path, &source, leaf, info)?;
+        let history = entries.history(&self.path, &source, leaf, name)?;
         let directory = self.path.parent().unwrap_or(Path::new("."));
         Self::create(directory, root, Some(&self.path))?.filled(&history)
     }
@@ -1437,7 +1413,7 @@ impl Session {
 
     /// Writes the session's current branch to `to` as a session file of its own, as Scramjet's
     /// `/export` writes a `.jsonl`: its header, without the session it was forked from, the
-    /// entries on the path to the leaf in order, and its name and color. An existing file is replaced.
+    /// entries on the path to the leaf in order, and its name. An existing file is replaced.
     pub fn export(&self, to: &Path) -> io::Result<()> {
         let source = self.bytes()?;
         let entries = parse(&self.path, &source[..])?;
@@ -1448,7 +1424,8 @@ impl Session {
         }
         let mut lines = serde_json::to_vec(&header)?;
         lines.push(b'\n');
-        lines.extend(entries.history(&self.path, &source, self.leaf, true)?);
+        let name = entries.name.as_deref();
+        lines.extend(entries.history(&self.path, &source, self.leaf, name)?);
         if let Some(directory) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
             std::fs::create_dir_all(directory)?;
         }
@@ -1509,7 +1486,6 @@ impl Session {
         self.contributors = context.contributors;
         self.changes = context.changes;
         self.name = entries.name;
-        self.color = entries.color;
         self.effort = context.effort;
         self.files = context.files;
         self.context_tokens = context.context_tokens;
@@ -1669,25 +1645,6 @@ impl Session {
         self.write(&line)?;
         self.lines += 1;
         self.name = Some(name.to_owned()).filter(|name| !name.is_empty());
-        Ok(())
-    }
-
-    /// The session's color, as `/color` sets it; `None` for the default.
-    pub fn color(&self) -> Option<&str> {
-        self.color.as_deref()
-    }
-
-    /// Saves `color` (`None` for the default) as the session's color, on a `session_info` line
-    /// that keeps its name, so that versions before colors read the name from it as before.
-    pub fn set_color(&mut self, color: Option<&str>) -> io::Result<()> {
-        let _writing = self.writing()?;
-        self.catch_up()?;
-        let line = info_line(self.name.as_deref(), Some(color.unwrap_or_default()));
-        let mut line = serde_json::to_vec(&line)?;
-        line.push(b'\n');
-        self.write(&line)?;
-        self.lines += 1;
-        self.color = color.map(str::to_owned);
         Ok(())
     }
 
@@ -1930,7 +1887,6 @@ impl Session {
             self.lines = entries.lines;
             self.tail = entries.tail;
             self.name = entries.name;
-            self.color = entries.color;
             self.size = entries.size;
             self.tokens = entries.tokens;
             self.unused = false;

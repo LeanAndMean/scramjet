@@ -9,12 +9,12 @@ use super::report::{ReportView, Tab};
 use super::settings::{card_level, scramjet_level};
 use super::terminal;
 use super::text::{clip, visible};
-use super::{changelog, clipboard, completion, doctor, export, installed, keymap, style};
-use scramjet::agent::{Agent, AgentError, AgentUi, McpState, Problem, Reach, SandboxMode, todo};
+use super::{changelog, clipboard, completion, export, installed, keymap, style};
+use scramjet::agent::{Agent, AgentError, McpState, Reach, SandboxMode, todo};
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::Ordering,
 };
 
 /// A built-in command as typed, with its argument.
@@ -28,10 +28,7 @@ pub(super) enum Builtin<'a> {
     /// With the new session's name, if given.
     Clear(&'a str),
     Rename(&'a str),
-    /// Claude Code's `/color [NAME|default]`: the prompt's border in the session's own color.
-    Color(&'a str),
     Status,
-    Diff,
     /// Claude Code's `/tasks [stop N]`: the commands bash runs in the background.
     Tasks(&'a str),
     /// Claude Code's `/todos`: the agent's checklist.
@@ -41,7 +38,6 @@ pub(super) enum Builtin<'a> {
     Memory,
     /// Claude Code's `/hooks`: the hooks the settings run.
     Hooks,
-    Doctor,
     /// With whether the details come first.
     Usage(bool),
     Context,
@@ -65,12 +61,6 @@ pub(super) enum Builtin<'a> {
     Login,
     Logout,
     Compact(&'a str),
-    /// Claude Code's `/autocompact [on|off|auto|TOKENS]`: when compaction runs by itself.
-    AutoCompact(&'a str),
-    /// Claude Code's `/btw QUESTION`: a side question, answered apart from the conversation.
-    Btw(&'a str),
-    /// Claude Code's `/recap`: where the session stands, asked as a side question.
-    Recap,
     /// Claude Code's `/goal [CONDITION|clear]`: a condition checked after each turn.
     Goal(&'a str),
     /// Claude Code's `/loop [INTERVAL] PROMPT|stop`: a prompt sent again on an interval.
@@ -103,16 +93,13 @@ impl<'a> Builtin<'a> {
             "copy" => Self::Copy(argument),
             "clear" => Self::Clear(argument),
             "rename" => Self::Rename(argument),
-            "color" => Self::Color(argument),
             "status" if argument.is_empty() => Self::Status,
-            "diff" if argument.is_empty() => Self::Diff,
             "tasks" => Self::Tasks(argument),
             "todos" if argument.is_empty() => Self::Todos,
             "agents" if argument.is_empty() => Self::Agents,
             "skills" if argument.is_empty() => Self::Skills,
             "memory" if argument.is_empty() => Self::Memory,
             "hooks" if argument.is_empty() => Self::Hooks,
-            "doctor" if argument.is_empty() => Self::Doctor,
             "usage" if argument.is_empty() || argument == "details" => {
                 Self::Usage(argument == "details")
             }
@@ -133,9 +120,6 @@ impl<'a> Builtin<'a> {
             "login" if argument.is_empty() => Self::Login,
             "logout" if argument.is_empty() => Self::Logout,
             "compact" => Self::Compact(argument),
-            "autocompact" => Self::AutoCompact(argument),
-            "btw" => Self::Btw(argument),
-            "recap" if argument.is_empty() => Self::Recap,
             "goal" => Self::Goal(argument),
             "loop" => Self::Loop(argument),
             "plan" => Self::Plan(argument),
@@ -160,18 +144,13 @@ impl<'a> Builtin<'a> {
                 | Self::Export(_)
                 | Self::Copy(_)
                 | Self::Rename(_)
-                | Self::Color(_)
                 | Self::Status
-                | Self::Diff
                 | Self::Tasks(_)
                 | Self::Todos
                 | Self::Agents
                 | Self::Skills
                 | Self::Memory
                 | Self::Hooks
-                | Self::Doctor
-                | Self::Btw(_)
-                | Self::Recap
                 | Self::Goal(_)
                 | Self::Loop(_)
                 | Self::Plan(_)
@@ -184,7 +163,6 @@ impl<'a> Builtin<'a> {
                 | Self::Model(_)
                 | Self::Effort(_)
                 | Self::Theme(_)
-                | Self::AutoCompact(_)
                 | Self::ScopedModels
                 | Self::Login
                 | Self::Logout
@@ -215,16 +193,13 @@ impl Interactive {
                 }
             }
             Some(Builtin::Rename(name)) => self.name(name),
-            Some(Builtin::Color(wanted)) => self.color(wanted),
             Some(Builtin::Status) => self.say(session_info(&self.session.agent).trim_end()),
-            Some(Builtin::Diff) => self.diff(),
             Some(Builtin::Tasks(argument)) => self.tasks(argument),
             Some(Builtin::Todos) => self.todos(),
             Some(Builtin::Agents) => self.agents(),
             Some(Builtin::Skills) => self.skills(),
             Some(Builtin::Memory) => self.memory(),
             Some(Builtin::Hooks) => self.hooks(),
-            Some(Builtin::Doctor) => self.doctor(),
             Some(Builtin::Usage(details)) => self.usage(details),
             Some(Builtin::Context) => self.context(),
             Some(Builtin::SystemPrompt) => self.system_prompt(),
@@ -245,9 +220,6 @@ impl Interactive {
             Some(Builtin::Login) => self.login(),
             Some(Builtin::Logout) => self.logout(),
             Some(Builtin::Compact(focus)) => self.compact(focus),
-            Some(Builtin::AutoCompact(wanted)) => self.auto_compact(wanted),
-            Some(Builtin::Btw(question)) => self.btw(question),
-            Some(Builtin::Recap) => self.recap(),
             Some(Builtin::Goal(condition)) => self.goal(condition),
             Some(Builtin::Loop(argument)) => self.looping(argument),
             Some(Builtin::Plan(argument)) => self.plan(argument),
@@ -296,38 +268,6 @@ impl Interactive {
                 Ok(()) => self.say_styled(style::MUTED, &format!("Session name set: {name}")),
                 Err(error) => self.say(&format!("Error: {error}")),
             }
-        }
-    }
-
-    /// `/color [NAME|default]`, as Claude Code's: the prompt's border in a color of the session's
-    /// own, saved with it, to tell sessions apart; a color picked at random when none is named.
-    fn color(&mut self, wanted: &str) {
-        let wanted = wanted.to_lowercase();
-        let colors: Vec<&str> = style::session_colors().collect();
-        let color = match wanted.as_str() {
-            "" => {
-                let since = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-                let at = since.unwrap_or_default().subsec_nanos() as usize % colors.len();
-                Some(colors[at])
-            }
-            "default" | "reset" | "none" | "gray" | "grey" => None,
-            name if colors.contains(&name) => Some(name),
-            name => {
-                let available = colors.join(", ");
-                let said =
-                    format!("Invalid color \"{name}\". Available colors: {available}, default");
-                return self.say(&said);
-            }
-        };
-        if let Err(error) = self.session.agent.set_session_color(color) {
-            return self.say(&format!("Error: {error}"));
-        }
-        if let Some(screen) = &self.screen {
-            screen.footer(super::footer::Shown::of(&self.session.agent));
-        }
-        match color {
-            Some(color) => self.say_styled(style::MUTED, &format!("Session color set to: {color}")),
-            None => self.say_styled(style::MUTED, "Session color reset to default"),
         }
     }
 
@@ -592,23 +532,6 @@ impl Interactive {
         self.say(report.trim_end());
     }
 
-    /// `/diff`, as Codex's and Claude Code's: the uncommitted changes, untracked files included;
-    /// on the full screen in a view of its own, the files changed a key away.
-    fn diff(&mut self) {
-        let root = self.session.agent.root().to_owned();
-        match super::changes::uncommitted(&root) {
-            Ok(None) => self.say("Not in a Git repository"),
-            Ok(Some(changes)) if changes.diff.is_empty() => {
-                self.say_styled(style::MUTED, "No uncommitted changes")
-            }
-            Ok(Some(changes)) => match &self.screen {
-                Some(screen) => screen.show_report(super::changes::view(&changes)),
-                None => self.say(super::changes::text(&changes).trim_end()),
-            },
-            Err(error) => self.say(&format!("Error: {error}")),
-        }
-    }
-
     /// `/tasks`, as Claude Code's: the commands bash runs in the background, each with how it
     /// ended or how long it has run, and its output's file; `/tasks stop N` stops one.
     fn tasks(&mut self, argument: &str) {
@@ -853,30 +776,6 @@ impl Interactive {
             at = Some(index);
             self.edit_installed(&file);
         }
-    }
-
-    /// `/doctor`, as Claude Code's: `scramjet doctor`'s checks, with what this session loaded,
-    /// its model and how its MCP servers are.
-    fn doctor(&mut self) {
-        let found = self.session.agent.installed();
-        let (in_plugins, problems): (Vec<_>, Vec<_>) = (self.problems(&found).into_iter())
-            .partition(|problem| installed::in_plugin(problem, &found.sets));
-        let text = |problems: Vec<Problem>| problems.into_iter().map(|p| p.text).collect();
-        let agent = &self.session.agent;
-        let mcp = (agent.mcp_servers().into_iter())
-            .map(|(server, state)| (server.name, state))
-            .collect();
-        let setup = doctor::Setup {
-            settings: &self.session.settings,
-            providers: agent.providers(),
-            root: agent.root(),
-            problems: text(problems),
-            in_plugins: text(in_plugins),
-            model: Some(agent.model().to_owned()),
-            mcp: Some(mcp),
-        };
-        let text = doctor::text(&doctor::checks(&setup));
-        self.say(text.trim_end());
     }
 
     /// `/context`, as Claude Code's: how much of the window each part of the context takes; on
@@ -1130,54 +1029,6 @@ tools into its page",
         }
     }
 
-    /// `/autocompact [on|off|auto|TOKENS]`: turns compaction by itself on or off, or sets the
-    /// tokens kept free of the window (`auto` its default), saved in the settings; without an
-    /// argument, where it runs.
-    fn auto_compact(&mut self, wanted: &str) {
-        let settings = &mut self.session.settings;
-        let saved = match wanted.to_ascii_lowercase().as_str() {
-            "" => Ok(()),
-            "on" => settings.set_auto_compact(true),
-            "off" => settings.set_auto_compact(false),
-            "auto" => (settings.set_auto_compact(true))
-                .and_then(|()| settings.set_compaction_reserve(None)),
-            tokens => match token_count(tokens) {
-                Some(reserve) => settings.set_compaction_reserve(Some(reserve)),
-                None => {
-                    return self.say(&format!(
-                        "Error: /autocompact takes on, off, auto or a number of tokens to keep \
-                         free of the window (such as 30000 or 30k), not {wanted}"
-                    ));
-                }
-            },
-        };
-        self.session.agent.set_compacting(settings.compacting);
-        if let Err(error) = saved {
-            self.say(&format!("Error: settings not saved: {error}"));
-        }
-        let agent = &self.session.agent;
-        if !agent.compacting().automatic {
-            return self
-                .say("Auto-compact: off; /compact still compacts; /autocompact on turns it on");
-        }
-        let when = match (agent.compaction_threshold(), agent.context_window()) {
-            (Some(at), Some(window)) => format!(
-                "past {} of {}'s {} window ({} kept free)",
-                terminal::tokens(at),
-                agent.model(),
-                terminal::tokens(window),
-                terminal::tokens(window - at)
-            ),
-            _ => format!(
-                "keeping {} of the window free (its size is not known)",
-                terminal::tokens(agent.compacting().reserve)
-            ),
-        };
-        self.say(&format!(
-            "Auto-compact: on, {when}; /autocompact on|off|auto|TOKENS"
-        ));
-    }
-
     /// `/effort [LEVEL]`: sets the thinking level, saved as the settings' default, as Shift+Tab
     /// does; without one, the levels to pick from (on the full screen `/settings`' list).
     fn effort(&mut self, wanted: &str) {
@@ -1245,74 +1096,6 @@ tools into its page",
         self.say(&format!("Theme: {wanted}"));
     }
 
-    /// `/btw QUESTION`: the model's answer from the conversation so far, on the full screen in a
-    /// view of its own. Typed during a turn, it is asked at the turn's next pause, the turn's
-    /// reply and calls going on meanwhile, and kept once the turn has ended.
-    fn btw(&mut self, question: &str) {
-        if question.is_empty() {
-            return self.say("Usage: /btw <question>");
-        }
-        let ask = |agent: &mut Agent, ui: &mut dyn AgentUi, cancel: &AtomicBool| {
-            agent.side_question(question, ui, cancel)
-        };
-        // A paused turn's screen already shows a turn running, and goes on showing it.
-        let result = match self.in_turn {
-            true => {
-                let result = self.on_screen(ask);
-                if let Some(screen) = &self.screen {
-                    screen.aside_ended();
-                }
-                result
-            }
-            false => self.during_turn(ask),
-        };
-        let aside = match result {
-            Ok(aside) => aside,
-            Err(AgentError::Cancelled) => return self.say_styled(style::MUTED, "(cancelled)"),
-            Err(error) => return self.say(&format!("Error: {error}")),
-        };
-        match &self.screen {
-            Some(screen) => screen.show_report(aside_view(question, &aside.answer)),
-            None => self.say(&format!("btw: {question}\n\n{}", aside.answer)),
-        }
-        if self.in_turn {
-            self.asides.push(aside);
-        } else if let Err(error) = self.session.agent.keep_aside(aside) {
-            self.say(&format!("Error: {error}"));
-        }
-    }
-
-    /// `/recap`: where the session stands, from the model as `/btw` asks, shown as a note. Typed
-    /// during a turn, it is asked at the turn's next pause and kept once the turn has ended.
-    fn recap(&mut self) {
-        if self.session.agent.prompts().is_empty() {
-            return self.say_styled(style::MUTED, "Nothing to recap yet");
-        }
-        let ask =
-            |agent: &mut Agent, ui: &mut dyn AgentUi, cancel: &AtomicBool| agent.recap(ui, cancel);
-        let result = match self.in_turn {
-            true => {
-                let result = self.on_screen(ask);
-                if let Some(screen) = &self.screen {
-                    screen.aside_ended();
-                }
-                result
-            }
-            false => self.during_turn(ask),
-        };
-        let aside = match result {
-            Ok(aside) => aside,
-            Err(AgentError::Cancelled) => return self.say_styled(style::MUTED, "(cancelled)"),
-            Err(error) => return self.say(&format!("Error: {error}")),
-        };
-        self.say_styled(style::MUTED, &format!("Recap: {}", aside.answer));
-        if self.in_turn {
-            self.asides.push(aside);
-        } else if let Err(error) = self.session.agent.keep_aside(aside) {
-            self.say(&format!("Error: {error}"));
-        }
-    }
-
     /// `!command` runs a command without a model turn; `!!command` keeps it out of the context.
     /// Returns whether there was a command to run.
     fn bang(&mut self, command: &str) -> bool {
@@ -1332,20 +1115,6 @@ tools into its page",
         }
         true
     }
-}
-
-/// `/btw`'s answer on the full screen, under its question.
-fn aside_view(question: &str, answer: &str) -> ReportView {
-    let summary = format!(
-        "**{}**\n\n{answer}\n\n*Not in the conversation: the model does not see this again.*",
-        question.trim()
-    );
-    let tab = Tab {
-        name: "Side question".into(),
-        summary,
-        details: String::new(),
-    };
-    ReportView::new("Side question", "answer", vec![tab], 0, false).markdown()
 }
 
 /// What `/mcp ARGUMENT` asks for, as Claude Code's `/mcp`; `None` for what it does not take.
@@ -1625,18 +1394,6 @@ pub(super) fn grouped(count: u64) -> String {
     grouped
 }
 
-/// A number of tokens as typed: `30000`, `30,000`, `30k` or `1.5k`.
-fn token_count(typed: &str) -> Option<u64> {
-    let typed = typed.replace(',', "");
-    let (number, scale) = match typed.strip_suffix(['k', 'K']) {
-        Some(number) => (number, 1e3),
-        None => (typed.as_str(), 1.0),
-    };
-    let parsed = number.parse::<f64>().ok()? * scale;
-    let whole = number.bytes().all(|b| b.is_ascii_digit() || b == b'.');
-    (whole && parsed.is_finite() && parsed < 1e12).then(|| parsed.round() as u64)
-}
-
 /// How a task ended, or how long it has run: `exited with code 0 after 3s`.
 fn task_state(task: &scramjet::agent::tasks::Task) -> String {
     match &task.ended {
@@ -1754,18 +1511,6 @@ mod tests {
     }
 
     #[test]
-    fn token_counts_take_plain_grouped_and_k_forms() {
-        assert_eq!(token_count("30000"), Some(30_000));
-        assert_eq!(token_count("30,000"), Some(30_000));
-        assert_eq!(token_count("30k"), Some(30_000));
-        assert_eq!(token_count("1.5K"), Some(1_500));
-        assert_eq!(token_count("0"), Some(0));
-        for wrong in ["", "k", "-5", "1e5", "inf", "lots", "5m"] {
-            assert_eq!(token_count(wrong), None, "{wrong}");
-        }
-    }
-
-    #[test]
     fn a_path_argument_is_its_first_word_or_quoted() {
         assert_eq!(path_argument(""), None);
         assert_eq!(path_argument("out.html"), Some("out.html"));
@@ -1781,11 +1526,9 @@ mod tests {
         let stops = |prompt| Builtin::parse(prompt).map(Builtin::interrupts);
         for prompt in [
             "/status",
-            "/diff",
             "/agents",
             "/skills",
             "/memory",
-            "/doctor",
             "/context",
             "/system-prompt",
             "/export",
@@ -1843,8 +1586,6 @@ mod tests {
             Builtin::parse("/rename  my work "),
             Some(Builtin::Rename("my work"))
         );
-        assert_eq!(Builtin::parse("/color Blue"), Some(Builtin::Color("Blue")));
-        assert_eq!(Builtin::parse("/color"), Some(Builtin::Color("")));
         assert_eq!(Builtin::parse("/copy 2 "), Some(Builtin::Copy("2")));
         assert_eq!(stops("/copy all"), Some(false));
         assert_eq!(Builtin::parse("/copy"), Some(Builtin::Copy("")));
@@ -1864,14 +1605,6 @@ mod tests {
             Some(Builtin::Theme("pi-light"))
         );
         assert_eq!(Builtin::parse("/theme"), Some(Builtin::Theme("")));
-        assert_eq!(
-            Builtin::parse("/autocompact 30k"),
-            Some(Builtin::AutoCompact("30k"))
-        );
-        assert_eq!(
-            Builtin::parse("/autocompact"),
-            Some(Builtin::AutoCompact(""))
-        );
     }
 
     #[test]

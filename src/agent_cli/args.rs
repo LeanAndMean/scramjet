@@ -107,7 +107,6 @@ Commands:
   catalog add|remove|list  add, remove or list the model catalogs' URLs
   lint [--strict] DIR...   check command sets as Scramjet loads them
   import [--dry-run]       copy Scramjet 1's setup
-  doctor                   check whether Scramjet can work here
   acp                      run as an Agent Client Protocol agent, for editors
 Each takes --help.
 
@@ -145,7 +144,6 @@ pub(super) const HELP_ALL: &str =
        scramjet catalog add URL | remove URL | list
        scramjet lint [--strict] [--json] DIR...
        scramjet import [--dry-run] [DIR]
-       scramjet doctor
        scramjet acp [OPTIONS]
 
 Interactive coding agent. Its models are those of the providers in models.json beside the
@@ -447,8 +445,6 @@ under each part, and s the system prompt as /system-prompt does.
 /system-prompt shows, on the full screen, the instructions the last request sent, each part under
 a heading, then its tool definitions; before any request, those the next sends. Up and Down,
 PgUp and PgDn, Home and End scroll it, the mouse or Shift and the arrows select, Escape closes it.
-/diff shows the Git repository's uncommitted changes against HEAD, untracked files as new ones
-(ignored files left out), without a model turn; on the full screen d lists the files changed.
 /tasks lists the commands the agent runs in the background (bash's run_in_background, as Claude
 Code's), each running or how it ended, with the file its output goes to; /tasks stop N stops one
 (/bashes and Codex's /ps too). On the full screen it is a list: Enter shows a task's output, its
@@ -481,16 +477,8 @@ any problem in skill files; on the full screen Enter opens one's SKILL.md.
 its CLAUDE.local.md would go; on the full screen Enter opens one in your editor, creating it.
 /hooks lists the hooks the settings run, by event with their matchers, after any problem in
 them, as Claude Code's; on the full screen Enter opens the settings file.
-/doctor checks, as scramjet doctor does, the program and the scramjet on PATH, a newer release,
-the disk, the settings and what they load, the models, the providers' servers on this machine,
-the sandbox, git and the shell, the terminal and how the MCP servers are.
-/btw QUESTION asks the model a side question with the conversation so far, as Claude Code's:
-no tool runs, the answer shows apart (on the full screen in a view of its own), and the model
-never sees the question or the answer again; what it spent is counted with the session.
-/recap asks the model the same way where the session stands, in a sentence or two, shown as a
-note, as Claude Code's.
 /goal CONDITION sets a goal, as Claude Code's: the agent works toward it, and after each turn
-that ends by itself the model is asked, as /btw asks, whether the conversation shows it met; until
+that ends by itself the model is asked whether the conversation shows it met; until
 it does, the reason goes back to the agent and the work goes on. Escape stops it; /goal says the
 goal, /goal clear clears it, and a new or resumed session has none.
 /plan starts plan mode, as Claude Code's and Codex's: the agent explores and proposes a plan
@@ -505,8 +493,8 @@ Code's; one due during a turn runs once the turn ends. It lasts while the sessio
 lists the levels the model takes (on the full screen to pick one).
 /theme NAME uses a theme and saves it as theme, as /settings → Theme does; /theme alone lists
 the themes (on the full screen to pick one, New theme… among them).
-Typed while a turn runs, /status, /diff, /tasks, /todos, /agents, /skills, /memory, /hooks, /doctor, /btw, /recap, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
-/model, /effort, /theme, /autocompact, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
+Typed while a turn runs, /status, /tasks, /todos, /agents, /skills, /memory, /hooks, /goal, /loop, /plan, /usage, /context, /system-prompt, /release-notes, /hotkeys, /keybindings, /rename,
+/model, /effort, /theme, /scoped-models, /copy, /export, /settings, /autopilot and /mcp run before its next
 request, /reload and /mcp's
 changes are refused,
 and the other commands stop the turn and run once it has.
@@ -540,9 +528,7 @@ and why (`import --help`); the first interactive start that finds one offers it.
 on stdin and stdout (`acp --help`).
 /compact [focus] replaces all but the last ~20k tokens of the conversation with a summary;
 this also happens by itself when the context nears the model's window, unless the settings'
-compaction.enabled is false (Auto-compact in /settings). /autocompact on|off sets it,
-/autocompact TOKENS sets compaction.reserveTokens, what is kept free of the window (auto: its
-default), and /autocompact alone says where compaction starts for the model.
+compaction.enabled is false (Auto-compact in /settings).
 Settings are read from $XDG_CONFIG_HOME/scramjet/settings.json (~/.config/scramjet/),
 with the keys hideThinkingBlock, doubleEscapeAction (tree, fork or none for the double
 Escape), branchSummary.skipPrompt (true: /tree never asks for a summary), treeFilterMode

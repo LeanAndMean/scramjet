@@ -18,7 +18,7 @@
 {"_scramjet_context_tokens":4000,"_scramjet_model":"screens/fixture-model","_scramjet_timing":{"duration_ms":1,"first_output_ms":1,"headers_ms":1,"started":1795592323767},"_scramjet_usage":{"cache_read":2586,"cache_write":0,"input":1104,"output":310},"arguments":"{\"status\": \"completed\", \"summary\": \"Proposed a commit message; nothing committed.\"}","call_id":"call_2_1","id":"fc_2_1","name":"report_scramjet_command_status","status":"completed","type":"function_call"}
 {"_scramjet_timing":{"duration_ms":0,"started":1795592323770},"call_id":"call_2_1","output":"status: completed","type":"function_call_output"}
 {"command":null,"type":"command_state"}
-{"color":"cyan","name":"compatibility fixture","type":"session_info"}
+{"name":"compatibility fixture","type":"session_info"}
 {"level":"high","type":"thinking_level_change"}
 {"content":"What does the README say?","role":"user"}
 {"_scramjet_context_tokens":4000,"_scramjet_model":"screens/fixture-model","_scramjet_timing":{"duration_ms":16,"first_output_ms":16,"headers_ms":16,"started":1795592325447},"_scramjet_usage":{"cache_read":2586,"cache_write":0,"input":1104,"output":310},"arguments":"{\"path\": \"README.md\"}","call_id":"call_3_0","id":"fc_3_0","name":"read","status":"completed","type":"function_call"}

@@ -958,20 +958,6 @@ impl Agent {
         self.config.compacting.automatic && should_compact(tokens, window, self.info.input, reserve)
     }
 
-    /// The context size past which automatic compaction runs, as `full` checks it: the window
-    /// less the reserve, or the model's input limit when lower; `None` with an unknown window or
-    /// one no larger than the reserve.
-    pub fn compaction_threshold(&self) -> Option<u64> {
-        let window = self.info.window?;
-        let (reserve, _) = self.reserve_and_kept();
-        let threshold = (window > reserve).then(|| window - reserve)?;
-        Some(
-            self.info
-                .input
-                .map_or(threshold, |input| threshold.min(input)),
-        )
-    }
-
     /// The settings' `reserveTokens` and `keepRecentTokens`, each at most a quarter of a known
     /// window: their defaults suit Scramjet's 200k windows, and on a 16k or 40k one compaction
     /// would never run, or keep nearly everything.

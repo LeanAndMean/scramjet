@@ -4,8 +4,6 @@
 
 Each section starts from what you see. In a session, `/scramjet:troubleshoot` asks the agent to diagnose a command or behavior that surprised you, reading what happened without changing anything.
 
-`scramjet doctor` checks the setup first: which `scramjet` your `PATH` runs (Scramjet 1's marked), a newer release, room on the disk, problems in the settings and what they load, the models and the one a session starts with, whether anything answers at a provider's server on this machine (a local proxy, or Ollama, llama.cpp, vLLM or LM Studio), whether the sandbox can start, git, the shell and `gh`, and the terminal. It sends nothing to a provider, and exits with an error when a check fails. In a session `/doctor` shows the same for that session, with how its MCP servers are.
-
 ## `scramjet` starts Scramjet 1, or an older version
 
 `scramjet --version` says which one runs, and `which -a scramjet` (on Windows `where.exe scramjet`) lists every `scramjet` on your `PATH`, the one that runs first. Put the directory the installer used (`~/.local/bin`, on Windows `%LOCALAPPDATA%\Programs\scramjet`) ahead of the others; on Windows, open a new terminal after installing, as the installer changes the `Path` only for terminals started after it. [Beside Scramjet 1](install.md#beside-scramjet-1).
@@ -59,4 +57,4 @@ The terminal may keep the key for itself: Windows Terminal's defaults keep Alt+E
 
 ## Reporting a problem
 
-In a session, `/scramjet:bug` writes up a bug or a request from the conversation as a GitHub issue with names, paths and private details taken out, and shows it whole for you to approve before posting it (it needs `gh`, logged in). Or [open an issue](https://github.com/LeanAndMean/scramjet/issues) yourself, with `scramjet doctor`'s output (it shows your system and terminal; take out what is private in it), what you did and what happened. `/status` shows the session's file; send only the part that shows the problem, as the file holds the whole conversation and every tool's output. A security problem goes privately, as [SECURITY.md](../../SECURITY.md) says, not in an issue.
+In a session, `/scramjet:bug` writes up a bug or a request from the conversation as a GitHub issue with names, paths and private details taken out, and shows it whole for you to approve before posting it (it needs `gh`, logged in). Or [open an issue](https://github.com/LeanAndMean/scramjet/issues) yourself, with `scramjet --version`, your system and terminal, what you did and what happened. `/status` shows the session's file; send only the part that shows the problem, as the file holds the whole conversation and every tool's output. A security problem goes privately, as [SECURITY.md](../../SECURITY.md) says, not in an issue.

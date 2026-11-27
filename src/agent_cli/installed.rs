@@ -787,7 +787,7 @@ pub(super) fn summary(loaded: &Loaded) -> String {
 /// there is one, else how many there are and where they are listed.
 /// Whether `problem` is in a file of one of Claude Code's plugins among `sets`: the user cannot
 /// fix its cache, and Claude Code skips such a file with a line in its debug log only, so start
-/// does not say it; `/settings`' Installed and `/doctor` do.
+/// does not say it; `/settings`' Installed does.
 pub(super) fn in_plugin(problem: &Problem, sets: &[Set]) -> bool {
     let Some(ProblemFile::Path(file)) = &problem.file else {
         return false;

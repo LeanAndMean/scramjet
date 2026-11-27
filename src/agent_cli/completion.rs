@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Scramjet's commands that this agent has, in Scramjet's order, with its descriptions, named
 /// as in Claude Code or Codex where they name the same action differently.
-const SLASH_COMMANDS: [(&str, &str); 46] = [
+const SLASH_COMMANDS: [(&str, &str); 40] = [
     ("settings", "Open settings menu"),
     ("model", "Select model (opens selector UI)"),
     // Shown with the key that cycles in place of "model" (`scoped_models`).
@@ -33,12 +33,7 @@ const SLASH_COMMANDS: [(&str, &str); 46] = [
         "Copy the last agent message to the clipboard, or the Nth-latest: /copy [N]",
     ),
     ("rename", "Set session display name"),
-    (
-        "color",
-        "Set the prompt bar's color for this session: /color [red|blue|green|yellow|purple|orange|pink|cyan|default]",
-    ),
     ("status", "Show session info and stats"),
-    ("diff", "Show uncommitted changes, untracked files included"),
     (
         "tasks",
         "Show the commands running in the background, or stop one: /tasks [stop N]",
@@ -73,15 +68,6 @@ const SLASH_COMMANDS: [(&str, &str); 46] = [
     ("logout", "Remove a provider's saved login"),
     ("clear", "Start a new session"),
     ("compact", "Manually compact the session context"),
-    (
-        "autocompact",
-        "Set when the context compacts by itself: /autocompact [on|off|auto|TOKENS]",
-    ),
-    (
-        "btw",
-        "Ask a side question, answered apart from the conversation: /btw QUESTION",
-    ),
-    ("recap", "Recap the session in a sentence or two"),
     (
         "goal",
         "Set a goal the agent works toward until a check finds it met: /goal [CONDITION|clear]",
@@ -122,10 +108,6 @@ const SLASH_COMMANDS: [(&str, &str); 46] = [
     (
         "hooks",
         "Show the hooks the settings run, and open their file",
-    ),
-    (
-        "doctor",
-        "Check whether Scramjet can work here: program, models, servers, sandbox, tools",
     ),
     (
         "sandbox",
@@ -287,9 +269,9 @@ impl Completion {
 
     /// The argument of a built-in command that Scramjet completes: after `/model `, the
     /// providers' `models` (references, `provider/id`) whose id and provider match it fuzzily,
-    /// each shown by its id with its provider; after `/autopilot ` and `/color `, the words
-    /// starting with it; after `/mcp reconnect `, `enable ` or `disable `, `all` and the
-    /// `mcp_servers` starting with it.
+    /// each shown by its id with its provider; after `/autopilot `, the words starting with it;
+    /// after `/mcp reconnect `, `enable ` or `disable `, `all` and the `mcp_servers` starting
+    /// with it.
     pub(super) fn argument(
         before: &str,
         models: &[String],
@@ -319,10 +301,6 @@ impl Completion {
                     .map(word)
                     .collect()
             }
-            "color" => (super::style::session_colors().chain(["default"]))
-                .filter(|color| color.starts_with(typed))
-                .map(word)
-                .collect(),
             "autopilot" | "mcp" => (match name {
                 "autopilot" => &["on", "off", "status"][..],
                 _ => &["reconnect", "enable", "disable"][..],
@@ -590,9 +568,7 @@ mod tests {
                 "/import",
                 "/copy",
                 "/rename",
-                "/color",
                 "/status",
-                "/diff",
                 "/tasks",
                 "/todos",
                 "/usage",
@@ -609,9 +585,6 @@ mod tests {
                 "/logout",
                 "/clear",
                 "/compact",
-                "/autocompact",
-                "/btw",
-                "/recap",
                 "/goal",
                 "/loop",
                 "/plan",
@@ -623,40 +596,36 @@ mod tests {
                 "/skills",
                 "/memory",
                 "/hooks",
-                "/doctor",
                 "/sandbox",
                 "/add-dir",
                 "/exit",
             ]
         );
+        let count = SLASH_COMMANDS.len();
+        let rows = plain(list.rows(60, 5));
         assert_eq!(
-            plain(list.rows(60, 5)),
+            rows[..5],
             [
                 "→ /settings       Open settings menu",
                 "  /model          Select model (opens selector UI)",
                 "  /scoped-models  Enable/disable models for Ctrl+P cycling",
                 "  /effort         Set the thinking level, or pick it from …",
                 "  /theme          Change the theme, or pick it from a list…",
-                "  (1/46)",
             ]
         );
+        assert_eq!(rows[5], format!("  (1/{count})"));
         // The selected row stays in the middle where it can; a narrow terminal drops descriptions.
         let mut list = list;
         for _ in 0..8 {
             list.select(false);
         }
+        let rows = plain(list.rows(24, 5));
         assert_eq!(
-            plain(list.rows(24, 5)),
-            [
-                "  /import",
-                "  /copy",
-                "→ /rename",
-                "  /color",
-                "  /status",
-                "  (9/46)"
-            ]
+            rows[..5],
+            ["  /import", "  /copy", "→ /rename", "  /status", "  /tasks"]
         );
-        for _ in 0..38 {
+        assert_eq!(rows[5], format!("  (9/{count})"));
+        for _ in 0..count - 8 {
             list.select(false);
         }
         assert_eq!(list.selected, 0);
@@ -780,11 +749,6 @@ mod tests {
         assert_eq!(words("/autopilot st").unwrap(), "status");
         assert!(words("/autopilot O").is_none());
         assert!(words("/autopilot on x").is_none());
-        assert_eq!(
-            words("/color ").unwrap(),
-            "red blue green yellow purple orange pink cyan default"
-        );
-        assert_eq!(words("/color p").unwrap(), "purple pink");
         assert_eq!(words("/mcp r").unwrap(), "reconnect");
         assert_eq!(words("/mcp ").unwrap(), "reconnect enable disable");
         assert_eq!(words("/mcp reconnect ").unwrap(), "all tavily test");

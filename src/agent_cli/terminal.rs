@@ -251,8 +251,6 @@ pub(super) fn waiting_for(purpose: Purpose) -> &'static str {
         Purpose::Compaction(Some(AutoCompaction::Threshold)) => "Auto-compacting",
         Purpose::Compaction(Some(AutoCompaction::Overflow)) => "Context overflow, compacting",
         Purpose::BranchSummary => "Summarizing branch",
-        Purpose::SideQuestion => "Answering the side question",
-        Purpose::Recap => "Writing the recap",
         Purpose::GoalCheck => "Checking the goal",
     }
 }

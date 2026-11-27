@@ -1679,9 +1679,7 @@ it another profile";
                 Builtin::Branch(_) => format!("; {BRANCH} branches"),
                 Builtin::Tree(_) => format!("; {TREE} lists the entries, {NAVIGATE} moves"),
                 Builtin::Sandbox(_) | Builtin::AddDir(_) => format!("; {SANDBOX} changes it"),
-                Builtin::Theme(_) | Builtin::Color(_) => {
-                    "; the client draws its own colors".to_owned()
-                }
+                Builtin::Theme(_) => "; the client draws its own colors".to_owned(),
                 _ => String::new(),
             };
             let message =
@@ -3851,7 +3849,6 @@ impl AgentUi for Updates {
             Purpose::Reply => "waiting",
             Purpose::Compaction(_) => "compacting",
             Purpose::BranchSummary => "summarizing",
-            Purpose::SideQuestion | Purpose::Recap => "answering",
             Purpose::GoalCheck => "checking",
         };
         self.status(state, super::terminal::waiting_for(purpose), None);
