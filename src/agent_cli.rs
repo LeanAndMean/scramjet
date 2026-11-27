@@ -207,7 +207,8 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         messages.push(String::new());
     }
     let (print_only, resume) = (options.print, matches!(options.start, Start::Resume));
-    let (max_turns, output) = (options.max_turns, options.output);
+    let (max_turns, max_budget) = (options.max_turns, options.max_budget);
+    let output = options.output;
     let root = project_root(options.project.take())?;
     let mut settings = Settings::load_cloning();
     settings.in_project(&root);
@@ -277,6 +278,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     agent.set_hooks(settings.hooks.clone());
     agent.set_unattended(true);
     agent.set_max_turns(max_turns);
+    agent.set_max_budget(max_budget);
     // A message read from stdin (`-`) may start a command.
     let commands = (messages.iter()).any(|message| message == "-" || message.starts_with('/'));
     agent.leave_out_idle_tools(commands);
@@ -289,7 +291,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
     let started = std::time::Instant::now();
     let replies = agent.replies().count();
-    let mut reached_max_turns = false;
+    let mut stopped_by = None;
     let result = (messages.into_iter()).try_for_each(|prompt| {
         let prompt = match prompt.as_str() {
             "-" => std::io::read_to_string(std::io::stdin()).map_err(|e| e.to_string())?,
@@ -297,7 +299,11 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
         };
         let model = agent.model().to_owned();
         let result = print(&mut agent, &mut ui, &prompt, &cancel).map_err(|error| {
-            reached_max_turns = matches!(error, AgentError::MaxTurns(_));
+            stopped_by = match error {
+                AgentError::MaxTurns(_) => Some("error_max_turns"),
+                AgentError::MaxBudget(_) => Some("error_max_budget_usd"),
+                _ => None,
+            };
             error.to_string()
         });
         // The agent's `switch_scramjet_model`, remembered as the user's choices are.
@@ -314,13 +320,7 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     }
     if output != OutputFormat::Text {
         let replied = agent.replies().count() > replies;
-        terminal::print_line(&run_result(
-            &agent,
-            started,
-            &result,
-            reached_max_turns,
-            replied,
-        ));
+        terminal::print_line(&run_result(&agent, started, &result, stopped_by, replied));
     }
     write_held_at_exit(&mut agent);
     result
@@ -350,7 +350,7 @@ fn run_result(
     agent: &Agent,
     started: std::time::Instant,
     result: &Result<(), String>,
-    reached_max_turns: bool,
+    stopped_by: Option<&str>,
     replied: bool,
 ) -> serde_json::Value {
     let usage = agent.usage;
@@ -359,8 +359,7 @@ fn run_result(
         "type": "result",
         "subtype": match result {
             Ok(()) => "success",
-            Err(_) if reached_max_turns => "error_max_turns",
-            Err(_) => "error_during_execution",
+            Err(_) => stopped_by.unwrap_or("error_during_execution"),
         },
         "is_error": result.is_err(),
         "duration_ms": started.elapsed().as_millis() as u64,

@@ -478,6 +478,8 @@ pub enum AgentError {
     TooManySteps,
     /// The run made the model requests `set_max_turns` allows.
     MaxTurns(u32),
+    /// The run spent the dollars `set_max_budget` allows.
+    MaxBudget(f64),
 }
 impl std::fmt::Display for AgentError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -496,6 +498,12 @@ impl std::fmt::Display for AgentError {
                 f,
                 "reached max turns ({most}): the run made the {most} model requests --max-turns allows"
             ),
+            Self::MaxBudget(most) => {
+                write!(
+                    f,
+                    "reached max budget (${most}): --max-budget-usd allows no more"
+                )
+            }
         }
     }
 }
@@ -740,6 +748,10 @@ pub struct Agent {
     /// The most model requests the run's turns make (`set_max_turns`), and those made.
     max_turns: Option<u32>,
     turns_made: u32,
+    /// The most dollars the run's requests spend (`set_max_budget`), and whether the user was
+    /// told that responses of unknown cost are not counted.
+    max_budget: Option<f64>,
+    unpriced_said: bool,
     /// Whether a grant can be kept always for the project (`set_keeps_grants`).
     keeps_grants: bool,
     /// Directories the user granted always for the project, for the front to keep
@@ -957,6 +969,8 @@ impl Agent {
             unattended: false,
             max_turns: None,
             turns_made: 0,
+            max_budget: None,
+            unpriced_said: false,
             keeps_grants: true,
             kept_grants: Vec::new(),
             reach_fixed: false,
@@ -2199,6 +2213,33 @@ impl Agent {
     /// compactions are not counted.
     pub fn set_max_turns(&mut self, most: Option<u32>) {
         (self.max_turns, self.turns_made) = (most, 0);
+    }
+
+    /// The most dollars the agent's requests spend from now on, subagents' included, as Claude
+    /// Code's `--max-budget-usd`: once that much is spent, the turn stops with
+    /// `AgentError::MaxBudget` before its next request. Responses whose cost is not known are
+    /// not counted, and the user is told so once.
+    pub fn set_max_budget(&mut self, most: Option<f64>) {
+        (self.max_budget, self.unpriced_said) = (most, false);
+    }
+
+    /// Stops a turn before a request past `set_max_budget`.
+    pub(crate) fn keep_to_budget(&mut self, ui: &mut dyn AgentUi) -> Result<(), AgentError> {
+        let Some(most) = self.max_budget else {
+            return Ok(());
+        };
+        if self.usage.unpriced && !self.unpriced_said {
+            self.unpriced_said = true;
+            ui.notice(&format!(
+                "--max-budget-usd: the cost of some responses of {} is not known, as no prices \
+apply to it; only those whose cost is known count toward the ${most}",
+                self.model()
+            ));
+        }
+        match self.usage.cost >= most {
+            true => Err(AgentError::MaxBudget(most)),
+            false => Ok(()),
+        }
     }
 
     /// The requests to the model the agent's turns made since `set_max_turns`, counted as it

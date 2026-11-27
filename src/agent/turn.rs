@@ -418,6 +418,7 @@ finish and is not checked on. Reply to continue.",
                     if let Some(most) = self.max_turns.filter(|most| self.turns_made >= *most) {
                         return Err(AgentError::MaxTurns(most));
                     }
+                    self.keep_to_budget(ui)?;
                     self.turns_made += 1;
                     let parts = self.instruction_parts();
                     let mut request = self.request_with(&parts);

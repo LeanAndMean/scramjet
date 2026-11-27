@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.409.0 — `--max-budget-usd` for `-p`
+
+### Added
+
+- `--max-budget-usd AMOUNT` bounds what a `-p` run spends, as Claude Code's does: once its requests, subagents' and compactions' included, cost AMOUNT dollars or more, it stops with `reached max budget ($AMOUNT)` before the next request to the model and exits 1; `--output-format json` says `error_max_budget_usd`. Responses of a model no prices apply to, as a local proxy's often are, are not counted, and a notice says so once.
+
 ## 2.408.0 — `--output-format stream-json` for `-p`
 
 ### Added

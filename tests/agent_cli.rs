@@ -120,6 +120,18 @@ fn help_shows_the_agents_usage_and_other_words_are_refused() {
         other.starts_with("scramjet: invalid --output-format \"xml\""),
         "{other}"
     );
+    let budget = refused(&["--max-budget-usd", "1", "hi"]);
+    assert!(
+        budget.starts_with("scramjet: --max-budget-usd needs -p\n"),
+        "{budget}"
+    );
+    for most in ["0", "-1", "many", "inf", "NaN"] {
+        let refusal = refused(&["--max-budget-usd", most, "-p", "hi"]);
+        assert!(
+            refusal.starts_with("scramjet: invalid --max-budget-usd"),
+            "{refusal}"
+        );
+    }
     for most in ["0", "-1", "many"] {
         let refusal = refused(&["--max-turns", most, "-p", "hi"]);
         assert!(
@@ -2275,6 +2287,80 @@ fn max_turns_stops_the_run_before_a_request_past_the_limit() {
     let ran = std::fs::read_to_string(project.join("ran.txt")).unwrap();
     assert_eq!(ran, "ran\nran\n");
     assert_eq!(bodies.try_iter().count(), 2);
+}
+
+#[test]
+#[cfg(unix)]
+fn max_budget_stops_the_run_before_a_request_once_it_is_spent() {
+    let binary = &binary();
+    let scratch = Scratch(
+        std::env::temp_dir().join(format!("scramjet-cli-max-budget-{}", std::process::id())),
+    );
+    let project = scratch.0.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let config = scratch.0.join("config");
+    std::fs::create_dir_all(config.join("scramjet")).unwrap();
+    // Each reply calls bash again, so only the budget ends the run; each costs $1 (4 output
+    // tokens at $250,000 a million) on the priced model, and is not known on the other.
+    let call = call_events(
+        "bash",
+        serde_json::json!({"command": "echo ran >> ran.txt"}),
+    );
+    let (port, bodies) = serve_events(vec![call[0].clone()]);
+    let models = serde_json::json!({"providers": {"test": {
+        "baseUrl": format!("http://127.0.0.1:{port}"), "api": "anthropic-messages",
+        "models": [
+            {"id": "claude-priced", "cost": {"input": 0, "output": 250000}},
+            {"id": "claude-unpriced"},
+        ],
+    }}});
+    std::fs::write(config.join("scramjet/models.json"), models.to_string()).unwrap();
+    let run = |model: &str, messages: &[&str]| {
+        let _ = std::fs::remove_file(project.join("ran.txt"));
+        let output = program(binary)
+            .args(["--retries", "0", "--no-session", "--model", model])
+            .args(["--max-budget-usd", "1.5", "--output-format", "json"])
+            .arg("-p")
+            .args(messages)
+            .current_dir(&project)
+            .env("XDG_STATE_HOME", scratch.0.join("state"))
+            .env("XDG_CONFIG_HOME", &config)
+            .env("SCRAMJET_CACHE", scratch.0.join("cache"))
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let result: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        let ran = std::fs::read_to_string(project.join("ran.txt")).unwrap_or_default();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        (
+            output.status.code(),
+            result,
+            ran,
+            bodies.try_iter().count(),
+            stderr,
+        )
+    };
+    // $1 spent is under the budget, $2 is past it: the second reply's call runs, then the run
+    // stops before a third request and the second message.
+    let (code, result, ran, requests, stderr) = run("claude-priced", &["hi", "again"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert_eq!(result["subtype"], "error_max_budget_usd", "{result}");
+    assert_eq!(result["is_error"], true);
+    let error = "reached max budget ($1.5): --max-budget-usd allows no more";
+    assert_eq!(result["errors"][0], error);
+    assert_eq!(result["total_cost_usd"], 2.0);
+    assert_eq!((ran.as_str(), requests), ("ran\nran\n", 2));
+    assert!(!stderr.contains("not known"), "{stderr}");
+    // Responses of unknown cost are not counted, and the notice says so once; --max-turns
+    // ends this run.
+    let (code, result, ran, requests, stderr) = run("claude-unpriced", &["--max-turns", "3", "hi"]);
+    assert_eq!(code, Some(1), "{stderr}");
+    assert_eq!(result["subtype"], "error_max_turns", "{result}");
+    assert_eq!((ran.as_str(), requests), ("ran\nran\nran\n", 3));
+    let notice =
+        "--max-budget-usd: the cost of some responses of test/claude-unpriced is not known";
+    assert_eq!(stderr.matches(notice).count(), 1, "{stderr}");
 }
 
 #[test]

@@ -30,6 +30,8 @@ Sessions:
   -p, --print              send the messages, print the replies and exit (a message -
                            reads stdin)
   --max-turns N            with -p, stop with an error before a model request past the Nth
+  --max-budget-usd AMOUNT  with -p, stop with an error before a model request once AMOUNT
+                           dollars are spent
   --output-format FORMAT   with -p, text (the replies, by default), json (the run's result
                            as one JSON object) or stream-json (a JSON line per message), as
                            Claude Code's
@@ -120,7 +122,7 @@ pub(super) const HELP_ALL: &str =
 [--api-key KEY] [-c | -r | --session FILE|ID | --fork FILE|ID | --no-session] [--session-dir DIR]
 [--bare] [--ephemeral] [--system-prompt TEXT] [--append-system-prompt TEXT]... [--no-context-files] [--no-directives]
 [--skill PATH]... [--no-skills] [--theme PATH]... [--no-themes] [-t LIST | -nt | -nbt] [--ask]
-[-s MODE] [--offline] [-p [--max-turns N] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
+[-s MODE] [--offline] [-p [--max-turns N] [--max-budget-usd AMOUNT] [--output-format text|json|stream-json]] [@FILE...] [MESSAGE...]
        scramjet --list-models [SEARCH] | --list-credential-stores | --export FILE [OUTPUT]
        scramjet --version
        scramjet install DIR|REPO | remove NAME|DIR|REPO | update [REPO|NAME|self] | list
@@ -268,10 +270,17 @@ but to NO_PROXY's hosts and this machine.
                          messages' together, as Claude Code's: one more stops it with an
                          error, exiting 1, once the last reply's tool calls ran (its subagents'
                          requests and compactions are not counted; default: no limit)
+  --max-budget-usd AMOUNT
+                         with -p, the most dollars the run spends, as Claude Code's: once its
+                         requests, subagents' and compactions' included, cost AMOUNT or more,
+                         it stops with an error before the next request to the model, exiting
+                         1. Responses whose cost is not known, as no prices apply to their
+                         model, are not counted, and a notice says so (default: no limit)
   --output-format text|json|stream-json
                          with -p, what stdout gets: text, the replies (default), or json, one
                          JSON object once the run ends, as Claude Code's: type result,
-                         subtype success, error_max_turns or error_during_execution, is_error,
+                         subtype success, error_max_turns, error_max_budget_usd or
+                         error_during_execution, is_error,
                          duration_ms, num_turns (the requests to the model), result (the last
                          reply's text, on success), errors (on failure), session_id,
                          total_cost_usd and usage (input_tokens, cache_creation_input_tokens,
@@ -566,6 +575,8 @@ pub(super) struct Options {
     pub(super) print: bool,
     /// `--max-turns`, with `-p`: the most model requests the run makes.
     pub(super) max_turns: Option<u32>,
+    /// `--max-budget-usd`, with `-p`: the most dollars the run spends.
+    pub(super) max_budget: Option<f64>,
     /// `--output-format`, with `-p`: what stdout gets.
     pub(super) output: OutputFormat,
     /// `@FILE` arguments, without the `@`: sent with the first message.
@@ -622,6 +633,7 @@ impl Options {
             api_key: None,
             print: false,
             max_turns: None,
+            max_budget: None,
             output: OutputFormat::Text,
             files: Vec::new(),
             messages: Vec::new(),
@@ -722,6 +734,11 @@ without spaces"
                 Some("--max-turns") => {
                     let most = value()?.parse().ok().filter(|most| *most > 0);
                     options.max_turns = Some(most.ok_or("invalid --max-turns")?)
+                }
+                Some("--max-budget-usd") => {
+                    let most = value()?.parse::<f64>().ok();
+                    let most = most.filter(|most| most.is_finite() && *most > 0.0);
+                    options.max_budget = Some(most.ok_or("invalid --max-budget-usd")?)
                 }
                 Some("--output-format") => match value()?.as_str() {
                     "text" => options.output = OutputFormat::Text,
@@ -850,6 +867,9 @@ workspace-write and danger-full-access"
         }
         if options.max_turns.is_some() && !options.print {
             return Err(format!("--max-turns needs -p\n\n{USAGE}"));
+        }
+        if options.max_budget.is_some() && !options.print {
+            return Err(format!("--max-budget-usd needs -p\n\n{USAGE}"));
         }
         if options.output != OutputFormat::Text && !options.print {
             return Err(format!("--output-format needs -p\n\n{USAGE}"));
