@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.405.1 — A Claude Code plugin's skills as its marketplace lists them
+
+### Fixed
+
+- A Claude Code plugin whose marketplace entry lists its skills, as Anthropic's `document-skills` does (`xlsx`, `docx`, `pptx`, `pdf`), now offers only those, as Claude Code does, instead of every skill in its `skills` directory. Skill directories a plugin's `plugin.json` lists are looked in too.
+
 ## 2.405.0 — A Claude Code plugin's broken file no longer warned of at every start
 
 ### Changed

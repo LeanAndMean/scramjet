@@ -845,6 +845,7 @@ mod tests {
             name: name.into(),
             directory: PathBuf::from("/cache").join(name),
             origin,
+            skills: None,
         };
         let sets = [
             set("toolkit", Origin::ClaudeCode),

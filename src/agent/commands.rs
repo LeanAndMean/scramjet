@@ -45,6 +45,9 @@ pub struct Set {
     pub name: String,
     pub directory: PathBuf,
     pub origin: Origin,
+    /// A Claude Code plugin's own skill directories (`claude_plugins::Plugin::skills`); else
+    /// its `skills`.
+    pub skills: Option<Vec<PathBuf>>,
 }
 
 impl Set {
@@ -89,6 +92,7 @@ impl Set {
             name,
             directory: directory.to_path_buf(),
             origin,
+            skills: None,
         })
     }
 }
@@ -222,6 +226,7 @@ impl Sets {
                     name: plugin.name.clone(),
                     directory: plugin.directory.clone(),
                     origin: Origin::ClaudeCode,
+                    skills: plugin.skills.clone(),
                 });
             }
         }
@@ -1240,6 +1245,7 @@ mod tests {
         let plugin = |name: &str| claude_plugins::Plugin {
             name: name.into(),
             directory: scratch.0.join("cache").join(name),
+            skills: None,
         };
         let installed = [scratch.0.join("installed/mach12")];
         let plugins = [plugin("mach12"), plugin("dev")];

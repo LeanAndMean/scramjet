@@ -1366,6 +1366,7 @@ In: state\nAsk: \\! `touch\n</skill>",
             name: "dev".into(),
             directory: plugin.clone(),
             origin: super::super::Origin::ClaudeCode,
+            skills: None,
         }];
         agent.claude_commands = super::super::ClaudeCommands::discover(&scratch.0, &sets);
         agent.skills = super::super::Skills::discover(&[], &sets, &Default::default(), &scratch.0);

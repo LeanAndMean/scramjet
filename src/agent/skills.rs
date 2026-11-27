@@ -81,7 +81,9 @@ fn places(
         home,
         claude: claude.as_deref(),
     };
-    let sets: Vec<(PathBuf, Option<String>)> = sets.iter().map(|set| (set.clone(), None)).collect();
+    let sets: Vec<(Vec<PathBuf>, Option<String>)> = (sets.iter())
+        .map(|set| (vec![crate::os::join(set, "skills")], None))
+        .collect();
     places_of(listed, &sets, options, root, agent_directory, user)
 }
 
@@ -95,12 +97,13 @@ struct User<'a> {
 /// Where Pi looks, first wins: the project's `.scramjet/skills`, then the `.agents/skills` and
 /// Claude Code's `.claude/skills` of the project and the directories above it up to its Git
 /// root, the settings' `listed` paths, the `skills` directories of the command sets (as a Claude
-/// Code plugin's; those of Claude Code's plugins, named with a plugin's name), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
+/// Code plugin's; those of Claude Code's plugins where their marketplace entry or `plugin.json`
+/// says, named with a plugin's name), then the user's `skills` in Scramjet's agent directory, `~/.agents/skills`
 /// and the `skills` of Claude Code's directory (with `--bare`, none of them, and never as a
 /// project's); then, as Scramjet's, the paths `--skill` gives, which are all with `--no-skills`.
 fn places_of(
     listed: &[PathBuf],
-    sets: &[(PathBuf, Option<String>)],
+    sets: &[(Vec<PathBuf>, Option<String>)],
     options: &SkillOptions,
     root: &Path,
     agent_directory: Option<&Path>,
@@ -143,13 +146,12 @@ fn places_of(
         }
     }
     places.extend(listed.iter().map(|path| (path.clone(), Place::Listed)));
-    places.extend(sets.iter().map(|(set, plugin)| {
-        let skills = crate::os::join(set, "skills");
-        match plugin {
-            Some(plugin) => (skills, Place::Plugin(plugin.clone())),
-            None => nested(skills),
-        }
-    }));
+    for (skills, plugin) in sets {
+        places.extend(skills.iter().map(|skills| match plugin {
+            Some(plugin) => (skills.clone(), Place::Plugin(plugin.clone())),
+            None => nested(skills.clone()),
+        }));
+    }
     if let Some(directory) = agent_directory {
         places.push((
             directory.join("skills"),
@@ -174,10 +176,12 @@ impl Skills {
     pub fn discover(listed: &[PathBuf], sets: &[Set], options: &SkillOptions, root: &Path) -> Self {
         let agent_directory = super::login::config_directory().filter(|_| !super::bare());
         let (home, claude) = (std::env::home_dir(), super::login::claude_directory());
-        let sets: Vec<(PathBuf, Option<String>)> = (sets.iter())
+        let sets: Vec<(Vec<PathBuf>, Option<String>)> = (sets.iter())
             .map(|set| {
                 let plugin = (set.origin == Origin::ClaudeCode).then(|| set.name.clone());
-                (set.directory.clone(), plugin)
+                let skills = (set.skills.clone())
+                    .unwrap_or_else(|| vec![crate::os::join(&set.directory, "skills")]);
+                (skills, plugin)
             })
             .collect();
         let user = User {
@@ -1106,5 +1110,35 @@ Do it.\n</skill>",
         let error = found.expand_now("/skill:pdf").unwrap().unwrap_err();
         assert!(error.starts_with(&format!("skill pdf: cannot read {}", pdf.display())));
         assert!(Skills::default().catalog().is_empty());
+    }
+
+    #[test]
+    fn a_claude_code_plugins_listed_skill_directories_are_its_only_ones() {
+        let scratch = scratch("plugin-listed");
+        let plugin = scratch.0.join("docs");
+        for name in ["pdf", "xlsx", "art"] {
+            write(
+                &plugin.join(format!("skills/{name}/SKILL.md")),
+                &skill(name, "Files."),
+            );
+        }
+        let set = |skills| Set {
+            name: "docs".into(),
+            directory: plugin.clone(),
+            origin: Origin::ClaudeCode,
+            skills,
+        };
+        let options = SkillOptions::default();
+        let names = |set: Set| -> Vec<String> {
+            let found = Skills::discover(&[], &[set], &options, &scratch.0);
+            (found.list.into_iter())
+                .filter(|skill| skill.path.starts_with(&plugin))
+                .map(|skill| skill.name)
+                .collect()
+        };
+        let listed = Some(vec![plugin.join("skills/xlsx"), plugin.join("skills/pdf")]);
+        assert_eq!(names(set(listed)), ["docs:xlsx", "docs:pdf"]);
+        assert_eq!(names(set(None)), ["docs:art", "docs:pdf", "docs:xlsx"]);
+        assert!(names(set(Some(Vec::new()))).is_empty());
     }
 }

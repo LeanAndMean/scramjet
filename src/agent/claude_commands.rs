@@ -742,11 +742,13 @@ mod tests {
                 name: "dev".into(),
                 directory: directory.clone(),
                 origin: Origin::ClaudeCode,
+                skills: None,
             },
             Set {
                 name: "other".into(),
                 directory: directory.clone(),
                 origin: Origin::Installed,
+                skills: None,
             },
         ];
         let found = ClaudeCommands::load(&plugins(&sets).collect::<Vec<_>>());
