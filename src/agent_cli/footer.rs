@@ -49,12 +49,6 @@ pub(super) struct Shown {
     /// The `/loop`'s interval, while one runs.
     pub(super) looping: Option<String>,
     pub(super) tasks: Running,
-    /// The session's id and file, and the model's display name, for the `statusLine` command.
-    pub(super) session_id: String,
-    pub(super) transcript: PathBuf,
-    pub(super) model_name: Option<String>,
-    /// The `Notification` hooks, run as the user is told the agent waits.
-    pub(super) notifier: Option<scramjet::agent::Notifier>,
 }
 
 /// The agent's background commands, counted each time the footer is drawn, so that one started
@@ -110,10 +104,6 @@ impl Shown {
             plan: agent.planning(),
             looping: (agent.looping()).map(|looping| interval(looping.every)),
             tasks: Running(Some(agent.tasks().clone())),
-            session_id: agent.session_id(),
-            transcript: agent.session_path().to_owned(),
-            model_name: agent.model_name().map(str::to_owned),
-            notifier: agent.notifier(),
         }
     }
 }
@@ -530,7 +520,6 @@ mod tests {
             plan: false,
             looping: None,
             tasks: Running::default(),
-            ..Default::default()
         }
     }
 

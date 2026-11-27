@@ -443,16 +443,12 @@ impl App {
         rows.extend(selection::rows(
             &self.queued(width, self.bottom != Bottom::Pi),
         ));
-        let under = self.status_line.rows(width, height / 3);
-        let height = height.saturating_sub(under.len());
-        let (mut rows, cursor) = match self.bottom {
+        match self.bottom {
             Bottom::Pi => self.pi(rows, (width, height)),
             Bottom::Boxed => self.boxed(rows, (width, height)),
             Bottom::Composer => self.composer(rows, (width, height)),
             Bottom::Bar => self.bar(rows, (width, height)),
-        };
-        rows.extend(selection::rows(&under));
-        (rows, cursor)
+        }
     }
 
     /// Scramjet's dock: the prompt between rules, or a dialog over a rule, then the footer.
@@ -687,12 +683,7 @@ impl App {
             self.drawn.clear();
         }
         // Given again with a whole frame, as after the screen was left, which clears it.
-        // Scramjet's mark: whether the agent works or waits for the user.
-        let mark = match &self.activity {
-            Some(activity) if !activity.asks() => '●',
-            _ => '○',
-        };
-        let title = format!("{mark} {}", self.footer.title());
+        let title = self.footer.title();
         let titled = self.drawn.is_empty() || title != self.title;
         if titled {
             write!(out, "\x1b]0;{title}\x07").unwrap();

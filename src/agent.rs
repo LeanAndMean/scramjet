@@ -110,8 +110,8 @@ pub use status::{Completed, FRESH_MARK, Next, Reopened, Routing, Source, Step};
 pub use suggest::Suggested;
 pub use tools::{
     CODING_TOOLS, DEFAULT_TOOLS, HARNESS_TOOLS, READ_MORE, UserShell, found, is_shell,
-    missing_shells, offline, read_line_too_long, run_with_input, sequence_diff, set_shell,
-    set_user_shell, shortened, terminal_line, write_replacing,
+    missing_shells, offline, read_line_too_long, sequence_diff, set_shell, set_user_shell,
+    shortened, terminal_line, write_replacing,
 };
 pub use tree::{Navigated, SessionTree, TreeEntry, TreeItem};
 pub use ui::{
@@ -1932,11 +1932,6 @@ impl Agent {
     /// The id the current model's requests name it by.
     pub fn model_id(&self) -> &str {
         &self.info.id
-    }
-
-    /// The current model's display name, when its provider gives one.
-    pub fn model_name(&self) -> Option<&str> {
-        (self.config.providers.find(&self.config.model)).and_then(|model| model.name.as_deref())
     }
 
     /// `--api-key`: `key`, as it is, for the current model's provider's requests from now on.

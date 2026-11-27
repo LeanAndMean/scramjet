@@ -540,14 +540,10 @@ branchSummary.reserveTokens (16384); images: autoResize (true: images over 2000x
 4.5 MB are scaled down before they are sent) and blockImages (false; true: no image is sent);
 and the full screen's scrollWheelStep (3 lines a notch,
 1-20), editorMaxHeightPercent (30: the prompt's most rows as a share of the screen's, 10-50) and
-autocompleteMaxVisible (5 completion entries shown at once, 3-20),
+autocompleteMaxVisible (5 completion entries shown at once, 3-20), and
 terminal.showTerminalProgress (on in Windows Terminal, ConEmu, Ghostty 1.2+ and iTerm2 3.6.6+,
 off elsewhere and inside tmux: the terminal's tab shows the agent busy while it works, OSC 9;4;
-Claude Code's terminalProgressBarEnabled is read too) and Claude Code's preferredNotifChannel
-(auto, terminal_bell, iterm2, iterm2_with_bell, kitty, ghostty or notifications_disabled: how
-the terminal is told the agent waits for you, a minute after a reply or 6 seconds into a
-question; auto: iTerm2's, kitty's or Ghostty's notification, none elsewhere); Claude Code's env,
-environment variables set at start, over the shell's, for Scramjet and what it runs.";
+Claude Code's terminalProgressBarEnabled is read too).";
 
 /// The session the agent starts in.
 pub(super) enum Start {

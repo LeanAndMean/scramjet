@@ -91,9 +91,6 @@ impl App {
         if self.exiting {
             return Flow::Go;
         }
-        if key != Key::Idle {
-            self.touched = Instant::now();
-        }
         if matches!(key, Key::Text(_) | Key::Paste(_) | Key::Press(_)) {
             self.typed = Some(Instant::now());
         }

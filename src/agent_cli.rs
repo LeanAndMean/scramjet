@@ -50,7 +50,6 @@ mod local_login;
 mod login;
 mod looping;
 mod markdown;
-mod notify;
 mod packages;
 mod palette;
 mod plan;
@@ -69,7 +68,6 @@ mod settings;
 mod settings_menu;
 mod slash;
 mod spelling;
-mod status_line;
 mod style;
 mod system_prompt;
 mod terminal;
@@ -106,10 +104,6 @@ pub fn execute(arguments: impl Iterator<Item = OsString>) -> Result<(), String> 
     if arguments.len() != before {
         // SAFETY: the process has started no thread yet.
         unsafe { std::env::set_var("SCRAMJET_OFFLINE", "1") };
-    }
-    // The clipboard's selection owners, `__…`, run with an emptied environment.
-    if !(arguments.first()).is_some_and(|first| first.to_string_lossy().starts_with("__")) {
-        settings::set_environment();
     }
     // Checked below before any subcommand that may write, or else once the options are read.
     let checked = (arguments.first().and_then(|first| first.to_str()))

@@ -179,13 +179,9 @@ impl Link {
             layout: settings.layout,
             retain_transcript: settings.retain_transcript,
             terminal_progress: settings.terminal_progress,
-            notify: settings
-                .notifications
-                .resolved(|name| std::env::var(name).ok()),
             design: settings.look,
             banner: settings.banner,
             bottom: settings.bottom,
-            status_line: settings.status_line.clone(),
         });
     }
     /// The prompt being typed is kept with the session saved at `session`, if any.
@@ -379,12 +375,8 @@ impl Handle {
         spelling::configure(settings.spell_check, settings.words().as_deref());
         let (markdown_reads, copy_on_select) = (settings.markdown_reads, settings.copy_on_select);
         let (layout, terminal_progress) = (settings.layout, settings.terminal_progress);
-        let notify = settings
-            .notifications
-            .resolved(|name| std::env::var(name).ok());
         let retain_transcript = settings.retain_transcript;
         let (design, banner, bottom) = (settings.look, settings.banner, settings.bottom);
-        let status_line = settings.status_line.clone();
         let (to, messages) = mpsc::channel();
         let (inputs, from) = mpsc::channel();
         let (woken, wake) = io::pipe()?;
@@ -406,19 +398,17 @@ impl Handle {
                     started: 0,
                 };
                 let app = App::new(editor, hide_thinking, cancel, inputs, queue, sides);
-                let mut app = App {
+                let app = App {
                     markdown_reads,
                     copy_on_select,
                     layout,
                     retain_transcript,
                     terminal_progress,
-                    notify,
                     design,
                     banner,
                     bottom,
                     ..app
                 };
-                app.status_line.configure(status_line);
                 app.run(raw, &messages, woken)
             }
         })?;

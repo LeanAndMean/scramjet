@@ -947,24 +947,6 @@ def cancel_at_approval(read, until, send, output):
     send(b'\x04')
 
 
-def notified_at_an_unanswered_approval(read, until, send, output):
-    shown, on_screen = full_screen()(read, output)
-    on_screen('\u2500' * 20)
-    assert b'\x1b]0;\xe2\x97\x8b scramjet - ' in output, 'the title marks no wait'
-    send(b'go\r')
-    on_screen('Allow? [y/N, a = allow all until exit]')
-    asked = len(output)
-    read(4.5)
-    assert b'\x1b]9;' not in output[asked:], 'told before 6 seconds'
-    told = until(b'\x1b]9;scramjet - ', asked)
-    assert output[told:].startswith(b'project: Scramjet needs your answer\x07\x07'), bytes(output[told:told + 80])
-    read(.5)
-    assert output.count(b'\x1b]9;') == 1, 'told more than once'
-    send(b'\x03')
-    on_screen('(cancelled)')
-    send(b'\x04')
-
-
 def approval_shows_hidden_characters(read, until, send, output):
     shown, on_screen = full_screen()(read, output)
     on_screen('\u2500' * 20)
@@ -987,8 +969,6 @@ def exit_during_turn(read, until, send, output):
     on_screen('\u2500' * 20)
     send(b'go\r')
     on_screen('bash  setsid')
-    # The title marks the agent at work.
-    assert b'\x1b]0;\xe2\x97\x8f scramjet - project\x07' in output, 'no working mark in the title'
     read(.3)
     # The first cancels the turn, the second exits as the cancellation ends.
     send(b'\x03')
@@ -1014,8 +994,6 @@ run(['--ask'], cancel_at_approval, calling)
 outputs = [item['output'] for item in map(json.loads, open(cancelled)) if item.get('type') == 'function_call_output']
 assert outputs == ['The user cancelled the turn before this tool call ran.'], outputs
 run(['--ask'], approval_shows_hidden_characters, disguised)
-run(['--ask'], notified_at_an_unanswered_approval, calling,
-    variables={'XDG_CONFIG_HOME': config_home('notify', '{"preferredNotifChannel": "iterm2_with_bell"}')})
 run([], exit_during_turn, calling)
 
 
@@ -2976,7 +2954,7 @@ def settings_menu(read, until, send, output):
     send(b'\x1b[B\r')
     on_screen(setting('Thinking level', 'high'))
     # Keys typed at once each reach the list the one before them leaves, none lost between.
-    send(b'\x1b[B\x1b[B\r' + b'\x1b[B' * 10 + b'\r')
+    send(b'\x1b[B\x1b[B\r' + b'\x1b[B' * 9 + b'\r')
     rows = on_screen(setting('Steering messages', 'one at a time'))
     assert rows[-2:] == ['  Sent with Enter during a turn: how many the model gets',
                          '  before its next request.'], rows
@@ -3002,7 +2980,7 @@ def settings_menu(read, until, send, output):
     assert 'Command: ' not in '\n'.join(rows), rows
     # A list the user opened leaves the status row on what the turn does.
     assert any(' Running ' in row for row in rows), rows
-    send(b'\x1b[B' * 25 + b'\r')
+    send(b'\x1b[B' * 24 + b'\r')
     on_screen('Tools  \u2191\u2193 move')
     send(b'\x1b[B' * 6 + b'\r\x1b')
     on_screen('\u203a ' + setting('Tools', 'read, bash, edit, write, find; swi…'))

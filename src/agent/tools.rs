@@ -2079,26 +2079,8 @@ pub(super) fn run_user_command(
     }
 }
 
-/// The most of a `run_with_input` command's output that is kept.
+/// The most of a `run_piped` command's output that is kept.
 const WITH_INPUT_BYTES: u64 = 64 * 1024;
-
-/// Runs `command` in bash in `root` with `input` on its standard input, as Claude Code runs its
-/// `statusLine` command: its standard output once it exits 0 within `timeout`, else why not.
-/// What it started is killed with it when the time runs out or `cancel` is set.
-pub fn run_with_input(
-    root: &Path,
-    command: &str,
-    input: &[u8],
-    timeout: Duration,
-    cancel: &AtomicBool,
-) -> Result<String, String> {
-    let exited = run_piped(root, command, input, &[], timeout, cancel)?;
-    match exited.code {
-        Some(0) => Ok(exited.stdout),
-        Some(code) => Err(format!("exited with {code}")),
-        None => Err("was killed".to_owned()),
-    }
-}
 
 /// How a `run_piped` command ended: its exit code (`None` when a signal ended it) and the
 /// first `WITH_INPUT_BYTES` of each output.
@@ -2108,7 +2090,9 @@ pub struct Exited {
     pub stderr: String,
 }
 
-/// As `run_with_input`, with `env` set for it, and however it exits within `timeout`.
+/// Runs `command` in bash in `root` with `input` on its standard input and `env` set for it:
+/// how it exits within `timeout`, else why not. What it started is killed with it when the time
+/// runs out or `cancel` is set.
 pub fn run_piped(
     root: &Path,
     command: &str,

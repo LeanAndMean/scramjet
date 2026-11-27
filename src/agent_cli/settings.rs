@@ -5,10 +5,8 @@ use super::banner::Banner;
 use super::bottom::Bottom;
 use super::design::Design;
 use super::keymap::{self, Binding};
-use super::notify::Channel;
 use super::packages::{self, Source};
 use super::sessions::Chains;
-use super::status_line;
 use super::tree::Filter;
 use super::{background, theme};
 use scramjet::agent::{
@@ -174,7 +172,6 @@ pub(super) enum Row {
     PromptHeight,
     CompletionRows,
     TerminalProgress,
-    Notifications,
     SpellCheck,
     AutoCompact,
     ResizeImages,
@@ -215,7 +212,6 @@ pub(super) const GROUPS: [(&str, &[Row]); 6] = [
             Row::RetainTranscript,
             Row::Changelog,
             Row::TerminalProgress,
-            Row::Notifications,
         ],
     ),
     (
@@ -291,7 +287,6 @@ impl Row {
             Self::PromptHeight => "Prompt height",
             Self::CompletionRows => "Completion rows",
             Self::TerminalProgress => "Terminal progress",
-            Self::Notifications => "Notifications",
             Self::SpellCheck => "Spelling",
             Self::AutoCompact => "Auto-compact",
             Self::ResizeImages => "Resize images",
@@ -405,13 +400,6 @@ impl Row {
                  stops while the agent waits for you. On by default in Windows Terminal, ConEmu, \
                  Ghostty 1.2+ and iTerm2 3.6.6+."
             }
-            Self::Notifications => {
-                "The terminal is told when the agent waits for you: a minute after a reply you \
-                 have not touched the prompt since, or 6 seconds after a question you have not \
-                 answered. iTerm2, kitty and Ghostty show a desktop notification, the bell \
-                 rings in any terminal; auto picks the terminal's own notification, none where \
-                 it has none."
-            }
             Self::SpellCheck => {
                 return format!(
                     "Words in the prompt the dictionary lacks are underlined. Words of your own, \
@@ -507,9 +495,6 @@ pub(super) struct Settings {
     /// screen tells the terminal it is busy while the agent works (OSC 9;4); by default only in
     /// terminals known to show it (`shows_progress`).
     pub(super) terminal_progress: bool,
-    /// `preferredNotifChannel`, Claude Code's: how the full screen tells the terminal that the
-    /// agent waits for the user.
-    pub(super) notifications: Channel,
     /// `branchSummary.skipPrompt`: leaving a branch in `/tree` summarizes nothing, unasked.
     pub(super) skip_branch_summary_prompt: bool,
     /// `treeFilterMode`: the entries `/tree` shows when it opens.
@@ -526,8 +511,6 @@ pub(super) struct Settings {
     pub(super) banner: Banner,
     /// `bottom`: how the status row, the prompt and the footer look.
     pub(super) bottom: Bottom,
-    /// `statusLine`: the command whose output shows under the footer, as Claude Code's.
-    pub(super) status_line: Option<status_line::Config>,
     /// `hooks`, Claude Code's: commands run before and after the agent's tools, each file's
     /// after the one before's.
     pub(super) hooks: std::sync::Arc<scramjet::agent::Hooks>,
@@ -733,7 +716,6 @@ impl Settings {
             collapse_changelog: false,
             last_changelog_version: None,
             terminal_progress: shows_progress(|name| std::env::var(name).ok()),
-            notifications: Channel::Auto,
             skip_branch_summary_prompt: false,
             tree_filter: Filter::Default,
             resume_chains: Chains::Flat,
@@ -742,7 +724,6 @@ impl Settings {
             look: Design::Tinted,
             banner: Banner::Header,
             bottom: Bottom::Bar,
-            status_line: None,
             hooks: Default::default(),
             default_thinking_level: None,
             default_provider: None,
@@ -860,15 +841,6 @@ impl Settings {
             None => {}
             Some(Value::Bool(on)) => self.terminal_progress = *on,
             Some(_) => wrong("terminalProgressBarEnabled", "true or false"),
-        }
-        let channel = object.get("preferredNotifChannel");
-        match channel.map(|name| name.as_str().and_then(Channel::named)) {
-            None => {}
-            Some(Some(channel)) => self.notifications = channel,
-            Some(None) => wrong(
-                "preferredNotifChannel",
-                r#""auto", "terminal_bell", "iterm2", "iterm2_with_bell", "kitty", "ghostty" or "notifications_disabled""#,
-            ),
         }
         // Scramjet's other `terminal` keys are for images, which are not shown here.
         match object.get("terminal") {
@@ -1181,13 +1153,11 @@ impl Settings {
                 "{path}: modelCatalogs must be a list of URLs; ignored"
             )),
         }
-        environment(object, &path, &mut self.warnings);
         if let Some(hooks) = object.get("hooks") {
             let read = scramjet::agent::Hooks::read(hooks, &path, &mut self.warnings);
             std::sync::Arc::make_mut(&mut self.hooks).extend(read);
         }
         self.apply_sandbox(&path, object);
-        self.apply_status_line(&path, object);
     }
 
     /// `sandbox`, an object of Claude Code's shape with Codex's modes, or as before a mode's name
@@ -1346,56 +1316,6 @@ impl Settings {
                 Err(()) => wrong(&format!("filesystem.{key}"), "must be a list of paths"),
             }
         }
-    }
-
-    /// `statusLine`, Claude Code's: `{"type": "command", "command": …}`, with `padding` and
-    /// `refreshInterval` in seconds; each wrong key is named, and a wrong `type` or `command`
-    /// leaves the status line off.
-    fn apply_status_line(&mut self, path: &str, object: &Map<String, Value>) {
-        let Some(value) = object.get("statusLine") else {
-            return;
-        };
-        let line = match value {
-            Value::Object(line) => line,
-            Value::Null => return,
-            _ => {
-                (self.warnings).push(format!("{path}: statusLine must be an object; ignored"));
-                return;
-            }
-        };
-        let mut wrong = |key: &str, expected: &str| {
-            (self.warnings).push(format!(
-                "{path}: statusLine.{key} must be {expected}; ignored"
-            ))
-        };
-        let mut usable = true;
-        match line.get("type") {
-            None | Some(Value::Null) => {}
-            Some(Value::String(kind)) if kind == "command" => {}
-            Some(_) => (usable, _) = (false, wrong("type", r#""command""#)),
-        }
-        let command = match line.get("command") {
-            Some(Value::String(command)) if !command.trim().is_empty() => Some(command.clone()),
-            None if line.is_empty() => None,
-            _ => {
-                wrong("command", "a command");
-                None
-            }
-        };
-        let mut config = status_line::Config::new(command.unwrap_or_default());
-        match line.get("padding").map(Value::as_u64) {
-            None => {}
-            Some(Some(padding)) if padding <= 40 => config.padding = padding as usize,
-            Some(_) => wrong("padding", "a whole number from 0 to 40"),
-        }
-        match line.get("refreshInterval").map(Value::as_u64) {
-            None => {}
-            Some(Some(seconds @ 1..=86_400)) => {
-                config.refresh = Some(Duration::from_secs(seconds));
-            }
-            Some(_) => wrong("refreshInterval", "seconds, from 1 to 86400"),
-        }
-        self.status_line = (usable && !config.command.is_empty()).then_some(config);
     }
 
     /// `sandbox.filesystem.allowWrite`'s directories, with `~` and relative paths resolved as
@@ -2308,14 +2228,6 @@ impl Settings {
             Row::Changelog => "whole".into(),
             Row::TerminalProgress if self.terminal_progress => "on".into(),
             Row::TerminalProgress => "off".into(),
-            Row::Notifications => match self.notifications {
-                Channel::Auto => match self.notifications.resolved(|name| std::env::var(name).ok())
-                {
-                    Some(channel) => format!("auto ({})", channel.shown()),
-                    None => "auto (none here)".into(),
-                },
-                channel => channel.shown().into(),
-            },
             Row::SpellCheck if self.spell_check => "on".into(),
             Row::SpellCheck => "off".into(),
             Row::AutoCompact if self.compacting.automatic => "on".into(),
@@ -2456,10 +2368,6 @@ impl Settings {
                     "showTerminalProgress",
                     json!(self.terminal_progress),
                 )
-            }
-            Row::Notifications => {
-                self.notifications = self.notifications.next();
-                self.save("preferredNotifChannel", json!(self.notifications.name()))
             }
             Row::SpellCheck => {
                 self.spell_check = !self.spell_check;
@@ -2837,13 +2745,9 @@ pub(super) struct Given {
 
 /// `--settings`' `values`, as Claude Code's: each a JSON object or a file holding one (relative
 /// to `cwd`), a later one's keys over an earlier one's, put over the settings file's from now on
-/// and never written to it; its `env` set in this process over the file's.
+/// and never written to it.
 pub(super) fn give(values: &[String], cwd: &Path) -> Result<(), String> {
     let given = given(values, cwd)?;
-    for (name, value) in environment(&given.object, "", &mut Vec::new()) {
-        // SAFETY: called, as `set_environment`, before the process starts a thread.
-        unsafe { std::env::set_var(name, value) };
-    }
     GIVEN
         .set(given)
         .map_err(|_| "--settings: given twice".to_owned())
@@ -3064,10 +2968,7 @@ const KEYS: &[(&str, &[&str])] = &[
             "sandboxNetwork",
             "directives",
             "sandbox",
-            "statusLine",
-            "preferredNotifChannel",
             "hooks",
-            "env",
             // Scramjet 1's, not read here.
             "anthropicExtraUsage",
             "dockEditor",
@@ -3119,10 +3020,6 @@ const KEYS: &[(&str, &[&str])] = &[
         &["mode", "network", BLOCK_READS, "filesystem"],
     ),
     ("sandbox.subagents.filesystem", FILESYSTEM_KEYS),
-    (
-        "statusLine",
-        &["type", "command", "padding", "refreshInterval"],
-    ),
 ];
 const FILESYSTEM_KEYS: &[&str] = &["allowWrite", "writable_roots", "denyRead", "allowRead"];
 
@@ -3147,61 +3044,6 @@ fn mistyped_keys(object: &Map<String, Value>, path: &str) -> Vec<String> {
         }
     }
     found
-}
-
-/// Sets the settings' `env` in this process, over the variables it was started with, as Claude
-/// Code's: its commands, hooks, MCP servers and subagents inherit them. Read at start only; the
-/// settings' other warnings name what is wrong in it.
-pub(super) fn set_environment() {
-    let config = scramjet::agent::login::config_directory();
-    let Some(Ok(object)) = config.map(|config| read_object(&config.join("settings.json"))) else {
-        return;
-    };
-    for (name, value) in environment(&object, "", &mut Vec::new()) {
-        // SAFETY: called before the process starts a thread.
-        unsafe { std::env::set_var(name, value) };
-    }
-}
-
-/// Claude Code's `env`: the variables to set, each a text, a number or true/false, as Claude
-/// Code takes them; a name or value the system cannot hold is warned of and left out.
-fn environment(
-    object: &Map<String, Value>,
-    path: &str,
-    warnings: &mut Vec<String>,
-) -> Vec<(String, String)> {
-    let variables = match object.get("env") {
-        None => return Vec::new(),
-        Some(Value::Object(variables)) => variables,
-        Some(_) => {
-            warnings.push(format!(
-                "{path}: env must be an object of environment variables by name; ignored"
-            ));
-            return Vec::new();
-        }
-    };
-    let mut set = Vec::new();
-    for (name, value) in variables {
-        let value = match value {
-            Value::String(text) => text.clone(),
-            Value::Number(number) => number.to_string(),
-            Value::Bool(on) => on.to_string(),
-            _ => {
-                warnings.push(format!(
-                    "{path}: env.{name} must be a text, a number or true/false; ignored"
-                ));
-                continue;
-            }
-        };
-        if name.is_empty() || name.contains(['=', '\0']) || value.contains('\0') {
-            warnings.push(format!(
-                "{path}: env.{name} cannot be set: a name holds no = and neither holds a NUL; ignored"
-            ));
-            continue;
-        }
-        set.push((name.clone(), value));
-    }
-    set
 }
 
 /// What a token count in the settings must be.
@@ -3515,7 +3357,6 @@ mod tests {
         taken.extend(Bottom::ALL.map(Bottom::name));
         taken.extend(Filter::CYCLE.map(Filter::setting));
         taken.extend(Chains::CYCLE.map(Chains::setting));
-        taken.extend(Channel::ALL.map(Channel::name));
         taken.extend(LEVELS.into_iter().chain(CODING_TOOLS).chain(HARNESS_TOOLS));
         let missing: Vec<_> = (taken.iter())
             .filter(|name| !shown.contains(*name))
@@ -3547,84 +3388,6 @@ mod tests {
             "{:?}",
             settings.warnings
         );
-    }
-
-    #[test]
-    fn claude_codes_env_is_read_with_what_cannot_be_set_left_out() {
-        let scratch = Scratch::new("env");
-        let settings = settings_with(
-            &scratch,
-            r#"{"env": {"HTTPS_PROXY": "http://127.0.0.1:3128", "DISABLE_TELEMETRY": 1,
-                "ON": true, "LIST": ["a"], "A=B": "x", "NUL": "a\u0000b"}}"#,
-        );
-        let object = read_object(settings.path().unwrap()).unwrap();
-        let mut warnings = Vec::new();
-        let set = environment(&object, "settings.json", &mut warnings);
-        let set: Vec<_> = (set.iter())
-            .map(|(n, v)| (n.as_str(), v.as_str()))
-            .collect();
-        assert_eq!(
-            set,
-            [
-                ("DISABLE_TELEMETRY", "1"),
-                ("HTTPS_PROXY", "http://127.0.0.1:3128"),
-                ("ON", "true")
-            ]
-        );
-        assert_eq!(warnings.len(), 3, "{warnings:?}");
-        assert!(warnings[0].starts_with("settings.json: env.A=B cannot be set"));
-        assert!(warnings[1].contains("env.LIST must be a text"));
-        assert!(warnings[2].contains("env.NUL cannot be set"));
-        assert_eq!(settings.warnings.len(), 3, "{:?}", settings.warnings);
-        let wrong = settings_with(&scratch, r#"{"env": "HTTPS_PROXY=x"}"#);
-        assert!(
-            wrong.warnings[0].contains(": env must be an object"),
-            "{:?}",
-            wrong.warnings
-        );
-    }
-
-    #[test]
-    fn claude_codes_notification_channel_is_read() {
-        let scratch = Scratch::new("notifications");
-        assert_eq!(settings_with(&scratch, "{}").notifications, Channel::Auto);
-        let kitty = settings_with(&scratch, r#"{"preferredNotifChannel": "kitty"}"#);
-        assert!(kitty.warnings.is_empty(), "{:?}", kitty.warnings);
-        assert_eq!(kitty.notifications, Channel::Kitty);
-        let wrong = settings_with(&scratch, r#"{"preferredNotifChannel": "desktop"}"#);
-        assert_eq!(wrong.notifications, Channel::Auto);
-        assert!(
-            wrong.warnings[0].contains("preferredNotifChannel must be \"auto\""),
-            "{:?}",
-            wrong.warnings
-        );
-    }
-
-    #[test]
-    fn claude_codes_status_line_is_read_as_it_is() {
-        let scratch = Scratch::new("status-line");
-        let settings = settings_with(
-            &scratch,
-            r#"{"statusLine": {"type": "command", "command": "~/.claude/statusline-command.sh",
-                "padding": 0, "refreshInterval": 10}}"#,
-        );
-        assert!(settings.warnings.is_empty(), "{:?}", settings.warnings);
-        assert_eq!(
-            settings.status_line,
-            Some(status_line::Config {
-                refresh: Some(Duration::from_secs(10)),
-                ..status_line::Config::new("~/.claude/statusline-command.sh".into())
-            })
-        );
-        let wrong = settings_with(
-            &scratch,
-            r#"{"statusLine": {"type": "static", "command": "x", "padding": -1}}"#,
-        );
-        assert_eq!(wrong.status_line, None);
-        assert_eq!(wrong.warnings.len(), 2, "{:?}", wrong.warnings);
-        let off = settings_with(&scratch, r#"{"statusLine": {"command": "  "}}"#);
-        assert_eq!(off.status_line, None);
-        assert!(off.warnings[0].ends_with("statusLine.command must be a command; ignored"));
     }
 
     #[test]
@@ -5001,11 +4764,6 @@ or false; ignored"
             seen(Row::TerminalProgress, &mut settings),
             ["off", "on", "off", "on"]
         );
-        settings.notifications = Channel::Bell;
-        assert_eq!(
-            seen(Row::Notifications, &mut settings),
-            ["terminal bell", "iTerm2", "iTerm2 with bell", "kitty"]
-        );
         assert_eq!(
             seen(Row::Changelog, &mut settings),
             ["whole", "titles", "whole", "titles"]
@@ -5065,7 +4823,6 @@ or false; ignored"
                 "scrollWheelStep": 6,
                 "editorMaxHeightPercent": 45,
                 "autocompleteMaxVisible": 3,
-                "preferredNotifChannel": "kitty",
                 "retainTranscriptOnExit": true,
                 "collapseChangelog": true,
                 "lastChangelogVersion": "1.2.3",

@@ -4,6 +4,8 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.422.0 — Unreleased settings taken out
+
 ## 2.421.0 — Unreleased commands and keys taken out
 
 ## 2.420.0 — Unreleased commands taken out
@@ -26,7 +28,7 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ### Added
 
-- `--settings FILE|JSON` gives settings for one run, as Claude Code's: a JSON object, or a file holding one, its keys over your settings file's (objects merged key by key), `env` included. It is read again at `/reload` and never saved into your file.
+- `--settings FILE|JSON` gives settings for one run, as Claude Code's: a JSON object, or a file holding one, its keys over your settings file's (objects merged key by key). It is read again at `/reload` and never saved into your file.
 
 ## 2.415.0 — `--mcp-config` and `--strict-mcp-config`
 
@@ -285,12 +287,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 - Claude Code's `UserPromptSubmit`, `Stop` and `SessionStart` hooks in the settings' `hooks`, copied as they are: a hook can keep a prompt from being sent or add context to it, keep the agent working when its turn would end (at most 8 times in a row, as Claude Code), and tell the model something as a session starts, is resumed, cleared or compacted.
 
-## 2.379.0 — Claude Code's env in the settings
-
-### Added
-
-- The settings' `env`, as Claude Code's: environment variables set at start, over the shell's, for Scramjet itself (an `HTTPS_PROXY`, a provider's key variable) and for the agent's commands, hooks, MCP servers and subagents. Claude Code's `env` can be copied as it is; a value that cannot be set is named in a warning.
-
 ## 2.378.0 — Claude Code's effortLevel in the settings
 
 ### Changed
@@ -302,19 +298,6 @@ What changed in each version of Scramjet, for the people using it. The newest co
 ### Added
 
 - The settings' `hooks`, in Claude Code's form and copied as they are: `PreToolUse`, `PostToolUse` and `PostToolUseFailure` command hooks run around the agent's tool calls, matched by Claude Code's tool names (`Bash`, `Write|Edit`, …) or Scramjet's. A hook can block a call (exit code 2, or `permissionDecision: "deny"`), ask you about it, change its input, or tell the model or you more. Claude Code's other events and kinds of hooks are named in a warning at start; subagents' tools run no hooks yet.
-
-## 2.376.0 — Told when the agent waits for you
-
-### Added
-
-- The full screen tells the terminal when the agent waits for you, as Claude Code's `preferredNotifChannel` setting says: a minute after a reply you have not touched a key since, or 6 seconds after an unanswered question. iTerm2, kitty and Ghostty show a desktop notification (`auto`, the default, picks theirs and sends nothing in other terminals, Windows Terminal among them); `terminal_bell` rings the bell anywhere. `/settings` has it under Display as Notifications.
-- The terminal's title starts with ● while the agent works and ○ while it waits for you, as Scramjet 1's.
-
-## 2.372.0 — The status line
-
-### Added
-
-- The `statusLine` setting, Claude Code's: a command run with the session's state as JSON on its input (the model, the directory, the session, how full the context is, the cost), whose output shows under the footer with its colors, a row a line. It runs again 300 ms after the state changes and every `refreshInterval` seconds if set, for at most 5 s; a failure shows why. Claude Code's setting and script can be copied as they are.
 
 ## 2.371.0 — /loop
 
