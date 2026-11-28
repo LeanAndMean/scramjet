@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.442.2 — Dependencies past their advisories
+
+### Fixed
+
+- `rustix` 1.1.6 and `tokio` 1.53.3 replace the versions RustSec marks unsound (RUSTSEC-2026-0486, extended-attribute reads; RUSTSEC-2026-0386, `AsyncFd`'s constructors). Scramjet called neither, so nothing it did was affected.
+- The MCP client is `rmcp` 3.12.0, which no longer needs the unmaintained `chrono` (RUSTSEC-2026-0543). The highlighter's `syntect` still uses the unmaintained `bincode` 1.3.3 (RUSTSEC-2025-0141), as its every release does; no fix is needed for it, and it goes when `syntect` replaces it.
+
 ## 2.442.1 — Commands that describe the action
 
 ### Changed

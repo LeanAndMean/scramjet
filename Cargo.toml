@@ -1,6 +1,6 @@
 [package]
 name = "scramjet"
-version = "2.442.1"
+version = "2.442.2"
 edition = "2024"
 license = "Apache-2.0"
 description = "An independent Rust terminal coding harness"
@@ -13,7 +13,7 @@ getrandom = { version = "=0.2.17", default-features = false }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 sha2 = { version = "=0.10.9", default-features = false }
 semver = { version = "=1.0.28", default-features = false, features = ["std"] }
-rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "termios", "process", "event", "time", "pipe"] }
+rustix = { version = "=1.1.6", default-features = false, features = ["std", "fs", "termios", "process", "event", "time", "pipe"] }
 signal-hook = { version = "=0.3.18", default-features = false }
 libc = { version = "=0.2.190", default-features = false }
 unicode-segmentation = { version = "=1.13.3", default-features = false }
@@ -26,7 +26,7 @@ hyper-util = { version = "=0.1.21", default-features = false, features = ["tokio
 rustls = { version = "=0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = { version = "=0.8.5", default-features = false }
 tokio-rustls = { version = "=0.26.6", default-features = false }
-tokio = { version = "=1.53.2", default-features = false, features = ["rt", "rt-multi-thread", "macros", "net", "time", "process", "io-util", "sync"] }
+tokio = { version = "=1.53.3", default-features = false, features = ["rt", "rt-multi-thread", "macros", "net", "time", "process", "io-util", "sync"] }
 ignore = { version = "=0.4.34", default-features = false }
 globset = { version = "=0.4.21", default-features = false }
 grep-searcher = { version = "=0.1.17", default-features = false }
@@ -40,7 +40,7 @@ syntect = { version = "=5.3.0", default-features = false, features = ["parsing",
 two-face = { version = "=0.5.2", default-features = false, features = ["syntect-onig"] }
 sse-stream = { version = "=0.2.6", default-features = false }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
-rmcp = { version = "=3.9.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
+rmcp = { version = "=3.12.0", default-features = false, features = ["client", "transport-async-rw", "transport-streamable-http-client"] }
 
 [target.'cfg(unix)'.dependencies]
 x11rb = { version = "=0.13.2", default-features = false }
