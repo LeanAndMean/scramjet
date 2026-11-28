@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.442.0 — The lint on the old tool names
+
+### Added
+
+- `scramjet lint` warns (`tool-renamed`) where a command or agent lists `delegate`, `report_scramjet_command_status` or `suggest_scramjet_next_steps` among its tools, saying the new name, and where a command's text names one of them, suggesting it describe the action ("hand off", "get the instructions of") instead. A line that names the new tool too, as one explaining the rename, is left alone; `delegate` counts only in backticks, so "delegate to" as a verb does not.
+
 ## 2.441.0 — `get_command`
 
 ### Changed

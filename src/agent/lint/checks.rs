@@ -1,10 +1,10 @@
 //! The checks of `scramjet lint` beyond what loading a set says: names Windows or Claude Code
-//! cannot use, tools no harness knows, statuses the harness refuses, and next steps, edges and
-//! mentions that lead nowhere.
+//! cannot use, tools no harness knows or named by their old names, statuses the harness refuses,
+//! and next steps, edges and mentions that lead nowhere.
 
 use super::{Diagnostic, Severity};
 use crate::agent::commands::{self, Commands, Policy, Set};
-use crate::agent::{autonomy, tools, yaml};
+use crate::agent::{autonomy, get_command, status, tools, yaml};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -265,6 +265,12 @@ pub(super) fn tool_names(
                     "Claude Code matches tool names by case and denies \"{base}\": write \
                      \"{name}\", which Scramjet reads as its {base}"
                 )
+            } else if let Some(new) = renamed(base) {
+                let text = format!(
+                    "\"{base}\" is the old name of \"{new}\", still accepted for now: write \"{new}\""
+                );
+                found.push(warning("tool-renamed", path, line, text));
+                continue;
             } else if scramjet_tool(base) || CLAUDE_CODE.contains(&base) {
                 continue;
             } else if let Some(rest) = base.strip_prefix("mcp__") {
@@ -298,6 +304,50 @@ pub(super) fn tool_names(
                 None => "tool-unknown",
             };
             found.push(warning(code, path, line, message));
+        }
+    }
+    found
+}
+
+/// The tool that `tool`, one of Scramjet 1's names, now runs.
+fn renamed(tool: &str) -> Option<&'static str> {
+    match tool {
+        tool if status::OLD_NAMES.contains(&tool) => Some(status::NAME),
+        get_command::OLD_NAME => Some(get_command::NAME),
+        _ => None,
+    }
+}
+
+static OLD_TOOL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(report_scramjet_command_status|suggest_scramjet_next_steps)\b|`(delegate)`")
+        .unwrap()
+});
+
+/// The old tool names a command's body names, but on a line that names the new one too, as one
+/// explaining the rename does. `delegate` counts only in backticks, apart from the verb.
+pub(super) fn old_tool_names(path: &Path, lines: &[(usize, &str)]) -> Vec<Diagnostic> {
+    let mut found = Vec::new();
+    for &(line, text) in lines {
+        let mut seen = Vec::new();
+        for captures in OLD_TOOL.captures_iter(text) {
+            let old = (captures.get(1).or(captures.get(2)))
+                .expect("group")
+                .as_str();
+            let new = renamed(old).expect("an old name");
+            if text.contains(&format!("`{new}`")) || seen.contains(&old) {
+                continue;
+            }
+            seen.push(old);
+            let action = match new {
+                status::NAME => "hand off",
+                _ => "get the instructions of /set:command",
+            };
+            let message = format!(
+                "`{old}` is the old name of `{new}`, still accepted for now: describe the action \
+                 (\"{action}\"), so the command reads right in any harness, or name `{new}` \
+                 where agents miss it"
+            );
+            found.push(warning("tool-renamed", path, Some(line), message));
         }
     }
     found

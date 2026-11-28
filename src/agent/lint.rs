@@ -78,6 +78,7 @@ pub fn lint(set: &Set, mcp_servers: &[String]) -> (Vec<Diagnostic>, Vec<PathBuf>
         let tools = checks::tool_names(path, &content, &["allowed-tools"], mcp_servers);
         diagnostics.extend(tools);
         diagnostics.extend(checks::statuses(path, &lines));
+        diagnostics.extend(checks::old_tool_names(path, &lines));
         diagnostics.extend(checks::references(set, &commands, path, &content, &lines));
     }
     for path in &agents {
@@ -655,6 +656,20 @@ which Scramjet reads as its bash"
 do not list, so it cannot be checked"
                 ),
                 (
+                    "commands/do.md",
+                    "tool-renamed",
+                    Some(9),
+                    "\"delegate\" is the old name of \"get_command\", still accepted for now: \
+write \"get_command\""
+                ),
+                (
+                    "commands/do.md",
+                    "tool-renamed",
+                    Some(10),
+                    "\"report_scramjet_command_status\" is the old name of \"handoff\", still \
+accepted for now: write \"handoff\""
+                ),
+                (
                     "agents/helper.md",
                     "tool-case",
                     Some(4),
@@ -673,14 +688,43 @@ which Scramjet reads as its find"
     }
 
     #[test]
+    fn old_tool_names_in_a_body_are_warned_about_unless_the_line_names_the_new_one() {
+        let body = "## Goals\n\n- A\n\n## Report\n\n\
+Then call `report_scramjet_command_status`, or suggest_scramjet_next_steps outside one.\n\
+Use the `delegate` tool to read a helper; delegate the review to an agent.\n\
+A line named `handoff` (in older sessions `report_scramjet_command_status`).\n\
+Call report_scramjet_command_status twice: report_scramjet_command_status.\n\
+\n```\nsuggest_scramjet_next_steps\n```\n";
+        let found = lint_with("old-tools", &[("commands/do.md", body)], &[]);
+        let shown: Vec<_> = (found.iter())
+            .map(|(_, code, line, message)| (*code, *line, message.split('`').nth(1).unwrap()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("tool-renamed", Some(7), "report_scramjet_command_status"),
+                ("tool-renamed", Some(7), "suggest_scramjet_next_steps"),
+                ("tool-renamed", Some(8), "delegate"),
+                ("tool-renamed", Some(10), "report_scramjet_command_status"),
+            ]
+        );
+        assert!(
+            found[2]
+                .3
+                .contains("(\"get the instructions of /set:command\")")
+        );
+        assert!(found[0].3.contains("(\"hand off\")"));
+    }
+
+    #[test]
     fn statuses_the_harness_refuses_are_warned_about_where_a_report_names_them() {
         let body = "## Goals\n\n- A\n\n## Report\n\n\
-Call `report_scramjet_command_status` with `status: \"completed\"`.\n\
+Call `handoff` with `status: \"completed\"`.\n\
 If it stopped, report the matching `status` (`blocked` / `incomplete`) instead.\n\
 Report `completed`, `continuing` or `abandoned`.\n\
 Set status: dormant when idle.\n\
 This command has a `forced` next step; report `completed`.\n\
-A `function_call` line named `report_scramjet_command_status` whose `arguments` holds its `status`.\n\
+A `function_call` line named `handoff` whose `arguments` holds its `status`.\n\
 \n```\nreport status: parked\n```\n";
         let found = lint_with("statuses", &[("commands/do.md", body)], &[]);
         let shown: Vec<_> = (found.iter())
