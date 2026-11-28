@@ -252,7 +252,7 @@ impl Agent {
         });
         if question {
             self.suggestion = suggest::Pending::Nothing;
-            self.delegated.clear();
+            self.retrieved.clear();
         }
         self.answer_interrupted_calls()?;
         if let Some(left) = summary {
@@ -485,7 +485,7 @@ fn asked_at(entries: &[session::Entry], entry: &session::Entry) -> Option<Asked>
 mod tests {
     use super::*;
     use crate::agent::tests::*;
-    use crate::agent::{Session, delegate, show_items};
+    use crate::agent::{Session, get_command, show_items};
     use crate::provider_fixture as fixture;
 
     #[test]
@@ -746,7 +746,7 @@ mod tests {
         let (endpoint, server) = serve(vec![
             tool_calls(&[
                 (question::NAME, select),
-                (delegate::NAME, json!({"command":"rs:work","args":"x"})),
+                (get_command::NAME, json!({"command":"rs:work","args":"x"})),
                 (question::NAME, freetext),
             ]),
             text("Waiting."),
@@ -776,7 +776,7 @@ mod tests {
         };
         agent.resume_turn(&mut ui, &cancel).unwrap();
         assert_eq!(agent.lifecycle.active(), Some("rs:work"));
-        assert_eq!(agent.delegated, [("rs:work".to_owned(), "x".to_owned())]);
+        assert_eq!(agent.retrieved, [("rs:work".to_owned(), "x".to_owned())]);
         // No status check follows, as the freetext question left the command waiting.
         let bodies = server.join().unwrap();
         assert_eq!(bodies.len(), 3);

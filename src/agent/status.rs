@@ -959,7 +959,7 @@ fn allowed(
             None => return Err(unknown(name)),
             Some(command) if command.delegate_only => {
                 return Err(format!(
-                    "{name} is delegate-only (invoke via delegate, not top-level dispatch)"
+                    "{name} is delegate-only (its instructions are for other commands to get)"
                 ));
             }
             Some(_) => {}
@@ -1680,8 +1680,8 @@ valid option(s): /rs:loop"
             notices,
             [
                 "scramjet: skipped invalid next step(s): /rs:steer (rs:steer is blacklisted), \
-/rs:nope (rs:nope is not registered), /rs:helper (rs:helper is delegate-only (invoke via \
-delegate, not top-level dispatch))"
+/rs:nope (rs:nope is not registered), /rs:helper (rs:helper is delegate-only (its \
+instructions are for other commands to get))"
             ]
         );
         let Next::Offer { steps, .. } = next else {

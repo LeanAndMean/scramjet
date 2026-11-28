@@ -410,7 +410,7 @@ pub struct Command {
     /// as a next step, and the `/` list leaves it out, though typed in full it runs.
     pub delegate_only: bool,
     /// The tools its `allowed-tools` names, `None` without a non-empty list. As in Scramjet,
-    /// they are advisory: `delegate` warns when a caller's share none with the command's.
+    /// they are advisory, but for the publications the running command's allow.
     pub(super) allowed_tools: Option<Vec<String>>,
     body: String,
     /// What may follow it, from the frontmatter's `next:` block.
@@ -1756,13 +1756,16 @@ auto-approve\n    add_issue_comment: require-approval\n",
             "project/rs/commands/loop.md",
             "---\nnext:\n  mode: forced\n  target: rs:loop\n---\nNew $1\n",
         );
-        let delegated = super::super::delegate::run(
+        let retrieved = super::super::get_command::run(
             &serde_json::json!({"command": "rs:loop", "args": "x"}),
             &commands,
-            None,
+            Some("rs:top"),
             &mut Vec::new(),
+            &|_| false,
         );
-        assert_eq!(delegated.text, framed("New x"));
+        let instructions = "<scramjet-command-instructions name=\"rs:loop\" for=\"rs:top\">\nNew \
+x\n</scramjet-command-instructions>";
+        assert_eq!(retrieved.text, instructions);
         commands.refresh("/rs:loop y");
         assert_eq!(commands.expand("/rs:loop y"), Some(framed("New y")));
         let forced = Policy::Forced {

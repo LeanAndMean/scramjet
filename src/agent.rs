@@ -19,8 +19,8 @@ mod configured;
 pub mod context;
 mod cooldown;
 pub mod copilot;
-mod delegate;
 mod forge;
+mod get_command;
 mod goal;
 mod guidance;
 mod image;
@@ -71,7 +71,7 @@ pub use claude_commands::{ClaudeCommand, ClaudeCommands};
 pub use client::{StreamProgress, download};
 pub use commands::{Command, Commands, Origin, Set, Sets, scramjet_1_directory, sets_in};
 pub use compaction::{AutoCompaction, Compaction, SavedCompaction};
-pub use delegate::{NAME as DELEGATE, SCOPE_WARNING as DELEGATE_SCOPE_WARNING};
+pub use get_command::{FRAME as INSTRUCTIONS_FRAME, NAME as GET_COMMAND};
 pub use goal::{GoalCheck, Verdict};
 pub use image::{decode_base64, mime as image_type, set_images};
 pub use instructions::{Part, Section};
@@ -712,8 +712,8 @@ pub struct Agent {
     /// The steps the agent suggested in the last turn, outside a command, for the user to choose
     /// from once it ends.
     suggestion: suggest::Pending,
-    /// The commands delegated in this turn, with their arguments.
-    delegated: Vec<(String, String)>,
+    /// The commands whose instructions were got in this turn, with their arguments.
+    retrieved: Vec<(String, String)>,
     /// The context's tokens when automatic compaction last failed in this turn, and how many
     /// times it failed: it is tried again only once the context has grown.
     compaction_failed: Option<(u64, u32)>,
@@ -980,7 +980,7 @@ impl Agent {
             completed: None,
             interrupted: None,
             suggestion: suggest::Pending::Nothing,
-            delegated: Vec::new(),
+            retrieved: Vec::new(),
             compaction_failed: None,
             attached: None,
             unanswered: None,
@@ -1755,14 +1755,14 @@ impl Agent {
         offered
     }
 
-    /// For a run whose only prompts are given at its start (`-p`): leaves out `handoff` unless
-    /// `commands` (a prompt may start a command) or the session left a command waiting, as no
-    /// one can choose the steps it hands off outside a command. Small models call it anyway when
-    /// offered.
+    /// For a run whose only prompts are given at its start (`-p`): leaves out `handoff` and
+    /// `get_command` unless `commands` (a prompt may start a command) or the session left a
+    /// command waiting, as no one can choose the steps handed off outside a command, and no
+    /// command's instructions are got outside one. Small models call them anyway when offered.
     pub fn leave_out_idle_tools(&mut self, commands: bool) {
         self.left_out = Vec::new();
         if !commands && self.lifecycle.active().is_none() {
-            self.left_out.push(status::NAME);
+            self.left_out.extend([status::NAME, get_command::NAME]);
         }
         self.instruct();
     }

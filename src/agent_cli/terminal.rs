@@ -13,7 +13,7 @@ use super::text::{FROM, RULE, Wrap, call_line, clip, columns, printable, style_a
 use super::{children, console, diff, editor, job, markdown, record, selection};
 use scramjet::agent::{
     Agent, AgentError, AgentUi, Answer, AutoCompaction, Children, Choice, CompactRead, Compaction,
-    DELEGATE, DELEGATE_SCOPE_WARNING, Ending, PUBLICATION_TOOLS, Purpose, READ_MORE, Reply,
+    Ending, GET_COMMAND, INSTRUCTIONS_FRAME, PUBLICATION_TOOLS, Purpose, READ_MORE, Reply,
     StreamProgress, TYPE_SOMETHING, ToolDetail, UserCommand, publication_choices,
     read_line_too_long,
 };
@@ -515,24 +515,13 @@ impl Terminal {
             (_, Some(ToolDetail::Subagents(children))) => {
                 children::rows(children, &self.look(width))
             }
-            // As in Scramjet, the instructions a command delegated to returns are shown expanded.
-            (DELEGATE, None) if !failed => {
+            // As in Scramjet, a command's instructions are shown once expanded.
+            (GET_COMMAND, None) if !failed => {
                 let body = command_body(output);
                 if full {
                     styled(preview(body, Shown::All, width))
                 } else {
                     let mut rows = Vec::new();
-                    if body.starts_with(DELEGATE_SCOPE_WARNING) {
-                        let warning = "WARNING: caller and delegate allowed-tools scopes do not \
-overlap; tool calls outside them are not blocked. Widen the caller scope or abort delegation.";
-                        let mut wrap = self.wrapper(width);
-                        let warning = wrap.push(warning) + &wrap.finish();
-                        rows.extend(
-                            warning
-                                .split('\n')
-                                .map(|row| self.styled(style::WARNING, row)),
-                        );
-                    }
                     if self.expandable {
                         let lines = match body.lines().count() {
                             1 => "1 line".to_owned(),
@@ -1988,7 +1977,8 @@ pub(super) fn command_body(sent: &str) -> &str {
         .and_then(|rest| rest.split_once(">\n"))
         .map_or(sent, |(_, body)| body)
         .trim_end();
-    body.strip_suffix("</scramjet-command>")
+    (body.strip_suffix("</scramjet-command>"))
+        .or_else(|| body.strip_suffix(&format!("</{INSTRUCTIONS_FRAME}>")))
         .unwrap_or(body)
         .trim_end()
 }
@@ -2643,19 +2633,19 @@ to expand\n(exit 2)"
     }
 
     #[test]
-    fn delegated_instructions_are_shown_when_expanded_and_refusals_always() {
-        let body = "<scramjet-command name=\"rs:read\">\nRead issue 42.\n\nThen stop.\n</scramjet-command>";
-        let disjoint = format!(
-            "<scramjet-command name=\"rs:edit\">\n{DELEGATE_SCOPE_WARNING} scopes differ.\n\nEdit\n</scramjet-command>"
-        );
+    fn a_commands_instructions_are_shown_when_expanded_and_refusals_always() {
+        let body = "<scramjet-command-instructions name=\"rs:read\" for=\"rs:top\">\nRead issue \
+42.\n\nThen stop.\n</scramjet-command-instructions>";
+        // As a session saved before `get_command` has them.
+        let old = "<scramjet-command name=\"rs:edit\">\nEdit\n</scramjet-command>";
         let shown = |full| {
             let mut ui = Terminal::capture_shown(40, Arc::new(AtomicBool::new(false)), full);
-            ui.tool_call(DELEGATE, "/rs:read 42", None);
-            ui.tool_result(DELEGATE, body, None, false);
-            ui.tool_call(DELEGATE, "/rs:edit", None);
-            ui.tool_result(DELEGATE, &disjoint, None, false);
-            ui.tool_call(DELEGATE, "/rs:nope", None);
-            ui.tool_result(DELEGATE, "ERROR: unknown command 'rs:nope'.", None, true);
+            ui.tool_call(GET_COMMAND, "/rs:read 42", None);
+            ui.tool_result(GET_COMMAND, body, None, false);
+            ui.tool_call(GET_COMMAND, "/rs:edit", None);
+            ui.tool_result(GET_COMMAND, old, None, false);
+            ui.tool_call(GET_COMMAND, "/rs:nope", None);
+            ui.tool_result(GET_COMMAND, "ERROR: unknown command 'rs:nope'.", None, true);
             let text = ui.captured();
             let mut plain = String::new();
             let mut escape = Escape::None;
@@ -2665,18 +2655,17 @@ to expand\n(exit 2)"
         };
         assert_eq!(
             shown(false),
-            "● delegate /rs:read 42\n  … (3 lines, Ctrl+O to expand)\n\n● delegate /rs:edit\n  \
-WARNING: caller and delegate\n  allowed-tools scopes do not overlap;\n  tool calls outside them are not\n  \
-blocked. Widen the caller scope or\n  abort delegation.\n  … (3 lines, Ctrl+O to expand)\n\n● delegate \
-/rs:nope\n  ERROR: unknown command 'rs:nope'.\n\n"
+            "● get_command /rs:read 42\n  … (3 lines, Ctrl+O to expand)\n\n● get_command \
+/rs:edit\n  … (1 line, Ctrl+O to expand)\n\n● get_command /rs:nope\n  ERROR: unknown command \
+'rs:nope'.\n\n"
         );
         let whole = shown(true);
         assert!(
-            whole.starts_with("● delegate /rs:read 42\n  Read issue 42.\n  \n  Then stop.\n\n"),
+            whole.starts_with(
+                "● get_command /rs:read 42\n  Read issue 42.\n  \n  Then stop.\n\n● \
+get_command /rs:edit\n  Edit\n\n"
+            ),
             "{whole:?}"
-        );
-        assert!(
-            !whole.contains("WARNING: caller") && whole.contains("[scramjet/delegate] WARNING:")
         );
     }
 

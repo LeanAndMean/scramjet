@@ -125,6 +125,7 @@ pub(super) fn sweep_worktrees(root: &Path) -> Vec<String> {
 pub fn ours(tool: &str) -> &str {
     match tool {
         tool if super::status::is_handoff(tool) => super::status::NAME,
+        super::get_command::OLD_NAME => super::get_command::NAME,
         "Read" => "read",
         "Write" => "write",
         "Edit" | "MultiEdit" => "edit",

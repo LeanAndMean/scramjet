@@ -141,7 +141,7 @@ pub const HARNESS_TOOLS: [&str; 12] = [
     super::publish::TOOLS[2],
     super::publish::TOOLS[3],
     super::question::NAME,
-    super::delegate::NAME,
+    super::get_command::NAME,
     super::subagent::NAME,
     super::switch::NAME,
     super::permissions::NAME,
@@ -190,7 +190,7 @@ pub(super) fn definitions(offered: &[&str]) -> Value {
     tools.push(super::status::definition());
     tools.extend(super::publish::definitions());
     tools.push(super::question::definition());
-    tools.push(super::delegate::definition());
+    tools.push(super::get_command::definition());
     tools.push(super::subagent::definition());
     tools.push(super::switch::definition());
     tools.push(super::permissions::definition());
@@ -359,9 +359,10 @@ impl<'a> Call<'a> {
                 arguments: json!({"server": server, "tool": tool, "arguments": arguments}),
             });
         }
-        let name = match super::status::is_handoff(name) {
-            true => super::status::NAME,
-            false => name,
+        let name = match name {
+            name if super::status::is_handoff(name) => super::status::NAME,
+            super::get_command::OLD_NAME => super::get_command::NAME,
+            name => name,
         };
         Ok(Self { name, arguments })
     }
@@ -391,7 +392,7 @@ impl<'a> Call<'a> {
                 }
             }
             super::subagent::NAME => super::subagent::summary(&self.arguments),
-            super::delegate::NAME => super::delegate::summary(&self.arguments),
+            super::get_command::NAME => super::get_command::summary(&self.arguments),
             super::switch::NAME => super::switch::summary(&self.arguments),
             super::permissions::NAME => super::permissions::summary(&self.arguments),
             name if super::publish::TOOLS.contains(&name) => {

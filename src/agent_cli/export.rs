@@ -11,9 +11,8 @@ use super::text::visible;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use scramjet::agent::{
     AgentError, AgentUi, Answer, AutoCompaction, Branch, ChildItem, ChildRun, ChildState, Children,
-    Choice, CompactRead, Compaction, DELEGATE, DELEGATE_SCOPE_WARNING, Delegation, Ending,
-    PUBLICATION_TOOLS, Purpose, Stats, StreamProgress, ToolDetail, UserCommand, read_branch,
-    show_items, terminal_line,
+    Choice, CompactRead, Compaction, Delegation, Ending, GET_COMMAND, PUBLICATION_TOOLS, Purpose,
+    Stats, StreamProgress, ToolDetail, UserCommand, read_branch, show_items, terminal_line,
 };
 use serde_json::Value;
 use std::{
@@ -237,15 +236,7 @@ impl AgentUi for Html {
                 format!("<div class=\"text\">{}</div>", escape(&visible(answer)))
             }
             (_, Some(ToolDetail::Subagents(children))) => children_html(children),
-            (DELEGATE, None) if !failed => {
-                let body = command_body(output);
-                let mut shown = String::new();
-                if body.starts_with(DELEGATE_SCOPE_WARNING) {
-                    shown += "<div class=\"warning\">WARNING: caller and delegate allowed-tools \
-scopes do not overlap; tool calls outside them are not blocked.</div>";
-                }
-                shown + &opened("Instructions", body)
-            }
+            (GET_COMMAND, None) if !failed => opened("Instructions", command_body(output)),
             (name, Some(ToolDetail::Publication(payload))) => {
                 let what = match name {
                     "create_issue" => "The issue",

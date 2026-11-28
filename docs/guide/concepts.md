@@ -49,9 +49,9 @@ A command with no `next` ends the chain. The steps show as a list, the recommend
 
 Each step from one command to another can be set to `chain` (run at once, without the list) or `pause` (always offer the list), in `/settings` → Next steps or in `autonomy.yaml`: the project's `.scramjet/autonomy.yaml`, then your `~/.config/scramjet/autonomy.yaml`. A set's `autonomy-defaults.yaml` suggests settings, which hold once you apply them there. With neither, `/autopilot on` runs the recommended step after 3 seconds (off by default, kept per session). In `-p`, where nobody chooses, only a `chain` step or autopilot goes on.
 
-## Delegation
+## Another command's instructions
 
-A command can run another as a subroutine with the `delegate` tool: the other command's instructions are loaded into the same conversation, and the caller carries them out and stays responsible for its own report. A command used only that way says `delegate-only: true` and is left out of the `/` list and of next steps. Delegating the same command with the same arguments twice in a turn is refused, so two commands cannot loop on each other.
+A running command can get another's instructions with the `get_command` tool: they come into the same conversation with their arguments, and the running command carries them out as part of its own work; nothing new starts, so it still hands off when its part is over. A command used only that way says `delegate-only: true` and is left out of the `/` list and of next steps. Getting the same command with the same arguments twice in a turn is refused, so two commands cannot loop on each other. With no command running the tool refuses: to run a command, the agent hands it off for you to accept.
 
 ## Publications
 

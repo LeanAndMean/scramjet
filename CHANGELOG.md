@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.441.0 — `get_command`
+
+### Changed
+
+- The agent's `delegate` tool is `get_command`: it gets another command's instructions, with their arguments, for the command that is running, which keeps going and still hands off when its part is over. With no command running it refuses, saying to hand the command off to run it, and where its file is to read it; an agent's name gets pointed to `subagent`. It no longer warns when the two commands' `allowed-tools` share no tool. Calls, `--tools`, `tools` in the settings and commands' `allowed-tools` by the old name still work.
+
 ## 2.440.0 — `handoff`
 
 ### Changed

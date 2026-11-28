@@ -58,7 +58,7 @@ While the agent works, Enter sends what you typed as a steer before its next req
   <img src="assets/readme-next-steps.png" alt="A command has finished and offers its next steps, the recommended one first, each in a fresh session" width="760">
 </p>
 
-A command is a Markdown file of instructions you would otherwise retype, run as `/set:command`; a command set gathers commands, the agents they hand work to and skills, laid out as a Claude Code plugin is. A command can run another as a subroutine, and declares which steps may follow it: when it finishes you choose one, or with `/autopilot on` the recommended one runs by itself, in a fresh session when the step is large. [Mach 12](https://github.com/LeanAndMean/mach12) is such a set, taking work from a GitHub issue through a plan, reviews and a pull request to a release:
+A command is a Markdown file of instructions you would otherwise retype, run as `/set:command`; a command set gathers commands, the agents they hand work to and skills, laid out as a Claude Code plugin is. A command can follow another's instructions as part of its own, and declares which steps may follow it: when it finishes you choose one, or with `/autopilot on` the recommended one runs by itself, in a fresh session when the step is large. [Mach 12](https://github.com/LeanAndMean/mach12) is such a set, taking work from a GitHub issue through a plan, reviews and a pull request to a release:
 
 ```sh
 scramjet install git:github.com/LeanAndMean/mach12
@@ -115,7 +115,7 @@ Report what works and what does not at [github.com/LeanAndMean/scramjet/issues](
 - [Installing](docs/guide/install.md): the installers, by hand, beside Scramjet 1, from source; where Scramjet keeps its files, and uninstalling.
 - [Providers and logins](docs/guide/providers.md): `/login`, `models.json`, model catalogs, proxies, local models.
 - [Sessions and keys](docs/guide/sessions.md): the command line, the full screen, session trees, key bindings.
-- [Concepts, and a first command set](docs/guide/concepts.md): commands, sets, agents, skills, next steps, autopilot and delegation, then a set of your own built step by step.
+- [Concepts, and a first command set](docs/guide/concepts.md): commands, sets, agents, skills, next steps, autopilot and other commands' instructions, then a set of your own built step by step.
 - [Command sets](docs/guide/command-sets.md): installing, packages, running commands and their next steps.
 - [Configuration](docs/guide/configuration.md): settings, context files, credentials, the sandbox, MCP servers, themes.
 - [Settings reference](docs/guide/settings.md): every key of `settings.json`, its values and its default.

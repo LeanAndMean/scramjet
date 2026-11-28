@@ -244,7 +244,7 @@ but to NO_PROXY's hosts and this machine.
                          the theme directories or the settings' themes
   -t, --tools LIST       the only tools the agent has in this run, comma-separated:
                          coding tools, in place of the settings' tools, and
-                         Scramjet's own (subagent, get_scramjet_user_input, delegate,
+                         Scramjet's own (subagent, get_scramjet_user_input, get_command,
                          handoff…), left out unless named; without handoff a command
                          cannot finish, and waits for you after each reply
                          Claude Code's names (Bash, Read, Glob…) are taken, and spaces

@@ -59,7 +59,7 @@ impl Agent {
         self.compact_before_prompt(ui, cancel)?;
         self.completed = None;
         self.suggestion = suggest::Pending::Nothing;
-        self.delegated.clear();
+        self.retrieved.clear();
         self.unanswered = None;
         let parent = self.session.leaf();
         let attached = self.attached.clone();

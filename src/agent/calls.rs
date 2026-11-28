@@ -8,8 +8,8 @@ use super::sandbox::Sandbox;
 use super::skills::Skills;
 use super::tools::{self, Approval, Call, Output};
 use super::{
-    Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, delegate,
-    forge, mcp, permissions, publish, question, sandbox, status, subagent, suggest, switch,
+    Agent, AgentError, AgentUi, Answer, DIFF, FAILED, SUBAGENTS, ToolDetail, Usage, forge,
+    get_command, mcp, permissions, publish, question, sandbox, status, subagent, suggest, switch,
 };
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -331,9 +331,9 @@ impl Agent {
                     self.lifecycle.answered();
                 }
             }
-            delegate::NAME => {
-                if let Ok((name, args)) = delegate::given(&call.arguments) {
-                    self.delegated.push((name.to_owned(), args.to_owned()));
+            get_command::NAME => {
+                if let Ok((name, args)) = get_command::given(&call.arguments) {
+                    self.retrieved.push((name.to_owned(), args.to_owned()));
                 }
             }
             _ => {}
@@ -509,10 +509,19 @@ impl Agent {
             ui.tool_result(call.name, &output.text, None, output.failed);
             return Called::Done(output, false);
         }
-        if call.name == delegate::NAME {
+        if call.name == get_command::NAME {
+            let agent = (get_command::given(&call.arguments).ok())
+                .map(|(name, _)| name)
+                .filter(|name| self.commands.get(name).is_none())
+                .is_some_and(|name| self.kit().tools().is_agent(name));
             let active = self.lifecycle.active();
-            let output =
-                delegate::run(&call.arguments, &self.commands, active, &mut self.delegated);
+            let output = get_command::run(
+                &call.arguments,
+                &self.commands,
+                active,
+                &mut self.retrieved,
+                &|_| agent,
+            );
             ui.tool_result(call.name, &output.text, None, output.failed);
             return Called::Done(output, false);
         }
@@ -667,6 +676,16 @@ impl Tools<'_> {
             output.failed,
         );
         (output, usage)
+    }
+
+    /// Whether `name` is an agent's that `subagent` would find.
+    fn is_agent(&self, name: &str) -> bool {
+        let found = subagent::discover(
+            &self.parent.sources,
+            self.parent.root,
+            subagent::Scope::Both,
+        );
+        found.agents.iter().any(|agent| agent.name == name)
     }
 
     /// Runs `call`, leaving its result to show.
@@ -963,25 +982,28 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     #[test]
-    fn a_command_delegates_to_another_once_per_turn_for_the_same_arguments() {
-        let delegate = |id: &str, args: &str| {
+    fn a_command_gets_anothers_instructions_once_per_turn_for_the_same_arguments() {
+        let get = |id: &str, name: &str, args: &str| {
             let arguments = json!({"command":"rs:read","args":args});
-            tool_call(id, delegate::NAME, arguments)
+            tool_call(id, name, arguments)
+        };
+        let completed = |id: &str| {
+            let arguments = json!({"summary":"Read.","status":"completed"});
+            tool_call(id, status::NAME, arguments)
         };
         let done = || stream(&fixture::text_events("done", fixture::known_usage()));
         let (endpoint, server) = serve(vec![
-            delegate("call_1", "42"),
-            delegate("call_2", "43"),
-            delegate("call_3", "42"),
-            tool_call(
-                "call_4",
-                status::NAME,
-                json!({"summary":"Read.","status":"completed"}),
-            ),
-            delegate("call_5", "42"),
+            get("call_1", get_command::NAME, "42"),
+            get("call_2", get_command::NAME, "43"),
+            // Scramjet 1's name runs it too.
+            get("call_3", get_command::OLD_NAME, "42"),
+            completed("call_4"),
+            get("call_5", get_command::NAME, "42"),
+            completed("call_6"),
+            get("call_7", get_command::NAME, "42"),
             done(),
         ]);
-        let (mut agent, _scratch) = agent(endpoint, "delegate");
+        let (mut agent, _scratch) = agent(endpoint, "get_command");
         let commands = agent.root().join(".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(commands.join("top.md"), "Read the issues.\n").unwrap();
@@ -992,35 +1014,46 @@ mod tests {
         let mut ui = Recorder::default();
         let cancel = AtomicBool::new(false);
         agent.turn("/rs:top", &mut ui, &cancel).unwrap();
-        // The next prompt starts a turn in which the command runs again.
+        // The next turn may get them again; with no command running, none are got.
+        agent.turn("/rs:top", &mut ui, &cancel).unwrap();
         agent.turn("again", &mut ui, &cancel).unwrap();
         let bodies = server.join().unwrap();
+        assert_eq!(bodies.len(), 8);
         let read = |issue| {
-            format!("<scramjet-command name=\"rs:read\">\nRead issue {issue}.\n</scramjet-command>")
+            format!(
+                "<scramjet-command-instructions name=\"rs:read\" for=\"rs:top\">\nRead issue \
+{issue}.\n</scramjet-command-instructions>"
+            )
         };
-        let outputs: Vec<_> = [1, 2, 3, 5].map(|at| last_output(&bodies[at])).into();
-        assert_eq!(bodies.len(), 6);
-        let refused = "ERROR: cycle detected in delegation chain rs:read -> rs:read -> rs:read: \
-'rs:read' was already delegated with these arguments in this turn. Refusing to recurse; its \
+        let outputs: Vec<_> = [1, 2, 3, 5, 7].map(|at| last_output(&bodies[at])).into();
+        let again = "ERROR: 'rs:read' was already retrieved with these arguments in this turn; its \
 instructions are in that earlier result.";
-        assert_eq!(outputs, [read(42), read(43), refused.into(), read(42)]);
+        let file = commands.join("read.md");
+        let idle = format!(
+            "ERROR: no command is running, so there is none to get instructions for. To run \
+/rs:read, hand it off: `handoff` with it as a next step, which the user accepts. To read it, its \
+file is {}.",
+            file.display()
+        );
+        assert_eq!(outputs, [read(42), read(43), again.into(), read(42), idle]);
         let shown: Vec<_> = (ui.shown.iter())
-            .filter(|shown| shown.contains("delegate"))
+            .filter(|shown| shown.contains("get_command"))
             .map(|shown| shown.lines().next().unwrap())
             .collect();
+        let instructions = "result get_command <scramjet-command-instructions name=\"rs:read\" \
+for=\"rs:top\">";
         assert_eq!(
-            shown,
+            shown[..6],
             [
-                "call delegate /rs:read 42",
-                "result delegate <scramjet-command name=\"rs:read\">",
-                "call delegate /rs:read 43",
-                "result delegate <scramjet-command name=\"rs:read\">",
-                "call delegate /rs:read 42",
-                &format!("result delegate {refused} failed"),
-                "call delegate /rs:read 42",
-                "result delegate <scramjet-command name=\"rs:read\">",
+                "call get_command /rs:read 42",
+                instructions,
+                "call get_command /rs:read 43",
+                instructions,
+                "call get_command /rs:read 42",
+                &format!("result get_command {again} failed"),
             ]
         );
+        assert_eq!(shown.len(), 10);
     }
 
     #[test]
@@ -2469,7 +2502,7 @@ files is added or changed.",
                 "add_issue_comment",
                 "add_pr_comment",
                 question::NAME,
-                delegate::NAME,
+                get_command::NAME,
                 subagent::NAME,
                 switch::NAME,
             ]
@@ -2494,7 +2527,7 @@ interactive session, prefer `handoff`",
                 &*format!("src{}a.txt:1: a needle", std::path::MAIN_SEPARATOR),
                 "a.txt",
                 "Tool write not found. Available tools: read, grep, ls, handoff, create_issue, \
-create_pr, add_issue_comment, add_pr_comment, get_scramjet_user_input, delegate, subagent, \
+create_pr, add_issue_comment, add_pr_comment, get_scramjet_user_input, get_command, subagent, \
 switch_scramjet_model"
             ]
         );
@@ -2550,7 +2583,7 @@ switch_scramjet_model"
         assert!(all.contains(&status::NAME.to_owned()));
         agent.leave_out_idle_tools(false);
         let left: Vec<_> = (all.iter())
-            .filter(|name| name.as_str() != status::NAME)
+            .filter(|name| ![status::NAME, get_command::NAME].contains(&name.as_str()))
             .cloned()
             .collect();
         assert_eq!(names(&agent), left);
@@ -2558,7 +2591,7 @@ switch_scramjet_model"
         assert!(!instructions.contains(status::SNIPPET), "{instructions}");
         assert!(!instructions.contains(suggest::GUIDELINE), "{instructions}");
         agent.leave_out_idle_tools(true);
-        assert!(names(&agent).contains(&status::NAME.to_owned()));
+        assert_eq!(names(&agent), all);
         assert!(agent.instructions().contains(status::SNIPPET));
         agent.lifecycle.prompted(status::Prompt::Command("waiting"));
         agent.leave_out_idle_tools(false);

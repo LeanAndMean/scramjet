@@ -265,15 +265,16 @@ pub(super) const GROUPS: [(&str, &[Row]); 7] = [
     ("Claude Code's files", &CLAUDE_ROWS),
 ];
 
-/// The flag of `claude` that `row`, one of `CLAUDE_ROWS`, turns on.
-/// `handoff` for the names Scramjet 1 gave the two tools it replaced, else `tool`.
-fn handoff_named(tool: &str) -> &str {
+/// The name now of a tool Scramjet 1 named otherwise, else `tool`.
+fn named_now(tool: &str) -> &str {
     match tool {
         "report_scramjet_command_status" | "suggest_scramjet_next_steps" => "handoff",
+        "delegate" => "get_command",
         tool => tool,
     }
 }
 
+/// The flag of `claude` that `row`, one of `CLAUDE_ROWS`, turns on.
 fn claude_flag(claude: &mut ClaudeCode, row: Row) -> &mut bool {
     match row {
         Row::ClaudeSkills => &mut claude.skills,
@@ -1978,7 +1979,7 @@ impl Settings {
     fn read_tools(&mut self, path: &str, names: &[Value]) {
         let mut tools: Vec<String> = Vec::new();
         for name in names {
-            match name.as_str().map(handoff_named) {
+            match name.as_str().map(named_now) {
                 Some(tool) if CODING_TOOLS.contains(&tool) || HARNESS_TOOLS.contains(&tool) => {
                     if !tools.iter().any(|known| known == tool) {
                         tools.push(tool.to_owned());
@@ -2010,7 +2011,7 @@ impl Settings {
             if tool == "suggest_scramjet_next_steps" {
                 continue;
             }
-            let tool = &handoff_named(tool).to_owned();
+            let tool = &named_now(tool).to_owned();
             let (list, harness) = match tool.as_str() {
                 tool if CODING_TOOLS.contains(&tool) => (&mut tools, false),
                 tool if HARNESS_TOOLS.contains(&tool) => (&mut off, true),
@@ -3981,13 +3982,17 @@ mod tests {
 
         let switched = settings_with(
             &scratch,
-            r#"{"tools": {"switch_scramjet_model": false, "bash": false, "delegate": true,
+            r#"{"tools": {"switch_scramjet_model": false, "bash": false, "delegate": false,
                 "nope": false, "ls": "no"}}"#,
         );
         let mut tools = DEFAULT_TOOLS.to_vec();
         tools.retain(|tool| *tool != "bash");
         assert_eq!(switched.tools, tools);
-        assert_eq!(switched.harness_off, ["switch_scramjet_model"]);
+        // Scramjet 1's `delegate` is `get_command`.
+        assert_eq!(
+            switched.harness_off,
+            ["get_command", "switch_scramjet_model"]
+        );
         assert_eq!(
             switched.warnings,
             [

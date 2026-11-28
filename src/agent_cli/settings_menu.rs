@@ -152,7 +152,7 @@ fn tool_note(tool: &str) -> &'static str {
         "ls" => "List directory contents",
         "handoff" => "Ends a command's run, or hands off what to run next",
         "get_scramjet_user_input" => "Asks you a question mid-turn",
-        "delegate" => "Runs another command as a subroutine",
+        "get_command" => "Gets another command's instructions for the running one",
         "subagent" => "Gives a task to a subagent",
         "switch_scramjet_model" => "Changes the session's model",
         "request_permissions" => "Asks you for more of the sandbox's reach; with the sandbox only",

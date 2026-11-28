@@ -249,8 +249,8 @@ fn orientation() -> String {
 
 Scramjet is the harness you are running under: a coding agent that loads command sets —
 directories of user-defined slash commands and their agents — and wires them into emergent
-workflows through declared next-step policies (forced / closed / open / ask) and command
-delegation. Mach 12 is one such command set (the issue → plan → review →
+workflows through declared next-step policies (forced / closed / open / ask) and handoffs
+between commands. Mach 12 is one such command set (the issue → plan → review →
 implement → PR → ship methodology); other sets can sit alongside it.
 "
     .to_owned();
@@ -265,7 +265,7 @@ implement → PR → ship methodology); other sets can sit alongside it.
     if !docs.is_empty() {
         text += &format!(
             "\nScramjet documentation (read only when the user asks about Scramjet itself — \
-its commands, command sets, next steps, delegation, settings, keys or the /autopilot on/off \
+its commands, command sets, next steps, handoffs, settings, keys or the /autopilot on/off \
 flag): {}\n",
             docs.join("; ")
         );
@@ -1490,7 +1490,7 @@ earlier causes version conflicts between parallel PRs."
         };
         assert!(text.contains(&format!(
             "about Scramjet itself — its commands, command sets, \
-next steps, delegation, settings, keys or the /autopilot on/off flag): {readme}`{} --help-all` \
+next steps, handoffs, settings, keys or the /autopilot on/off flag): {readme}`{} --help-all` \
 (every option, key and built-in command)\n",
             std::env::current_exe().unwrap().display()
         )));
