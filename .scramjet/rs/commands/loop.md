@@ -8,7 +8,7 @@ allowed-tools:
   - Write
   - subagent
   - get_scramjet_user_input
-  - report_scramjet_command_status
+  - handoff
 next:
   mode: closed
   candidates:
@@ -48,7 +48,7 @@ Stop for the user only as described in `CLAUDE.md`, using `get_scramjet_user_inp
 
 ## Report
 
-Tell the user briefly what changed, how it was verified, the commit, any open questions or choices recorded, and what comes next. Then call `report_scramjet_command_status` with the work performed as `summary`:
+Tell the user briefly what changed, how it was verified, the commit, any open questions or choices recorded, and what comes next. Then hand off with the work performed as `summary`:
 
 - `status: "completed"` when this run committed real progress, including partial progress with its continuation recorded. Include one `next_steps` entry with `fresh_session: true` and a concrete `reason`: `/rs:review <commits>` when the increment changed process isolation, credential handling or destructive file operations; `/rs:steer` when the remaining useful work depends on recorded open questions; otherwise `/rs:loop`. Set `recommended_next_step` to that entry's index.
 

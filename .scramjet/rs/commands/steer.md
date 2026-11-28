@@ -8,7 +8,7 @@ allowed-tools:
   - Write
   - subagent
   - get_scramjet_user_input
-  - report_scramjet_command_status
+  - handoff
 next:
   mode: closed
   candidates:
@@ -60,4 +60,4 @@ Remove or revise anything those changes make stale. Preserve unrelated uncommitt
 
 ## Report
 
-Tell the user briefly what was recorded and where, and what the loop will work on next. Then call `report_scramjet_command_status` with the work performed as `summary` and `status: "completed"`. Unless the user wants building to pause, include one `next_steps` entry: `/rs:loop` with `fresh_session: true` and a concrete `reason`, and set `recommended_next_step` to its index.
+Tell the user briefly what was recorded and where, and what the loop will work on next. Then hand off with the work performed as `summary` and `status: "completed"`. Unless the user wants building to pause, include one `next_steps` entry: `/rs:loop` with `fresh_session: true` and a concrete `reason`, and set `recommended_next_step` to its index.
