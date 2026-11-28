@@ -4,6 +4,12 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.442.1 — Commands that describe the action
+
+### Changed
+
+- The built-in `writing-scramjet-commands` skill tells command authors to describe the action ("hand off to", "get the instructions of") rather than name the tool that does it, so a command reads right in another harness and survives a rename, and says what getting another command's instructions does; the concepts guide's tutorial set says it so too.
+
 ## 2.442.0 — The lint on the old tool names
 
 ### Added

@@ -184,7 +184,7 @@ Do not add handoff fields without a named consumer.
 
 A command set is a directory, named `<set>` by its `set.yaml`'s `name` (else the directory's name). It holds:
 
-- `commands/<name>.md`: the command `/<set>:<name>`. Frontmatter: `description`, `argument-hint`, `next` (below), `delegate-only: true` for a command only the `delegate` tool runs, and `allowed-tools` (a list or a comma-separated string) naming the tools it uses: the publication tools (`create_issue`, `create_pr`, `add_issue_comment`, `add_pr_comment`) it may use, and the built-in ones in Claude Code's names (`Bash`, `Read`, `Grep`, `Glob`, `Edit`, `Write`), which Claude Code then runs without asking when the set is loaded as its plugin; it matches them case-sensitively, so `bash` there is not `Bash`. The body is the command; `$ARGUMENTS`, `$@`, `$1`… and bash-style slices take its arguments.
+- `commands/<name>.md`: the command `/<set>:<name>`. Frontmatter: `description`, `argument-hint`, `next` (below), `delegate-only: true` for a command whose instructions only other commands get, left out of the `/` list and of next steps, and `allowed-tools` (a list or a comma-separated string) naming the tools it uses: the publication tools (`create_issue`, `create_pr`, `add_issue_comment`, `add_pr_comment`) it may use, and the built-in ones in Claude Code's names (`Bash`, `Read`, `Grep`, `Glob`, `Edit`, `Write`), which Claude Code then runs without asking when the set is loaded as its plugin; it matches them case-sensitively, so `bash` there is not `Bash`. The body is the command; `$ARGUMENTS`, `$@`, `$1`… and bash-style slices take its arguments.
 - `agents/<name>.md`: the subagent `<set>:<name>`. Frontmatter: `name` (without the set prefix), `description`, `tools` in Claude Code's names (`Read, Grep, Glob, LS, Bash`), and optionally `disallowedTools` and `model`. The body is its system prompt.
 - `skills/<name>/SKILL.md`: skills the set brings, as a Claude Code plugin's, with `name` and `description` frontmatter.
 - `autonomy-defaults.yaml`: the set's defaults for `edges` (from a command to a next step: `chain` runs it, `pause` offers it) and `publications` (per command and tool: `auto-approve` or `require-approval`). The user's `autonomy.yaml` overrides them.
@@ -195,7 +195,11 @@ File names hold no `:`, so a set checks out on Windows; Scramjet 1's `<set>:<nam
 
 A command runs until the agent hands off with `completed` (its part is over, with a `summary` and, where policy allows, `next_steps`) or `abandoned` (the user wants to stop, after confirming). There is no `blocked` or `incomplete`: work only the user can unblock is asked of the user with `get_scramjet_user_input`, which waits for the answer.
 
-The harness wraps an invoked command in `<scramjet-command name="…">`, a top-level command's arguments in `<user-context>` and a delegated one's in `<caller-context>`. Put a command's arguments inside one such block, as untrusted input, and give it an early `## Goals` list of the outcomes that control it.
+A running command can get another command's instructions, with its arguments, and follow them as part of its own work: nothing new starts, and it still hands off when its part is over. To run a command after this one, hand off to it as a next step.
+
+Describe these actions, not the tools that do them: "hand off to `/set:next`", "get the instructions of `/set:helper` and follow them", "ask the `set:agent` agent". The command then reads right in another harness and survives a tool's rename. Name a tool only where agents are seen to miss the right one.
+
+The harness wraps an invoked command in `<scramjet-command name="…">`, a top-level command's arguments in `<user-context>`; a command whose instructions another gets puts its arguments in `<caller-context>`. Put a command's arguments inside one such block, as untrusted input, and give it an early `## Goals` list of the outcomes that control it.
 
 ## Tools and evidence
 

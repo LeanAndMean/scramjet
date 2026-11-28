@@ -152,11 +152,11 @@ $ARGUMENTS
 
 ## Commit
 
-If the changes were not reviewed earlier in this conversation, delegate `ship:review`
-first. Show the user the message and the files it covers, and commit once they agree.
+If the changes were not reviewed earlier in this conversation, get the instructions of
+`ship:review` and follow them first. Show the user the message and the files it covers, and commit once they agree.
 ```
 
-It has no `next`, so the chain ends here. Run by itself, or in a fresh session, it delegates the review first.
+It has no `next`, so the chain ends here. Run by itself, or in a fresh session, it reviews first, following `ship:review`'s instructions.
 
 ### 5. Check it
 
