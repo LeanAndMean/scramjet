@@ -906,9 +906,19 @@ pub(super) fn guidance(
     problems: &mut Vec<Problem>,
 ) -> Vec<(PathBuf, String)> {
     let real = |path: &Path| crate::os::canonicalize(path).unwrap_or_else(|_| path.into());
+    // A file not made yet is where its nearest existing directory really is.
+    let real_file = |path: &Path| {
+        (path.ancestors())
+            .find_map(|existing| {
+                let real = crate::os::canonicalize(existing).ok()?;
+                let rest = path.strip_prefix(existing).ok()?;
+                Some(crate::os::join(&real, rest))
+            })
+            .unwrap_or_else(|| path.into())
+    };
     let (root, file) = match file.starts_with(root) {
         true => (root.to_path_buf(), file.to_path_buf()),
-        false => (real(root), real(file)),
+        false => (real(root), real_file(file)),
     };
     let home = std::env::home_dir();
     let at_home = |directory: &Path| {
@@ -2026,9 +2036,10 @@ specific tasks.\n";
         );
         write(sub.join(".claude/rules/not.md"), &scoped("/*.rs", "Not."));
         write(deeper.join("AGENTS.md"), "Not Claude Code's.");
+        let real = crate::os::canonicalize(&scratch).unwrap();
         let found = |file: &Path| -> Vec<(PathBuf, String)> {
             (guidance(&root, file, &Hidden::default(), &mut Vec::new()).into_iter())
-                .filter(|(path, _)| path.starts_with(&scratch))
+                .filter(|(path, _)| path.starts_with(&scratch) || path.starts_with(&real))
                 .map(|(path, text)| (path, text.trim().to_owned()))
                 .collect()
         };
@@ -2049,10 +2060,15 @@ specific tasks.\n";
             [(root.join(".claude/rules/docs.md"), "Docs.".to_owned())]
         );
         assert!(found(&root.join("README.md")).is_empty());
-        // Outside the project, an outer directory's rules still match by their own paths.
+        // Outside the project, an outer directory's rules still match by their own paths, the
+        // file and the directories found where they really are (macOS's temporary directory is
+        // under a link).
         assert_eq!(
             found(&outer.join("c/x.rs")),
-            [(outer.join(".claude/rules/other.md"), "Other.".to_owned())]
+            [(
+                crate::os::join(&real, "a/.claude/rules/other.md"),
+                "Other.".to_owned()
+            )]
         );
     }
 }

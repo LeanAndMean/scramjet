@@ -161,8 +161,8 @@ mod tests {
         // The user's own `~/.claude/rules` that match would come first.
         let expected = format!(
             "Contents of {}:\n\nSub rules.\n\nContents of {}:\n\nRust rule.\n</system-reminder>",
-            root.join("sub/CLAUDE.md").display(),
-            root.join(".claude/rules/rust.md").display()
+            crate::os::join(&root, "sub/CLAUDE.md").display(),
+            crate::os::join(&root, ".claude/rules/rust.md").display()
         );
         assert!(told.starts_with("<system-reminder>\n"), "{told}");
         assert!(told.ends_with(&expected), "{told}");
@@ -174,10 +174,13 @@ mod tests {
             .filter(|shown| shown.starts_with("notice Loaded"))
             .collect();
         assert_eq!(notices.len(), 1, "{:?}", ui.shown);
-        assert!(
-            notices[0].ends_with("sub/CLAUDE.md, .claude/rules/rust.md"),
-            "{notices:?}"
+        let shown = |path: &str| crate::os::join(std::path::Path::new(""), path);
+        let loaded = format!(
+            "{}, {}",
+            shown("sub/CLAUDE.md").display(),
+            shown(".claude/rules/rust.md").display()
         );
+        assert!(notices[0].ends_with(&loaded), "{notices:?}");
     }
 
     #[test]

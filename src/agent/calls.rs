@@ -1004,7 +1004,7 @@ mod tests {
             done(),
         ]);
         let (mut agent, _scratch) = agent(endpoint, "get_command");
-        let commands = agent.root().join(".scramjet/rs/commands");
+        let commands = crate::os::join(agent.root(), ".scramjet/rs/commands");
         std::fs::create_dir_all(&commands).unwrap();
         std::fs::write(commands.join("top.md"), "Read the issues.\n").unwrap();
         let helper = "---\ndelegate-only: true\n---\nRead issue $1.\n";

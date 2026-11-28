@@ -642,7 +642,7 @@ pub(super) fn linked_git(root: &Path, granted: &[PathBuf]) -> Vec<PathBuf> {
 /// The common Git directory, with the config and hooks, that a worktree's Git directory names.
 pub(super) fn common_dir(gitdir: &Path) -> Option<PathBuf> {
     let text = std::fs::read_to_string(gitdir.join("commondir")).ok()?;
-    std::fs::canonicalize(gitdir.join(text.trim())).ok()
+    crate::os::canonicalize(&gitdir.join(text.trim())).ok()
 }
 
 /// The Git directory that the `.git` file `dotgit` names.
@@ -652,7 +652,7 @@ pub(super) fn pointed_to(dotgit: &Path) -> Option<PathBuf> {
     }
     let text = std::fs::read_to_string(dotgit).ok()?;
     let gitdir = text.trim().strip_prefix("gitdir:")?.trim();
-    std::fs::canonicalize(dotgit.parent()?.join(gitdir)).ok()
+    crate::os::canonicalize(&dotgit.parent()?.join(gitdir)).ok()
 }
 
 /// The directories between the real directory `root` and each path `kept` in it, to be mounted
@@ -3890,32 +3890,37 @@ TMUX={socket},1,0 tmux run-shell '{three}'; tmux new-session -d -s own 'sleep 30
             .unwrap();
         assert!(!reached.exists(), "{output:?}");
 
-        // A sandboxed command starts a tmux of its own in the fresh `/tmp`, apart from the user's
-        // servers there.
-        let mut in_tmp = super::Hidden::under(&home, Vec::new());
-        in_tmp.keep_tmux_apart(std::path::Path::new("/tmp"), Some(own.clone()));
-        let script = "tmux new-session -d -s sandboxed 'sleep 300' && tmux ls -F '#S'";
-        let output = super::command(&project, script, &in_tmp, false)
-            .unwrap()
-            .output()
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "sandboxed\n",
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        // So too in a project at `/tmp` itself, whose real `/tmp` holds the user's sockets.
-        let output = super::command(std::path::Path::new("/tmp"), script, &in_tmp, false)
-            .unwrap()
-            .output()
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&output.stdout),
-            "sandboxed\n",
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        // On macOS `/tmp` is shared and the user's sockets there stay denied, so only Linux's
+        // private one lets a sandboxed tmux start.
+        #[cfg(target_os = "linux")]
+        {
+            // A sandboxed command starts a tmux of its own in the fresh `/tmp`, apart from the user's
+            // servers there.
+            let mut in_tmp = super::Hidden::under(&home, Vec::new());
+            in_tmp.keep_tmux_apart(std::path::Path::new("/tmp"), Some(own.clone()));
+            let script = "tmux new-session -d -s sandboxed 'sleep 300' && tmux ls -F '#S'";
+            let output = super::command(&project, script, &in_tmp, false)
+                .unwrap()
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "sandboxed\n",
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // So too in a project at `/tmp` itself, whose real `/tmp` holds the user's sockets.
+            let output = super::command(std::path::Path::new("/tmp"), script, &in_tmp, false)
+                .unwrap()
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "sandboxed\n",
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
 
         // scramjet-rs run where TMUX_TMPDIR is already its own, as in a session a hidden command
         // started, still has tmux in its hidden commands.

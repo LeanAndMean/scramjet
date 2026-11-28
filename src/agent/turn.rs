@@ -1412,7 +1412,7 @@ In: state\nAsk: \\! `touch\n</skill>",
         assert_eq!(bodies.len(), 2);
         let sent = |body: &Value| body["input"].as_array().unwrap()[0]["content"].clone();
         assert_eq!(sent(&bodies[0]), json!("Branch: 1.0.0\nDo login"));
-        let skill = plugin.join("skills/pdf/SKILL.md");
+        let skill = crate::os::join(&plugin, "skills/pdf/SKILL.md");
         let expected = format!(
             "<skill name=\"dev:pdf\" location=\"{}\">\nReferences are relative to {}.\n\n\
 Fill form.pdf\n</skill>",

@@ -4,6 +4,13 @@ What changed in each version of Scramjet, for the people using it. The newest co
 
 ## Unreleased
 
+## 2.442.3 — Claude Code's files on macOS and Windows
+
+### Fixed
+
+- On Windows, Claude Code's memory (`claudeCode.memory`) is found in a linked Git worktree too: the main worktree's path was taken in Windows' `\\?\` form, so its project's directory under `~/.claude/projects` was never the right one.
+- A file written outside the project, where it did not exist yet, brings in the `.claude/rules` that match it when its path goes through a link or a Windows short name (as macOS's and Windows' temporary directories do): the file and the directories were compared in different forms, so no rule matched.
+
 ## 2.442.2 — Dependencies past their advisories
 
 ### Fixed
